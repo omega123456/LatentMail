@@ -1,0 +1,212 @@
+// Angular Material must be @use'd before any other rules (Sass requirement)
+@use '@angular/material' as mat;
+
+@import "tailwindcss";
+
+// ============================================================
+// Design Tokens — Shared between Angular Material and Tailwind
+// ============================================================
+
+:root {
+  // Font
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  // Spacing base
+  --spacing-unit: 8px;
+
+  // Border radius
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  // Density (row heights)
+  --density-compact: 44px;
+  --density-comfortable: 56px;
+  --density-spacious: 72px;
+
+  // Layout defaults
+  --sidebar-width: 240px;
+  --sidebar-collapsed-width: 56px;
+  --email-list-width: 320px;
+  --titlebar-height: 32px;
+  --statusbar-height: 24px;
+}
+
+// ============================================================
+// Light Theme (default)
+// ============================================================
+
+:root,
+[data-theme='light'] {
+  --color-primary: #1976D2;
+  --color-primary-light: #E3F2FD;
+  --color-secondary: #00897B;
+  --color-accent: #FF6F00;
+
+  --color-surface: #FFFFFF;
+  --color-surface-variant: #F5F5F5;
+  --color-background: #FAFAFA;
+
+  --color-text-primary: #212121;
+  --color-text-secondary: #666666;
+  --color-text-tertiary: #999999;
+
+  --color-border: #E0E0E0;
+  --color-error: #D32F2F;
+  --color-success: #388E3C;
+
+  color-scheme: light;
+}
+
+// ============================================================
+// Dark Theme
+// ============================================================
+
+[data-theme='dark'] {
+  --color-primary: #64B5F6;
+  --color-primary-light: #1A237E;
+  --color-secondary: #4DB6AC;
+  --color-accent: #FFB74D;
+
+  --color-surface: #121212;
+  --color-surface-variant: #1E1E1E;
+  --color-background: #0A0A0A;
+
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #B0B0B0;
+  --color-text-tertiary: #757575;
+
+  --color-border: #333333;
+  --color-error: #FF6B6B;
+  --color-success: #81C784;
+
+  color-scheme: dark;
+}
+
+// ============================================================
+// System theme detection
+// ============================================================
+
+@media (prefers-color-scheme: dark) {
+  [data-theme='system'] {
+    --color-primary: #64B5F6;
+    --color-primary-light: #1A237E;
+    --color-secondary: #4DB6AC;
+    --color-accent: #FFB74D;
+
+    --color-surface: #121212;
+    --color-surface-variant: #1E1E1E;
+    --color-background: #0A0A0A;
+
+    --color-text-primary: #FFFFFF;
+    --color-text-secondary: #B0B0B0;
+    --color-text-tertiary: #757575;
+
+    --color-border: #333333;
+    --color-error: #FF6B6B;
+    --color-success: #81C784;
+
+    color-scheme: dark;
+  }
+}
+
+// ============================================================
+// Global Styles
+// ============================================================
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// Prevent text selection on UI elements (not email content)
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+// Scrollbar styling
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 4px;
+
+  &:hover {
+    background-color: var(--color-text-tertiary);
+  }
+}
+
+// ============================================================
+// Animation Utilities
+// ============================================================
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+// ============================================================
+// Angular Material Custom Theme
+// ============================================================
+
+html {
+  @include mat.theme((
+    color: (
+      theme-type: light,
+      primary: mat.$azure-palette,
+    ),
+    typography: Inter,
+    density: 0,
+  ));
+}
+
+[data-theme='dark'] {
+  @include mat.theme((
+    color: (
+      theme-type: dark,
+      primary: mat.$azure-palette,
+    ),
+  ));
+}
+
+// Material Symbols font
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+
+// Inter font
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+.material-symbols-outlined {
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+}

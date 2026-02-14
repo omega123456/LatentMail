@@ -1,0 +1,65 @@
+{
+  "name": "mailclient-app",
+  "version": "0.1.0",
+  "description": "A cross-platform desktop email client with AI integration",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "build:prod": "ng build --configuration=production",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:all": "yarn build:prod && yarn build:electron",
+    "electron:dev": "yarn build:electron && NODE_ENV=development electron .",
+    "electron:start": "yarn build:all && electron .",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test",
+    "package": "yarn build:all && electron-forge package",
+    "make": "yarn build:all && electron-forge make"
+  },
+  "prettier": {
+    "printWidth": 100,
+    "singleQuote": true,
+    "overrides": [
+      {
+        "files": "*.html",
+        "options": {
+          "parser": "angular"
+        }
+      }
+    ]
+  },
+  "private": true,
+  "packageManager": "yarn@1.22.22",
+  "dependencies": {
+    "@angular/animations": "^21.1.4",
+    "@angular/cdk": "^21.1.4",
+    "@angular/common": "^21.1.0",
+    "@angular/compiler": "^21.1.0",
+    "@angular/core": "^21.1.0",
+    "@angular/forms": "^21.1.0",
+    "@angular/material": "^21.1.4",
+    "@angular/platform-browser": "^21.1.0",
+    "@angular/router": "^21.1.0",
+    "@ngrx/signals": "^21.0.1",
+    "electron-log": "^5",
+    "rxjs": "~7.8.0",
+    "sql.js": "^1.14.0",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^21.1.4",
+    "@angular/cli": "^21.1.4",
+    "@angular/compiler-cli": "^21.1.0",
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-dmg": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron/rebuild": "^4.0.3",
+    "@tailwindcss/postcss": "^4.1.18",
+    "electron": "^40.4.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "typescript": "~5.9.2"
+  }
+}
