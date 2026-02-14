@@ -4,6 +4,8 @@ import log from 'electron-log/main';
 import { registerAllIpcHandlers } from './ipc';
 import { DatabaseService } from './services/database-service';
 import { OAuthService } from './services/oauth-service';
+import { SyncService } from './services/sync-service';
+import { ImapService } from './services/imap-service';
 
 // Configure logging
 log.initialize();
@@ -46,6 +48,19 @@ if (!gotTheLock) {
       oauthService.initializeRefreshTimers();
     } catch (err) {
       log.warn('Failed to initialize OAuth refresh timers:', err);
+    }
+
+    // Start background sync for all accounts
+    try {
+      const syncService = SyncService.getInstance();
+      syncService.startBackgroundSync();
+
+      // Trigger initial sync for all accounts
+      syncService.syncAllAccounts().catch(err => {
+        log.warn('Initial sync failed:', err);
+      });
+    } catch (err) {
+      log.warn('Failed to start background sync:', err);
     }
 
     // Create the main window
@@ -138,6 +153,16 @@ function restoreWindowState(win: BrowserWindow): void {
     log.warn('Failed to restore window state:', err);
   }
 }
+
+app.on('before-quit', () => {
+  // Stop background sync and disconnect IMAP
+  try {
+    SyncService.getInstance().stopBackgroundSync();
+    ImapService.getInstance().disconnectAll().catch(() => {});
+  } catch {
+    // Ignore cleanup errors
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

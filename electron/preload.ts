@@ -26,6 +26,10 @@ const electronAPI = {
       ipcRenderer.invoke('mail:flag', accountId, messageIds, flag, value) as Promise<IpcResponse>,
     search: (accountId: string, query: string) =>
       ipcRenderer.invoke('mail:search', accountId, query) as Promise<IpcResponse>,
+    syncAccount: (accountId: string) =>
+      ipcRenderer.invoke('mail:sync-account', accountId) as Promise<IpcResponse>,
+    getFolders: (accountId: string) =>
+      ipcRenderer.invoke('mail:get-folders', accountId) as Promise<IpcResponse>,
   },
 
   // Auth operations

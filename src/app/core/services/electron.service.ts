@@ -18,6 +18,8 @@ interface ElectronAPI {
     move: (accountId: string, messageIds: string[], targetFolder: string) => Promise<IpcResponse>;
     flag: (accountId: string, messageIds: string[], flag: string, value: boolean) => Promise<IpcResponse>;
     search: (accountId: string, query: string) => Promise<IpcResponse>;
+    syncAccount: (accountId: string) => Promise<IpcResponse>;
+    getFolders: (accountId: string) => Promise<IpcResponse>;
   };
   auth: {
     login: () => Promise<IpcResponse>;
@@ -93,6 +95,14 @@ export class ElectronService {
 
   async searchEmails(accountId: string, query: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.mail.search(accountId, query));
+  }
+
+  async syncAccount(accountId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.syncAccount(accountId));
+  }
+
+  async getFolders(accountId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.getFolders(accountId));
   }
 
   // ---- Auth operations ----
