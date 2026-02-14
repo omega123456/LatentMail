@@ -126,16 +126,41 @@ export function registerMailIpcHandlers(): void {
       log.info(`Moving ${messageIds.length} messages to ${targetFolder} for account ${accountId}`);
       const imapService = ImapService.getInstance();
 
-      // Get current folder for each message from DB
       const numAccountId = Number(accountId);
-      for (const msgId of messageIds) {
-        // Find the email in DB to get its current folder and UID
-        const emails = db.getEmailsByThreadId(numAccountId, msgId);
-        if (emails.length > 0) {
-          const email = emails[0];
-          const currentFolder = email['folder'] as string;
-          // Use gmail_message_id as UID approximation — in a real impl we'd store UIDs
-          await imapService.moveMessages(accountId, currentFolder, [Number(email['id'])], targetFolder);
+      const resolvedEmails: Array<Record<string, unknown>> = [];
+
+      for (const id of messageIds) {
+        const byMessageId = db.getEmailByGmailMessageId(numAccountId, id);
+        if (byMessageId) {
+          resolvedEmails.push(byMessageId);
+          continue;
+        }
+        // Backward compatibility: older callers passed thread IDs.
+        resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
+      }
+
+      const deduped = new Map<string, Record<string, unknown>>();
+      for (const email of resolvedEmails) {
+        const gmailMessageId = String(email['gmailMessageId'] || '');
+        if (gmailMessageId) {
+          deduped.set(gmailMessageId, email);
+        }
+      }
+
+      const byFolder = new Map<string, number[]>();
+      for (const email of deduped.values()) {
+        const folder = String(email['folder'] || '');
+        const uid = Number(email['gmailMessageId']);
+        if (!folder || !Number.isFinite(uid)) continue;
+        if (!byFolder.has(folder)) {
+          byFolder.set(folder, []);
+        }
+        byFolder.get(folder)!.push(uid);
+      }
+
+      for (const [sourceFolder, uids] of byFolder.entries()) {
+        if (uids.length > 0) {
+          await imapService.moveMessages(accountId, sourceFolder, uids, targetFolder);
         }
       }
 
@@ -164,14 +189,33 @@ export function registerMailIpcHandlers(): void {
         starred: { isStarred: value },
         important: { isImportant: value },
       };
-      const dbFlags = flagMap[flag];
-      if (dbFlags) {
-        for (const msgId of messageIds) {
-          db.updateEmailFlags(numAccountId, msgId, dbFlags);
+      const resolvedEmails: Array<Record<string, unknown>> = [];
+      for (const id of messageIds) {
+        const byMessageId = db.getEmailByGmailMessageId(numAccountId, id);
+        if (byMessageId) {
+          resolvedEmails.push(byMessageId);
+          continue;
+        }
+        // Backward compatibility: older callers passed thread IDs.
+        resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
+      }
+
+      const deduped = new Map<string, Record<string, unknown>>();
+      for (const email of resolvedEmails) {
+        const gmailMessageId = String(email['gmailMessageId'] || '');
+        if (gmailMessageId) {
+          deduped.set(gmailMessageId, email);
         }
       }
 
-      // Also update on IMAP server (best-effort, async)
+      const dbFlags = flagMap[flag];
+      if (dbFlags) {
+        for (const email of deduped.values()) {
+          db.updateEmailFlags(numAccountId, String(email['gmailMessageId']), dbFlags);
+        }
+      }
+
+      // Also update on IMAP server (best-effort)
       try {
         const imapService = ImapService.getInstance();
         const imapFlags: { read?: boolean; starred?: boolean } = {};
@@ -179,8 +223,22 @@ export function registerMailIpcHandlers(): void {
         if (flag === 'starred') imapFlags.starred = value;
 
         if (Object.keys(imapFlags).length > 0) {
-          // We'd need UIDs here — for now, we update locally and sync will reconcile
-          // In a production app, we'd store IMAP UIDs alongside gmail_message_id
+          const byFolder = new Map<string, number[]>();
+          for (const email of deduped.values()) {
+            const folder = String(email['folder'] || '');
+            const uid = Number(email['gmailMessageId']);
+            if (!folder || !Number.isFinite(uid)) continue;
+            if (!byFolder.has(folder)) {
+              byFolder.set(folder, []);
+            }
+            byFolder.get(folder)!.push(uid);
+          }
+
+          for (const [folder, uids] of byFolder.entries()) {
+            if (uids.length > 0) {
+              await imapService.setFlags(accountId, folder, uids, imapFlags);
+            }
+          }
         }
       } catch (err) {
         log.warn('Failed to update flags on IMAP server:', err);

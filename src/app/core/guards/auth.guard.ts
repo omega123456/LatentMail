@@ -20,8 +20,8 @@ export const authGuard: CanActivateFn = async () => {
     if (response.success && (response.data as number) > 0) {
       return true;
     }
-  } catch {
-    // Fall through to redirect
+  } catch (err) {
+    console.warn('AuthGuard account check failed', err);
   }
 
   return router.createUrlTree(['/auth']);

@@ -209,13 +209,13 @@ export class AccountSwitcherComponent {
 
   switchAccount(accountId: number): void {
     this.accountsStore.setActiveAccount(accountId);
-    this.router.navigate(['/mail', accountId, 'inbox']);
+    this.router.navigate(['/mail', accountId, 'INBOX']);
   }
 
   async addAccount(): Promise<void> {
     const account = await this.accountsStore.login();
     if (account) {
-      this.router.navigate(['/mail', account.id, 'inbox']);
+      this.router.navigate(['/mail', account.id, 'INBOX']);
     }
   }
 

@@ -21,8 +21,8 @@ export const setupGuard: CanActivateFn = async () => {
       // Already have accounts, redirect to mail
       return router.createUrlTree(['/mail']);
     }
-  } catch {
-    // Allow access to auth page if we can't determine
+  } catch (err) {
+    console.warn('SetupGuard account check failed', err);
   }
 
   return true;

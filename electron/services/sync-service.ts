@@ -217,7 +217,7 @@ export class SyncService {
 
     const db = DatabaseService.getInstance();
     const intervalSetting = db.getSetting('syncInterval');
-    const interval = intervalMs || (intervalSetting ? Number(intervalSetting) : 300_000); // Default 5 minutes
+    const interval = intervalMs || this.parseSyncIntervalMs(intervalSetting);
 
     this.syncInterval = setInterval(() => {
       this.syncAllAccounts().catch(err => {
@@ -226,6 +226,17 @@ export class SyncService {
     }, interval);
 
     log.info(`Background sync started with ${interval / 1000}s interval`);
+  }
+
+  private parseSyncIntervalMs(value: string | null): number {
+    if (!value) return 300_000;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 300_000;
+    // Backward compatibility: older values were stored as minutes.
+    if (parsed < 1000) {
+      return Math.max(60_000, parsed * 60_000);
+    }
+    return Math.max(60_000, parsed);
   }
 
   /**

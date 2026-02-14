@@ -29,6 +29,14 @@ const FOLDER_ICON_MAP: Record<string, string> = {
   '[Gmail]/Important': 'label_important',
 };
 
+function normalizeFolderId(folderId: string): string {
+  const normalized = folderId.trim();
+  if (normalized.toLowerCase() === 'inbox') {
+    return 'INBOX';
+  }
+  return normalized;
+}
+
 export const FoldersStore = signalStore(
   { providedIn: 'root' },
   withState(initialState),
@@ -74,8 +82,9 @@ export const FoldersStore = signalStore(
 
             // Default to INBOX if no active folder
             const currentActive = store.activeFolderId();
-            const activeId = currentActive && folders.find(f => f.gmailLabelId === currentActive)
-              ? currentActive
+            const normalizedCurrentActive = currentActive ? normalizeFolderId(currentActive) : null;
+            const activeId = normalizedCurrentActive && folders.find(f => f.gmailLabelId === normalizedCurrentActive)
+              ? normalizedCurrentActive
               : 'INBOX';
 
             patchState(store, { folders, activeFolderId: activeId, loading: false });
@@ -93,8 +102,12 @@ export const FoldersStore = signalStore(
         }
       },
 
+      normalizeFolderId(folderId: string): string {
+        return normalizeFolderId(folderId);
+      },
+
       setActiveFolder(folderId: string): void {
-        patchState(store, { activeFolderId: folderId });
+        patchState(store, { activeFolderId: this.normalizeFolderId(folderId) });
       },
 
       clearFolders(): void {

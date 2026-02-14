@@ -6,6 +6,7 @@ import { UiStore } from '../../../store/ui.store';
 import { EmailListItemComponent } from './email-list-item.component';
 import { Thread } from '../../../core/models/email.model';
 import { FoldersStore } from '../../../store/folders.store';
+import { AccountsStore } from '../../../store/accounts.store';
 
 @Component({
   selector: 'app-email-list',
@@ -91,6 +92,7 @@ import { FoldersStore } from '../../../store/folders.store';
 export class EmailListComponent {
   readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
+  readonly accountsStore = inject(AccountsStore);
   readonly uiStore = inject(UiStore);
   readonly threadSelected = output<Thread>();
 
@@ -108,14 +110,19 @@ export class EmailListComponent {
       accountId,
       [thread.gmailThreadId],
       'starred',
-      !thread.isStarred
+      !thread.isStarred,
+      thread.gmailThreadId
     );
   }
 
   onScroll(index: number): void {
     const threads = this.emailsStore.threads();
     if (index > threads.length - 10 && this.emailsStore.hasMore()) {
-      // Load more handled via mail-shell
+      const activeAccount = this.accountsStore.activeAccount();
+      const activeFolderId = this.foldersStore.activeFolderId();
+      if (activeAccount && activeFolderId) {
+        this.emailsStore.loadMore(activeAccount.id, activeFolderId);
+      }
     }
   }
 }

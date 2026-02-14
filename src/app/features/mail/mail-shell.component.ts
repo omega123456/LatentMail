@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, effect } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -277,36 +277,17 @@ export class MailShellComponent implements OnInit, OnDestroy {
   private routeSub?: Subscription;
   private syncSub?: Subscription;
 
-  constructor() {
-    effect(() => {
-      const activeAccount = this.accountsStore.activeAccount();
-      if (activeAccount) {
-        this.foldersStore.loadFolders(activeAccount.id);
-        this.loadEmailsForActiveFolder(activeAccount.id);
-      }
-    });
-  }
+  constructor() { }
 
   ngOnInit(): void {
-    this.accountsStore.loadAccounts();
+    this.initializeRouteDrivenState().catch(() => {
+      // Initialization failures are reflected in individual stores.
+    });
 
-    this.routeSub = this.route.params.subscribe(params => {
-      const accountId = params['accountId'];
-      const folderId = params['folderId'];
-      const threadId = params['threadId'];
-
-      if (accountId) {
-        this.accountsStore.setActiveAccount(Number(accountId));
-      }
-      if (folderId) {
-        this.foldersStore.setActiveFolder(folderId);
-      }
-      if (threadId) {
-        const activeAccount = this.accountsStore.activeAccount();
-        if (activeAccount) {
-          this.emailsStore.loadThread(activeAccount.id, threadId);
-        }
-      }
+    this.routeSub = this.route.params.subscribe(() => {
+      this.applyRouteParams().catch(() => {
+        // Route handling failures are reflected in individual stores.
+      });
     });
 
     this.syncSub = this.electronService.onEvent<{
@@ -325,10 +306,7 @@ export class MailShellComponent implements OnInit, OnDestroy {
       }
     });
 
-    const activeAccount = this.accountsStore.activeAccount();
-    if (activeAccount) {
-      this.emailsStore.syncAccount(activeAccount.id);
-    }
+    this.triggerSyncForActiveAccount();
   }
 
   ngOnDestroy(): void {
@@ -339,23 +317,26 @@ export class MailShellComponent implements OnInit, OnDestroy {
   onFolderSelected(folderId: string): void {
     const activeAccount = this.accountsStore.activeAccount();
     if (activeAccount) {
+      const normalizedFolderId = this.foldersStore.normalizeFolderId(folderId);
       this.emailsStore.clearSelection();
-      this.emailsStore.loadThreads(activeAccount.id, folderId);
-      this.router.navigate(['/mail', activeAccount.id, folderId]);
+      this.emailsStore.loadThreads(activeAccount.id, normalizedFolderId);
+      this.router.navigate(['/mail', activeAccount.id, normalizedFolderId]);
     }
   }
 
-  onThreadSelected(thread: Thread): void {
+  async onThreadSelected(thread: Thread): Promise<void> {
     const activeAccount = this.accountsStore.activeAccount();
     if (activeAccount) {
-      this.emailsStore.loadThread(activeAccount.id, thread.gmailThreadId);
+      await this.emailsStore.loadThread(activeAccount.id, thread.gmailThreadId);
 
       if (!thread.isRead) {
+        const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
         this.emailsStore.flagEmails(
           activeAccount.id,
-          [thread.gmailThreadId],
+          messageIds.length > 0 ? messageIds : [thread.gmailThreadId],
           'read',
-          true
+          true,
+          thread.gmailThreadId
         );
       }
 
@@ -371,14 +352,16 @@ export class MailShellComponent implements OnInit, OnDestroy {
     const thread = this.emailsStore.selectedThread();
     const activeAccount = this.accountsStore.activeAccount();
     if (!thread || !activeAccount) return;
+    const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
+    const targetIds = messageIds.length > 0 ? messageIds : [thread.gmailThreadId];
 
     switch (action) {
       case 'archive':
-        this.emailsStore.moveEmails(activeAccount.id, [thread.gmailThreadId], '[Gmail]/All Mail');
+        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/All Mail', thread.gmailThreadId);
         this.emailsStore.clearSelection();
         break;
       case 'delete':
-        this.emailsStore.moveEmails(activeAccount.id, [thread.gmailThreadId], '[Gmail]/Trash');
+        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/Trash', thread.gmailThreadId);
         this.emailsStore.clearSelection();
         break;
       case 'reply':
@@ -411,5 +394,48 @@ export class MailShellComponent implements OnInit, OnDestroy {
   private loadEmailsForActiveFolder(accountId: number): void {
     const folderId = this.foldersStore.activeFolderId() || 'INBOX';
     this.emailsStore.loadThreads(accountId, folderId);
+  }
+
+  private async initializeRouteDrivenState(): Promise<void> {
+    await this.accountsStore.loadAccounts();
+    await this.applyRouteParams();
+    this.triggerSyncForActiveAccount();
+  }
+
+  private async applyRouteParams(): Promise<void> {
+    const params = this.route.snapshot.params;
+    const accountIdParam = params['accountId'];
+    const folderIdParam = params['folderId'];
+    const threadIdParam = params['threadId'];
+
+    if (accountIdParam) {
+      this.accountsStore.setActiveAccount(Number(accountIdParam));
+    }
+
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+
+    await this.foldersStore.loadFolders(activeAccount.id);
+
+    const resolvedFolderId = this.foldersStore.normalizeFolderId(
+      folderIdParam || this.foldersStore.activeFolderId() || 'INBOX'
+    );
+    this.foldersStore.setActiveFolder(resolvedFolderId);
+    await this.emailsStore.loadThreads(activeAccount.id, resolvedFolderId);
+
+    if (threadIdParam) {
+      await this.emailsStore.loadThread(activeAccount.id, threadIdParam);
+    } else {
+      this.emailsStore.clearSelection();
+    }
+  }
+
+  private triggerSyncForActiveAccount(): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    if (activeAccount) {
+      this.emailsStore.syncAccount(activeAccount.id);
+    }
   }
 }

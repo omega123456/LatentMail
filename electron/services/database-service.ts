@@ -342,6 +342,19 @@ export class DatabaseService {
     return this.mapEmailRow(result[0].values[0], result[0].columns);
   }
 
+  getEmailByGmailMessageId(accountId: number, gmailMessageId: string): Record<string, unknown> | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, gmail_message_id, gmail_thread_id, folder, from_address, from_name,
+        to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
+        is_read, is_starred, is_important, size, has_attachments, labels
+       FROM emails WHERE account_id = ? AND gmail_message_id = ? LIMIT 1`,
+      [accountId, gmailMessageId]
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    return this.mapEmailRow(result[0].values[0], result[0].columns);
+  }
+
   updateEmailFlags(
     accountId: number,
     gmailMessageId: string,

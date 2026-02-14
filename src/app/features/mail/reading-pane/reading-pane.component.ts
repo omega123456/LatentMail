@@ -376,22 +376,26 @@ export class ReadingPaneComponent {
   toggleStar(): void {
     const thread = this.emailsStore.selectedThread();
     if (!thread) return;
+    const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
     this.emailsStore.flagEmails(
       thread.accountId,
-      [thread.gmailThreadId],
+      messageIds.length > 0 ? messageIds : [thread.gmailThreadId],
       'starred',
-      !thread.isStarred
+      !thread.isStarred,
+      thread.gmailThreadId
     );
   }
 
   toggleRead(): void {
     const thread = this.emailsStore.selectedThread();
     if (!thread) return;
+    const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
     this.emailsStore.flagEmails(
       thread.accountId,
-      [thread.gmailThreadId],
+      messageIds.length > 0 ? messageIds : [thread.gmailThreadId],
       'read',
-      !thread.isRead
+      !thread.isRead,
+      thread.gmailThreadId
     );
   }
 }

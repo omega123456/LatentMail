@@ -8,7 +8,7 @@ export interface SettingsState {
   theme: ThemeMode;
   layout: LayoutMode;
   density: DensityMode;
-  syncInterval: number; // minutes
+  syncInterval: number; // minutes (UI-facing)
   syncOnStartup: boolean;
   desktopNotifications: boolean;
   showUnreadCounts: boolean;
@@ -44,11 +44,17 @@ export const SettingsStore = signalStore(
         const response = await electronService.getSettings();
         if (response.success && response.data) {
           const data = response.data as Record<string, string>;
+          const rawSyncInterval = data['syncInterval'] ? Number(data['syncInterval']) : null;
+          const syncIntervalMinutes = rawSyncInterval === null
+            ? store.syncInterval()
+            : rawSyncInterval >= 1000
+              ? Math.max(1, Math.round(rawSyncInterval / 60000))
+              : Math.max(1, rawSyncInterval);
           patchState(store, {
             theme: (data['theme'] as ThemeMode) || store.theme(),
             layout: (data['layout'] as LayoutMode) || store.layout(),
             density: (data['density'] as DensityMode) || store.density(),
-            syncInterval: data['syncInterval'] ? Number(data['syncInterval']) : store.syncInterval(),
+            syncInterval: syncIntervalMinutes,
             syncOnStartup: data['syncOnStartup'] !== undefined ? data['syncOnStartup'] === 'true' : store.syncOnStartup(),
             desktopNotifications: data['desktopNotifications'] !== undefined ? data['desktopNotifications'] === 'true' : store.desktopNotifications(),
             showUnreadCounts: data['showUnreadCounts'] !== undefined ? data['showUnreadCounts'] === 'true' : store.showUnreadCounts(),
@@ -62,8 +68,18 @@ export const SettingsStore = signalStore(
       },
 
       async updateSetting(key: string, value: string): Promise<void> {
-        patchState(store, { [key]: key === 'syncInterval' ? Number(value) : ['true', 'false'].includes(value) ? value === 'true' : value } as Partial<SettingsState>);
-        await electronService.setSettings({ [key]: value });
+        const parsedValue = key === 'syncInterval'
+          ? Number(value) >= 1000
+            ? Math.max(1, Math.round(Number(value) / 60000))
+            : Math.max(1, Number(value))
+          : ['true', 'false'].includes(value)
+            ? value === 'true'
+            : value;
+        patchState(store, { [key]: parsedValue } as Partial<SettingsState>);
+        const persistedValue = key === 'syncInterval'
+          ? String(Number(value) >= 1000 ? Number(value) : Math.max(1, Number(value)) * 60000)
+          : value;
+        await electronService.setSettings({ [key]: persistedValue });
       },
 
       async setTheme(theme: ThemeMode): Promise<void> {
@@ -82,8 +98,9 @@ export const SettingsStore = signalStore(
       },
 
       async setSyncInterval(minutes: number): Promise<void> {
-        patchState(store, { syncInterval: minutes });
-        await electronService.setSettings({ syncInterval: String(minutes) });
+        const safeMinutes = Math.max(1, minutes);
+        patchState(store, { syncInterval: safeMinutes });
+        await electronService.setSettings({ syncInterval: String(safeMinutes * 60000) });
       },
 
       async toggleSetting(key: keyof SettingsState): Promise<void> {

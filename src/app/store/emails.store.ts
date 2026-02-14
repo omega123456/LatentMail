@@ -103,10 +103,16 @@ export const EmailsStore = signalStore(
               currentPage: nextPage,
             });
           } else {
-            patchState(store, { loading: false });
+            patchState(store, {
+              loading: false,
+              error: response.error?.message || 'Failed to load more emails',
+            });
           }
-        } catch {
-          patchState(store, { loading: false });
+        } catch (err: unknown) {
+          patchState(store, {
+            loading: false,
+            error: err instanceof Error ? err.message : 'Failed to load more emails',
+          });
         }
       },
 
@@ -145,27 +151,36 @@ export const EmailsStore = signalStore(
         accountId: number,
         messageIds: string[],
         flag: string,
-        value: boolean
+        value: boolean,
+        threadId?: string
       ): Promise<void> {
         // Optimistic update
+        const targetThreadId = threadId || store.selectedThreadId() || null;
         if (flag === 'read') {
           patchState(store, {
             threads: store.threads().map(t =>
-              messageIds.includes(t.gmailThreadId) ? { ...t, isRead: value } : t
+              t.gmailThreadId === targetThreadId ? { ...t, isRead: value } : t
             ),
           });
         } else if (flag === 'starred') {
           patchState(store, {
             threads: store.threads().map(t =>
-              messageIds.includes(t.gmailThreadId) ? { ...t, isStarred: value } : t
+              t.gmailThreadId === targetThreadId ? { ...t, isStarred: value } : t
             ),
           });
         }
 
         try {
-          await electronService.flagEmails(String(accountId), messageIds, flag, value);
-        } catch (err) {
-          // Revert on failure — reload threads
+          const response = await electronService.flagEmails(String(accountId), messageIds, flag, value);
+          if (!response.success) {
+            patchState(store, {
+              error: response.error?.message || 'Failed to update flags',
+            });
+          }
+        } catch (err: unknown) {
+          patchState(store, {
+            error: err instanceof Error ? err.message : 'Failed to update flags',
+          });
         }
       },
 
@@ -173,17 +188,26 @@ export const EmailsStore = signalStore(
       async moveEmails(
         accountId: number,
         messageIds: string[],
-        targetFolder: string
+        targetFolder: string,
+        threadId?: string
       ): Promise<void> {
         // Optimistic remove from list
+        const targetThreadId = threadId || store.selectedThreadId() || null;
         patchState(store, {
-          threads: store.threads().filter(t => !messageIds.includes(t.gmailThreadId)),
+          threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
         });
 
         try {
-          await electronService.moveEmails(String(accountId), messageIds, targetFolder);
-        } catch (err) {
-          // On failure, we'd need to reload
+          const response = await electronService.moveEmails(String(accountId), messageIds, targetFolder);
+          if (!response.success) {
+            patchState(store, {
+              error: response.error?.message || 'Failed to move emails',
+            });
+          }
+        } catch (err: unknown) {
+          patchState(store, {
+            error: err instanceof Error ? err.message : 'Failed to move emails',
+          });
         }
       },
 
@@ -196,10 +220,16 @@ export const EmailsStore = signalStore(
             const results = response.data as Thread[];
             patchState(store, { threads: results, loading: false, hasMore: false });
           } else {
-            patchState(store, { loading: false });
+            patchState(store, {
+              loading: false,
+              error: response.error?.message || 'Search failed',
+            });
           }
-        } catch {
-          patchState(store, { loading: false });
+        } catch (err: unknown) {
+          patchState(store, {
+            loading: false,
+            error: err instanceof Error ? err.message : 'Search failed',
+          });
         }
       },
 
@@ -207,10 +237,20 @@ export const EmailsStore = signalStore(
       async syncAccount(accountId: number): Promise<void> {
         patchState(store, { syncing: true, syncProgress: 0 });
         try {
-          await electronService.syncAccount(String(accountId));
-          patchState(store, { syncing: false, syncProgress: 100 });
-        } catch {
-          patchState(store, { syncing: false });
+          const response = await electronService.syncAccount(String(accountId));
+          if (response.success) {
+            patchState(store, { syncing: false, syncProgress: 100 });
+          } else {
+            patchState(store, {
+              syncing: false,
+              error: response.error?.message || 'Sync failed',
+            });
+          }
+        } catch (err: unknown) {
+          patchState(store, {
+            syncing: false,
+            error: err instanceof Error ? err.message : 'Sync failed',
+          });
         }
       },
 

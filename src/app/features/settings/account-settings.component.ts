@@ -49,7 +49,7 @@ import { ConfirmDialogComponent, ConfirmDialogData } from '../../shared/componen
             </div>
             <div class="account-actions">
               @if (account.needsReauth) {
-                <button mat-raised-button color="primary" (click)="reauthAccount()">
+                <button mat-raised-button color="primary" (click)="reauthAccount(account.id)">
                   Re-authenticate
                 </button>
               }
@@ -227,7 +227,8 @@ export class AccountSettingsComponent implements OnInit {
     await this.accountsStore.login();
   }
 
-  async reauthAccount(): Promise<void> {
+  async reauthAccount(accountId: number): Promise<void> {
+    this.accountsStore.setActiveAccount(accountId);
     await this.accountsStore.login();
   }
 
