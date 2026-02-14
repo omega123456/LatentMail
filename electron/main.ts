@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { app, BrowserWindow, shell } from 'electron';
 import * as path from 'path';
 import log from 'electron-log/main';

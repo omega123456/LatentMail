@@ -9,7 +9,7 @@
     "build": "ng build",
     "build:prod": "ng build --configuration=production",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "build:all": "yarn build:prod && yarn build:electron",
+    "build:all": "ng build --configuration=electron && yarn build:electron",
     "electron:dev": "yarn build:electron && NODE_ENV=development electron .",
     "electron:start": "yarn build:all && electron .",
     "watch": "ng build --watch --configuration development",
@@ -32,6 +32,7 @@
   "private": true,
   "packageManager": "yarn@1.22.22",
   "dependencies": {
+    "dotenv": "^16.4.5",
     "@angular/animations": "^21.1.4",
     "@angular/cdk": "^21.1.4",
     "@angular/common": "^21.1.0",
