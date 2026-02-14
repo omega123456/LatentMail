@@ -10,7 +10,7 @@
     "build:prod": "ng build --configuration=production",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:all": "ng build --configuration=electron && yarn build:electron",
-    "electron:dev": "yarn build:electron && NODE_ENV=development electron .",
+    "electron:dev": "yarn build:electron && npx concurrently -n ng,electron -c blue,green \"ng serve\" \"npx wait-on http://localhost:4200 && npx cross-env NODE_ENV=development electron .\"",
     "electron:start": "yarn build:all && electron .",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
@@ -52,6 +52,9 @@
     "tslib": "^2.3.0"
   },
   "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "wait-on": "^8.0.1",
     "@angular/build": "^21.1.4",
     "@angular/cli": "^21.1.4",
     "@angular/compiler-cli": "^21.1.0",

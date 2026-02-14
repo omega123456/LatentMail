@@ -42,13 +42,18 @@ interface OAuthTokens {
 export class OAuthService {
   private static instance: OAuthService;
   private clientId: string;
+  private clientSecret: string;
   private loopbackServer: OAuthLoopbackServer | null = null;
   private refreshTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   private constructor() {
     this.clientId = process.env['GOOGLE_CLIENT_ID'] || '';
+    this.clientSecret = process.env['GOOGLE_CLIENT_SECRET'] || '';
     if (!this.clientId) {
       log.warn('GOOGLE_CLIENT_ID not set — OAuth login will not work');
+    }
+    if (!this.clientSecret) {
+      log.warn('GOOGLE_CLIENT_SECRET not set — required if using a Web application OAuth client; optional for Desktop app client');
     }
   }
 
@@ -331,13 +336,17 @@ export class OAuthService {
   }
 
   private exchangeCodeForTokens(code: string, redirectUri: string, codeVerifier: string): Promise<OAuthTokens> {
-    const body = new URLSearchParams({
+    const params: Record<string, string> = {
       code,
       client_id: this.clientId,
       redirect_uri: redirectUri,
       grant_type: 'authorization_code',
       code_verifier: codeVerifier,
-    }).toString();
+    };
+    if (this.clientSecret) {
+      params.client_secret = this.clientSecret;
+    }
+    const body = new URLSearchParams(params).toString();
 
     return new Promise((resolve, reject) => {
       const req = https.request(GOOGLE_TOKEN_URL, {
@@ -374,11 +383,15 @@ export class OAuthService {
   }
 
   private refreshTokenRequest(refreshToken: string): Promise<OAuthTokens> {
-    const body = new URLSearchParams({
+    const params: Record<string, string> = {
       refresh_token: refreshToken,
       client_id: this.clientId,
       grant_type: 'refresh_token',
-    }).toString();
+    };
+    if (this.clientSecret) {
+      params.client_secret = this.clientSecret;
+    }
+    const body = new URLSearchParams(params).toString();
 
     return new Promise((resolve, reject) => {
       const req = https.request(GOOGLE_TOKEN_URL, {

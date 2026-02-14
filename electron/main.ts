@@ -93,9 +93,13 @@ function createMainWindow(): void {
   // Restore window position/size from saved state
   restoreWindowState(mainWindow);
 
-  // Show window when ready
+  // Show window when ready; in dev mode open DevTools once the window is shown
+  const isDev = process.env['NODE_ENV'] === 'development';
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+    if (isDev) {
+      mainWindow?.webContents.openDevTools();
+    }
   });
 
   // Open external links in system browser
@@ -115,10 +119,9 @@ function createMainWindow(): void {
     mainWindow = null;
   });
 
-  // Load the Angular app
-  if (process.env['NODE_ENV'] === 'development') {
+  // Load the Angular app (dev: ng serve on 4200; prod: built index)
+  if (isDev) {
     mainWindow.loadURL('http://localhost:4200');
-    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/mailclient-app/browser/index.html'));
   }

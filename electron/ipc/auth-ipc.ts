@@ -26,6 +26,9 @@ export function registerAuthIpcHandlers(): void {
       if (message.includes('GOOGLE_CLIENT_ID')) {
         return ipcError('AUTH_NOT_CONFIGURED', message);
       }
+      if (message.includes('client_secret is missing')) {
+        return ipcError('AUTH_NOT_CONFIGURED', 'Add GOOGLE_CLIENT_SECRET to your .env file. Required when using a Web application OAuth client in Google Cloud Console.');
+      }
       if (message.includes('timed out')) {
         return ipcError('AUTH_TIMEOUT', 'Authentication timed out. Please try again.');
       }
