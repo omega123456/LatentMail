@@ -23,6 +23,7 @@ interface ElectronAPI {
     login: () => Promise<IpcResponse>;
     logout: (accountId: string) => Promise<IpcResponse>;
     getAccounts: () => Promise<IpcResponse>;
+    getAccountCount: () => Promise<IpcResponse>;
   };
   ai: {
     summarize: (threadContent: string) => Promise<IpcResponse>;
@@ -106,6 +107,10 @@ export class ElectronService {
 
   async getAccounts(): Promise<IpcResponse> {
     return this.invoke(() => this.api!.auth.getAccounts());
+  }
+
+  async getAccountCount(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.auth.getAccountCount());
   }
 
   // ---- AI operations ----

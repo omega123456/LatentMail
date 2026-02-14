@@ -16,6 +16,7 @@ const electronAPI = {
         login: () => electron_1.ipcRenderer.invoke('auth:login'),
         logout: (accountId) => electron_1.ipcRenderer.invoke('auth:logout', accountId),
         getAccounts: () => electron_1.ipcRenderer.invoke('auth:get-accounts'),
+        getAccountCount: () => electron_1.ipcRenderer.invoke('auth:get-account-count'),
     },
     // AI operations
     ai: {

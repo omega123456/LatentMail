@@ -2,8 +2,9 @@ export interface Account {
   id: number;
   email: string;
   displayName: string;
-  avatarUrl?: string;
+  avatarUrl?: string | null;
   isActive: boolean;
+  needsReauth?: boolean;
 }
 
 export interface Folder {

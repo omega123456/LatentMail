@@ -3,7 +3,7 @@
 // All tables use INTEGER PRIMARY KEY for autoincrement via SQLite's rowid
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CREATE_TABLES_SQL = exports.SCHEMA_VERSION = void 0;
-exports.SCHEMA_VERSION = 1;
+exports.SCHEMA_VERSION = 2;
 exports.CREATE_TABLES_SQL = `
   -- Accounts table
   CREATE TABLE IF NOT EXISTS accounts (
@@ -14,6 +14,7 @@ exports.CREATE_TABLES_SQL = `
     last_sync_at TEXT,
     sync_cursor TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
+    needs_reauth INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );

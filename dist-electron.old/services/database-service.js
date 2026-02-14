@@ -99,16 +99,33 @@ class DatabaseService {
         if (!this.db)
             throw new Error('Database not initialized');
         const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
-        const versionRow = result.length > 0 && result[0].values.length > 0
-            ? { version: result[0].values[0][0] }
-            : undefined;
-        if (!versionRow) {
+        let currentVersion = result.length > 0 && result[0].values.length > 0
+            ? result[0].values[0][0]
+            : 0;
+        if (currentVersion === 0) {
             this.db.run('INSERT INTO schema_version (version) VALUES (?)', [schema_1.SCHEMA_VERSION]);
             main_1.default.info(`Database schema version set to ${schema_1.SCHEMA_VERSION}`);
+            return;
         }
-        else if (versionRow.version < schema_1.SCHEMA_VERSION) {
-            main_1.default.info(`Migrating database from version ${versionRow.version} to ${schema_1.SCHEMA_VERSION}`);
-            this.db.run('UPDATE schema_version SET version = ?', [schema_1.SCHEMA_VERSION]);
+        while (currentVersion < schema_1.SCHEMA_VERSION) {
+            const nextVersion = currentVersion + 1;
+            main_1.default.info(`Migrating database from version ${currentVersion} to ${nextVersion}`);
+            if (nextVersion === 2) {
+                this.migrateTo2();
+            }
+            this.db.run('UPDATE schema_version SET version = ?', [nextVersion]);
+            currentVersion = nextVersion;
+        }
+    }
+    /** Migration 1 → 2: add needs_reauth to accounts if missing */
+    migrateTo2() {
+        if (!this.db)
+            return;
+        const pragma = this.db.exec('PRAGMA table_info(accounts)');
+        const columns = pragma.length > 0 ? pragma[0].values.map((row) => row[1]) : [];
+        if (!columns.includes('needs_reauth')) {
+            this.db.run('ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0');
+            main_1.default.info('Added needs_reauth column to accounts');
         }
     }
     /** Persist the in-memory database to disk */
@@ -167,7 +184,7 @@ class DatabaseService {
     getAccounts() {
         if (!this.db)
             throw new Error('Database not initialized');
-        const result = this.db.exec('SELECT id, email, display_name, avatar_url, is_active FROM accounts WHERE is_active = 1');
+        const result = this.db.exec('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE is_active = 1');
         if (result.length === 0)
             return [];
         return result[0].values.map((row) => ({
@@ -176,7 +193,62 @@ class DatabaseService {
             display_name: row[2],
             avatar_url: row[3],
             is_active: row[4],
+            needs_reauth: row[5] || 0,
         }));
+    }
+    getAccountById(id) {
+        if (!this.db)
+            throw new Error('Database not initialized');
+        const result = this.db.exec('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE id = ?', [id]);
+        if (result.length === 0 || result[0].values.length === 0)
+            return null;
+        const row = result[0].values[0];
+        return {
+            id: row[0],
+            email: row[1],
+            display_name: row[2],
+            avatar_url: row[3],
+            is_active: row[4],
+            needs_reauth: row[5] || 0,
+        };
+    }
+    createAccount(email, displayName, avatarUrl) {
+        if (!this.db)
+            throw new Error('Database not initialized');
+        this.db.run('INSERT INTO accounts (email, display_name, avatar_url, is_active) VALUES (?, ?, ?, 1)', [email, displayName, avatarUrl]);
+        // Get the last inserted rowid
+        const result = this.db.exec('SELECT last_insert_rowid()');
+        const id = result[0].values[0][0];
+        this.scheduleSave();
+        return id;
+    }
+    updateAccount(id, displayName, avatarUrl) {
+        if (!this.db)
+            throw new Error('Database not initialized');
+        this.db.run('UPDATE accounts SET display_name = ?, avatar_url = ?, needs_reauth = 0, updated_at = datetime(\'now\') WHERE id = ?', [displayName, avatarUrl, id]);
+        this.scheduleSave();
+    }
+    deleteAccount(id) {
+        if (!this.db)
+            throw new Error('Database not initialized');
+        // CASCADE will handle emails, threads, labels, filters
+        this.db.run('DELETE FROM accounts WHERE id = ?', [id]);
+        this.scheduleSave();
+        main_1.default.info(`Deleted account ${id} and all related data`);
+    }
+    setAccountNeedsReauth(id) {
+        if (!this.db)
+            throw new Error('Database not initialized');
+        this.db.run('UPDATE accounts SET needs_reauth = 1, updated_at = datetime(\'now\') WHERE id = ?', [id]);
+        this.scheduleSave();
+    }
+    getAccountCount() {
+        if (!this.db)
+            throw new Error('Database not initialized');
+        const result = this.db.exec('SELECT COUNT(*) FROM accounts WHERE is_active = 1');
+        if (result.length === 0)
+            return 0;
+        return result[0].values[0][0];
     }
     close() {
         if (this.db) {

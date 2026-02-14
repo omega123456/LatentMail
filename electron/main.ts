@@ -3,6 +3,7 @@ import * as path from 'path';
 import log from 'electron-log/main';
 import { registerAllIpcHandlers } from './ipc';
 import { DatabaseService } from './services/database-service';
+import { OAuthService } from './services/oauth-service';
 
 // Configure logging
 log.initialize();
@@ -38,6 +39,14 @@ if (!gotTheLock) {
 
     // Register IPC handlers
     registerAllIpcHandlers();
+
+    // Initialize OAuth token refresh timers for existing accounts
+    try {
+      const oauthService = OAuthService.getInstance();
+      oauthService.initializeRefreshTimers();
+    } catch (err) {
+      log.warn('Failed to initialize OAuth refresh timers:', err);
+    }
 
     // Create the main window
     createMainWindow();

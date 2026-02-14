@@ -2,37 +2,86 @@ import { ipcMain } from 'electron';
 import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
+import { OAuthService } from '../services/oauth-service';
 
 export function registerAuthIpcHandlers(): void {
+  // Initiate OAuth login flow (opens system browser)
   ipcMain.handle(IPC_CHANNELS.AUTH_LOGIN, async () => {
     try {
-      // TODO: Implement in Phase 2 with OAuthService
       log.info('OAuth login requested');
-      return ipcError('AUTH_NOT_IMPLEMENTED', 'OAuth login not yet implemented');
-    } catch (err) {
+      const oauthService = OAuthService.getInstance();
+      const account = await oauthService.login();
+
+      // Map to the format the renderer expects
+      return ipcSuccess({
+        id: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        avatarUrl: account.avatarUrl,
+      });
+    } catch (err: any) {
       log.error('Failed to initiate login:', err);
-      return ipcError('AUTH_LOGIN_FAILED', 'Failed to start authentication');
+      const message = err.message || 'Failed to start authentication';
+
+      if (message.includes('GOOGLE_CLIENT_ID')) {
+        return ipcError('AUTH_NOT_CONFIGURED', message);
+      }
+      if (message.includes('timed out')) {
+        return ipcError('AUTH_TIMEOUT', 'Authentication timed out. Please try again.');
+      }
+      if (message.includes('denied')) {
+        return ipcError('AUTH_DENIED', 'Authentication was denied. Please try again and grant the required permissions.');
+      }
+
+      return ipcError('AUTH_LOGIN_FAILED', message);
     }
   });
 
+  // Remove an account (revoke tokens, delete data, clear credentials)
   ipcMain.handle(IPC_CHANNELS.AUTH_LOGOUT, async (_event, accountId: string) => {
     try {
       log.info(`Logout requested for account ${accountId}`);
+      const oauthService = OAuthService.getInstance();
+      await oauthService.logout(accountId);
       return ipcSuccess(null);
-    } catch (err) {
+    } catch (err: any) {
       log.error('Failed to logout:', err);
-      return ipcError('AUTH_LOGOUT_FAILED', 'Failed to logout');
+      return ipcError('AUTH_LOGOUT_FAILED', err.message || 'Failed to remove account');
     }
   });
 
+  // Get all active accounts
   ipcMain.handle(IPC_CHANNELS.AUTH_GET_ACCOUNTS, async () => {
     try {
       const db = DatabaseService.getInstance();
       const accounts = db.getAccounts();
-      return ipcSuccess(accounts);
-    } catch (err) {
+
+      // Map snake_case DB fields to camelCase for the renderer
+      const mapped = accounts.map(a => ({
+        id: a.id,
+        email: a.email,
+        displayName: a.display_name,
+        avatarUrl: a.avatar_url,
+        isActive: a.is_active === 1,
+        needsReauth: a.needs_reauth === 1,
+      }));
+
+      return ipcSuccess(mapped);
+    } catch (err: any) {
       log.error('Failed to get accounts:', err);
       return ipcError('AUTH_GET_ACCOUNTS_FAILED', 'Failed to retrieve accounts');
+    }
+  });
+
+  // Get account count (used by route guards)
+  ipcMain.handle(IPC_CHANNELS.AUTH_GET_ACCOUNT_COUNT, async () => {
+    try {
+      const db = DatabaseService.getInstance();
+      const count = db.getAccountCount();
+      return ipcSuccess(count);
+    } catch (err: any) {
+      log.error('Failed to get account count:', err);
+      return ipcError('AUTH_GET_ACCOUNT_COUNT_FAILED', 'Failed to get account count');
     }
   });
 }

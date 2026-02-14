@@ -36,6 +36,8 @@ const electronAPI = {
       ipcRenderer.invoke('auth:logout', accountId) as Promise<IpcResponse>,
     getAccounts: () =>
       ipcRenderer.invoke('auth:get-accounts') as Promise<IpcResponse>,
+    getAccountCount: () =>
+      ipcRenderer.invoke('auth:get-account-count') as Promise<IpcResponse>,
   },
 
   // AI operations

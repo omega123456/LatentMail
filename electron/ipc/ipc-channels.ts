@@ -13,6 +13,7 @@ export const IPC_CHANNELS = {
   AUTH_LOGIN: 'auth:login',
   AUTH_LOGOUT: 'auth:logout',
   AUTH_GET_ACCOUNTS: 'auth:get-accounts',
+  AUTH_GET_ACCOUNT_COUNT: 'auth:get-account-count',
 
   // AI operations
   AI_SUMMARIZE: 'ai:summarize',

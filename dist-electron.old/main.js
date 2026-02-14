@@ -42,6 +42,7 @@ const path = __importStar(require("path"));
 const main_1 = __importDefault(require("electron-log/main"));
 const ipc_1 = require("./ipc");
 const database_service_1 = require("./services/database-service");
+const oauth_service_1 = require("./services/oauth-service");
 // Configure logging
 main_1.default.initialize();
 main_1.default.transports.file.maxSize = 10 * 1024 * 1024; // 10MB
@@ -74,6 +75,14 @@ else {
         }
         // Register IPC handlers
         (0, ipc_1.registerAllIpcHandlers)();
+        // Initialize OAuth token refresh timers for existing accounts
+        try {
+            const oauthService = oauth_service_1.OAuthService.getInstance();
+            oauthService.initializeRefreshTimers();
+        }
+        catch (err) {
+            main_1.default.warn('Failed to initialize OAuth refresh timers:', err);
+        }
         // Create the main window
         createMainWindow();
     });

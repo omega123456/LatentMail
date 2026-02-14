@@ -1,17 +1,17 @@
-import { Component } from '@angular/core';
+import { Component, inject, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
+import { AccountSwitcherComponent } from './sidebar/account-switcher.component';
+import { AccountsStore } from '../../store/accounts.store';
 
 @Component({
   selector: 'app-mail-shell',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink, AccountSwitcherComponent],
   template: `
     <div class="mail-shell">
       <aside class="sidebar">
-        <div class="sidebar-header">
-          <span class="material-symbols-outlined">account_circle</span>
-          <span>Accounts</span>
-        </div>
+        <app-account-switcher />
         <nav class="folder-list">
           <div class="folder-item active">
             <span class="material-symbols-outlined">inbox</span>
@@ -38,15 +38,30 @@ import { CommonModule } from '@angular/common';
             <span>Trash</span>
           </div>
         </nav>
+        <div class="sidebar-footer">
+          <a class="folder-item" routerLink="/settings">
+            <span class="material-symbols-outlined">settings</span>
+            <span>Settings</span>
+          </a>
+        </div>
       </aside>
       <div class="email-list">
         <div class="email-list-header">
           <span>Inbox</span>
         </div>
+
+        @if (accountsStore.accountsNeedingReauth().length > 0) {
+          <div class="reauth-banner">
+            <span class="material-symbols-outlined">warning</span>
+            <span>Some accounts need re-authentication.</span>
+            <a routerLink="/settings/accounts">Fix</a>
+          </div>
+        }
+
         <div class="email-list-empty">
           <span class="material-symbols-outlined">inbox</span>
           <p>No emails yet</p>
-          <p class="hint">Connect a Gmail account to get started</p>
+          <p class="hint">Email sync will begin after connecting a Gmail account</p>
         </div>
       </div>
       <div class="reading-pane">
@@ -73,14 +88,6 @@ import { CommonModule } from '@angular/common';
       overflow-y: auto;
     }
 
-    .sidebar-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 16px;
-      font-weight: 500;
-    }
-
     .folder-list {
       flex: 1;
     }
@@ -93,6 +100,7 @@ import { CommonModule } from '@angular/common';
       cursor: pointer;
       color: var(--color-text-primary);
       transition: background-color 120ms ease;
+      text-decoration: none;
 
       &:hover {
         background-color: var(--color-primary-light);
@@ -109,6 +117,11 @@ import { CommonModule } from '@angular/common';
       }
     }
 
+    .sidebar-footer {
+      border-top: 1px solid var(--color-border);
+      padding: 4px 0;
+    }
+
     .email-list {
       width: var(--email-list-width, 320px);
       border-right: 1px solid var(--color-border);
@@ -122,6 +135,28 @@ import { CommonModule } from '@angular/common';
       font-weight: 600;
       font-size: 16px;
       border-bottom: 1px solid var(--color-border);
+    }
+
+    .reauth-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background-color: #FFF3E0;
+      font-size: 12px;
+      color: #E65100;
+      border-bottom: 1px solid #FFE0B2;
+
+      .material-symbols-outlined {
+        font-size: 16px;
+      }
+
+      a {
+        color: var(--color-primary);
+        font-weight: 500;
+        text-decoration: none;
+        margin-left: auto;
+      }
     }
 
     .email-list-empty, .reading-pane-empty {
@@ -154,4 +189,10 @@ import { CommonModule } from '@angular/common';
     }
   `]
 })
-export class MailShellComponent {}
+export class MailShellComponent implements OnInit {
+  readonly accountsStore = inject(AccountsStore);
+
+  ngOnInit(): void {
+    this.accountsStore.loadAccounts();
+  }
+}

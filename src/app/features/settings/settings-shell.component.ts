@@ -1,12 +1,12 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 
 @Component({
   selector: 'app-settings-shell',
   standalone: true,
-  imports: [CommonModule, RouterLink, MatButtonModule],
+  imports: [CommonModule, RouterLink, RouterLinkActive, RouterOutlet, MatButtonModule],
   template: `
     <div class="settings-shell">
       <div class="settings-header">
@@ -18,38 +18,37 @@ import { MatButtonModule } from '@angular/material/button';
       </div>
       <div class="settings-body">
         <nav class="settings-nav">
-          <div class="nav-item active">
+          <a class="nav-item" routerLink="general" routerLinkActive="active">
             <span class="material-symbols-outlined">settings</span>
             General
-          </div>
-          <div class="nav-item">
+          </a>
+          <a class="nav-item" routerLink="accounts" routerLinkActive="active">
             <span class="material-symbols-outlined">account_circle</span>
             Accounts
-          </div>
-          <div class="nav-item">
+          </a>
+          <a class="nav-item disabled">
             <span class="material-symbols-outlined">auto_awesome</span>
             AI
-          </div>
-          <div class="nav-item">
+          </a>
+          <a class="nav-item disabled">
             <span class="material-symbols-outlined">keyboard</span>
             Keyboard
-          </div>
-          <div class="nav-item">
+          </a>
+          <a class="nav-item disabled">
             <span class="material-symbols-outlined">notifications</span>
             Notifications
-          </div>
-          <div class="nav-item">
+          </a>
+          <a class="nav-item disabled">
             <span class="material-symbols-outlined">draw</span>
             Signatures
-          </div>
-          <div class="nav-item">
+          </a>
+          <a class="nav-item disabled">
             <span class="material-symbols-outlined">filter_list</span>
             Filters
-          </div>
+          </a>
         </nav>
         <div class="settings-content">
-          <h2>General Settings</h2>
-          <p class="placeholder">Settings content will be implemented in Phase 4.</p>
+          <router-outlet />
         </div>
       </div>
     </div>
@@ -107,8 +106,9 @@ import { MatButtonModule } from '@angular/material/button';
       color: var(--color-text-primary);
       font-size: 14px;
       transition: background-color 120ms ease;
+      text-decoration: none;
 
-      &:hover {
+      &:hover:not(.disabled) {
         background-color: var(--color-surface-variant);
       }
 
@@ -116,6 +116,12 @@ import { MatButtonModule } from '@angular/material/button';
         background-color: var(--color-primary-light);
         color: var(--color-primary);
         font-weight: 500;
+      }
+
+      &.disabled {
+        color: var(--color-text-tertiary);
+        cursor: default;
+        pointer-events: none;
       }
 
       .material-symbols-outlined {
@@ -127,16 +133,6 @@ import { MatButtonModule } from '@angular/material/button';
       flex: 1;
       padding: 24px 32px;
       overflow-y: auto;
-    }
-
-    h2 {
-      font-size: 18px;
-      font-weight: 600;
-      margin-bottom: 16px;
-    }
-
-    .placeholder {
-      color: var(--color-text-tertiary);
     }
   `]
 })
