@@ -1,7 +1,8 @@
-import { Component, inject, input, output } from '@angular/core';
+import { Component, inject, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ScrollingModule } from '@angular/cdk/scrolling';
 import { EmailsStore } from '../../../store/emails.store';
+import { UiStore } from '../../../store/ui.store';
 import { EmailListItemComponent } from './email-list-item.component';
 import { Thread } from '../../../core/models/email.model';
 import { FoldersStore } from '../../../store/folders.store';
@@ -12,16 +13,6 @@ import { FoldersStore } from '../../../store/folders.store';
   imports: [CommonModule, ScrollingModule, EmailListItemComponent],
   template: `
     <div class="email-list-container">
-      <div class="email-list-header">
-        <span class="folder-name">{{ foldersStore.activeFolder()?.name || 'Inbox' }}</span>
-        @if (emailsStore.syncing()) {
-          <span class="sync-indicator">
-            <span class="material-symbols-outlined spinning">sync</span>
-            Syncing...
-          </span>
-        }
-      </div>
-
       @if (emailsStore.loading() && emailsStore.threads().length === 0) {
         <div class="email-list-loading">
           <span class="material-symbols-outlined spinning">sync</span>
@@ -35,7 +26,7 @@ import { FoldersStore } from '../../../store/folders.store';
         </div>
       } @else {
         <cdk-virtual-scroll-viewport
-          itemSize="76"
+          [itemSize]="uiStore.densityHeight()"
           class="email-scroll-viewport"
           (scrolledIndexChange)="onScroll($event)"
         >
@@ -43,6 +34,7 @@ import { FoldersStore } from '../../../store/folders.store';
             *cdkVirtualFor="let thread of emailsStore.threads(); trackBy: trackByThreadId"
             [thread]="thread"
             [isSelected]="thread.gmailThreadId === emailsStore.selectedThreadId()"
+            [density]="uiStore.density()"
             (clicked)="onThreadClick(thread)"
             (starToggled)="onStarToggle(thread)"
           />
@@ -56,43 +48,6 @@ import { FoldersStore } from '../../../store/folders.store';
       flex-direction: column;
       height: 100%;
       overflow: hidden;
-    }
-
-    .email-list-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-      font-weight: 600;
-      font-size: 16px;
-      border-bottom: 1px solid var(--color-border);
-      min-height: 48px;
-    }
-
-    .folder-name {
-      color: var(--color-text-primary);
-    }
-
-    .sync-indicator {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 12px;
-      font-weight: 400;
-      color: var(--color-text-tertiary);
-
-      .material-symbols-outlined {
-        font-size: 16px;
-      }
-    }
-
-    .spinning {
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
     }
 
     .email-scroll-viewport {
@@ -122,11 +77,21 @@ import { FoldersStore } from '../../../store/folders.store';
         font-size: 12px;
       }
     }
+
+    .spinning {
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
   `]
 })
 export class EmailListComponent {
   readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
+  readonly uiStore = inject(UiStore);
   readonly threadSelected = output<Thread>();
 
   trackByThreadId(_index: number, thread: Thread): string {
@@ -148,10 +113,9 @@ export class EmailListComponent {
   }
 
   onScroll(index: number): void {
-    // Load more when near the end
     const threads = this.emailsStore.threads();
     if (index > threads.length - 10 && this.emailsStore.hasMore()) {
-      // Would need accountId and folderId from parent — handled in mail-shell
+      // Load more handled via mail-shell
     }
   }
 }

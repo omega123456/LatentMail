@@ -12,17 +12,21 @@ import { FoldersStore } from '../../../store/folders.store';
         <div
           class="folder-item"
           [class.active]="folder.gmailLabelId === foldersStore.activeFolderId()"
+          [class.collapsed]="collapsed()"
+          [title]="collapsed() ? folder.name : ''"
           (click)="onFolderClick(folder.gmailLabelId)"
         >
           <span class="material-symbols-outlined">{{ folder.icon || 'folder' }}</span>
-          <span class="folder-name">{{ folder.name }}</span>
-          @if (folder.unreadCount > 0) {
-            <span class="unread-count">{{ folder.unreadCount }}</span>
+          @if (!collapsed()) {
+            <span class="folder-name">{{ folder.name }}</span>
+            @if (folder.unreadCount > 0) {
+              <span class="unread-count">{{ folder.unreadCount }}</span>
+            }
           }
         </div>
       }
 
-      @if (foldersStore.userLabels().length > 0) {
+      @if (!collapsed() && foldersStore.userLabels().length > 0) {
         <div class="labels-header">Labels</div>
         @for (label of foldersStore.userLabels(); track label.gmailLabelId) {
           <div
@@ -44,6 +48,7 @@ import { FoldersStore } from '../../../store/folders.store';
     .folder-list {
       flex: 1;
       overflow-y: auto;
+      overflow-x: hidden;
     }
 
     .folder-item {
@@ -55,6 +60,7 @@ import { FoldersStore } from '../../../store/folders.store';
       color: var(--color-text-primary);
       transition: background-color 120ms ease;
       font-size: 14px;
+      white-space: nowrap;
 
       &:hover {
         background-color: var(--color-primary-light);
@@ -66,8 +72,14 @@ import { FoldersStore } from '../../../store/folders.store';
         font-weight: 500;
       }
 
+      &.collapsed {
+        justify-content: center;
+        padding: 10px 0;
+      }
+
       .material-symbols-outlined {
         font-size: 20px;
+        flex-shrink: 0;
       }
     }
 
@@ -98,6 +110,7 @@ import { FoldersStore } from '../../../store/folders.store';
 })
 export class FolderListComponent {
   readonly foldersStore = inject(FoldersStore);
+  readonly collapsed = input(false);
   readonly folderSelected = output<string>();
 
   onFolderClick(folderId: string): void {

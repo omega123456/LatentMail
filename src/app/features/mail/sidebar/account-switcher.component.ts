@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { MatMenuModule } from '@angular/material/menu';
@@ -11,11 +11,11 @@ import { AccountsStore } from '../../../store/accounts.store';
   standalone: true,
   imports: [CommonModule, MatMenuModule, MatButtonModule, MatDividerModule],
   template: `
-    <div class="account-switcher">
+    <div class="account-switcher" [class.collapsed]="collapsed()">
       <button
         class="account-trigger"
         [matMenuTriggerFor]="accountMenu"
-        matTooltip="Switch account"
+        [title]="collapsed() ? (accountsStore.activeAccount()?.email || 'Switch account') : ''"
       >
         @if (accountsStore.activeAccount(); as active) {
           <div class="avatar" [style.background-image]="active.avatarUrl ? 'url(' + active.avatarUrl + ')' : ''">
@@ -23,14 +23,18 @@ import { AccountsStore } from '../../../store/accounts.store';
               <span class="avatar-letter">{{ active.email[0].toUpperCase() }}</span>
             }
           </div>
-          <div class="account-info">
-            <span class="account-name">{{ active.displayName }}</span>
-            <span class="account-email">{{ active.email }}</span>
-          </div>
-          <span class="material-symbols-outlined expand-icon">expand_more</span>
+          @if (!collapsed()) {
+            <div class="account-info">
+              <span class="account-name">{{ active.displayName }}</span>
+              <span class="account-email">{{ active.email }}</span>
+            </div>
+            <span class="material-symbols-outlined expand-icon">expand_more</span>
+          }
         } @else {
           <span class="material-symbols-outlined">account_circle</span>
-          <span class="account-info"><span class="account-name">No account</span></span>
+          @if (!collapsed()) {
+            <span class="account-info"><span class="account-name">No account</span></span>
+          }
         }
       </button>
 
@@ -52,7 +56,7 @@ import { AccountsStore } from '../../../store/accounts.store';
                 <span class="menu-email">{{ account.email }}</span>
               </div>
               @if (account.needsReauth) {
-                <span class="material-symbols-outlined reauth-icon" matTooltip="Needs re-authentication">warning</span>
+                <span class="material-symbols-outlined reauth-icon">warning</span>
               }
             </div>
           </button>
@@ -75,6 +79,10 @@ import { AccountsStore } from '../../../store/accounts.store';
   styles: [`
     .account-switcher {
       padding: 8px 12px;
+
+      &.collapsed {
+        padding: 8px 4px;
+      }
     }
 
     .account-trigger {
@@ -94,6 +102,11 @@ import { AccountsStore } from '../../../store/accounts.store';
       &:hover {
         background-color: var(--color-primary-light);
       }
+    }
+
+    .collapsed .account-trigger {
+      justify-content: center;
+      padding: 8px;
     }
 
     .avatar {
@@ -191,6 +204,7 @@ import { AccountsStore } from '../../../store/accounts.store';
 })
 export class AccountSwitcherComponent {
   readonly accountsStore = inject(AccountsStore);
+  readonly collapsed = input(false);
   private readonly router = inject(Router);
 
   switchAccount(accountId: number): void {

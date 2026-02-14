@@ -5,10 +5,14 @@ import { Subscription } from 'rxjs';
 import { AccountSwitcherComponent } from './sidebar/account-switcher.component';
 import { FolderListComponent } from './sidebar/folder-list.component';
 import { EmailListComponent } from './email-list/email-list.component';
+import { EmailListHeaderComponent } from './email-list/email-list-header.component';
 import { ReadingPaneComponent } from './reading-pane/reading-pane.component';
+import { StatusBarComponent } from './status-bar/status-bar.component';
+import { ResizablePanelDirective } from './resizable-panel.directive';
 import { AccountsStore } from '../../store/accounts.store';
 import { FoldersStore } from '../../store/folders.store';
 import { EmailsStore } from '../../store/emails.store';
+import { UiStore } from '../../store/ui.store';
 import { ElectronService } from '../../core/services/electron.service';
 import { Thread } from '../../core/models/email.model';
 
@@ -18,35 +22,118 @@ import { Thread } from '../../core/models/email.model';
   imports: [
     CommonModule, RouterLink,
     AccountSwitcherComponent, FolderListComponent,
-    EmailListComponent, ReadingPaneComponent,
+    EmailListComponent, EmailListHeaderComponent,
+    ReadingPaneComponent, StatusBarComponent,
+    ResizablePanelDirective,
   ],
   template: `
-    <div class="mail-shell">
-      <aside class="sidebar">
-        <app-account-switcher />
-        <app-folder-list (folderSelected)="onFolderSelected($event)" />
+    <div class="mail-shell" [class.layout-bottom]="uiStore.isBottomPreview()" [class.layout-list-only]="uiStore.isListOnly()">
+      <!-- Sidebar -->
+      <aside
+        class="sidebar"
+        [class.collapsed]="uiStore.sidebarCollapsed()"
+        [style.width.px]="uiStore.effectiveSidebarWidth()"
+        appResizablePanel
+        [minSize]="180"
+        [maxSize]="400"
+        (resized)="onSidebarResized($event)"
+      >
+        <app-account-switcher [collapsed]="uiStore.sidebarCollapsed()" />
+        <app-folder-list
+          [collapsed]="uiStore.sidebarCollapsed()"
+          (folderSelected)="onFolderSelected($event)"
+        />
         <div class="sidebar-footer">
+          <button class="footer-item" (click)="uiStore.toggleSidebar()">
+            <span class="material-symbols-outlined">
+              {{ uiStore.sidebarCollapsed() ? 'chevron_right' : 'chevron_left' }}
+            </span>
+            @if (!uiStore.sidebarCollapsed()) {
+              <span>Collapse</span>
+            }
+          </button>
           <a class="footer-item" routerLink="/settings">
             <span class="material-symbols-outlined">settings</span>
-            <span>Settings</span>
+            @if (!uiStore.sidebarCollapsed()) {
+              <span>Settings</span>
+            }
           </a>
         </div>
       </aside>
 
-      <div class="email-list-panel">
-        @if (accountsStore.accountsNeedingReauth().length > 0) {
-          <div class="reauth-banner">
-            <span class="material-symbols-outlined">warning</span>
-            <span>Some accounts need re-authentication.</span>
-            <a routerLink="/settings/accounts">Fix</a>
-          </div>
-        }
-        <app-email-list (threadSelected)="onThreadSelected($event)" />
-      </div>
+      <!-- Main content area -->
+      @if (uiStore.isThreeColumn()) {
+        <!-- Three-column layout -->
+        <div
+          class="email-list-panel"
+          [style.width.px]="uiStore.emailListWidth()"
+          appResizablePanel
+          [minSize]="240"
+          [maxSize]="600"
+          (resized)="onEmailListResized($event)"
+        >
+          @if (accountsStore.accountsNeedingReauth().length > 0) {
+            <div class="reauth-banner">
+              <span class="material-symbols-outlined">warning</span>
+              <span>Some accounts need re-authentication.</span>
+              <a routerLink="/settings/accounts">Fix</a>
+            </div>
+          }
+          <app-email-list-header />
+          <app-email-list (threadSelected)="onThreadSelected($event)" />
+        </div>
 
-      <div class="reading-pane-panel">
-        <app-reading-pane (actionClicked)="onAction($event)" />
-      </div>
+        <div class="reading-pane-panel">
+          <app-reading-pane (actionClicked)="onAction($event)" />
+        </div>
+      } @else if (uiStore.isBottomPreview()) {
+        <!-- Bottom preview layout -->
+        <div class="bottom-layout-container">
+          @if (accountsStore.accountsNeedingReauth().length > 0) {
+            <div class="reauth-banner">
+              <span class="material-symbols-outlined">warning</span>
+              <span>Some accounts need re-authentication.</span>
+              <a routerLink="/settings/accounts">Fix</a>
+            </div>
+          }
+          <div class="email-list-panel-full">
+            <app-email-list-header />
+            <app-email-list (threadSelected)="onThreadSelected($event)" />
+          </div>
+
+          @if (emailsStore.selectedThread()) {
+            <div
+              class="reading-pane-bottom"
+              [style.height.%]="uiStore.readingPaneHeight()"
+              appResizablePanel
+              direction="vertical"
+              [minSize]="150"
+              [maxSize]="600"
+              (resized)="onReadingPaneResized($event)"
+            >
+              <app-reading-pane (actionClicked)="onAction($event)" />
+            </div>
+          }
+        </div>
+      } @else {
+        <!-- List only layout -->
+        <div class="bottom-layout-container">
+          @if (accountsStore.accountsNeedingReauth().length > 0) {
+            <div class="reauth-banner">
+              <span class="material-symbols-outlined">warning</span>
+              <span>Some accounts need re-authentication.</span>
+              <a routerLink="/settings/accounts">Fix</a>
+            </div>
+          }
+          <div class="email-list-panel-full">
+            <app-email-list-header />
+            <app-email-list (threadSelected)="onThreadSelected($event)" />
+          </div>
+        </div>
+      }
+
+      <!-- Status Bar -->
+      <app-status-bar />
     </div>
   `,
   styles: [`
@@ -54,20 +141,28 @@ import { Thread } from '../../core/models/email.model';
       display: flex;
       height: 100%;
       overflow: hidden;
+      flex-wrap: wrap;
     }
 
+    /* --- Sidebar --- */
     .sidebar {
-      width: var(--sidebar-width, 240px);
       background-color: var(--color-surface-variant);
       border-right: 1px solid var(--color-border);
       display: flex;
       flex-direction: column;
-      overflow-y: auto;
+      overflow: hidden;
+      transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1);
+      flex-shrink: 0;
+    }
+
+    .sidebar.collapsed {
+      overflow: hidden;
     }
 
     .sidebar-footer {
       border-top: 1px solid var(--color-border);
       padding: 4px 0;
+      margin-top: auto;
     }
 
     .footer-item {
@@ -79,6 +174,11 @@ import { Thread } from '../../core/models/email.model';
       color: var(--color-text-primary);
       text-decoration: none;
       transition: background-color 120ms ease;
+      border: none;
+      background: none;
+      width: 100%;
+      font-size: 14px;
+      font-family: inherit;
 
       &:hover {
         background-color: var(--color-primary-light);
@@ -89,15 +189,49 @@ import { Thread } from '../../core/models/email.model';
       }
     }
 
+    /* --- Three-column layout --- */
     .email-list-panel {
-      width: var(--email-list-width, 320px);
       border-right: 1px solid var(--color-border);
       display: flex;
       flex-direction: column;
       background-color: var(--color-surface);
       overflow: hidden;
+      flex-shrink: 0;
     }
 
+    .reading-pane-panel {
+      flex: 1;
+      background-color: var(--color-surface);
+      display: flex;
+      overflow: hidden;
+      min-width: 300px;
+    }
+
+    /* --- Bottom preview / list-only --- */
+    .bottom-layout-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background-color: var(--color-surface);
+    }
+
+    .email-list-panel-full {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 100px;
+    }
+
+    .reading-pane-bottom {
+      border-top: 1px solid var(--color-border);
+      display: flex;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    /* --- Reauth banner --- */
     .reauth-banner {
       display: flex;
       align-items: center;
@@ -120,11 +254,15 @@ import { Thread } from '../../core/models/email.model';
       }
     }
 
-    .reading-pane-panel {
-      flex: 1;
-      background-color: var(--color-surface);
+    /* --- Status bar occupies full width at bottom --- */
+    :host {
       display: flex;
-      overflow: hidden;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    app-status-bar {
+      flex-shrink: 0;
     }
   `]
 })
@@ -132,6 +270,7 @@ export class MailShellComponent implements OnInit, OnDestroy {
   readonly accountsStore = inject(AccountsStore);
   readonly foldersStore = inject(FoldersStore);
   readonly emailsStore = inject(EmailsStore);
+  readonly uiStore = inject(UiStore);
   private readonly electronService = inject(ElectronService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -139,7 +278,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
   private syncSub?: Subscription;
 
   constructor() {
-    // When active account changes, load folders and emails
     effect(() => {
       const activeAccount = this.accountsStore.activeAccount();
       if (activeAccount) {
@@ -150,10 +288,8 @@ export class MailShellComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    // Load accounts
     this.accountsStore.loadAccounts();
 
-    // Subscribe to route params
     this.routeSub = this.route.params.subscribe(params => {
       const accountId = params['accountId'];
       const folderId = params['folderId'];
@@ -173,7 +309,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
       }
     });
 
-    // Listen for sync progress events
     this.syncSub = this.electronService.onEvent<{
       accountId: string;
       progress: number;
@@ -181,7 +316,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
     }>('mail:sync').subscribe(event => {
       this.emailsStore.updateSyncProgress(event.progress);
 
-      // Reload data when sync completes
       if (event.status === 'done') {
         const activeAccount = this.accountsStore.activeAccount();
         if (activeAccount && String(activeAccount.id) === event.accountId) {
@@ -191,7 +325,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
       }
     });
 
-    // Trigger sync for active account
     const activeAccount = this.accountsStore.activeAccount();
     if (activeAccount) {
       this.emailsStore.syncAccount(activeAccount.id);
@@ -217,7 +350,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
     if (activeAccount) {
       this.emailsStore.loadThread(activeAccount.id, thread.gmailThreadId);
 
-      // Mark as read
       if (!thread.isRead) {
         this.emailsStore.flagEmails(
           activeAccount.id,
@@ -254,6 +386,25 @@ export class MailShellComponent implements OnInit, OnDestroy {
       case 'forward':
         // Compose functionality — Phase 5
         break;
+    }
+  }
+
+  onSidebarResized(width: number): void {
+    if (!this.uiStore.sidebarCollapsed()) {
+      this.uiStore.setSidebarWidth(width);
+    }
+  }
+
+  onEmailListResized(width: number): void {
+    this.uiStore.setEmailListWidth(width);
+  }
+
+  onReadingPaneResized(height: number): void {
+    // Convert pixel height to percentage of parent container
+    const container = document.querySelector('.bottom-layout-container');
+    if (container) {
+      const percent = (height / container.clientHeight) * 100;
+      this.uiStore.setReadingPaneHeight(percent);
     }
   }
 

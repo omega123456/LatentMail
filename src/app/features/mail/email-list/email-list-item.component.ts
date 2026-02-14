@@ -2,6 +2,7 @@ import { Component, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Thread } from '../../../core/models/email.model';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
+import { DensityMode } from '../../../core/services/layout.service';
 
 @Component({
   selector: 'app-email-list-item',
@@ -12,6 +13,8 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
       class="email-item"
       [class.unread]="!thread().isRead"
       [class.selected]="isSelected()"
+      [class.compact]="density() === 'compact'"
+      [class.spacious]="density() === 'spacious'"
       (click)="clicked.emit(thread())"
     >
       <div class="email-avatar">
@@ -27,9 +30,11 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
         <div class="email-subject" [class.bold]="!thread().isRead">
           {{ thread().subject || '(no subject)' }}
         </div>
-        <div class="email-snippet">
-          {{ thread().snippet }}
-        </div>
+        @if (density() !== 'compact') {
+          <div class="email-snippet">
+            {{ thread().snippet }}
+          </div>
+        }
       </div>
       <div class="email-indicators">
         @if (thread().isStarred) {
@@ -70,6 +75,34 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
       &.unread {
         background-color: rgba(25, 118, 210, 0.04);
       }
+
+      &.compact {
+        padding: 6px 16px;
+        gap: 8px;
+        align-items: center;
+
+        .email-avatar {
+          width: 28px;
+          height: 28px;
+          min-width: 28px;
+          font-size: 11px;
+        }
+
+        .email-sender { font-size: 13px; }
+        .email-subject { font-size: 12px; }
+        .email-date { font-size: 11px; }
+      }
+
+      &.spacious {
+        padding: 14px 16px;
+
+        .email-avatar {
+          width: 40px;
+          height: 40px;
+          min-width: 40px;
+          font-size: 16px;
+        }
+      }
     }
 
     .email-avatar {
@@ -85,6 +118,7 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
       font-size: 14px;
       font-weight: 500;
       margin-top: 2px;
+      flex-shrink: 0;
     }
 
     .email-content {
@@ -176,6 +210,7 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 export class EmailListItemComponent {
   readonly thread = input.required<Thread>();
   readonly isSelected = input<boolean>(false);
+  readonly density = input<DensityMode>('comfortable');
   readonly clicked = output<Thread>();
   readonly starToggled = output<Thread>();
 
@@ -183,7 +218,6 @@ export class EmailListItemComponent {
     const participants = this.thread().participants;
     if (participants) {
       const first = participants.split(',')[0].trim();
-      // Extract name from "Name <email>" or just show email
       const nameMatch = first.match(/^(.+?)(?:\s*<.*>)?$/);
       return nameMatch?.[1] || first;
     }
