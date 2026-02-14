@@ -1,1 +1,0 @@
-{"version":3,"file":"platform.js","sourceRoot":"","sources":["../../electron/utils/platform.ts"],"names":[],"mappings":";;AAAA,8BAEC;AAED,0BAEC;AAED,0BAEC;AAVD,SAAgB,SAAS;IACvB,OAAO,OAAO,CAAC,QAAQ,KAAK,OAAO,CAAC;AACtC,CAAC;AAED,SAAgB,OAAO;IACrB,OAAO,OAAO,CAAC,QAAQ,KAAK,QAAQ,CAAC;AACvC,CAAC;AAED,SAAgB,OAAO;IACrB,OAAO,OAAO,CAAC,QAAQ,KAAK,OAAO,CAAC;AACtC,CAAC"}
