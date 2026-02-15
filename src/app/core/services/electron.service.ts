@@ -36,6 +36,16 @@ interface ElectronAPI {
     getModels: () => Promise<IpcResponse>;
     getStatus: () => Promise<IpcResponse>;
   };
+  compose: {
+    saveDraft: (draft: unknown) => Promise<IpcResponse>;
+    getDrafts: (accountId: number) => Promise<IpcResponse>;
+    getDraft: (draftId: number) => Promise<IpcResponse>;
+    deleteDraft: (draftId: number) => Promise<IpcResponse>;
+    searchContacts: (query: string) => Promise<IpcResponse>;
+    getSignatures: () => Promise<IpcResponse>;
+    saveSignatures: (signatures: unknown) => Promise<IpcResponse>;
+    deleteSignature: (signatureId: string) => Promise<IpcResponse>;
+  };
   db: {
     getSettings: (keys?: string[]) => Promise<IpcResponse>;
     setSettings: (settings: Record<string, string>) => Promise<IpcResponse>;
@@ -151,6 +161,40 @@ export class ElectronService {
 
   async aiGetStatus(): Promise<IpcResponse> {
     return this.invoke(() => this.api!.ai.getStatus());
+  }
+
+  // ---- Compose operations ----
+
+  async saveDraft(draft: unknown): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.saveDraft(draft));
+  }
+
+  async getDrafts(accountId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.getDrafts(accountId));
+  }
+
+  async getDraft(draftId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.getDraft(draftId));
+  }
+
+  async deleteDraft(draftId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.deleteDraft(draftId));
+  }
+
+  async searchContacts(query: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.searchContacts(query));
+  }
+
+  async getSignatures(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.getSignatures());
+  }
+
+  async saveSignatures(signatures: unknown): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.saveSignatures(signatures));
+  }
+
+  async deleteSignature(signatureId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.deleteSignature(signatureId));
   }
 
   // ---- DB/Settings operations ----

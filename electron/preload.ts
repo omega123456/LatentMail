@@ -62,6 +62,26 @@ const electronAPI = {
       ipcRenderer.invoke('ai:get-status') as Promise<IpcResponse>,
   },
 
+  // Compose operations
+  compose: {
+    saveDraft: (draft: unknown) =>
+      ipcRenderer.invoke('compose:save-draft', draft) as Promise<IpcResponse>,
+    getDrafts: (accountId: number) =>
+      ipcRenderer.invoke('compose:get-drafts', accountId) as Promise<IpcResponse>,
+    getDraft: (draftId: number) =>
+      ipcRenderer.invoke('compose:get-draft', draftId) as Promise<IpcResponse>,
+    deleteDraft: (draftId: number) =>
+      ipcRenderer.invoke('compose:delete-draft', draftId) as Promise<IpcResponse>,
+    searchContacts: (query: string) =>
+      ipcRenderer.invoke('compose:search-contacts', query) as Promise<IpcResponse>,
+    getSignatures: () =>
+      ipcRenderer.invoke('compose:get-signatures') as Promise<IpcResponse>,
+    saveSignatures: (signatures: unknown) =>
+      ipcRenderer.invoke('compose:save-signature', signatures) as Promise<IpcResponse>,
+    deleteSignature: (signatureId: string) =>
+      ipcRenderer.invoke('compose:delete-signature', signatureId) as Promise<IpcResponse>,
+  },
+
   // Database/settings operations
   db: {
     getSettings: (keys?: string[]) =>

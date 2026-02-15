@@ -9,12 +9,14 @@ import { EmailListHeaderComponent } from './email-list/email-list-header.compone
 import { ReadingPaneComponent } from './reading-pane/reading-pane.component';
 import { StatusBarComponent } from './status-bar/status-bar.component';
 import { ResizablePanelDirective } from './resizable-panel.directive';
+import { ComposeWindowComponent } from '../compose/compose-window.component';
 import { AccountsStore } from '../../store/accounts.store';
 import { FoldersStore } from '../../store/folders.store';
 import { EmailsStore } from '../../store/emails.store';
+import { ComposeStore } from '../../store/compose.store';
 import { UiStore } from '../../store/ui.store';
 import { ElectronService } from '../../core/services/electron.service';
-import { Thread } from '../../core/models/email.model';
+import { Thread, ComposeMode } from '../../core/models/email.model';
 
 @Component({
   selector: 'app-mail-shell',
@@ -24,7 +26,7 @@ import { Thread } from '../../core/models/email.model';
     AccountSwitcherComponent, FolderListComponent,
     EmailListComponent, EmailListHeaderComponent,
     ReadingPaneComponent, StatusBarComponent,
-    ResizablePanelDirective,
+    ResizablePanelDirective, ComposeWindowComponent,
   ],
   template: `
     <div class="mail-shell" [class.layout-bottom]="uiStore.isBottomPreview()" [class.layout-list-only]="uiStore.isListOnly()">
@@ -39,6 +41,15 @@ import { Thread } from '../../core/models/email.model';
         (resized)="onSidebarResized($event)"
       >
         <app-account-switcher [collapsed]="uiStore.sidebarCollapsed()" />
+
+        <!-- Compose button -->
+        <button class="compose-btn" [class.collapsed]="uiStore.sidebarCollapsed()" (click)="openNewCompose()">
+          <span class="material-symbols-outlined">edit</span>
+          @if (!uiStore.sidebarCollapsed()) {
+            <span>Compose</span>
+          }
+        </button>
+
         <app-folder-list
           [collapsed]="uiStore.sidebarCollapsed()"
           (folderSelected)="onFolderSelected($event)"
@@ -135,6 +146,9 @@ import { Thread } from '../../core/models/email.model';
       <!-- Status Bar -->
       <app-status-bar />
     </div>
+
+    <!-- Compose Window (overlay) -->
+    <app-compose-window />
   `,
   styles: [`
     .mail-shell {
@@ -157,6 +171,33 @@ import { Thread } from '../../core/models/email.model';
 
     .sidebar.collapsed {
       overflow: hidden;
+    }
+
+    .compose-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 12px 12px 8px;
+      padding: 10px 20px;
+      background-color: var(--color-primary);
+      color: white;
+      border: none;
+      border-radius: 24px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      transition: filter 150ms ease, padding 200ms ease;
+
+      &:hover { filter: brightness(1.1); }
+
+      &.collapsed {
+        padding: 10px;
+        justify-content: center;
+        margin: 12px 8px 8px;
+      }
+
+      .material-symbols-outlined { font-size: 20px; }
     }
 
     .sidebar-footer {
@@ -270,6 +311,7 @@ export class MailShellComponent implements OnInit, OnDestroy {
   readonly accountsStore = inject(AccountsStore);
   readonly foldersStore = inject(FoldersStore);
   readonly emailsStore = inject(EmailsStore);
+  readonly composeStore = inject(ComposeStore);
   readonly uiStore = inject(UiStore);
   private readonly electronService = inject(ElectronService);
   private readonly route = inject(ActivatedRoute);
@@ -367,7 +409,7 @@ export class MailShellComponent implements OnInit, OnDestroy {
       case 'reply':
       case 'reply-all':
       case 'forward':
-        // Compose functionality — Phase 5
+        this.openComposeForAction(action as ComposeMode);
         break;
     }
   }
@@ -437,5 +479,35 @@ export class MailShellComponent implements OnInit, OnDestroy {
     if (activeAccount) {
       this.emailsStore.syncAccount(activeAccount.id);
     }
+  }
+
+  openNewCompose(): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) return;
+    this.composeStore.openCompose({
+      mode: 'new',
+      accountId: activeAccount.id,
+      accountEmail: activeAccount.email,
+      accountDisplayName: activeAccount.displayName,
+    });
+  }
+
+  private openComposeForAction(mode: ComposeMode): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    const thread = this.emailsStore.selectedThread();
+    if (!activeAccount || !thread) return;
+
+    // Use the last message in the thread for reply/forward context
+    const messages = this.emailsStore.selectedMessages();
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+
+    this.composeStore.openCompose({
+      mode,
+      accountId: activeAccount.id,
+      accountEmail: activeAccount.email,
+      accountDisplayName: activeAccount.displayName,
+      originalThread: thread,
+      originalMessage: lastMessage || undefined,
+    });
   }
 }

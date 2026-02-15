@@ -26,6 +26,16 @@ export const IPC_CHANNELS = {
   AI_GET_MODELS: 'ai:get-models',
   AI_GET_STATUS: 'ai:get-status',
 
+  // Compose operations
+  COMPOSE_SAVE_DRAFT: 'compose:save-draft',
+  COMPOSE_GET_DRAFTS: 'compose:get-drafts',
+  COMPOSE_GET_DRAFT: 'compose:get-draft',
+  COMPOSE_DELETE_DRAFT: 'compose:delete-draft',
+  COMPOSE_SEARCH_CONTACTS: 'compose:search-contacts',
+  COMPOSE_GET_SIGNATURES: 'compose:get-signatures',
+  COMPOSE_SAVE_SIGNATURE: 'compose:save-signature',
+  COMPOSE_DELETE_SIGNATURE: 'compose:delete-signature',
+
   // Database/settings operations
   DB_GET_SETTINGS: 'db:get-settings',
   DB_SET_SETTINGS: 'db:set-settings',

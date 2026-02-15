@@ -46,3 +46,50 @@ export interface Attachment {
   contentId?: string;
   localPath?: string;
 }
+
+export interface Contact {
+  id: number;
+  email: string;
+  displayName?: string;
+  frequency: number;
+  lastContactedAt?: string;
+}
+
+export type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward';
+
+export interface Draft {
+  id?: number;
+  accountId: number;
+  gmailThreadId?: string;
+  subject: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  htmlBody: string;
+  textBody: string;
+  inReplyTo?: string;
+  references?: string;
+  attachments: DraftAttachment[];
+  signature?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DraftAttachment {
+  id?: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  data?: string; // base64
+  path?: string;
+}
+
+export interface ComposeContext {
+  mode: ComposeMode;
+  accountId: number;
+  accountEmail: string;
+  accountDisplayName: string;
+  draft?: Draft;
+  originalThread?: Thread;
+  originalMessage?: Email;
+}

@@ -4,6 +4,7 @@ import { registerDbIpcHandlers } from './db-ipc';
 import { registerMailIpcHandlers } from './mail-ipc';
 import { registerAuthIpcHandlers } from './auth-ipc';
 import { registerAiIpcHandlers } from './ai-ipc';
+import { registerComposeIpcHandlers } from './compose-ipc';
 
 export function registerAllIpcHandlers(): void {
   log.info('Registering IPC handlers...');
@@ -13,6 +14,7 @@ export function registerAllIpcHandlers(): void {
   registerMailIpcHandlers();
   registerAuthIpcHandlers();
   registerAiIpcHandlers();
+  registerComposeIpcHandlers();
 
   log.info('All IPC handlers registered');
 }

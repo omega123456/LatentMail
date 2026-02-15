@@ -548,6 +548,98 @@ export class DatabaseService {
     return result[0].values.map((row) => this.mapEmailRow(row, result[0].columns));
   }
 
+  // ---- Draft operations ----
+
+  saveDraft(draft: {
+    id?: number;
+    accountId: number;
+    gmailThreadId?: string;
+    subject: string;
+    to: string;
+    cc: string;
+    bcc: string;
+    htmlBody: string;
+    textBody: string;
+    inReplyTo?: string;
+    references?: string;
+    attachmentsJson?: string;
+    signature?: string;
+  }): number {
+    if (!this.db) throw new Error('Database not initialized');
+    if (draft.id) {
+      this.db.run(
+        `UPDATE drafts SET subject = ?, to_addresses = ?, cc_addresses = ?, bcc_addresses = ?,
+         html_body = ?, text_body = ?, in_reply_to = ?, "references" = ?,
+         attachments_json = ?, signature = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+        [draft.subject, draft.to, draft.cc, draft.bcc, draft.htmlBody, draft.textBody,
+         draft.inReplyTo || null, draft.references || null, draft.attachmentsJson || null,
+         draft.signature || null, draft.id]
+      );
+      this.scheduleSave();
+      return draft.id;
+    }
+    this.db.run(
+      `INSERT INTO drafts (account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
+       bcc_addresses, html_body, text_body, in_reply_to, "references", attachments_json, signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [draft.accountId, draft.gmailThreadId || null, draft.subject, draft.to, draft.cc, draft.bcc,
+       draft.htmlBody, draft.textBody, draft.inReplyTo || null, draft.references || null,
+       draft.attachmentsJson || null, draft.signature || null]
+    );
+    const result = this.db.exec('SELECT last_insert_rowid()');
+    const id = result[0].values[0][0] as number;
+    this.scheduleSave();
+    return id;
+  }
+
+  getDraftsByAccount(accountId: number): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
+       bcc_addresses, html_body, text_body, in_reply_to, "references",
+       attachments_json, signature, created_at, updated_at
+       FROM drafts WHERE account_id = ? ORDER BY updated_at DESC`,
+      [accountId]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => this.mapGenericRow(row, result[0].columns));
+  }
+
+  getDraftById(id: number): Record<string, unknown> | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
+       bcc_addresses, html_body, text_body, in_reply_to, "references",
+       attachments_json, signature, created_at, updated_at
+       FROM drafts WHERE id = ?`,
+      [id]
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    return this.mapGenericRow(result[0].values[0], result[0].columns);
+  }
+
+  deleteDraft(id: number): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('DELETE FROM drafts WHERE id = ?', [id]);
+    this.scheduleSave();
+  }
+
+  // ---- Contact search (for autocomplete) ----
+
+  searchContacts(query: string, limit: number = 10): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
+    const likeQuery = `%${query}%`;
+    const result = this.db.exec(
+      `SELECT id, email, display_name, frequency, last_contacted_at
+       FROM contacts WHERE email LIKE ? OR display_name LIKE ?
+       ORDER BY frequency DESC LIMIT ?`,
+      [likeQuery, likeQuery, limit]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => this.mapGenericRow(row, result[0].columns));
+  }
+
   // ---- Account sync state ----
 
   updateAccountSyncState(accountId: number, lastSyncAt: string, syncCursor?: string): void {
@@ -603,6 +695,17 @@ export class DatabaseService {
       } else {
         obj[key] = val;
       }
+    }
+    return obj;
+  }
+
+  private mapGenericRow(row: (string | number | Uint8Array | null)[], columns: string[]): Record<string, unknown> {
+    const obj: Record<string, unknown> = {};
+    for (let i = 0; i < columns.length; i++) {
+      const col = columns[i];
+      const val = row[i];
+      const key = col.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      obj[key] = val;
     }
     return obj;
   }
