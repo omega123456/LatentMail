@@ -16,7 +16,7 @@ import { EmailsStore } from '../../store/emails.store';
 import { ComposeStore } from '../../store/compose.store';
 import { UiStore } from '../../store/ui.store';
 import { ElectronService } from '../../core/services/electron.service';
-import { Thread, ComposeMode } from '../../core/models/email.model';
+import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
 
 @Component({
   selector: 'app-mail-shell',
@@ -408,6 +408,9 @@ export class MailShellComponent implements OnInit, OnDestroy {
         this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/Trash', thread.gmailThreadId, currentFolder);
         this.emailsStore.clearSelection();
         break;
+      case 'edit-draft':
+        this.openDraftForEditing();
+        break;
       case 'reply':
       case 'reply-all':
       case 'forward':
@@ -510,6 +513,50 @@ export class MailShellComponent implements OnInit, OnDestroy {
       accountDisplayName: activeAccount.displayName,
       originalThread: thread,
       originalMessage: lastMessage || undefined,
+    });
+  }
+
+  /**
+   * Open a draft from the Drafts folder for editing in compose.
+   * Maps the selected email message to a Draft shape and opens compose with serverDraftUid
+   * so that on send/discard, the old draft can be removed from Gmail.
+   */
+  private openDraftForEditing(): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    const thread = this.emailsStore.selectedThread();
+    if (!activeAccount || !thread) return;
+
+    const messages = this.emailsStore.selectedMessages();
+    // Use the most recent message (or only message) in the draft thread
+    const msg = messages.length > 0 ? messages[messages.length - 1] : null;
+    if (!msg) return;
+
+    // Map Email to Draft shape
+    const draft: Draft = {
+      accountId: activeAccount.id,
+      gmailThreadId: msg.gmailThreadId || '',
+      subject: (msg.subject || '').replace(/^(Draft|Re:|Fwd:)\s*/i, '').trim() || msg.subject || '',
+      to: msg.toAddresses || '',
+      cc: msg.ccAddresses || '',
+      bcc: msg.bccAddresses || '',
+      htmlBody: msg.htmlBody || '',
+      textBody: msg.textBody || '',
+      attachments: [],
+    };
+
+    // Preserve original subject (keep Re:/Fwd: prefixes if present)
+    draft.subject = msg.subject || '';
+
+    // The gmailMessageId is the UID in this app's storage (numeric string from IMAP UID)
+    const serverDraftUid = Number(msg.gmailMessageId);
+
+    this.composeStore.openCompose({
+      mode: 'new',
+      accountId: activeAccount.id,
+      accountEmail: activeAccount.email,
+      accountDisplayName: activeAccount.displayName,
+      draft,
+      serverDraftUid: Number.isFinite(serverDraftUid) ? serverDraftUid : undefined,
     });
   }
 }

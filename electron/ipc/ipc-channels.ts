@@ -31,6 +31,7 @@ export const IPC_CHANNELS = {
   COMPOSE_GET_DRAFTS: 'compose:get-drafts',
   COMPOSE_GET_DRAFT: 'compose:get-draft',
   COMPOSE_DELETE_DRAFT: 'compose:delete-draft',
+  COMPOSE_DELETE_DRAFT_ON_SERVER: 'compose:delete-draft-on-server',
   COMPOSE_SEARCH_CONTACTS: 'compose:search-contacts',
   COMPOSE_GET_SIGNATURES: 'compose:get-signatures',
   COMPOSE_SAVE_SIGNATURE: 'compose:save-signature',

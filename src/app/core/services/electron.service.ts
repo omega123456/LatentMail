@@ -41,6 +41,7 @@ interface ElectronAPI {
     getDrafts: (accountId: number) => Promise<IpcResponse>;
     getDraft: (draftId: number) => Promise<IpcResponse>;
     deleteDraft: (draftId: number) => Promise<IpcResponse>;
+    deleteDraftOnServer: (accountId: number, uid: number) => Promise<IpcResponse>;
     searchContacts: (query: string) => Promise<IpcResponse>;
     getSignatures: () => Promise<IpcResponse>;
     saveSignatures: (signatures: unknown) => Promise<IpcResponse>;
@@ -179,6 +180,10 @@ export class ElectronService {
 
   async deleteDraft(draftId: number): Promise<IpcResponse> {
     return this.invoke(() => this.api!.compose.deleteDraft(draftId));
+  }
+
+  async deleteDraftOnServer(accountId: number, uid: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.compose.deleteDraftOnServer(accountId, uid));
   }
 
   async searchContacts(query: string): Promise<IpcResponse> {

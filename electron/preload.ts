@@ -72,6 +72,8 @@ const electronAPI = {
       ipcRenderer.invoke('compose:get-draft', draftId) as Promise<IpcResponse>,
     deleteDraft: (draftId: number) =>
       ipcRenderer.invoke('compose:delete-draft', draftId) as Promise<IpcResponse>,
+    deleteDraftOnServer: (accountId: number, uid: number) =>
+      ipcRenderer.invoke('compose:delete-draft-on-server', accountId, uid) as Promise<IpcResponse>,
     searchContacts: (query: string) =>
       ipcRenderer.invoke('compose:search-contacts', query) as Promise<IpcResponse>,
     getSignatures: () =>

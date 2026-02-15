@@ -19,6 +19,8 @@ interface ComposeState {
   accountEmail: string;
   accountDisplayName: string;
   draftId: number | null;
+  /** UID of a server draft opened from [Gmail]/Drafts (not a local draft) */
+  serverDraftUid: number | null;
   to: string;
   cc: string;
   bcc: string;
@@ -46,6 +48,7 @@ const initialState: ComposeState = {
   accountEmail: '',
   accountDisplayName: '',
   draftId: null,
+  serverDraftUid: null,
   to: '',
   cc: '',
   bcc: '',
@@ -113,6 +116,7 @@ export const ComposeStore = signalStore(
         const draft = {
           id: store.draftId() || undefined,
           accountId: store.accountId()!,
+          serverDraftUid: store.serverDraftUid() || undefined,
           gmailThreadId: store.gmailThreadId() || undefined,
           subject: store.subject(),
           to: store.to(),
@@ -130,6 +134,7 @@ export const ComposeStore = signalStore(
           const { id } = response.data as { id: number };
           patchState(store, {
             draftId: id,
+            serverDraftUid: null,
             saving: false,
             lastSavedAt: new Date().toISOString(),
           });
@@ -202,6 +207,7 @@ export const ComposeStore = signalStore(
             accountEmail: context.accountEmail,
             accountDisplayName: context.accountDisplayName,
             draftId: d.id || null,
+            serverDraftUid: context.serverDraftUid || null,
             to: d.to,
             cc: d.cc,
             bcc: d.bcc,
@@ -234,6 +240,7 @@ export const ComposeStore = signalStore(
           accountEmail: context.accountEmail,
           accountDisplayName: context.accountDisplayName,
           draftId: null,
+          serverDraftUid: null,
           to,
           cc,
           bcc: '',
@@ -252,8 +259,12 @@ export const ComposeStore = signalStore(
         });
       },
 
-      closeCompose(): void {
+      async closeCompose(): Promise<void> {
         clearAutoSave();
+        // Save the draft before closing if there's content worth saving
+        if (store.isOpen() && store.isDirty() && store.accountId()) {
+          await saveDraft();
+        }
         patchState(store, initialState);
       },
 
@@ -308,9 +319,13 @@ export const ComposeStore = signalStore(
 
           const response = await electronService.sendMail(String(store.accountId()), message);
           if (response.success) {
-            // Delete the draft if it was saved
+            // Delete the local draft if it was saved (also deletes from Gmail via IPC)
             if (store.draftId()) {
               await electronService.deleteDraft(store.draftId()!);
+            }
+            // Delete server draft if opened from Drafts folder (not a local draft)
+            if (store.serverDraftUid() && store.accountId()) {
+              await electronService.deleteDraftOnServer(store.accountId()!, store.serverDraftUid()!);
             }
             clearAutoSave();
             patchState(store, initialState);
@@ -359,6 +374,10 @@ export const ComposeStore = signalStore(
         clearAutoSave();
         if (store.draftId()) {
           await electronService.deleteDraft(store.draftId()!);
+        }
+        // Delete server draft if opened from Drafts folder
+        if (store.serverDraftUid() && store.accountId()) {
+          await electronService.deleteDraftOnServer(store.accountId()!, store.serverDraftUid()!);
         }
         patchState(store, initialState);
       },

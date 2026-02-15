@@ -589,9 +589,9 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.destroyEditor();
-    this.composeStore.closeCompose();
+    await this.composeStore.closeCompose();
   }
 
   async send(): Promise<void> {

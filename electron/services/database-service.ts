@@ -112,6 +112,10 @@ export class DatabaseService {
       }
     }
 
+    if (currentVersion < 3) {
+      this.migrateV2toV3();
+    }
+
     // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
     this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
     this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
@@ -278,6 +282,27 @@ export class DatabaseService {
     this.db.run('PRAGMA foreign_keys = ON');
 
     log.info('Migration v1 → v2 complete');
+  }
+
+  /**
+   * Migrate from schema v2 to v3: add imap_uid and imap_uid_validity to drafts table.
+   */
+  private migrateV2toV3(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    log.info('Running migration v2 → v3: add IMAP UID columns to drafts');
+
+    // Check if columns already exist (idempotent)
+    const colCheck = this.db.exec("PRAGMA table_info(drafts)");
+    const hasImapUid = colCheck.length > 0 && colCheck[0].values.some(
+      (row) => (row[1] as string) === 'imap_uid'
+    );
+
+    if (!hasImapUid) {
+      this.db.run('ALTER TABLE drafts ADD COLUMN imap_uid INTEGER');
+      this.db.run('ALTER TABLE drafts ADD COLUMN imap_uid_validity INTEGER');
+    }
+
+    log.info('Migration v2 → v3 complete');
   }
 
   /** Persist the in-memory database to disk */
@@ -773,28 +798,33 @@ export class DatabaseService {
     references?: string;
     attachmentsJson?: string;
     signature?: string;
+    imapUid?: number | null;
+    imapUidValidity?: number | null;
   }): number {
     if (!this.db) throw new Error('Database not initialized');
     if (draft.id) {
       this.db.run(
         `UPDATE drafts SET subject = ?, to_addresses = ?, cc_addresses = ?, bcc_addresses = ?,
          html_body = ?, text_body = ?, in_reply_to = ?, "references" = ?,
-         attachments_json = ?, signature = ?, updated_at = datetime('now')
+         attachments_json = ?, signature = ?, imap_uid = ?, imap_uid_validity = ?,
+         updated_at = datetime('now')
          WHERE id = ?`,
         [draft.subject, draft.to, draft.cc, draft.bcc, draft.htmlBody, draft.textBody,
          draft.inReplyTo || null, draft.references || null, draft.attachmentsJson || null,
-         draft.signature || null, draft.id]
+         draft.signature || null, draft.imapUid ?? null, draft.imapUidValidity ?? null, draft.id]
       );
       this.scheduleSave();
       return draft.id;
     }
     this.db.run(
       `INSERT INTO drafts (account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
-       bcc_addresses, html_body, text_body, in_reply_to, "references", attachments_json, signature)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       bcc_addresses, html_body, text_body, in_reply_to, "references", attachments_json, signature,
+       imap_uid, imap_uid_validity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [draft.accountId, draft.gmailThreadId || null, draft.subject, draft.to, draft.cc, draft.bcc,
        draft.htmlBody, draft.textBody, draft.inReplyTo || null, draft.references || null,
-       draft.attachmentsJson || null, draft.signature || null]
+       draft.attachmentsJson || null, draft.signature || null,
+       draft.imapUid ?? null, draft.imapUidValidity ?? null]
     );
     const result = this.db.exec('SELECT last_insert_rowid()');
     const id = result[0].values[0][0] as number;
@@ -807,7 +837,7 @@ export class DatabaseService {
     const result = this.db.exec(
       `SELECT id, account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
        bcc_addresses, html_body, text_body, in_reply_to, "references",
-       attachments_json, signature, created_at, updated_at
+       attachments_json, signature, imap_uid, imap_uid_validity, created_at, updated_at
        FROM drafts WHERE account_id = ? ORDER BY updated_at DESC`,
       [accountId]
     );
@@ -820,7 +850,7 @@ export class DatabaseService {
     const result = this.db.exec(
       `SELECT id, account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
        bcc_addresses, html_body, text_body, in_reply_to, "references",
-       attachments_json, signature, created_at, updated_at
+       attachments_json, signature, imap_uid, imap_uid_validity, created_at, updated_at
        FROM drafts WHERE id = ?`,
       [id]
     );

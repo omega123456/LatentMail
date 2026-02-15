@@ -2,6 +2,7 @@ import { Component, inject, OnChanges, SimpleChanges, input, output } from '@ang
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { EmailsStore } from '../../../store/emails.store';
+import { FoldersStore } from '../../../store/folders.store';
 import { Email } from '../../../core/models/email.model';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 
@@ -18,8 +19,15 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
     } @else if (emailsStore.selectedThread(); as thread) {
       <div class="reading-pane-content">
         <!-- Toolbar -->
-        <div class="message-toolbar">
-          <button class="toolbar-btn" (click)="actionClicked.emit('reply')">
+21:         <div class="message-toolbar">
+22:           @if (isDraftsFolder()) {
+23:             <button class="toolbar-btn edit-draft-btn" (click)="actionClicked.emit('edit-draft')">
+24:               <span class="material-symbols-outlined">edit</span>
+25:               <span>Edit Draft</span>
+26:             </button>
+27:             <div class="toolbar-separator"></div>
+28:           }
+29:           <button class="toolbar-btn" (click)="actionClicked.emit('reply')">
             <span class="material-symbols-outlined">reply</span>
             <span>Reply</span>
           </button>
@@ -169,6 +177,15 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
       &:hover {
         background-color: var(--color-surface-variant);
         color: var(--color-text-primary);
+      }
+
+      &.edit-draft-btn {
+        color: var(--color-primary);
+        font-weight: 500;
+
+        &:hover {
+          background-color: var(--color-primary-light);
+        }
       }
 
       .material-symbols-outlined {
@@ -333,10 +350,17 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 })
 export class ReadingPaneComponent {
   readonly emailsStore = inject(EmailsStore);
+  private readonly foldersStore = inject(FoldersStore);
   readonly actionClicked = output<string>();
   readonly expandedMessages = new Set<string>();
 
   private sanitizer = inject(DomSanitizer);
+
+  /** Whether the current folder is the Gmail Drafts folder. */
+  isDraftsFolder(): boolean {
+    const folder = this.foldersStore.activeFolderId();
+    return folder === '[Gmail]/Drafts';
+  }
 
   getInitial(email: Email): string {
     const name = email.fromName || email.fromAddress;

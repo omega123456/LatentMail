@@ -397,6 +397,73 @@ export class ImapService {
 
   // ---- Private helpers ----
 
+  /**
+   * Append a raw RFC822 message to [Gmail]/Drafts with the \Draft flag.
+   * Returns the UID assigned by the server (null if server did not return UID, e.g. no UIDPLUS)
+   * and the mailbox UIDVALIDITY.
+   */
+  async appendDraft(
+    accountId: string,
+    rawMessage: Buffer
+  ): Promise<{ uid: number | null; uidValidity: number }> {
+    const client = await this.connect(accountId);
+    const folder = '[Gmail]/Drafts';
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const result = await client.append(folder, rawMessage, ['\\Draft', '\\Seen']);
+      const raw = result as { uid?: number; destination?: string; uidValidity?: bigint };
+      const uid = raw.uid && raw.uid > 0 ? raw.uid : null;
+      if (uid === null) {
+        log.warn(
+          `Draft appended to ${folder} for account ${accountId} but server did not return UID (UIDPLUS?). ` +
+          'Deletions/updates of this draft on the server will not be possible.'
+        );
+      }
+      const uidValidity = Number(
+        raw.uidValidity ||
+        (client.mailbox as { uidValidity?: bigint })?.uidValidity ||
+        0
+      );
+      log.info(`Draft appended to ${folder} for account ${accountId}: uid=${uid ?? 'none'}, uidValidity=${uidValidity}`);
+      return { uid, uidValidity };
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Delete a message by UID from a folder (used to remove old draft before re-appending).
+   * If storedUidValidity is provided and does not match the current mailbox UIDVALIDITY,
+   * deletion is skipped to avoid targeting the wrong message after a UIDVALIDITY reset.
+   */
+  async deleteDraftByUid(
+    accountId: string,
+    folder: string,
+    uid: number,
+    storedUidValidity?: number | null
+  ): Promise<void> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(folder);
+    try {
+      if (storedUidValidity != null) {
+        const current = Number((client.mailbox as { uidValidity?: bigint })?.uidValidity ?? 0);
+        if (current !== storedUidValidity) {
+          log.warn(
+            `Skipping delete of uid=${uid} in ${folder}: UIDVALIDITY mismatch (stored=${storedUidValidity}, current=${current}). ` +
+            'Mailbox may have been recreated; stored UID could refer to a different message.'
+          );
+          return;
+        }
+      }
+      await client.messageDelete(String(uid), { uid: true });
+      log.info(`Deleted message uid=${uid} from ${folder} for account ${accountId}`);
+    } finally {
+      lock.release();
+    }
+  }
+
+  // ---- Private parse helpers ----
+
   private parseMessage(msg: FetchMessageObject, folder: string): FetchedEmail | null {
     try {
       const envelope = msg.envelope;
