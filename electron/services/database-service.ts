@@ -116,6 +116,10 @@ export class DatabaseService {
       this.migrateV2toV3();
     }
 
+    if (currentVersion < 4) {
+      this.migrateV3toV4();
+    }
+
     // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
     this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
     this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
@@ -305,6 +309,41 @@ export class DatabaseService {
     log.info('Migration v2 → v3 complete');
   }
 
+  /**
+   * Migrate from schema v3 to v4: add uid column to email_folders and backfill
+   * from emails.gmail_message_id where it is numeric (legacy UID-based identifiers).
+   */
+  private migrateV3toV4(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    log.info('Running migration v3 → v4: add uid to email_folders, Message-ID based dedup');
+
+    // Check if column already exists (idempotent)
+    const colCheck = this.db.exec("PRAGMA table_info(email_folders)");
+    const hasUid = colCheck.length > 0 && colCheck[0].values.some(
+      (row) => (row[1] as string) === 'uid'
+    );
+
+    if (!hasUid) {
+      this.db.run('ALTER TABLE email_folders ADD COLUMN uid INTEGER');
+    }
+
+    // Backfill uid from emails.gmail_message_id where it is purely numeric (legacy rows
+    // where gmail_message_id was set to the IMAP UID string).
+    // GLOB '[0-9]*' ensures it starts with a digit; the NOT GLOB '*[^0-9]*' ensures
+    // it contains only digits (no letters or special chars).
+    this.db.run(`
+      UPDATE email_folders SET uid = CAST(e.gmail_message_id AS INTEGER)
+      FROM emails e
+      WHERE email_folders.email_id = e.id
+        AND email_folders.uid IS NULL
+        AND e.gmail_message_id GLOB '[0-9]*'
+        AND e.gmail_message_id NOT GLOB '*[^0-9]*'
+        AND CAST(e.gmail_message_id AS INTEGER) > 0
+    `);
+
+    log.info('Migration v3 → v4 complete');
+  }
+
   /** Persist the in-memory database to disk */
   saveToDisk(): void {
     if (!this.db) return;
@@ -439,6 +478,7 @@ export class DatabaseService {
     gmailMessageId: string;
     gmailThreadId: string;
     folder: string;
+    folderUid?: number;
     fromAddress: string;
     fromName?: string;
     toAddresses: string;
@@ -492,11 +532,19 @@ export class DatabaseService {
     );
     const id = result[0].values[0][0] as number;
 
-    // Record folder association in the link table
-    this.db.run(
-      'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (?, ?, ?)',
-      [id, email.accountId, email.folder]
-    );
+    // Record folder association in the link table (with per-folder UID if available)
+    if (email.folderUid != null) {
+      this.db.run(
+        `INSERT INTO email_folders (email_id, account_id, folder, uid) VALUES (?, ?, ?, ?)
+         ON CONFLICT(email_id, folder) DO UPDATE SET uid = excluded.uid`,
+        [id, email.accountId, email.folder, email.folderUid]
+      );
+    } else {
+      this.db.run(
+        'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (?, ?, ?)',
+        [id, email.accountId, email.folder]
+      );
+    }
 
     this.scheduleSave();
     return id;
@@ -862,6 +910,220 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run('DELETE FROM drafts WHERE id = ?', [id]);
     this.scheduleSave();
+  }
+
+  // ---- Folder association management ----
+
+  /** Remove an email's association with a specific folder. */
+  removeEmailFolderAssociation(accountId: number, gmailMessageId: string, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `DELETE FROM email_folders WHERE folder = ? AND email_id IN (
+        SELECT id FROM emails WHERE account_id = ? AND gmail_message_id = ?
+      )`,
+      [folder, accountId, gmailMessageId]
+    );
+    this.scheduleSave();
+  }
+
+  /** Remove a thread's association with a specific folder. */
+  removeThreadFolderAssociation(threadId: number, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'DELETE FROM thread_folders WHERE thread_id = ? AND folder = ?',
+      [threadId, folder]
+    );
+    this.scheduleSave();
+  }
+
+  /** Get all gmail_message_ids that have a folder association for a given account + folder. */
+  getEmailGmailMessageIdsByFolder(accountId: number, folder: string): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT e.gmail_message_id FROM emails e
+       JOIN email_folders ef ON e.id = ef.email_id
+       WHERE e.account_id = ? AND ef.folder = ?`,
+      [accountId, folder]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
+  }
+
+  /**
+   * Get all (emailId, uid) pairs from email_folders for a given account + folder.
+   * Used for reconciliation: compare local UIDs against server UIDs.
+   */
+  getEmailFolderUids(accountId: number, folder: string): Array<{ emailId: number; uid: number; gmailMessageId: string }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT ef.email_id, ef.uid, e.gmail_message_id FROM email_folders ef
+       JOIN emails e ON e.id = ef.email_id
+       WHERE e.account_id = ? AND ef.folder = ? AND ef.uid IS NOT NULL`,
+      [accountId, folder]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => ({
+      emailId: row[0] as number,
+      uid: row[1] as number,
+      gmailMessageId: row[2] as string,
+    }));
+  }
+
+  /**
+   * Get folder UIDs for a given email (by gmail_message_id).
+   * Returns one entry per folder the email appears in, with the IMAP UID for that folder.
+   * Used by flag and move handlers to resolve (account, email) → [(folder, uid)].
+   */
+  getFolderUidsForEmail(accountId: number, gmailMessageId: string): Array<{ folder: string; uid: number }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT ef.folder, ef.uid FROM email_folders ef
+       JOIN emails e ON e.id = ef.email_id
+       WHERE e.account_id = ? AND e.gmail_message_id = ? AND ef.uid IS NOT NULL`,
+      [accountId, gmailMessageId]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => ({
+      folder: row[0] as string,
+      uid: row[1] as number,
+    }));
+  }
+
+  /**
+   * Move an email from one folder to another atomically.
+   * Removes the source folder association and adds the target folder association.
+   * If targetUid is provided, stores it as the UID for the new folder association.
+   */
+  moveEmailFolder(accountId: number, gmailMessageId: string, sourceFolder: string, targetFolder: string, targetUid?: number | null): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      // Get the email's internal ID
+      const result = this.db.exec(
+        'SELECT id FROM emails WHERE account_id = ? AND gmail_message_id = ?',
+        [accountId, gmailMessageId]
+      );
+      if (result.length > 0 && result[0].values.length > 0) {
+        const emailId = result[0].values[0][0] as number;
+        // Remove source folder association
+        this.db.run(
+          'DELETE FROM email_folders WHERE email_id = ? AND folder = ?',
+          [emailId, sourceFolder]
+        );
+        // Add target folder association (with uid if available)
+        if (targetUid != null) {
+          this.db.run(
+            `INSERT INTO email_folders (email_id, account_id, folder, uid) VALUES (?, ?, ?, ?)
+             ON CONFLICT(email_id, folder) DO UPDATE SET uid = excluded.uid`,
+            [emailId, accountId, targetFolder, targetUid]
+          );
+        } else {
+          this.db.run(
+            'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (?, ?, ?)',
+            [emailId, accountId, targetFolder]
+          );
+        }
+      }
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  /**
+   * Move a thread from one folder to another atomically.
+   * Removes the source folder association and adds the target folder association.
+   */
+  moveThreadFolder(threadId: number, accountId: number, sourceFolder: string, targetFolder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      // Remove source folder association
+      this.db.run(
+        'DELETE FROM thread_folders WHERE thread_id = ? AND folder = ?',
+        [threadId, sourceFolder]
+      );
+      // Add target folder association
+      this.db.run(
+        'INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder) VALUES (?, ?, ?)',
+        [threadId, accountId, targetFolder]
+      );
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  /**
+   * Remove orphaned threads — threads with no remaining folder associations.
+   */
+  removeOrphanedThreads(accountId: number): number {
+    if (!this.db) throw new Error('Database not initialized');
+    // Count before deleting for logging
+    const countResult = this.db.exec(
+      `SELECT COUNT(*) FROM threads t WHERE t.account_id = ?
+       AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.thread_id = t.id)`,
+      [accountId]
+    );
+    const count = (countResult.length > 0 && countResult[0].values.length > 0)
+      ? countResult[0].values[0][0] as number : 0;
+
+    if (count > 0) {
+      this.db.run(
+        `DELETE FROM threads WHERE account_id = ?
+         AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.thread_id = threads.id)`,
+        [accountId]
+      );
+      this.scheduleSave();
+    }
+    return count;
+  }
+
+  /**
+   * Get the internal thread ID for a given gmail_thread_id.
+   */
+  getThreadInternalId(accountId: number, gmailThreadId: string): number | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      'SELECT id FROM threads WHERE account_id = ? AND gmail_thread_id = ?',
+      [accountId, gmailThreadId]
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    return result[0].values[0][0] as number;
+  }
+
+  /**
+   * Get all thread IDs (internal) that have emails in a given folder.
+   * Used for reconciliation to find threads that should be disassociated from a folder.
+   */
+  getThreadIdsByFolder(accountId: number, folder: string): number[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      'SELECT DISTINCT thread_id FROM thread_folders WHERE account_id = ? AND folder = ?',
+      [accountId, folder]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as number);
+  }
+
+  /**
+   * Check if a thread still has any emails in a given folder.
+   * Used during reconciliation to decide whether to keep the thread-folder association.
+   */
+  threadHasEmailsInFolder(accountId: number, gmailThreadId: string, folder: string): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT COUNT(*) FROM emails e
+       JOIN email_folders ef ON e.id = ef.email_id
+       WHERE e.account_id = ? AND e.gmail_thread_id = ? AND ef.folder = ?`,
+      [accountId, gmailThreadId, folder]
+    );
+    if (result.length === 0 || result[0].values.length === 0) return false;
+    return (result[0].values[0][0] as number) > 0;
   }
 
   // ---- Contact search (for autocomplete) ----

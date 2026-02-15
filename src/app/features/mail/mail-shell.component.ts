@@ -518,8 +518,8 @@ export class MailShellComponent implements OnInit, OnDestroy {
 
   /**
    * Open a draft from the Drafts folder for editing in compose.
-   * Maps the selected email message to a Draft shape and opens compose with serverDraftUid
-   * so that on send/discard, the old draft can be removed from Gmail.
+   * Maps the selected email message to a Draft shape and passes its gmailMessageId
+   * so that on send/discard, the backend can resolve the UID and remove the old draft from Gmail.
    */
   private openDraftForEditing(): void {
     const activeAccount = this.accountsStore.activeAccount();
@@ -547,8 +547,8 @@ export class MailShellComponent implements OnInit, OnDestroy {
     // Preserve original subject (keep Re:/Fwd: prefixes if present)
     draft.subject = msg.subject || '';
 
-    // The gmailMessageId is the UID in this app's storage (numeric string from IMAP UID)
-    const serverDraftUid = Number(msg.gmailMessageId);
+    // Pass the gmailMessageId so the backend can resolve the IMAP UID from email_folders
+    const serverDraftGmailMessageId = msg.gmailMessageId;
 
     this.composeStore.openCompose({
       mode: 'new',
@@ -556,7 +556,7 @@ export class MailShellComponent implements OnInit, OnDestroy {
       accountEmail: activeAccount.email,
       accountDisplayName: activeAccount.displayName,
       draft,
-      serverDraftUid: Number.isFinite(serverDraftUid) ? serverDraftUid : undefined,
+      serverDraftGmailMessageId,
     });
   }
 }

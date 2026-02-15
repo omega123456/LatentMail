@@ -3,8 +3,8 @@ import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { SyncService } from '../services/sync-service';
 import { buildDraftMime } from '../services/draft-mime';
+import { randomUUID } from 'crypto';
 
 const GMAIL_DRAFTS_FOLDER = '[Gmail]/Drafts';
 
@@ -15,8 +15,8 @@ export function registerComposeIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.COMPOSE_SAVE_DRAFT, async (_event, draft: {
     id?: number;
     accountId: number;
-    /** UID of server draft to delete before first APPEND (when editing a draft opened from Gmail) */
-    serverDraftUid?: number;
+    /** gmailMessageId of server draft to delete before first APPEND (when editing a draft opened from Gmail) */
+    serverDraftGmailMessageId?: string;
     gmailThreadId?: string;
     subject: string;
     to: string;
@@ -52,6 +52,11 @@ export function registerComposeIpcHandlers(): void {
       let imapUid: number | null = null;
       let imapUidValidity: number | null = null;
 
+      // Generate a stable Message-ID for this draft (used in both MIME and local DB).
+      // Nodemailer stores Message-ID with angle brackets as-is.
+      const domain = account.email.split('@')[1] || 'local';
+      const draftMessageId = `<draft-${randomUUID()}@${domain}>`;
+
       try {
         // Parse attachments from JSON
         const attachments: Array<{ filename: string; content: Buffer | string; contentType?: string }> = [];
@@ -82,19 +87,27 @@ export function registerComposeIpcHandlers(): void {
           text: draft.textBody || undefined,
           inReplyTo: draft.inReplyTo || undefined,
           references: draft.references || undefined,
+          messageId: draftMessageId,
           attachments: attachments.length > 0 ? attachments : undefined,
         });
 
         // 4. If editing a server draft (no local id yet), delete the original from Gmail before APPEND
-        if (!draft.id && draft.serverDraftUid) {
+        if (!draft.id && draft.serverDraftGmailMessageId) {
           try {
             const imapService = ImapService.getInstance();
-            await imapService.deleteDraftByUid(
-              String(draft.accountId),
-              GMAIL_DRAFTS_FOLDER,
-              draft.serverDraftUid,
-              null
-            );
+            // Resolve the UID from email_folders for this message in Drafts
+            const folderUids = db.getFolderUidsForEmail(draft.accountId, draft.serverDraftGmailMessageId);
+            const draftsEntry = folderUids.find(fu => fu.folder === GMAIL_DRAFTS_FOLDER);
+            if (draftsEntry) {
+              await imapService.deleteDraftByUid(
+                String(draft.accountId),
+                GMAIL_DRAFTS_FOLDER,
+                draftsEntry.uid,
+                null
+              );
+            } else {
+              log.warn(`No UID found for server draft gmailMessageId=${draft.serverDraftGmailMessageId} — cannot delete from server`);
+            }
           } catch (err) {
             log.warn('Failed to delete server draft from Gmail before append (continuing):', err);
           }
@@ -124,18 +137,100 @@ export function registerComposeIpcHandlers(): void {
         imapUid = appendResult.uid;
         imapUidValidity = appendResult.uidValidity;
 
-        // 7. Trigger sync so the Drafts folder updates in the UI
-        const syncService = SyncService.getInstance();
-        syncService.syncAccount(String(draft.accountId)).catch(err => {
-          log.warn('Post-draft-save sync failed:', err);
-        });
+        // 7. Update local emails/threads/folder tables so Drafts folder view reflects the draft
+        //    without needing a full sync. Only do this when APPEND returned a valid UID.
+        if (imapUid != null) {
+          try {
+            const gmailThreadId = draft.gmailThreadId || `draft-${randomUUID()}`;
+
+            // If we deleted an old IMAP UID, clean up its email/thread/folder entries.
+            // The old draft's gmailMessageId was stored in the drafts table's companion
+            // email row — look it up by searching for email_folders with the old UID.
+            if (oldImapUid) {
+              // Find the email row that had this old UID in the Drafts folder
+              const oldFolderUids = db.getEmailFolderUids(draft.accountId, GMAIL_DRAFTS_FOLDER);
+              const oldEntry = oldFolderUids.find(e => e.uid === oldImapUid);
+              if (oldEntry) {
+                db.removeEmailFolderAssociation(draft.accountId, oldEntry.gmailMessageId, GMAIL_DRAFTS_FOLDER);
+
+                // Check if the old thread still has emails in Drafts; if not, remove thread-folder link
+                const oldEmail = db.getEmailByGmailMessageId(draft.accountId, oldEntry.gmailMessageId);
+                if (oldEmail) {
+                  const oldThreadId = String(oldEmail['gmailThreadId'] || '');
+                  if (oldThreadId && !db.threadHasEmailsInFolder(draft.accountId, oldThreadId, GMAIL_DRAFTS_FOLDER)) {
+                    const oldInternalThreadId = db.getThreadInternalId(draft.accountId, oldThreadId);
+                    if (oldInternalThreadId != null) {
+                      db.removeThreadFolderAssociation(oldInternalThreadId, GMAIL_DRAFTS_FOLDER);
+                    }
+                  }
+                }
+              }
+            }
+
+            // Upsert the new draft as an email in the emails table
+            db.upsertEmail({
+              accountId: draft.accountId,
+              gmailMessageId: draftMessageId,
+              gmailThreadId,
+              folder: GMAIL_DRAFTS_FOLDER,
+              folderUid: imapUid,
+              fromAddress: account.email,
+              fromName: account.display_name,
+              toAddresses: draft.to || '',
+              ccAddresses: draft.cc || '',
+              bccAddresses: draft.bcc || '',
+              subject: draft.subject || '',
+              textBody: draft.textBody || '',
+              htmlBody: draft.htmlBody || '',
+              date: new Date().toISOString(),
+              isRead: true,
+              isStarred: false,
+              isImportant: false,
+              snippet: (draft.textBody || '').substring(0, 100),
+              hasAttachments: !!draft.attachmentsJson,
+            });
+
+            // Upsert thread entry for the draft.
+            // If a thread already exists (e.g. reply draft in an existing conversation),
+            // preserve its metadata to avoid clobbering real thread info.
+            const existingThread = db.getThreadById(draft.accountId, gmailThreadId);
+            let dbThreadId: number;
+            if (existingThread) {
+              // Thread exists — keep existing metadata, just ensure folder association
+              dbThreadId = existingThread['id'] as number;
+            } else {
+              // New thread — create with draft info
+              dbThreadId = db.upsertThread({
+                accountId: draft.accountId,
+                gmailThreadId,
+                subject: draft.subject || '',
+                lastMessageDate: new Date().toISOString(),
+                participants: account.email,
+                messageCount: 1,
+                snippet: (draft.textBody || '').substring(0, 100),
+                folder: GMAIL_DRAFTS_FOLDER,
+                isRead: true,
+                isStarred: false,
+              });
+            }
+
+            // Associate thread with [Gmail]/Drafts folder
+            db.upsertThreadFolder(dbThreadId, draft.accountId, GMAIL_DRAFTS_FOLDER);
+
+            log.info(`Draft saved to local emails/threads with UID ${imapUid}`);
+          } catch (dbErr) {
+            log.warn('Failed to upsert draft into emails/threads tables (draft saved to drafts table):', dbErr);
+          }
+        } else {
+          log.warn('IMAP APPEND did not return a UID — draft will appear in Drafts folder on next sync');
+        }
 
       } catch (err) {
         // If IMAP fails (e.g. offline), continue saving locally only
         log.warn('Draft IMAP append failed (saving locally only):', err);
       }
 
-      // 8. Save to local DB with IMAP UID
+      // 8. Save to local DB drafts table with IMAP UID
       const id = db.saveDraft({
         ...draft,
         imapUid,
@@ -203,11 +298,17 @@ export function registerComposeIpcHandlers(): void {
     }
   });
 
-  // Delete a draft message from Gmail by UID (for server drafts opened from Drafts folder)
-  ipcMain.handle(IPC_CHANNELS.COMPOSE_DELETE_DRAFT_ON_SERVER, async (_event, accountId: number, uid: number) => {
+  // Delete a draft message from Gmail by gmailMessageId (resolves UID from email_folders)
+  ipcMain.handle(IPC_CHANNELS.COMPOSE_DELETE_DRAFT_ON_SERVER, async (_event, accountId: number, gmailMessageId: string) => {
     try {
-      const imapService = ImapService.getInstance();
-      await imapService.deleteDraftByUid(String(accountId), GMAIL_DRAFTS_FOLDER, uid);
+      const folderUids = db.getFolderUidsForEmail(accountId, gmailMessageId);
+      const draftsEntry = folderUids.find(fu => fu.folder === GMAIL_DRAFTS_FOLDER);
+      if (draftsEntry) {
+        const imapService = ImapService.getInstance();
+        await imapService.deleteDraftByUid(String(accountId), GMAIL_DRAFTS_FOLDER, draftsEntry.uid);
+      } else {
+        log.warn(`No UID found for draft gmailMessageId=${gmailMessageId} in ${GMAIL_DRAFTS_FOLDER} — cannot delete from server`);
+      }
       return ipcSuccess(null);
     } catch (err) {
       log.error('Failed to delete server draft:', err);

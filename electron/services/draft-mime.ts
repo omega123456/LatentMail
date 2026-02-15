@@ -11,6 +11,7 @@ interface DraftMimeOptions {
   text?: string;
   inReplyTo?: string;
   references?: string;
+  messageId?: string;  // Message-ID to embed in the MIME headers
   attachments?: Array<{
     filename: string;
     content: Buffer | string;
@@ -38,6 +39,7 @@ export async function buildDraftMime(options: DraftMimeOptions): Promise<Buffer>
     text: options.text || undefined,
     inReplyTo: options.inReplyTo || undefined,
     references: options.references || undefined,
+    messageId: options.messageId || undefined,
     attachments: options.attachments,
     // Mark as draft in headers
     headers: {

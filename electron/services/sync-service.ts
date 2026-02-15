@@ -126,6 +126,7 @@ export class SyncService {
               gmailMessageId: email.gmailMessageId,
               gmailThreadId: email.gmailThreadId,
               folder,
+              folderUid: email.uid,
               fromAddress: email.fromAddress,
               fromName: email.fromName,
               toAddresses: email.toAddresses,
@@ -150,14 +151,18 @@ export class SyncService {
             }
           }
 
-          // Upsert threads
+          // Upsert threads (dedupe emails by gmailMessageId so the same message
+          // appearing in multiple folders doesn't inflate counts or create duplicates)
           for (const [threadId, threadEmails] of threadMap) {
-            const latest = threadEmails.reduce((a, b) =>
+            // Dedupe by gmailMessageId — same message in two folders should count once
+            const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+
+            const latest = uniqueEmails.reduce((a, b) =>
               new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
             );
-            const participants = [...new Set(threadEmails.map(e => e.fromAddress))].join(', ');
-            const allRead = threadEmails.every(e => e.isRead);
-            const anyStarred = threadEmails.some(e => e.isStarred);
+            const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+            const allRead = uniqueEmails.every(e => e.isRead);
+            const anyStarred = uniqueEmails.some(e => e.isStarred);
 
             const dbThreadId = db.upsertThread({
               accountId: numAccountId,
@@ -165,7 +170,7 @@ export class SyncService {
               subject: latest.subject,
               lastMessageDate: latest.date,
               participants,
-              messageCount: threadEmails.length,
+              messageCount: uniqueEmails.length,
               snippet: latest.snippet,
               folder,
               isRead: allRead,
@@ -178,6 +183,63 @@ export class SyncService {
 
           totalNewCount += emails.length;
           log.info(`Synced ${emails.length} emails from ${folder} for account ${accountId}`);
+
+          // --- Folder reconciliation ---
+          // Compare local email_folders UIDs against the FULL server UID list.
+          // With Message-ID based gmail_message_id, reconciliation must use
+          // the per-folder UID stored in email_folders, not gmail_message_id.
+          // Skip on initial sync — we only fetched recent messages and shouldn't
+          // remove older associations.
+          if (!isInitialSync) {
+            try {
+              // Fetch the complete UID set from the server (lightweight SEARCH ALL)
+              const serverUids = await imapService.fetchFolderUids(accountId, folder);
+              const serverUidSet = new Set(serverUids);
+
+              // Query local DB for all (emailId, uid) pairs associated with this folder
+              const localFolderUids = db.getEmailFolderUids(numAccountId, folder);
+
+              // Find stale local entries: present locally but not on server
+              const staleEntries = localFolderUids.filter(entry => !serverUidSet.has(entry.uid));
+
+              if (staleEntries.length > 0) {
+                log.info(`Reconciliation: removing ${staleEntries.length} stale email-folder associations from ${folder} for account ${accountId}`);
+
+                db.getDatabase().run('BEGIN');
+                try {
+                  for (const stale of staleEntries) {
+                    // Remove email-folder association
+                    db.removeEmailFolderAssociation(numAccountId, stale.gmailMessageId, folder);
+
+                    // Check if the email's thread still has emails in this folder
+                    const email = db.getEmailByGmailMessageId(numAccountId, stale.gmailMessageId);
+                    if (email) {
+                      const threadId = String(email['gmailThreadId'] || '');
+                      if (threadId && !db.threadHasEmailsInFolder(numAccountId, threadId, folder)) {
+                        const internalThreadId = db.getThreadInternalId(numAccountId, threadId);
+                        if (internalThreadId != null) {
+                          db.removeThreadFolderAssociation(internalThreadId, folder);
+                          log.info(`Reconciliation: removed thread-folder association for thread ${threadId} from ${folder}`);
+                        }
+                      }
+                    }
+                  }
+                  db.getDatabase().run('COMMIT');
+                } catch (reconcileErr) {
+                  db.getDatabase().run('ROLLBACK');
+                  throw reconcileErr;
+                }
+
+                // Remove orphaned threads (threads with zero folder associations)
+                const orphansRemoved = db.removeOrphanedThreads(numAccountId);
+                if (orphansRemoved > 0) {
+                  log.info(`Reconciliation: removed ${orphansRemoved} orphaned threads for account ${accountId}`);
+                }
+              }
+            } catch (reconcileErr) {
+              log.warn(`Reconciliation failed for folder ${folder} account ${accountId} (continuing):`, reconcileErr);
+            }
+          }
         } catch (err) {
           log.warn(`Failed to sync folder ${folder} for account ${accountId}:`, err);
           // Continue with other folders

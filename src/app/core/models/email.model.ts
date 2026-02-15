@@ -92,6 +92,6 @@ export interface ComposeContext {
   draft?: Draft;
   originalThread?: Thread;
   originalMessage?: Email;
-  /** UID of a server draft opened from [Gmail]/Drafts for edit */
-  serverDraftUid?: number;
+  /** gmailMessageId of a server draft opened from [Gmail]/Drafts for edit (backend resolves UID) */
+  serverDraftGmailMessageId?: string;
 }

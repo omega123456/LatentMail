@@ -19,15 +19,15 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
     } @else if (emailsStore.selectedThread(); as thread) {
       <div class="reading-pane-content">
         <!-- Toolbar -->
-21:         <div class="message-toolbar">
-22:           @if (isDraftsFolder()) {
-23:             <button class="toolbar-btn edit-draft-btn" (click)="actionClicked.emit('edit-draft')">
-24:               <span class="material-symbols-outlined">edit</span>
-25:               <span>Edit Draft</span>
-26:             </button>
-27:             <div class="toolbar-separator"></div>
-28:           }
-29:           <button class="toolbar-btn" (click)="actionClicked.emit('reply')">
+        <div class="message-toolbar">
+          @if (isDraftsFolder()) {
+            <button class="toolbar-btn edit-draft-btn" (click)="actionClicked.emit('edit-draft')">
+              <span class="material-symbols-outlined">edit</span>
+              <span>Edit Draft</span>
+            </button>
+            <div class="toolbar-separator"></div>
+          }
+          <button class="toolbar-btn" (click)="actionClicked.emit('reply')">
             <span class="material-symbols-outlined">reply</span>
             <span>Reply</span>
           </button>

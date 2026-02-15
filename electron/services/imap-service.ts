@@ -1,5 +1,6 @@
 import { ImapFlow, FetchMessageObject } from 'imapflow';
 import log from 'electron-log/main';
+import { simpleParser } from 'mailparser';
 import { OAuthService } from './oauth-service';
 import { DatabaseService } from './database-service';
 
@@ -245,6 +246,22 @@ export class ImapService {
   }
 
   /**
+   * Fetch all UIDs in a folder (lightweight SEARCH ALL — no message content).
+   * Used for sync reconciliation to get a complete picture of what exists on the server.
+   */
+  async fetchFolderUids(accountId: string, folder: string): Promise<number[]> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const searchResult = await client.search({ all: true }, { uid: true }) as number[] | false;
+      if (!searchResult || searchResult.length === 0) return [];
+      return Array.from(searchResult);
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Fetch the full body of a single email by UID.
    */
   async fetchEmailBody(
@@ -261,9 +278,12 @@ export class ImapService {
 
       if (!msg || !msg.source) return null;
 
-      const source = msg.source.toString();
-      const parsed = this.parseBodyFromSource(source);
-      return parsed;
+      const sourceBuffer = Buffer.isBuffer(msg.source) ? msg.source : Buffer.from(msg.source);
+      const parsed = await simpleParser(sourceBuffer);
+      return {
+        textBody: (parsed.text || '').trim(),
+        htmlBody: (parsed.html || '').trim(),
+      };
     } finally {
       lock.release();
     }
@@ -304,11 +324,17 @@ export class ImapService {
         const fetchMsg = msg as FetchMessageObject;
         const email = this.parseMessage(fetchMsg, '[Gmail]/All Mail');
         if (email) {
-          // Also parse body from source
           if (fetchMsg.source) {
-            const body = this.parseBodyFromSource(fetchMsg.source.toString());
-            email.textBody = body.textBody;
-            email.htmlBody = body.htmlBody;
+            try {
+              const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
+                ? fetchMsg.source
+                : Buffer.from(fetchMsg.source);
+              const parsed = await simpleParser(sourceBuffer);
+              email.textBody = (parsed.text || '').trim();
+              email.htmlBody = (parsed.html || '').trim();
+            } catch (err) {
+              log.warn('Failed to parse thread message body:', err);
+            }
           }
           emails.push(email);
         }
@@ -484,9 +510,27 @@ export class ImapService {
       const subject = envelope.subject || '(no subject)';
       const snippet = subject.substring(0, 100);
 
+      // Use Message-ID header as stable identifier (same across all folders).
+      // Fall back to raw headers parse, then to UID string for malformed messages.
+      // Normalize to <...> format for consistency.
+      let messageId = (envelope.messageId ?? '').trim();
+      if (messageId) {
+        // Ensure we extract just the <...> token
+        const angleMatch = messageId.match(/<[^>]+>/);
+        if (angleMatch) {
+          messageId = angleMatch[0];
+        }
+      }
+      if (!messageId && msg.headers) {
+        messageId = this.parseMessageIdFromHeaders(msg.headers);
+      }
+      if (!messageId) {
+        messageId = String(msg.uid);
+      }
+
       return {
         uid: msg.uid,
-        gmailMessageId: String(msg.uid),
+        gmailMessageId: messageId,
         gmailThreadId: msg.threadId || '',
         folder,
         fromAddress,
@@ -528,89 +572,30 @@ export class ImapService {
     return false;
   }
 
-  private parseBodyFromSource(source: string): { textBody: string; htmlBody: string } {
-    let textBody = '';
-    let htmlBody = '';
-
+  /**
+   * Extract Message-ID from raw headers buffer when envelope.messageId is missing.
+   * Handles RFC 5322 folded headers by unfolding first, then extracting the <...> token.
+   */
+  private parseMessageIdFromHeaders(headers: Buffer | string): string {
     try {
-      const boundaryMatch = source.match(/boundary="?([^";\r\n]+)"?/i);
-      if (boundaryMatch) {
-        const boundary = boundaryMatch[1];
-        const parts = source.split(`--${boundary}`);
-
-        for (const part of parts) {
-          const headerEnd = part.indexOf('\r\n\r\n');
-          if (headerEnd === -1) continue;
-
-          const headers = part.substring(0, headerEnd).toLowerCase();
-          let body = part.substring(headerEnd + 4);
-
-          const endBoundary = body.indexOf(`--${boundary}`);
-          if (endBoundary !== -1) {
-            body = body.substring(0, endBoundary);
-          }
-          body = body.replace(/\r\n$/, '');
-
-          // Check for nested multipart
-          const nestedBoundary = headers.match(/boundary="?([^";\r\n]+)"?/i);
-          if (nestedBoundary) {
-            const nested = this.parseBodyFromSource(part.substring(headerEnd + 4));
-            if (nested.textBody) textBody = nested.textBody;
-            if (nested.htmlBody) htmlBody = nested.htmlBody;
-            continue;
-          }
-
-          // Decode transfer encoding
-          if (headers.includes('content-transfer-encoding: base64')) {
-            try {
-              body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8');
-            } catch {
-              // Leave as-is if decode fails
-            }
-          } else if (headers.includes('content-transfer-encoding: quoted-printable')) {
-            body = this.decodeQuotedPrintable(body);
-          }
-
-          if (headers.includes('content-type: text/plain') && !textBody) {
-            textBody = body.trim();
-          } else if (headers.includes('content-type: text/html') && !htmlBody) {
-            htmlBody = body.trim();
-          }
+      let headerStr = typeof headers === 'string' ? headers : headers.toString('utf-8');
+      // Unfold headers: CRLF followed by whitespace is a continuation
+      headerStr = headerStr.replace(/\r?\n[ \t]+/g, ' ');
+      const match = headerStr.match(/^Message-ID:\s*(.+)/im);
+      if (match) {
+        const value = match[1].trim();
+        // Extract the <...> token (standard Message-ID format)
+        const angleMatch = value.match(/<[^>]+>/);
+        if (angleMatch) {
+          return angleMatch[0];
         }
-      } else {
-        // Single-part message
-        const headerEnd = source.indexOf('\r\n\r\n');
-        if (headerEnd !== -1) {
-          const headers = source.substring(0, headerEnd).toLowerCase();
-          let body = source.substring(headerEnd + 4);
-
-          if (headers.includes('content-transfer-encoding: base64')) {
-            try {
-              body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8');
-            } catch {
-              // Leave as-is
-            }
-          } else if (headers.includes('content-transfer-encoding: quoted-printable')) {
-            body = this.decodeQuotedPrintable(body);
-          }
-
-          if (headers.includes('content-type: text/html')) {
-            htmlBody = body.trim();
-          } else {
-            textBody = body.trim();
-          }
-        }
+        // If no angle brackets, use the raw value (non-standard but possible)
+        return value;
       }
-    } catch (err) {
-      log.warn('Failed to parse email body from source:', err);
+    } catch {
+      // Ignore parse errors
     }
-
-    return { textBody, htmlBody };
+    return '';
   }
 
-  private decodeQuotedPrintable(str: string): string {
-    return str
-      .replace(/=\r?\n/g, '')
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-  }
 }

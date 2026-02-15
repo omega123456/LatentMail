@@ -77,6 +77,7 @@ export function registerMailIpcHandlers(): void {
                 gmailMessageId: fetched.gmailMessageId,
                 gmailThreadId: fetched.gmailThreadId,
                 folder: fetched.folder,
+                folderUid: fetched.uid,
                 fromAddress: fetched.fromAddress,
                 fromName: fetched.fromName,
                 toAddresses: fetched.toAddresses,
@@ -128,11 +129,9 @@ export function registerMailIpcHandlers(): void {
       const smtpService = SmtpService.getInstance();
       const result = await smtpService.sendEmail(accountId, message);
 
-      // Trigger a sync to update sent folder
-      const syncService = SyncService.getInstance();
-      syncService.syncAccount(accountId).catch(err => {
-        log.warn('Post-send sync failed:', err);
-      });
+      // No full sync after send — the sent message will appear in Sent folder
+      // on the next scheduled background sync or IDLE event. Draft cleanup is
+      // handled by the frontend via COMPOSE_DELETE_DRAFT.
 
       return ipcSuccess(result);
     } catch (err: unknown) {
@@ -169,23 +168,34 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // Group messages by source folder using email_folders link table
+      // Group messages by source folder using getFolderUidsForEmail (resolves Message-ID → per-folder UIDs)
       const byFolder = new Map<string, number[]>();
+      // Track which gmailMessageId maps to which source folders for post-move DB update
+      const emailSourceFolders = new Map<string, Set<string>>();
       for (const email of deduped.values()) {
         const gmailMessageId = String(email['gmailMessageId'] || '');
-        const uid = Number(gmailMessageId);
-        if (!Number.isFinite(uid)) continue;
+        const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
+
+        if (folderUids.length === 0) {
+          log.warn(`MAIL_MOVE: No folder UIDs found for email ${gmailMessageId} — IMAP move skipped (will resolve on next sync)`);
+        }
 
         if (sourceFolder) {
-          // Explicit source folder from the frontend
-          if (!byFolder.has(sourceFolder)) byFolder.set(sourceFolder, []);
-          byFolder.get(sourceFolder)!.push(uid);
+          // Explicit source folder from the frontend — find the UID for this folder
+          const entry = folderUids.find(fu => fu.folder === sourceFolder);
+          if (entry) {
+            if (!byFolder.has(sourceFolder)) byFolder.set(sourceFolder, []);
+            byFolder.get(sourceFolder)!.push(entry.uid);
+            if (!emailSourceFolders.has(gmailMessageId)) emailSourceFolders.set(gmailMessageId, new Set());
+            emailSourceFolders.get(gmailMessageId)!.add(sourceFolder);
+          }
         } else {
-          // Resolve folders from the email_folders link table
-          const folders = db.getFoldersForEmail(numAccountId, gmailMessageId);
-          for (const folder of folders) {
+          // Resolve all folders from the email_folders link table
+          for (const { folder, uid } of folderUids) {
             if (!byFolder.has(folder)) byFolder.set(folder, []);
             byFolder.get(folder)!.push(uid);
+            if (!emailSourceFolders.has(gmailMessageId)) emailSourceFolders.set(gmailMessageId, new Set());
+            emailSourceFolders.get(gmailMessageId)!.add(folder);
           }
         }
       }
@@ -196,11 +206,36 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // Trigger sync to update local state
-      const syncService = SyncService.getInstance();
-      syncService.syncAccount(accountId).catch(err => {
-        log.warn('Post-move sync failed:', err);
-      });
+      // Update local DB folder associations directly instead of triggering a full sync.
+      for (const [srcFolder] of byFolder.entries()) {
+        if (srcFolder === targetFolder) continue;
+
+        for (const email of deduped.values()) {
+          const gmailMessageId = String(email['gmailMessageId'] || '');
+          const gmailThreadId = String(email['gmailThreadId'] || '');
+          const sources = emailSourceFolders.get(gmailMessageId);
+          if (!gmailMessageId || !sources || !sources.has(srcFolder)) continue;
+
+          // Move this email's folder association from source to target
+          // New UID in target folder is unknown until next sync — pass null
+          db.moveEmailFolder(numAccountId, gmailMessageId, srcFolder, targetFolder, null);
+
+          // Move thread-folder association if thread has no more emails in source
+          if (gmailThreadId) {
+            const internalThreadId = db.getThreadInternalId(numAccountId, gmailThreadId);
+            if (internalThreadId != null) {
+              if (!db.threadHasEmailsInFolder(numAccountId, gmailThreadId, srcFolder)) {
+                db.moveThreadFolder(internalThreadId, numAccountId, srcFolder, targetFolder);
+              } else {
+                // Thread still has emails in source folder — just add the target association
+                db.upsertThreadFolder(internalThreadId, numAccountId, targetFolder);
+              }
+            }
+          }
+        }
+      }
+
+      log.info(`Move complete: ${deduped.size} emails moved to ${targetFolder}, local DB updated`);
 
       return ipcSuccess(null);
     } catch (err) {
@@ -255,15 +290,15 @@ export function registerMailIpcHandlers(): void {
         if (flag === 'starred') imapFlags.starred = value;
 
         if (Object.keys(imapFlags).length > 0) {
-          // Group by folder using the email_folders link table
+          // Group by folder using getFolderUidsForEmail (resolves Message-ID → per-folder UIDs)
           const byFolder = new Map<string, number[]>();
           for (const email of deduped.values()) {
             const gmailMessageId = String(email['gmailMessageId'] || '');
-            const uid = Number(gmailMessageId);
-            if (!Number.isFinite(uid)) continue;
-
-            const folders = db.getFoldersForEmail(numAccountId, gmailMessageId);
-            for (const folder of folders) {
+            const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
+            if (folderUids.length === 0) {
+              log.warn(`MAIL_FLAG: No folder UIDs found for email ${gmailMessageId} — IMAP flag update skipped (will resolve on next sync)`);
+            }
+            for (const { folder, uid } of folderUids) {
               if (!byFolder.has(folder)) byFolder.set(folder, []);
               byFolder.get(folder)!.push(uid);
             }
