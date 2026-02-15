@@ -15,7 +15,7 @@ interface ElectronAPI {
     fetchEmails: (accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => Promise<IpcResponse>;
     fetchThread: (accountId: string, threadId: string) => Promise<IpcResponse>;
     send: (accountId: string, message: unknown) => Promise<IpcResponse>;
-    move: (accountId: string, messageIds: string[], targetFolder: string) => Promise<IpcResponse>;
+    move: (accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string) => Promise<IpcResponse>;
     flag: (accountId: string, messageIds: string[], flag: string, value: boolean) => Promise<IpcResponse>;
     search: (accountId: string, query: string) => Promise<IpcResponse>;
     syncAccount: (accountId: string) => Promise<IpcResponse>;
@@ -95,8 +95,8 @@ export class ElectronService {
     return this.invoke(() => this.api!.mail.send(accountId, message));
   }
 
-  async moveEmails(accountId: string, messageIds: string[], targetFolder: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.mail.move(accountId, messageIds, targetFolder));
+  async moveEmails(accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.move(accountId, messageIds, targetFolder, sourceFolder));
   }
 
   async flagEmails(accountId: string, messageIds: string[], flag: string, value: boolean): Promise<IpcResponse> {

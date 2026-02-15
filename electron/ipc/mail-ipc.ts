@@ -6,6 +6,9 @@ import { ImapService } from '../services/imap-service';
 import { SmtpService } from '../services/smtp-service';
 import { SyncService } from '../services/sync-service';
 
+// Threads we've already attempted to fetch bodies for this process (avoids infinite re-fetch for orphans).
+const threadBodyFetchAttempted = new Set<string>();
+
 export function registerMailIpcHandlers(): void {
   const db = DatabaseService.getInstance();
 
@@ -46,15 +49,25 @@ export function registerMailIpcHandlers(): void {
 
       // Get all messages in this thread
       let messages = db.getEmailsByThreadId(numAccountId, threadId);
+      log.info(`FETCH_THREAD: ${messages.length} messages from DB for thread ${threadId}`);
 
-      // If any messages are missing bodies, fetch from IMAP
+      // Fetch from IMAP when any messages are missing bodies (e.g. after partial sync).
+      // Guard: only attempt once per thread per process to avoid infinite re-fetch for
+      // orphans that IMAP's thread search doesn't return.
       const missingBodies = messages.filter(
         (m) => !m['htmlBody'] && !m['textBody']
       );
-      if (missingBodies.length > 0) {
+      const fetchKey = `${accountId}:${threadId}`;
+      const shouldFetch =
+        missingBodies.length > 0 && !threadBodyFetchAttempted.has(fetchKey);
+      if (shouldFetch) {
+        threadBodyFetchAttempted.add(fetchKey);
+        log.info(`FETCH_THREAD: ${missingBodies.length}/${messages.length} messages missing bodies — fetching from IMAP`);
+
         try {
           const imapService = ImapService.getInstance();
           const fetchedMessages = await imapService.fetchThread(accountId, threadId);
+          log.info(`FETCH_THREAD: IMAP returned ${fetchedMessages.length} messages for thread ${threadId}`);
 
           // Update DB with fetched bodies
           for (const fetched of fetchedMessages) {
@@ -130,9 +143,9 @@ export function registerMailIpcHandlers(): void {
   });
 
   // Move messages to a different folder
-  ipcMain.handle(IPC_CHANNELS.MAIL_MOVE, async (_event, accountId: string, messageIds: string[], targetFolder: string) => {
+  ipcMain.handle(IPC_CHANNELS.MAIL_MOVE, async (_event, accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string) => {
     try {
-      log.info(`Moving ${messageIds.length} messages to ${targetFolder} for account ${accountId}`);
+      log.info(`Moving ${messageIds.length} messages to ${targetFolder} for account ${accountId} (sourceFolder=${sourceFolder || 'auto'})`);
       const imapService = ImapService.getInstance();
 
       const numAccountId = Number(accountId);
@@ -156,20 +169,30 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
+      // Group messages by source folder using email_folders link table
       const byFolder = new Map<string, number[]>();
       for (const email of deduped.values()) {
-        const folder = String(email['folder'] || '');
-        const uid = Number(email['gmailMessageId']);
-        if (!folder || !Number.isFinite(uid)) continue;
-        if (!byFolder.has(folder)) {
-          byFolder.set(folder, []);
+        const gmailMessageId = String(email['gmailMessageId'] || '');
+        const uid = Number(gmailMessageId);
+        if (!Number.isFinite(uid)) continue;
+
+        if (sourceFolder) {
+          // Explicit source folder from the frontend
+          if (!byFolder.has(sourceFolder)) byFolder.set(sourceFolder, []);
+          byFolder.get(sourceFolder)!.push(uid);
+        } else {
+          // Resolve folders from the email_folders link table
+          const folders = db.getFoldersForEmail(numAccountId, gmailMessageId);
+          for (const folder of folders) {
+            if (!byFolder.has(folder)) byFolder.set(folder, []);
+            byFolder.get(folder)!.push(uid);
+          }
         }
-        byFolder.get(folder)!.push(uid);
       }
 
-      for (const [sourceFolder, uids] of byFolder.entries()) {
+      for (const [folder, uids] of byFolder.entries()) {
         if (uids.length > 0) {
-          await imapService.moveMessages(accountId, sourceFolder, uids, targetFolder);
+          await imapService.moveMessages(accountId, folder, uids, targetFolder);
         }
       }
 
@@ -232,15 +255,18 @@ export function registerMailIpcHandlers(): void {
         if (flag === 'starred') imapFlags.starred = value;
 
         if (Object.keys(imapFlags).length > 0) {
+          // Group by folder using the email_folders link table
           const byFolder = new Map<string, number[]>();
           for (const email of deduped.values()) {
-            const folder = String(email['folder'] || '');
-            const uid = Number(email['gmailMessageId']);
-            if (!folder || !Number.isFinite(uid)) continue;
-            if (!byFolder.has(folder)) {
-              byFolder.set(folder, []);
+            const gmailMessageId = String(email['gmailMessageId'] || '');
+            const uid = Number(gmailMessageId);
+            if (!Number.isFinite(uid)) continue;
+
+            const folders = db.getFoldersForEmail(numAccountId, gmailMessageId);
+            for (const folder of folders) {
+              if (!byFolder.has(folder)) byFolder.set(folder, []);
+              byFolder.get(folder)!.push(uid);
             }
-            byFolder.get(folder)!.push(uid);
           }
 
           for (const [folder, uids] of byFolder.entries()) {

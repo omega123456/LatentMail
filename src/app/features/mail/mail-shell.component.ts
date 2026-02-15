@@ -397,13 +397,15 @@ export class MailShellComponent implements OnInit, OnDestroy {
     const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
     const targetIds = messageIds.length > 0 ? messageIds : [thread.gmailThreadId];
 
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+
     switch (action) {
       case 'archive':
-        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/All Mail', thread.gmailThreadId);
+        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/All Mail', thread.gmailThreadId, currentFolder);
         this.emailsStore.clearSelection();
         break;
       case 'delete':
-        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/Trash', thread.gmailThreadId);
+        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/Trash', thread.gmailThreadId, currentFolder);
         this.emailsStore.clearSelection();
         break;
       case 'reply':

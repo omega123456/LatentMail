@@ -362,6 +362,8 @@ export class ReadingPaneComponent {
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/on\w+="[^"]*"/gi, '')
       .replace(/on\w+='[^']*'/gi, '');
+    // Strip external stylesheet links to avoid CSP violations (style-src only allows 'self' and fonts.googleapis.com)
+    cleaned = cleaned.replace(/<link[^>]*\srel\s*=\s*["']?stylesheet["']?[^>]*>/gi, '');
     // Upgrade font URLs to HTTPS so they comply with CSP (style-src allows https://fonts.googleapis.com)
     cleaned = cleaned
       .replace(/http:\/\/fonts\.googleapis\.com/gi, 'https://fonts.googleapis.com')

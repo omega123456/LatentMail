@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
 // All tables use INTEGER PRIMARY KEY for autoincrement via SQLite's rowid
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table
@@ -18,13 +18,12 @@ export const CREATE_TABLES_SQL = `
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  -- Emails table
+  -- Emails table (one row per message, no folder column)
   CREATE TABLE IF NOT EXISTS emails (
     id INTEGER PRIMARY KEY,
     account_id INTEGER NOT NULL,
     gmail_message_id TEXT NOT NULL,
     gmail_thread_id TEXT NOT NULL,
-    folder TEXT NOT NULL,
     from_address TEXT NOT NULL,
     from_name TEXT,
     to_addresses TEXT NOT NULL,
@@ -44,13 +43,24 @@ export const CREATE_TABLES_SQL = `
     raw_headers TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-    UNIQUE(account_id, gmail_message_id, folder)
+    UNIQUE(account_id, gmail_message_id)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_emails_account_folder ON emails(account_id, folder);
   CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, gmail_thread_id);
   CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC);
   CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address);
+
+  -- Email-folder association table (emails can appear in multiple folders)
+  CREATE TABLE IF NOT EXISTS email_folders (
+    id INTEGER PRIMARY KEY,
+    email_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    folder TEXT NOT NULL,
+    FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+    UNIQUE(email_id, folder)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_email_folders_account_folder ON email_folders(account_id, folder);
 
   -- Threads table
   CREATE TABLE IF NOT EXISTS threads (

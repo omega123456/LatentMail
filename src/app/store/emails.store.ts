@@ -189,7 +189,8 @@ export const EmailsStore = signalStore(
         accountId: number,
         messageIds: string[],
         targetFolder: string,
-        threadId?: string
+        threadId?: string,
+        sourceFolder?: string
       ): Promise<void> {
         // Optimistic remove from list
         const targetThreadId = threadId || store.selectedThreadId() || null;
@@ -198,7 +199,7 @@ export const EmailsStore = signalStore(
         });
 
         try {
-          const response = await electronService.moveEmails(String(accountId), messageIds, targetFolder);
+          const response = await electronService.moveEmails(String(accountId), messageIds, targetFolder, sourceFolder);
           if (!response.success) {
             patchState(store, {
               error: response.error?.message || 'Failed to move emails',

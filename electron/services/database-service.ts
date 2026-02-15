@@ -64,21 +64,220 @@ export class DatabaseService {
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
 
-    // Run schema creation (single version; no migration history in dev)
+    // Run schema creation (creates tables if they don't exist)
     this.db.run(CREATE_TABLES_SQL);
 
-    const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
-    const hasVersion =
-      result.length > 0 && result[0].values.length > 0 && (result[0].values[0][0] as number) > 0;
-    if (!hasVersion) {
-      this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
-      log.info(`Database schema version set to ${SCHEMA_VERSION}`);
+    // Determine current schema version (handles legacy DBs missing schema_version rows)
+    let currentVersion = 0;
+    try {
+      const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
+      if (result.length > 0 && result[0].values.length > 0) {
+        currentVersion = (result[0].values[0][0] as number) || 0;
+      }
+    } catch {
+      // schema_version table may not exist in very old DBs — CREATE_TABLES_SQL just created it
+      currentVersion = 0;
     }
+
+    if (currentVersion === 0) {
+      // Fresh DB or legacy DB that never had a version row.
+      // Check if the old emails schema (with folder column) exists and needs migration.
+      const colCheck = this.db.exec("PRAGMA table_info(emails)");
+      const hasFolder = colCheck.length > 0 && colCheck[0].values.some(
+        (row) => (row[1] as string) === 'folder'
+      );
+
+      if (hasFolder) {
+        // Legacy DB with old schema — treat as version 1 so migration runs
+        currentVersion = 1;
+      } else {
+        // Truly fresh DB — schema is already v2 from CREATE_TABLES_SQL
+        currentVersion = SCHEMA_VERSION;
+      }
+    }
+
+    // Run migrations
+    if (currentVersion < 2) {
+      this.migrateV1toV2();
+    } else {
+      // Safety: if version claims v2 but the emails table still has a folder column
+      // (e.g. a previous migration attempt failed or was incomplete), re-run.
+      const colCheck = this.db.exec("PRAGMA table_info(emails)");
+      const hasFolder = colCheck.length > 0 && colCheck[0].values.some(
+        (row) => (row[1] as string) === 'folder'
+      );
+      if (hasFolder) {
+        log.warn('Schema version is 2 but emails table still has folder column — re-running migration');
+        this.migrateV1toV2();
+      }
+    }
+
+    // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
+    this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
+    this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
+
+    // Ensure version row exists and is up to date
+    this.db.run('DELETE FROM schema_version');
+    this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
+    log.info(`Database schema version set to ${SCHEMA_VERSION}`);
 
     // Save to disk
     this.saveToDisk();
 
     log.info('Database schema initialized');
+  }
+
+  /**
+   * Migrate from schema v1 (emails has folder column, duplicated rows) to v2
+   * (one row per message, email_folders link table).
+   */
+  private migrateV1toV2(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    log.info('Running migration v1 → v2: email_folders link table');
+
+    // Disable foreign keys during migration so DROP TABLE doesn't CASCADE-delete
+    // rows in email_folders that we just populated.
+    this.db.run('PRAGMA foreign_keys = OFF');
+
+    // 1. Drop email_folders if it was created by CREATE_TABLES_SQL before migration
+    //    (it would reference the old emails table and would be empty anyway).
+    this.db.run('DROP TABLE IF EXISTS email_folders');
+
+    // 2. Create emails_new with the v2 schema (no folder, unique on account+message)
+    this.db.run('DROP TABLE IF EXISTS emails_new');
+    this.db.run(`
+      CREATE TABLE emails_new (
+        id INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL,
+        gmail_message_id TEXT NOT NULL,
+        gmail_thread_id TEXT NOT NULL,
+        from_address TEXT NOT NULL,
+        from_name TEXT,
+        to_addresses TEXT NOT NULL,
+        cc_addresses TEXT,
+        bcc_addresses TEXT,
+        subject TEXT,
+        text_body TEXT,
+        html_body TEXT,
+        date TEXT NOT NULL,
+        is_read INTEGER NOT NULL DEFAULT 0,
+        is_starred INTEGER NOT NULL DEFAULT 0,
+        is_important INTEGER NOT NULL DEFAULT 0,
+        snippet TEXT,
+        size INTEGER,
+        has_attachments INTEGER NOT NULL DEFAULT 0,
+        labels TEXT,
+        raw_headers TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, gmail_message_id)
+      )
+    `);
+
+    // 3. Create email_folders fresh (will reference emails_new after rename)
+    this.db.run(`
+      CREATE TABLE email_folders (
+        id INTEGER PRIMARY KEY,
+        email_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        folder TEXT NOT NULL,
+        UNIQUE(email_id, folder)
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_email_folders_account_folder ON email_folders(account_id, folder)');
+
+    // 4. For each group of duplicate rows, pick the canonical one (prefer body present)
+    //    and insert into emails_new, keeping the original id.
+    //    Use char(31) (unit separator) for folders so folder names containing commas are not split.
+    const groups = this.db.exec(`
+      SELECT account_id, gmail_message_id,
+        GROUP_CONCAT(id) AS ids,
+        GROUP_CONCAT(folder, char(31)) AS folders
+      FROM emails
+      GROUP BY account_id, gmail_message_id
+    `);
+
+    const FOLDER_SEP = '\u001F'; // must match char(31) used in GROUP_CONCAT
+    if (groups.length > 0) {
+      for (const row of groups[0].values) {
+        const accountId = row[0] as number;
+        const gmailMessageId = row[1] as string;
+        const ids = (row[2] as string).split(',').map(Number);
+        const folders = (row[3] as string).split(FOLDER_SEP);
+
+        // Pick canonical: prefer a row that has body content
+        const candidates = this.db.exec(`
+          SELECT id FROM emails
+          WHERE account_id = ? AND gmail_message_id = ?
+          ORDER BY (CASE WHEN COALESCE(html_body, '') != '' OR COALESCE(text_body, '') != '' THEN 0 ELSE 1 END), id ASC
+          LIMIT 1
+        `, [accountId, gmailMessageId]);
+
+        const canonicalId = candidates[0].values[0][0] as number;
+
+        // Insert canonical row into emails_new (keeping its id)
+        this.db.run(`
+          INSERT OR IGNORE INTO emails_new (id, account_id, gmail_message_id, gmail_thread_id,
+            from_address, from_name, to_addresses, cc_addresses, bcc_addresses,
+            subject, text_body, html_body, date, is_read, is_starred, is_important,
+            snippet, size, has_attachments, labels, raw_headers, created_at)
+          SELECT id, account_id, gmail_message_id, gmail_thread_id,
+            from_address, from_name, to_addresses, cc_addresses, bcc_addresses,
+            subject, text_body, html_body, date, is_read, is_starred, is_important,
+            snippet, size, has_attachments, labels, raw_headers, created_at
+          FROM emails WHERE id = ?
+        `, [canonicalId]);
+
+        // Insert folder links for all folders this message appeared in
+        for (const folder of folders) {
+          this.db.run(
+            'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (?, ?, ?)',
+            [canonicalId, accountId, folder.trim()]
+          );
+        }
+
+        // Reassign attachments and search_index from non-canonical rows to canonical
+        for (const oldId of ids) {
+          if (oldId !== canonicalId) {
+            this.db.run('UPDATE attachments SET email_id = ? WHERE email_id = ?', [canonicalId, oldId]);
+            this.db.run('UPDATE search_index SET email_id = ? WHERE email_id = ?', [canonicalId, oldId]);
+          }
+        }
+      }
+    }
+
+    // 5. Swap tables
+    this.db.run('DROP TABLE emails');
+    this.db.run('ALTER TABLE emails_new RENAME TO emails');
+
+    // 6. Recreate indexes on the new emails table
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, gmail_thread_id)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address)');
+
+    // 7. Now add the FK constraint to email_folders by recreating it properly
+    //    (SQLite doesn't support ALTER TABLE ADD CONSTRAINT, but we just created
+    //    email_folders without the FK to avoid CASCADE issues during migration.
+    //    Recreate it with the FK now that emails points to the correct table.)
+    this.db.run(`
+      CREATE TABLE email_folders_new (
+        id INTEGER PRIMARY KEY,
+        email_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        folder TEXT NOT NULL,
+        FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+        UNIQUE(email_id, folder)
+      )
+    `);
+    this.db.run('INSERT INTO email_folders_new SELECT * FROM email_folders');
+    this.db.run('DROP TABLE email_folders');
+    this.db.run('ALTER TABLE email_folders_new RENAME TO email_folders');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_email_folders_account_folder ON email_folders(account_id, folder)');
+
+    // Re-enable foreign keys
+    this.db.run('PRAGMA foreign_keys = ON');
+
+    log.info('Migration v1 → v2 complete');
   }
 
   /** Persist the in-memory database to disk */
@@ -233,58 +432,55 @@ export class DatabaseService {
     labels?: string;
   }): number {
     if (!this.db) throw new Error('Database not initialized');
+    // Upsert the single email row (no folder in the emails table).
+    // Pass NULL (not '') for empty bodies so COALESCE preserves existing body on update.
     this.db.run(
-      `INSERT INTO emails (account_id, gmail_message_id, gmail_thread_id, folder, from_address, from_name,
+      `INSERT INTO emails (account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
         is_read, is_starred, is_important, snippet, size, has_attachments, labels)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(account_id, gmail_message_id, folder) DO UPDATE SET
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(account_id, gmail_message_id) DO UPDATE SET
         from_address = excluded.from_address, from_name = excluded.from_name,
         to_addresses = excluded.to_addresses, cc_addresses = excluded.cc_addresses, bcc_addresses = excluded.bcc_addresses,
-        subject = excluded.subject, text_body = COALESCE(excluded.text_body, text_body),
-        html_body = COALESCE(excluded.html_body, html_body), date = excluded.date,
+        subject = excluded.subject,
+        text_body = COALESCE(NULLIF(excluded.text_body, ''), text_body),
+        html_body = COALESCE(NULLIF(excluded.html_body, ''), html_body),
+        date = excluded.date,
         is_read = excluded.is_read, is_starred = excluded.is_starred, is_important = excluded.is_important,
         snippet = excluded.snippet, size = excluded.size, has_attachments = excluded.has_attachments,
         labels = excluded.labels`,
       [
-        email.accountId, email.gmailMessageId, email.gmailThreadId, email.folder,
+        email.accountId, email.gmailMessageId, email.gmailThreadId,
         email.fromAddress, email.fromName || '', email.toAddresses,
         email.ccAddresses || '', email.bccAddresses || '', email.subject || '',
-        email.textBody || '', email.htmlBody || '', email.date,
+        email.textBody || null, email.htmlBody || null, email.date,
         email.isRead ? 1 : 0, email.isStarred ? 1 : 0, email.isImportant ? 1 : 0,
         email.snippet || '', email.size || 0, email.hasAttachments ? 1 : 0,
         email.labels || '',
       ]
     );
-    const result = this.db.exec('SELECT last_insert_rowid()');
+
+    // Retrieve the actual id (last_insert_rowid is unreliable after ON CONFLICT)
+    const result = this.db.exec(
+      'SELECT id FROM emails WHERE account_id = ? AND gmail_message_id = ?',
+      [email.accountId, email.gmailMessageId]
+    );
     const id = result[0].values[0][0] as number;
+
+    // Record folder association in the link table
+    this.db.run(
+      'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (?, ?, ?)',
+      [id, email.accountId, email.folder]
+    );
+
     this.scheduleSave();
     return id;
-  }
-
-  getEmailsByFolder(
-    accountId: number,
-    folder: string,
-    limit: number = 50,
-    offset: number = 0
-  ): Array<Record<string, unknown>> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, folder, from_address, from_name,
-        to_addresses, cc_addresses, bcc_addresses, subject, snippet, date,
-        is_read, is_starred, is_important, size, has_attachments, labels
-       FROM emails WHERE account_id = ? AND folder = ?
-       ORDER BY date DESC LIMIT ? OFFSET ?`,
-      [accountId, folder, limit, offset]
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapEmailRow(row, result[0].columns));
   }
 
   getEmailsByThreadId(accountId: number, gmailThreadId: string): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, folder, from_address, from_name,
+      `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, size, has_attachments, labels
        FROM emails WHERE account_id = ? AND gmail_thread_id = ?
@@ -298,7 +494,7 @@ export class DatabaseService {
   getEmailById(id: number): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, folder, from_address, from_name,
+      `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, size, has_attachments, labels
        FROM emails WHERE id = ?`,
@@ -311,7 +507,7 @@ export class DatabaseService {
   getEmailByGmailMessageId(accountId: number, gmailMessageId: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, folder, from_address, from_name,
+      `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, size, has_attachments, labels
        FROM emails WHERE account_id = ? AND gmail_message_id = ? LIMIT 1`,
@@ -319,6 +515,19 @@ export class DatabaseService {
     );
     if (result.length === 0 || result[0].values.length === 0) return null;
     return this.mapEmailRow(result[0].values[0], result[0].columns);
+  }
+
+  /** Get all folders an email appears in (via the email_folders link table). */
+  getFoldersForEmail(accountId: number, gmailMessageId: string): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT ef.folder FROM email_folders ef
+       JOIN emails e ON e.id = ef.email_id
+       WHERE e.account_id = ? AND e.gmail_message_id = ?`,
+      [accountId, gmailMessageId]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
   }
 
   updateEmailFlags(
@@ -533,7 +742,7 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const likeQuery = `%${query}%`;
     const result = this.db.exec(
-      `SELECT e.id, e.account_id, e.gmail_message_id, e.gmail_thread_id, e.folder,
+      `SELECT e.id, e.account_id, e.gmail_message_id, e.gmail_thread_id,
         e.from_address, e.from_name, e.to_addresses, e.subject, e.snippet, e.date,
         e.is_read, e.is_starred, e.is_important, e.size, e.has_attachments, e.labels
        FROM emails e
