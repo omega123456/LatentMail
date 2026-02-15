@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
 // All tables use INTEGER PRIMARY KEY for autoincrement via SQLite's rowid
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 1;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table

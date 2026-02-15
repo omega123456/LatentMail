@@ -64,168 +64,21 @@ export class DatabaseService {
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
 
-    // Run schema creation
+    // Run schema creation (single version; no migration history in dev)
     this.db.run(CREATE_TABLES_SQL);
 
-    // Check and run migrations
-    this.runMigrations();
+    const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
+    const hasVersion =
+      result.length > 0 && result[0].values.length > 0 && (result[0].values[0][0] as number) > 0;
+    if (!hasVersion) {
+      this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
+      log.info(`Database schema version set to ${SCHEMA_VERSION}`);
+    }
 
     // Save to disk
     this.saveToDisk();
 
     log.info('Database schema initialized');
-  }
-
-  private runMigrations(): void {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
-    let currentVersion: number =
-      result.length > 0 && result[0].values.length > 0
-        ? (result[0].values[0][0] as number)
-        : 0;
-
-    if (currentVersion === 0) {
-      this.db.run('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
-      log.info(`Database schema version set to ${SCHEMA_VERSION}`);
-      return;
-    }
-
-    while (currentVersion < SCHEMA_VERSION) {
-      const nextVersion = currentVersion + 1;
-      log.info(`Migrating database from version ${currentVersion} to ${nextVersion}`);
-
-      if (nextVersion === 2) {
-        this.migrateTo2();
-      }
-
-      if (nextVersion === 3) {
-        this.migrateTo3();
-      }
-
-      if (nextVersion === 4) {
-        this.migrateTo4();
-      }
-
-      this.db.run('UPDATE schema_version SET version = ?', [nextVersion]);
-      currentVersion = nextVersion;
-    }
-  }
-
-  /** Migration 1 → 2: add needs_reauth to accounts if missing */
-  private migrateTo2(): void {
-    if (!this.db) return;
-    const pragma = this.db.exec('PRAGMA table_info(accounts)');
-    const columns = pragma.length > 0 ? pragma[0].values.map((row) => row[1] as string) : [];
-    if (!columns.includes('needs_reauth')) {
-      this.db.run('ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0');
-      log.info('Added needs_reauth column to accounts');
-    }
-  }
-
-  /** Migration 2 → 3: add thread_folders table and migrate existing data */
-  private migrateTo3(): void {
-    if (!this.db) return;
-    // Table is created by CREATE_TABLES_SQL (IF NOT EXISTS), but for
-    // databases created before this schema change we run it again explicitly.
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS thread_folders (
-        id INTEGER PRIMARY KEY,
-        thread_id INTEGER NOT NULL,
-        account_id INTEGER NOT NULL,
-        folder TEXT NOT NULL,
-        FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
-        UNIQUE(thread_id, folder)
-      )
-    `);
-    this.db.run(
-      'CREATE INDEX IF NOT EXISTS idx_thread_folders_account_folder ON thread_folders(account_id, folder)'
-    );
-    // Migrate existing thread→folder associations from threads table
-    this.db.run(
-      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
-       SELECT id, account_id, folder FROM threads`
-    );
-    // Also populate from emails table — emails store the correct per-folder info
-    // that threads.folder may have lost due to the overwrite bug
-    this.db.run(
-      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
-       SELECT DISTINCT t.id, t.account_id, e.folder
-       FROM emails e
-       INNER JOIN threads t ON t.account_id = e.account_id AND t.gmail_thread_id = e.gmail_thread_id`
-    );
-    log.info('Migrated to v3: created thread_folders table and migrated existing data');
-  }
-
-  /** Migration 3 → 4: repair thread_folders, fix email unique constraint */
-  private migrateTo4(): void {
-    if (!this.db) return;
-
-    // 1. Fix emails table: UNIQUE(account_id, gmail_message_id) is wrong because
-    //    gmail_message_id is actually a per-folder UID. Two different physical
-    //    messages from different folders can share the same UID number, causing
-    //    data loss on conflict. Change to UNIQUE(account_id, gmail_message_id, folder).
-    const hasOldConstraint = this.db.exec(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='emails'`
-    );
-    const createSql = hasOldConstraint[0]?.values[0]?.[0] as string || '';
-    if (createSql.includes('UNIQUE(account_id, gmail_message_id)') &&
-        !createSql.includes('UNIQUE(account_id, gmail_message_id, folder)')) {
-      log.info('Recreating emails table with corrected unique constraint');
-      this.db.run(`ALTER TABLE emails RENAME TO emails_old`);
-      this.db.run(`
-        CREATE TABLE emails (
-          id INTEGER PRIMARY KEY,
-          account_id INTEGER NOT NULL,
-          gmail_message_id TEXT NOT NULL,
-          gmail_thread_id TEXT NOT NULL,
-          folder TEXT NOT NULL,
-          from_address TEXT NOT NULL,
-          from_name TEXT,
-          to_addresses TEXT NOT NULL,
-          cc_addresses TEXT,
-          bcc_addresses TEXT,
-          subject TEXT,
-          text_body TEXT,
-          html_body TEXT,
-          date TEXT NOT NULL,
-          is_read INTEGER NOT NULL DEFAULT 0,
-          is_starred INTEGER NOT NULL DEFAULT 0,
-          is_important INTEGER NOT NULL DEFAULT 0,
-          snippet TEXT,
-          size INTEGER,
-          has_attachments INTEGER NOT NULL DEFAULT 0,
-          labels TEXT,
-          raw_headers TEXT,
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-          UNIQUE(account_id, gmail_message_id, folder)
-        )
-      `);
-      this.db.run(`
-        INSERT INTO emails SELECT * FROM emails_old
-      `);
-      this.db.run(`DROP TABLE emails_old`);
-      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_account_folder ON emails(account_id, folder)`);
-      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, gmail_thread_id)`);
-      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC)`);
-      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address)`);
-    }
-
-    // 2. Repair thread_folders from emails table
-    this.db.run(
-      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
-       SELECT DISTINCT t.id, t.account_id, e.folder
-       FROM emails e
-       INNER JOIN threads t ON t.account_id = e.account_id AND t.gmail_thread_id = e.gmail_thread_id`
-    );
-
-    // 3. Force a full re-sync so thread_folders gets fully populated
-    this.db.run(`UPDATE accounts SET last_sync_at = NULL`);
-
-    const result = this.db.exec('SELECT COUNT(*) FROM thread_folders');
-    const count = result[0]?.values[0]?.[0] ?? 0;
-    log.info(`Migrated to v4: fixed email unique constraint, repaired thread_folders (${count} entries), reset sync state`);
   }
 
   /** Persist the in-memory database to disk */
