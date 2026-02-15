@@ -290,6 +290,58 @@ export class ImapService {
   }
 
   /**
+   * Fetch a single message by UID from a specific folder.
+   * Returns headers, flags, and body (via source parse). Used by the queue
+   * worker after APPEND to retrieve server-confirmed data.
+   * Does NOT acquire a mailbox lock — caller must hold the lock if needed.
+   */
+  async fetchMessageByUid(
+    accountId: string,
+    folder: string,
+    uid: number,
+  ): Promise<FetchedEmail | null> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const msg = await client.fetchOne(String(uid), {
+        uid: true,
+        envelope: true,
+        flags: true,
+        bodyStructure: true,
+        headers: true,
+        source: true,
+        labels: true,
+        threadId: true,
+        size: true,
+      }, { uid: true });
+
+      if (!msg) return null;
+
+      const fetchMsg = msg as FetchMessageObject;
+      const email = this.parseMessage(fetchMsg, folder);
+      if (!email) return null;
+
+      // Parse body from source
+      if (fetchMsg.source) {
+        try {
+          const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
+            ? fetchMsg.source
+            : Buffer.from(fetchMsg.source);
+          const parsed = await simpleParser(sourceBuffer);
+          email.textBody = (parsed.text || '').trim();
+          email.htmlBody = (parsed.html || '').trim();
+        } catch (err) {
+          log.warn('fetchMessageByUid: failed to parse message body:', err);
+        }
+      }
+
+      return email;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Fetch all messages in a Gmail thread.
    */
   async fetchThread(

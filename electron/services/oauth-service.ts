@@ -243,6 +243,15 @@ export class OAuthService {
       this.scheduleTokenRefresh(accountId, newTokens.expiresAt);
 
       log.info(`Access token refreshed for account ${accountId}`);
+
+      // Resume the mail queue if it was paused due to auth failure
+      try {
+        const { MailQueueService } = require('./mail-queue-service');
+        MailQueueService.getInstance().resumeAccount(Number(accountId));
+      } catch {
+        // Queue may not be initialized yet
+      }
+
       return newTokens.accessToken;
     } catch (err: any) {
       // If the refresh token is revoked, mark account as needing re-auth

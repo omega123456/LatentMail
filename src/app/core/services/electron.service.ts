@@ -37,15 +37,18 @@ interface ElectronAPI {
     getStatus: () => Promise<IpcResponse>;
   };
   compose: {
-    saveDraft: (draft: unknown) => Promise<IpcResponse>;
-    getDrafts: (accountId: number) => Promise<IpcResponse>;
-    getDraft: (draftId: number) => Promise<IpcResponse>;
-    deleteDraft: (draftId: number) => Promise<IpcResponse>;
-    deleteDraftOnServer: (accountId: number, gmailMessageId: string) => Promise<IpcResponse>;
     searchContacts: (query: string) => Promise<IpcResponse>;
     getSignatures: () => Promise<IpcResponse>;
     saveSignatures: (signatures: unknown) => Promise<IpcResponse>;
     deleteSignature: (signatureId: string) => Promise<IpcResponse>;
+  };
+  queue: {
+    enqueue: (operation: unknown) => Promise<IpcResponse>;
+    getStatus: () => Promise<IpcResponse>;
+    retryFailed: (params?: { queueId?: string }) => Promise<IpcResponse>;
+    clearCompleted: () => Promise<IpcResponse>;
+    cancel: (params: { queueId: string }) => Promise<IpcResponse>;
+    getPendingCount: () => Promise<IpcResponse>;
   };
   db: {
     getSettings: (keys?: string[]) => Promise<IpcResponse>;
@@ -164,31 +167,7 @@ export class ElectronService {
     return this.invoke(() => this.api!.ai.getStatus());
   }
 
-  // ---- Compose operations ----
-
-  async saveDraft(draft: unknown): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.compose.saveDraft(draft));
-  }
-
-  async getDrafts(accountId: number): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.compose.getDrafts(accountId));
-  }
-
-  async getDraft(draftId: number): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.compose.getDraft(draftId));
-  }
-
-  async deleteDraft(draftId: number): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.compose.deleteDraft(draftId));
-  }
-
-  async deleteDraftOnServer(accountId: number, gmailMessageId: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.compose.deleteDraftOnServer(accountId, gmailMessageId));
-  }
-
-  async deleteDraftOnServerByMessageId(accountId: number, gmailMessageId: string): Promise<IpcResponse> {
-    return this.deleteDraftOnServer(accountId, gmailMessageId);
-  }
+  // ---- Compose operations (signatures & contacts only) ----
 
   async searchContacts(query: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.compose.searchContacts(query));
@@ -204,6 +183,38 @@ export class ElectronService {
 
   async deleteSignature(signatureId: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.compose.deleteSignature(signatureId));
+  }
+
+  // ---- Queue operations ----
+
+  async enqueueOperation(operation: {
+    type: string;
+    accountId: number;
+    payload: unknown;
+    description?: string;
+    queueId?: string;
+  }): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.queue.enqueue(operation));
+  }
+
+  async getQueueStatus(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.queue.getStatus());
+  }
+
+  async retryFailedOperations(queueId?: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.queue.retryFailed(queueId ? { queueId } : undefined));
+  }
+
+  async clearCompletedOperations(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.queue.clearCompleted());
+  }
+
+  async cancelOperation(queueId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.queue.cancel({ queueId }));
+  }
+
+  async getPendingOperationCount(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.queue.getPendingCount());
   }
 
   // ---- DB/Settings operations ----

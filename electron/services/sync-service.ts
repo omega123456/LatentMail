@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron';
 import log from 'electron-log/main';
 import { ImapService } from './imap-service';
 import { DatabaseService } from './database-service';
+import { FolderLockManager } from './folder-lock-manager';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 /** Gmail special-use folder mappings */
@@ -101,6 +102,16 @@ export class SyncService {
         folderIndex++;
         const progress = Math.round((folderIndex / foldersToSync.length) * 100);
         this.emitProgress({ accountId, folder, progress, newCount: totalNewCount, status: 'syncing' });
+
+        // Acquire folder lock to coordinate with queue operations
+        const lockManager = FolderLockManager.getInstance();
+        let releaseLock: (() => void) | null = null;
+        try {
+          releaseLock = await lockManager.acquire(folder);
+        } catch (lockErr) {
+          log.warn(`Sync: failed to acquire lock on ${folder} (skipping):`, lockErr);
+          continue;
+        }
 
         try {
           const fetchLimit = isInitialSync ? 100 : 200;
@@ -243,6 +254,8 @@ export class SyncService {
         } catch (err) {
           log.warn(`Failed to sync folder ${folder} for account ${accountId}:`, err);
           // Continue with other folders
+        } finally {
+          if (releaseLock) releaseLock();
         }
       }
 

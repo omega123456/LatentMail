@@ -18,9 +18,10 @@ interface ComposeState {
   accountId: number | null;
   accountEmail: string;
   accountDisplayName: string;
-  draftId: number | null;
-  /** gmailMessageId of a server draft opened from [Gmail]/Drafts (backend resolves UID) */
-  serverDraftGmailMessageId: string | null;
+  /** UUID of the current draft's queue entry (null if not yet saved). */
+  queueId: string | null;
+  /** Whether the server has confirmed the draft exists (queue completed). */
+  serverConfirmed: boolean;
   to: string;
   cc: string;
   bcc: string;
@@ -29,7 +30,6 @@ interface ComposeState {
   textBody: string;
   inReplyTo: string;
   references: string;
-  gmailThreadId: string;
   attachments: DraftAttachment[];
   showCc: boolean;
   showBcc: boolean;
@@ -47,8 +47,8 @@ const initialState: ComposeState = {
   accountId: null,
   accountEmail: '',
   accountDisplayName: '',
-  draftId: null,
-  serverDraftGmailMessageId: null,
+  queueId: null,
+  serverConfirmed: false,
   to: '',
   cc: '',
   bcc: '',
@@ -57,7 +57,6 @@ const initialState: ComposeState = {
   textBody: '',
   inReplyTo: '',
   references: '',
-  gmailThreadId: '',
   attachments: [],
   showCc: false,
   showBcc: false,
@@ -92,6 +91,10 @@ export const ComposeStore = signalStore(
   withMethods((store) => {
     const electronService = inject(ElectronService);
     let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Guard: prevents duplicate enqueues from rapid timer fires. */
+    let enqueueInFlight = false;
+    /** Subscription cleanup for queue:update events. */
+    let queueUpdateUnsub: (() => void) | null = null;
 
     function clearAutoSave(): void {
       if (autoSaveTimer) {
@@ -109,40 +112,107 @@ export const ComposeStore = signalStore(
       }, 5000);
     }
 
-    async function saveDraft(): Promise<void> {
-      if (!store.accountId()) return;
-      patchState(store, { saving: true });
-      try {
-        const draft = {
-          id: store.draftId() || undefined,
-          accountId: store.accountId()!,
-          serverDraftGmailMessageId: store.serverDraftGmailMessageId() || undefined,
-          gmailThreadId: store.gmailThreadId() || undefined,
-          subject: store.subject(),
-          to: store.to(),
-          cc: store.cc(),
-          bcc: store.bcc(),
-          htmlBody: store.htmlBody(),
-          textBody: store.textBody(),
-          inReplyTo: store.inReplyTo() || undefined,
-          references: store.references() || undefined,
-          attachmentsJson: store.attachments().length > 0 ? JSON.stringify(store.attachments()) : undefined,
-          signature: store.activeSignatureId() || undefined,
-        };
-        const response = await electronService.saveDraft(draft);
-        if (response.success && response.data) {
-          const { id } = response.data as { id: number };
+    /**
+     * Subscribe to queue:update events to track server confirmation.
+     * Filtered by the current queueId.
+     */
+    function subscribeToQueueUpdates(): void {
+      unsubscribeFromQueueUpdates();
+
+      const sub = electronService.onEvent<{
+        queueId: string;
+        status: string;
+        error?: string;
+        result?: unknown;
+      }>('queue:update').subscribe((update) => {
+        const currentQueueId = store.queueId();
+        if (!currentQueueId || update.queueId !== currentQueueId) return;
+
+        if (update.status === 'completed') {
           patchState(store, {
-            draftId: id,
-            serverDraftGmailMessageId: null,
+            serverConfirmed: true,
             saving: false,
             lastSavedAt: new Date().toISOString(),
           });
+        } else if (update.status === 'failed') {
+          patchState(store, {
+            saving: false,
+            error: update.error || 'Draft save failed',
+          });
+        }
+      });
+
+      queueUpdateUnsub = () => sub.unsubscribe();
+    }
+
+    function unsubscribeFromQueueUpdates(): void {
+      if (queueUpdateUnsub) {
+        queueUpdateUnsub();
+        queueUpdateUnsub = null;
+      }
+    }
+
+    async function saveDraft(): Promise<void> {
+      if (!store.accountId() || enqueueInFlight) return;
+
+      // Block draft-update until the initial draft-create is server-confirmed.
+      // This prevents enqueuing an update before the server IDs are available,
+      // which would fall back to a duplicate draft-create.
+      const currentQueueId = store.queueId();
+      const isUpdate = !!currentQueueId;
+      if (isUpdate && !store.serverConfirmed()) return;
+
+      enqueueInFlight = true;
+      patchState(store, { saving: true });
+
+      try {
+        const basePayload = {
+          subject: store.subject(),
+          to: store.to(),
+          cc: store.cc() || undefined,
+          bcc: store.bcc() || undefined,
+          htmlBody: store.htmlBody() || undefined,
+          textBody: store.textBody() || undefined,
+          inReplyTo: store.inReplyTo() || undefined,
+          references: store.references() || undefined,
+          attachments: store.attachments().length > 0
+            ? store.attachments().map(a => ({
+                filename: a.filename,
+                data: a.data || '',
+                mimeType: a.mimeType,
+              }))
+            : undefined,
+        };
+
+        const type = isUpdate ? 'draft-update' : 'draft-create';
+        const payload = isUpdate
+          ? { ...basePayload, originalQueueId: currentQueueId }
+          : basePayload;
+
+        const description = `Save draft: ${store.subject() || '(no subject)'}`;
+
+        const response = await electronService.enqueueOperation({
+          type,
+          accountId: store.accountId()!,
+          payload,
+          description,
+        });
+
+        if (response.success && response.data) {
+          const { queueId: returnedQueueId } = response.data as { queueId: string };
+
+          // On first save, store the queueId and subscribe to updates
+          if (!currentQueueId) {
+            patchState(store, { queueId: returnedQueueId });
+            subscribeToQueueUpdates();
+          }
         } else {
           patchState(store, { saving: false });
         }
       } catch {
         patchState(store, { saving: false });
+      } finally {
+        enqueueInFlight = false;
       }
     }
 
@@ -154,12 +224,10 @@ export const ComposeStore = signalStore(
         let htmlBody = '';
         let inReplyTo = '';
         let references = '';
-        let gmailThreadId = '';
         let showCc = false;
 
         if (context.originalMessage && context.mode !== 'new') {
           const msg = context.originalMessage;
-          gmailThreadId = msg.gmailThreadId;
 
           if (context.mode === 'reply') {
             to = msg.fromAddress;
@@ -206,8 +274,8 @@ export const ComposeStore = signalStore(
             accountId: context.accountId,
             accountEmail: context.accountEmail,
             accountDisplayName: context.accountDisplayName,
-            draftId: d.id || null,
-            serverDraftGmailMessageId: context.serverDraftGmailMessageId || null,
+            queueId: null,
+            serverConfirmed: false,
             to: d.to,
             cc: d.cc,
             bcc: d.bcc,
@@ -216,7 +284,6 @@ export const ComposeStore = signalStore(
             textBody: d.textBody,
             inReplyTo: d.inReplyTo || '',
             references: d.references || '',
-            gmailThreadId: d.gmailThreadId || '',
             attachments: d.attachments || [],
             showCc: !!d.cc,
             showBcc: !!d.bcc,
@@ -239,8 +306,8 @@ export const ComposeStore = signalStore(
           accountId: context.accountId,
           accountEmail: context.accountEmail,
           accountDisplayName: context.accountDisplayName,
-          draftId: null,
-          serverDraftGmailMessageId: null,
+          queueId: null,
+          serverConfirmed: false,
           to,
           cc,
           bcc: '',
@@ -249,7 +316,6 @@ export const ComposeStore = signalStore(
           textBody: '',
           inReplyTo,
           references,
-          gmailThreadId,
           attachments: [],
           showCc,
           showBcc: false,
@@ -265,6 +331,7 @@ export const ComposeStore = signalStore(
         if (store.isOpen() && store.isDirty() && store.accountId()) {
           await saveDraft();
         }
+        unsubscribeFromQueueUpdates();
         patchState(store, initialState);
       },
 
@@ -319,16 +386,8 @@ export const ComposeStore = signalStore(
 
           const response = await electronService.sendMail(String(store.accountId()), message);
           if (response.success) {
-            // Delete the local draft if it was saved (also deletes from Gmail via IPC)
-            if (store.draftId()) {
-              await electronService.deleteDraft(store.draftId()!);
-            }
-            // Delete server draft if opened from Drafts folder (not a local draft)
-            if (store.serverDraftGmailMessageId() && store.accountId()) {
-              // Resolve UID from backend and delete
-              await electronService.deleteDraftOnServerByMessageId(store.accountId()!, store.serverDraftGmailMessageId()!);
-            }
             clearAutoSave();
+            unsubscribeFromQueueUpdates();
             patchState(store, initialState);
             return true;
           } else {
@@ -373,13 +432,10 @@ export const ComposeStore = signalStore(
 
       async discardDraft(): Promise<void> {
         clearAutoSave();
-        if (store.draftId()) {
-          await electronService.deleteDraft(store.draftId()!);
-        }
-        // Delete server draft if opened from Drafts folder
-        if (store.serverDraftGmailMessageId() && store.accountId()) {
-          await electronService.deleteDraftOnServerByMessageId(store.accountId()!, store.serverDraftGmailMessageId()!);
-        }
+        unsubscribeFromQueueUpdates();
+        // If the server has confirmed the draft exists, we could enqueue a delete
+        // operation. For now, the draft will remain on the server and be cleaned up
+        // on next sync or manually. Phase 2 will add delete-via-queue.
         patchState(store, initialState);
       },
     };

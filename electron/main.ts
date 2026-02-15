@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, dialog } from 'electron';
 import * as path from 'path';
 import log from 'electron-log/main';
 import { registerAllIpcHandlers } from './ipc';
@@ -7,6 +7,7 @@ import { DatabaseService } from './services/database-service';
 import { OAuthService } from './services/oauth-service';
 import { SyncService } from './services/sync-service';
 import { ImapService } from './services/imap-service';
+import { MailQueueService } from './services/mail-queue-service';
 
 // Configure logging
 log.initialize();
@@ -158,10 +159,46 @@ function restoreWindowState(win: BrowserWindow): void {
   }
 }
 
-app.on('before-quit', () => {
+let quitting = false;
+
+app.on('before-quit', async (event) => {
+  // Check for pending queue operations
+  if (!quitting) {
+    try {
+      const queueService = MailQueueService.getInstance();
+      const pendingCount = queueService.getPendingCount();
+
+      if (pendingCount > 0 && mainWindow && !mainWindow.isDestroyed()) {
+        event.preventDefault();
+
+        const result = await dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          buttons: ['Close Anyway', 'Wait'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Pending Operations',
+          message: `There ${pendingCount === 1 ? 'is' : 'are'} ${pendingCount} pending mail operation${pendingCount === 1 ? '' : 's'}.`,
+          detail: 'If you close now, these operations will be lost. Would you like to wait for them to complete?',
+        });
+
+        if (result.response === 0) {
+          // User chose "Close Anyway"
+          quitting = true;
+          queueService.cancelAllRetries();
+          app.quit();
+        }
+        // else: user chose "Wait" — do nothing, app stays open
+        return;
+      }
+    } catch {
+      // Ignore errors during shutdown check
+    }
+  }
+
   // Stop background sync and disconnect IMAP
   try {
     SyncService.getInstance().stopBackgroundSync();
+    MailQueueService.getInstance().cancelAllRetries();
     ImapService.getInstance().disconnectAll().catch(() => {});
   } catch {
     // Ignore cleanup errors

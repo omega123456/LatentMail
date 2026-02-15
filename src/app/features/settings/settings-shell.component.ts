@@ -46,6 +46,10 @@ import { MatButtonModule } from '@angular/material/button';
             <span class="material-symbols-outlined">filter_list</span>
             Filters
           </a>
+          <a class="nav-item" routerLink="queue" routerLinkActive="active">
+            <span class="material-symbols-outlined">pending_actions</span>
+            Queue
+          </a>
         </nav>
         <div class="settings-content">
           <router-outlet />

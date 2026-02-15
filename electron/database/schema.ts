@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
 // All tables use INTEGER PRIMARY KEY for autoincrement via SQLite's rowid
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table
@@ -186,30 +186,6 @@ export const CREATE_TABLES_SQL = `
 
   CREATE INDEX IF NOT EXISTS idx_search_subject ON search_index(subject);
   CREATE INDEX IF NOT EXISTS idx_search_from ON search_index(from_address);
-
-  -- Drafts table (local compose drafts for auto-save)
-  CREATE TABLE IF NOT EXISTS drafts (
-    id INTEGER PRIMARY KEY,
-    account_id INTEGER NOT NULL,
-    gmail_thread_id TEXT,
-    subject TEXT NOT NULL DEFAULT '',
-    to_addresses TEXT NOT NULL DEFAULT '',
-    cc_addresses TEXT NOT NULL DEFAULT '',
-    bcc_addresses TEXT NOT NULL DEFAULT '',
-    html_body TEXT NOT NULL DEFAULT '',
-    text_body TEXT NOT NULL DEFAULT '',
-    in_reply_to TEXT,
-    "references" TEXT,
-    attachments_json TEXT,
-    signature TEXT,
-    imap_uid INTEGER,
-    imap_uid_validity INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_drafts_account ON drafts(account_id);
 
   -- Schema version tracking
   CREATE TABLE IF NOT EXISTS schema_version (

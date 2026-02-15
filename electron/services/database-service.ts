@@ -120,6 +120,10 @@ export class DatabaseService {
       this.migrateV3toV4();
     }
 
+    if (currentVersion < 5) {
+      this.migrateV4toV5();
+    }
+
     // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
     this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
     this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
@@ -342,6 +346,41 @@ export class DatabaseService {
     `);
 
     log.info('Migration v3 → v4 complete');
+  }
+
+  /**
+   * Migrate from schema v4 to v5: drop the drafts table.
+   * Draft content now lives in the compose store (renderer memory) until server confirms.
+   * After confirmation, drafts exist as regular emails in the emails table.
+   */
+  private migrateV4toV5(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    log.info('Running migration v4 → v5: remove drafts table (queue-based draft system)');
+
+    // Check if drafts table exists before trying to drop
+    const tableCheck = this.db.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='drafts'"
+    );
+
+    if (tableCheck.length > 0 && tableCheck[0].values.length > 0) {
+      // Log warning about data loss
+      const draftCount = this.db.exec('SELECT COUNT(*) FROM drafts');
+      const count = (draftCount.length > 0 && draftCount[0].values.length > 0)
+        ? draftCount[0].values[0][0] as number : 0;
+
+      if (count > 0) {
+        log.warn(
+          `Dropping drafts table with ${count} local draft(s). ` +
+          'Server-backed drafts will reappear on next sync. ' +
+          'Local-only drafts (no IMAP UID) are lost.'
+        );
+      }
+
+      this.db.run('DROP TABLE IF EXISTS drafts');
+      this.db.run('DROP INDEX IF EXISTS idx_drafts_account');
+    }
+
+    log.info('Migration v4 → v5 complete');
   }
 
   /** Persist the in-memory database to disk */
@@ -828,88 +867,6 @@ export class DatabaseService {
     );
     if (result.length === 0) return [];
     return result[0].values.map((row) => this.mapEmailRow(row, result[0].columns));
-  }
-
-  // ---- Draft operations ----
-
-  saveDraft(draft: {
-    id?: number;
-    accountId: number;
-    gmailThreadId?: string;
-    subject: string;
-    to: string;
-    cc: string;
-    bcc: string;
-    htmlBody: string;
-    textBody: string;
-    inReplyTo?: string;
-    references?: string;
-    attachmentsJson?: string;
-    signature?: string;
-    imapUid?: number | null;
-    imapUidValidity?: number | null;
-  }): number {
-    if (!this.db) throw new Error('Database not initialized');
-    if (draft.id) {
-      this.db.run(
-        `UPDATE drafts SET subject = ?, to_addresses = ?, cc_addresses = ?, bcc_addresses = ?,
-         html_body = ?, text_body = ?, in_reply_to = ?, "references" = ?,
-         attachments_json = ?, signature = ?, imap_uid = ?, imap_uid_validity = ?,
-         updated_at = datetime('now')
-         WHERE id = ?`,
-        [draft.subject, draft.to, draft.cc, draft.bcc, draft.htmlBody, draft.textBody,
-         draft.inReplyTo || null, draft.references || null, draft.attachmentsJson || null,
-         draft.signature || null, draft.imapUid ?? null, draft.imapUidValidity ?? null, draft.id]
-      );
-      this.scheduleSave();
-      return draft.id;
-    }
-    this.db.run(
-      `INSERT INTO drafts (account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
-       bcc_addresses, html_body, text_body, in_reply_to, "references", attachments_json, signature,
-       imap_uid, imap_uid_validity)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [draft.accountId, draft.gmailThreadId || null, draft.subject, draft.to, draft.cc, draft.bcc,
-       draft.htmlBody, draft.textBody, draft.inReplyTo || null, draft.references || null,
-       draft.attachmentsJson || null, draft.signature || null,
-       draft.imapUid ?? null, draft.imapUidValidity ?? null]
-    );
-    const result = this.db.exec('SELECT last_insert_rowid()');
-    const id = result[0].values[0][0] as number;
-    this.scheduleSave();
-    return id;
-  }
-
-  getDraftsByAccount(accountId: number): Array<Record<string, unknown>> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT id, account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
-       bcc_addresses, html_body, text_body, in_reply_to, "references",
-       attachments_json, signature, imap_uid, imap_uid_validity, created_at, updated_at
-       FROM drafts WHERE account_id = ? ORDER BY updated_at DESC`,
-      [accountId]
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapGenericRow(row, result[0].columns));
-  }
-
-  getDraftById(id: number): Record<string, unknown> | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT id, account_id, gmail_thread_id, subject, to_addresses, cc_addresses,
-       bcc_addresses, html_body, text_body, in_reply_to, "references",
-       attachments_json, signature, imap_uid, imap_uid_validity, created_at, updated_at
-       FROM drafts WHERE id = ?`,
-      [id]
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return this.mapGenericRow(result[0].values[0], result[0].columns);
-  }
-
-  deleteDraft(id: number): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run('DELETE FROM drafts WHERE id = ?', [id]);
-    this.scheduleSave();
   }
 
   // ---- Folder association management ----

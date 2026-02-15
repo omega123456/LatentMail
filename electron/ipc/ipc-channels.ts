@@ -26,12 +26,15 @@ export const IPC_CHANNELS = {
   AI_GET_MODELS: 'ai:get-models',
   AI_GET_STATUS: 'ai:get-status',
 
-  // Compose operations
-  COMPOSE_SAVE_DRAFT: 'compose:save-draft',
-  COMPOSE_GET_DRAFTS: 'compose:get-drafts',
-  COMPOSE_GET_DRAFT: 'compose:get-draft',
-  COMPOSE_DELETE_DRAFT: 'compose:delete-draft',
-  COMPOSE_DELETE_DRAFT_ON_SERVER: 'compose:delete-draft-on-server',
+  // Queue operations
+  QUEUE_ENQUEUE: 'queue:enqueue',
+  QUEUE_GET_STATUS: 'queue:get-status',
+  QUEUE_RETRY_FAILED: 'queue:retry-failed',
+  QUEUE_CLEAR_COMPLETED: 'queue:clear-completed',
+  QUEUE_CANCEL: 'queue:cancel',
+  QUEUE_GET_PENDING_COUNT: 'queue:get-pending-count',
+
+  // Compose operations (signatures & contacts only — draft ops moved to queue)
   COMPOSE_SEARCH_CONTACTS: 'compose:search-contacts',
   COMPOSE_GET_SIGNATURES: 'compose:get-signatures',
   COMPOSE_SAVE_SIGNATURE: 'compose:save-signature',
@@ -55,6 +58,7 @@ export const IPC_EVENTS = {
   AUTH_REFRESH: 'auth:refresh',
   AI_STATUS: 'ai:status',
   AI_STREAM: 'ai:stream',
+  QUEUE_UPDATE: 'queue:update',
   SYSTEM_NOTIFICATION: 'system:notification',
   SYSTEM_TRAY_ACTION: 'system:tray-action',
 } as const;

@@ -62,18 +62,8 @@ const electronAPI = {
       ipcRenderer.invoke('ai:get-status') as Promise<IpcResponse>,
   },
 
-  // Compose operations
+  // Compose operations (signatures & contacts only — draft ops moved to queue)
   compose: {
-    saveDraft: (draft: unknown) =>
-      ipcRenderer.invoke('compose:save-draft', draft) as Promise<IpcResponse>,
-    getDrafts: (accountId: number) =>
-      ipcRenderer.invoke('compose:get-drafts', accountId) as Promise<IpcResponse>,
-    getDraft: (draftId: number) =>
-      ipcRenderer.invoke('compose:get-draft', draftId) as Promise<IpcResponse>,
-    deleteDraft: (draftId: number) =>
-      ipcRenderer.invoke('compose:delete-draft', draftId) as Promise<IpcResponse>,
-    deleteDraftOnServer: (accountId: number, gmailMessageId: string) =>
-      ipcRenderer.invoke('compose:delete-draft-on-server', accountId, gmailMessageId) as Promise<IpcResponse>,
     searchContacts: (query: string) =>
       ipcRenderer.invoke('compose:search-contacts', query) as Promise<IpcResponse>,
     getSignatures: () =>
@@ -82,6 +72,22 @@ const electronAPI = {
       ipcRenderer.invoke('compose:save-signature', signatures) as Promise<IpcResponse>,
     deleteSignature: (signatureId: string) =>
       ipcRenderer.invoke('compose:delete-signature', signatureId) as Promise<IpcResponse>,
+  },
+
+  // Queue operations
+  queue: {
+    enqueue: (operation: unknown) =>
+      ipcRenderer.invoke('queue:enqueue', operation) as Promise<IpcResponse>,
+    getStatus: () =>
+      ipcRenderer.invoke('queue:get-status') as Promise<IpcResponse>,
+    retryFailed: (params?: { queueId?: string }) =>
+      ipcRenderer.invoke('queue:retry-failed', params) as Promise<IpcResponse>,
+    clearCompleted: () =>
+      ipcRenderer.invoke('queue:clear-completed') as Promise<IpcResponse>,
+    cancel: (params: { queueId: string }) =>
+      ipcRenderer.invoke('queue:cancel', params) as Promise<IpcResponse>,
+    getPendingCount: () =>
+      ipcRenderer.invoke('queue:get-pending-count') as Promise<IpcResponse>,
   },
 
   // Database/settings operations
@@ -108,6 +114,7 @@ const electronAPI = {
       'auth:refresh',
       'ai:status',
       'ai:stream',
+      'queue:update',
       'system:notification',
       'system:tray-action',
     ];

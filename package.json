@@ -52,6 +52,7 @@
     "dompurify": "^3.3.1",
     "dotenv": "^16.4.5",
     "electron-log": "^5",
+    "fastq": "^1.20.1",
     "imapflow": "^1.2.9",
     "mailparser": "^3.7.0",
     "nodemailer": "^8.0.1",

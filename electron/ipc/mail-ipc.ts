@@ -130,8 +130,8 @@ export function registerMailIpcHandlers(): void {
       const result = await smtpService.sendEmail(accountId, message);
 
       // No full sync after send — the sent message will appear in Sent folder
-      // on the next scheduled background sync or IDLE event. Draft cleanup is
-      // handled by the frontend via COMPOSE_DELETE_DRAFT.
+      // on the next scheduled background sync or IDLE event. Draft cleanup
+      // is not handled here — it will be moved to the queue system in Phase 3.
 
       return ipcSuccess(result);
     } catch (err: unknown) {
@@ -165,6 +165,33 @@ export function registerMailIpcHandlers(): void {
         const gmailMessageId = String(email['gmailMessageId'] || '');
         if (gmailMessageId) {
           deduped.set(gmailMessageId, email);
+        }
+      }
+
+      // Handle orphan threads: if the caller sent a single ID that resolved to zero
+      // emails (e.g. an orphan draft thread with no email rows), clean up its
+      // thread_folders entry for the source folder so it disappears from the list.
+      // Safety: only remove if the thread truly has zero emails in the DB to avoid
+      // hiding valid threads due to DB staleness or Message-ID normalization issues.
+      if (deduped.size === 0 && messageIds.length === 1 && sourceFolder) {
+        const orphanThreadId = messageIds[0];
+        // Confirm this is not a known message ID
+        const asEmail = db.getEmailByGmailMessageId(numAccountId, orphanThreadId);
+        if (!asEmail) {
+          // Verify the thread has zero emails before removing — prevents false cleanup
+          const threadEmails = db.getEmailsByThreadId(numAccountId, orphanThreadId);
+          if (threadEmails.length === 0) {
+            const internalThreadId = db.getThreadInternalId(numAccountId, orphanThreadId);
+            if (internalThreadId != null) {
+              db.removeThreadFolderAssociation(internalThreadId, sourceFolder);
+              log.info(`MAIL_MOVE: Removed orphan thread ${orphanThreadId} (internal ${internalThreadId}) from folder ${sourceFolder}`);
+            } else {
+              log.warn(`MAIL_MOVE: Orphan thread ${orphanThreadId} has no internal thread ID — cannot clean up`);
+            }
+            return ipcSuccess(null);
+          } else {
+            log.warn(`MAIL_MOVE: Thread ${orphanThreadId} has ${threadEmails.length} emails but none resolved via message ID — skipping orphan cleanup`);
+          }
         }
       }
 

@@ -70,6 +70,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/settings/account-settings.component').then(m => m.AccountSettingsComponent),
       },
+      {
+        path: 'queue',
+        loadComponent: () =>
+          import('./features/settings/queue-settings.component').then(m => m.QueueSettingsComponent),
+      },
     ],
   },
   {
