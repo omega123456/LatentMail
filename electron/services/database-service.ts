@@ -99,6 +99,14 @@ export class DatabaseService {
         this.migrateTo2();
       }
 
+      if (nextVersion === 3) {
+        this.migrateTo3();
+      }
+
+      if (nextVersion === 4) {
+        this.migrateTo4();
+      }
+
       this.db.run('UPDATE schema_version SET version = ?', [nextVersion]);
       currentVersion = nextVersion;
     }
@@ -113,6 +121,111 @@ export class DatabaseService {
       this.db.run('ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0');
       log.info('Added needs_reauth column to accounts');
     }
+  }
+
+  /** Migration 2 → 3: add thread_folders table and migrate existing data */
+  private migrateTo3(): void {
+    if (!this.db) return;
+    // Table is created by CREATE_TABLES_SQL (IF NOT EXISTS), but for
+    // databases created before this schema change we run it again explicitly.
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS thread_folders (
+        id INTEGER PRIMARY KEY,
+        thread_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        folder TEXT NOT NULL,
+        FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+        UNIQUE(thread_id, folder)
+      )
+    `);
+    this.db.run(
+      'CREATE INDEX IF NOT EXISTS idx_thread_folders_account_folder ON thread_folders(account_id, folder)'
+    );
+    // Migrate existing thread→folder associations from threads table
+    this.db.run(
+      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
+       SELECT id, account_id, folder FROM threads`
+    );
+    // Also populate from emails table — emails store the correct per-folder info
+    // that threads.folder may have lost due to the overwrite bug
+    this.db.run(
+      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
+       SELECT DISTINCT t.id, t.account_id, e.folder
+       FROM emails e
+       INNER JOIN threads t ON t.account_id = e.account_id AND t.gmail_thread_id = e.gmail_thread_id`
+    );
+    log.info('Migrated to v3: created thread_folders table and migrated existing data');
+  }
+
+  /** Migration 3 → 4: repair thread_folders, fix email unique constraint */
+  private migrateTo4(): void {
+    if (!this.db) return;
+
+    // 1. Fix emails table: UNIQUE(account_id, gmail_message_id) is wrong because
+    //    gmail_message_id is actually a per-folder UID. Two different physical
+    //    messages from different folders can share the same UID number, causing
+    //    data loss on conflict. Change to UNIQUE(account_id, gmail_message_id, folder).
+    const hasOldConstraint = this.db.exec(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='emails'`
+    );
+    const createSql = hasOldConstraint[0]?.values[0]?.[0] as string || '';
+    if (createSql.includes('UNIQUE(account_id, gmail_message_id)') &&
+        !createSql.includes('UNIQUE(account_id, gmail_message_id, folder)')) {
+      log.info('Recreating emails table with corrected unique constraint');
+      this.db.run(`ALTER TABLE emails RENAME TO emails_old`);
+      this.db.run(`
+        CREATE TABLE emails (
+          id INTEGER PRIMARY KEY,
+          account_id INTEGER NOT NULL,
+          gmail_message_id TEXT NOT NULL,
+          gmail_thread_id TEXT NOT NULL,
+          folder TEXT NOT NULL,
+          from_address TEXT NOT NULL,
+          from_name TEXT,
+          to_addresses TEXT NOT NULL,
+          cc_addresses TEXT,
+          bcc_addresses TEXT,
+          subject TEXT,
+          text_body TEXT,
+          html_body TEXT,
+          date TEXT NOT NULL,
+          is_read INTEGER NOT NULL DEFAULT 0,
+          is_starred INTEGER NOT NULL DEFAULT 0,
+          is_important INTEGER NOT NULL DEFAULT 0,
+          snippet TEXT,
+          size INTEGER,
+          has_attachments INTEGER NOT NULL DEFAULT 0,
+          labels TEXT,
+          raw_headers TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+          UNIQUE(account_id, gmail_message_id, folder)
+        )
+      `);
+      this.db.run(`
+        INSERT INTO emails SELECT * FROM emails_old
+      `);
+      this.db.run(`DROP TABLE emails_old`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_account_folder ON emails(account_id, folder)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, gmail_thread_id)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address)`);
+    }
+
+    // 2. Repair thread_folders from emails table
+    this.db.run(
+      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
+       SELECT DISTINCT t.id, t.account_id, e.folder
+       FROM emails e
+       INNER JOIN threads t ON t.account_id = e.account_id AND t.gmail_thread_id = e.gmail_thread_id`
+    );
+
+    // 3. Force a full re-sync so thread_folders gets fully populated
+    this.db.run(`UPDATE accounts SET last_sync_at = NULL`);
+
+    const result = this.db.exec('SELECT COUNT(*) FROM thread_folders');
+    const count = result[0]?.values[0]?.[0] ?? 0;
+    log.info(`Migrated to v4: fixed email unique constraint, repaired thread_folders (${count} entries), reset sync state`);
   }
 
   /** Persist the in-memory database to disk */
@@ -272,8 +385,8 @@ export class DatabaseService {
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
         is_read, is_starred, is_important, snippet, size, has_attachments, labels)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(account_id, gmail_message_id) DO UPDATE SET
-        folder = excluded.folder, from_address = excluded.from_address, from_name = excluded.from_name,
+       ON CONFLICT(account_id, gmail_message_id, folder) DO UPDATE SET
+        from_address = excluded.from_address, from_name = excluded.from_name,
         to_addresses = excluded.to_addresses, cc_addresses = excluded.cc_addresses, bcc_addresses = excluded.bcc_addresses,
         subject = excluded.subject, text_body = COALESCE(excluded.text_body, text_body),
         html_body = COALESCE(excluded.html_body, html_body), date = excluded.date,
@@ -424,7 +537,12 @@ export class DatabaseService {
         thread.snippet || '', thread.folder, thread.isRead ? 1 : 0, thread.isStarred ? 1 : 0,
       ]
     );
-    const result = this.db.exec('SELECT last_insert_rowid()');
+    // last_insert_rowid() is only reliable for INSERT, not ON CONFLICT UPDATE.
+    // Query the actual ID to handle both cases.
+    const result = this.db.exec(
+      'SELECT id FROM threads WHERE account_id = ? AND gmail_thread_id = ?',
+      [thread.accountId, thread.gmailThreadId]
+    );
     const id = result[0].values[0][0] as number;
     this.scheduleSave();
     return id;
@@ -438,10 +556,12 @@ export class DatabaseService {
   ): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_thread_id, subject, last_message_date, participants,
-        message_count, snippet, folder, is_read, is_starred
-       FROM threads WHERE account_id = ? AND folder = ?
-       ORDER BY last_message_date DESC LIMIT ? OFFSET ?`,
+      `SELECT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date, t.participants,
+        t.message_count, t.snippet, tf.folder, t.is_read, t.is_starred
+       FROM threads t
+       INNER JOIN thread_folders tf ON t.id = tf.thread_id
+       WHERE t.account_id = ? AND tf.folder = ?
+       ORDER BY t.last_message_date DESC LIMIT ? OFFSET ?`,
       [accountId, folder, limit, offset]
     );
     if (result.length === 0) return [];
@@ -461,6 +581,17 @@ export class DatabaseService {
   }
 
   // ---- Label/Folder operations ----
+
+  /** Associate a thread with a folder (many-to-many). */
+  upsertThreadFolder(threadId: number, accountId: number, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
+       VALUES (?, ?, ?)`,
+      [threadId, accountId, folder]
+    );
+    // No scheduleSave here — the caller (SyncService) batches saves via upsertThread.
+  }
 
   upsertLabel(label: {
     accountId: number;

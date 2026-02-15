@@ -16,6 +16,15 @@ export function registerMailIpcHandlers(): void {
       const limit = options?.limit || 50;
       const offset = options?.offset || 0;
       const threads = db.getThreadsByFolder(Number(accountId), folderId, limit, offset);
+      log.info(`MAIL_FETCH_EMAILS: account=${accountId} folder=${folderId} returned ${threads.length} threads`);
+      if (threads.length === 0) {
+        // Debug: check what's actually in the DB
+        const rawDb = db.getDatabase();
+        const threadCount = rawDb.exec('SELECT COUNT(*) FROM threads WHERE account_id = ?', [Number(accountId)]);
+        const tfCount = rawDb.exec('SELECT COUNT(*) FROM thread_folders WHERE account_id = ?', [Number(accountId)]);
+        const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = ?', [Number(accountId)]);
+        log.info(`DEBUG: total threads=${threadCount[0]?.values[0]?.[0]}, total thread_folders=${tfCount[0]?.values[0]?.[0]}, folders in thread_folders=${JSON.stringify(tfFolders[0]?.values)}`);
+      }
       return ipcSuccess(threads);
     } catch (err) {
       log.error('Failed to fetch emails:', err);

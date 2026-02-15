@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
 // All tables use INTEGER PRIMARY KEY for autoincrement via SQLite's rowid
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table
@@ -44,7 +44,7 @@ export const CREATE_TABLES_SQL = `
     raw_headers TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-    UNIQUE(account_id, gmail_message_id)
+    UNIQUE(account_id, gmail_message_id, folder)
   );
 
   CREATE INDEX IF NOT EXISTS idx_emails_account_folder ON emails(account_id, folder);
@@ -73,6 +73,18 @@ export const CREATE_TABLES_SQL = `
 
   CREATE INDEX IF NOT EXISTS idx_threads_account_folder ON threads(account_id, folder);
   CREATE INDEX IF NOT EXISTS idx_threads_last_date ON threads(last_message_date DESC);
+
+  -- Thread-folder association table (threads can appear in multiple folders)
+  CREATE TABLE IF NOT EXISTS thread_folders (
+    id INTEGER PRIMARY KEY,
+    thread_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    folder TEXT NOT NULL,
+    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+    UNIQUE(thread_id, folder)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_thread_folders_account_folder ON thread_folders(account_id, folder);
 
   -- Attachments table
   CREATE TABLE IF NOT EXISTS attachments (

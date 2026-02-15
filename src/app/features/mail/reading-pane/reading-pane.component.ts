@@ -358,10 +358,14 @@ export class ReadingPaneComponent {
   sanitizeHtml(html: string): SafeHtml {
     // Strip script tags and event handlers for safety
     // In production, use DOMPurify in the main process before sending to renderer
-    const cleaned = html
+    let cleaned = html
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/on\w+="[^"]*"/gi, '')
       .replace(/on\w+='[^']*'/gi, '');
+    // Upgrade font URLs to HTTPS so they comply with CSP (style-src allows https://fonts.googleapis.com)
+    cleaned = cleaned
+      .replace(/http:\/\/fonts\.googleapis\.com/gi, 'https://fonts.googleapis.com')
+      .replace(/http:\/\/fonts\.gstatic\.com/gi, 'https://fonts.gstatic.com');
     return this.sanitizer.bypassSecurityTrustHtml(cleaned);
   }
 

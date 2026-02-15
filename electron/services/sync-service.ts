@@ -83,6 +83,8 @@ export class SyncService {
         ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
         : new Date(syncState.lastSyncAt!);
 
+      log.info(`Sync scope: isInitialSync=${isInitialSync}, sinceDate=${sinceDate.toISOString()}, lastSyncAt=${syncState.lastSyncAt}`);
+
       // 3. Sync priority folders first, then others
       const allFolders = mailboxes
         .filter(mb => mb.listed && mb.messages > 0)
@@ -157,7 +159,7 @@ export class SyncService {
             const allRead = threadEmails.every(e => e.isRead);
             const anyStarred = threadEmails.some(e => e.isStarred);
 
-            db.upsertThread({
+            const dbThreadId = db.upsertThread({
               accountId: numAccountId,
               gmailThreadId: threadId,
               subject: latest.subject,
@@ -169,6 +171,9 @@ export class SyncService {
               isRead: allRead,
               isStarred: anyStarred,
             });
+
+            // Associate this thread with the current folder
+            db.upsertThreadFolder(dbThreadId, numAccountId, folder);
           }
 
           totalNewCount += emails.length;

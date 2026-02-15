@@ -44,15 +44,24 @@ import { AccountsStore } from '../../../store/accounts.store';
     </div>
   `,
   styles: [`
-    .email-list-container {
+    :host {
       display: flex;
       flex-direction: column;
       height: 100%;
+      min-height: 0;
+    }
+
+    .email-list-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
       overflow: hidden;
     }
 
     .email-scroll-viewport {
       flex: 1;
+      min-height: 0;
     }
 
     .email-list-loading, .email-list-empty {
