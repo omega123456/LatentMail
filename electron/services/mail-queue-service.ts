@@ -37,7 +37,9 @@ export interface DraftPayload {
 
 export interface DraftUpdatePayload extends DraftPayload {
   /** queueId of the original draft-create operation (used to resolve server IDs). */
-  originalQueueId: string;
+  originalQueueId?: string;
+  /** Server draft's gmail_message_id (alternative to originalQueueId for drafts opened from folder). */
+  serverDraftGmailMessageId?: string;
 }
 
 export interface SendPayload {
@@ -558,11 +560,36 @@ export class MailQueueService {
     const imapService = ImapService.getInstance();
     const lockManager = FolderLockManager.getInstance();
 
-    // Resolve the server IDs from the original draft-create
-    const oldServerIds = this.queueIdToServerIds.get(payload.originalQueueId);
+    // Resolve the server IDs via two paths:
+    //   1. In-memory mapping (draft created this session)
+    //   2. Local DB lookup by gmailMessageId (draft opened from server)
+    let oldServerIds: ServerIds | undefined;
+
+    // Path 1: Resolve via in-memory mapping (draft created in this session)
+    if (payload.originalQueueId) {
+      oldServerIds = this.queueIdToServerIds.get(payload.originalQueueId);
+    }
+
+    // Path 2: Resolve via DB lookup (draft opened from server, or mapping lost after restart)
+    if (!oldServerIds && payload.serverDraftGmailMessageId) {
+      const folderUids = db.getFolderUidsForEmail(item.accountId, payload.serverDraftGmailMessageId);
+      const draftsEntry = folderUids.find(fu => fu.folder === GMAIL_DRAFTS_FOLDER);
+      if (draftsEntry) {
+        const oldEmail = db.getEmailByGmailMessageId(item.accountId, payload.serverDraftGmailMessageId);
+        const gmailThreadId = oldEmail ? String(oldEmail['gmailThreadId'] || '') : '';
+        // Construct ServerIds from DB data (no UIDVALIDITY stored; pass 0)
+        oldServerIds = {
+          gmailMessageId: payload.serverDraftGmailMessageId,
+          gmailThreadId,
+          imapUid: draftsEntry.uid,
+          imapUidValidity: 0,
+        };
+      }
+    }
+
     if (!oldServerIds) {
       // Fallback: treat as draft-create (mapping lost, e.g. after app restart)
-      log.warn(`[MailQueue] draft-update (${item.queueId}): no server IDs for originalQueueId=${payload.originalQueueId}, falling back to draft-create`);
+      log.warn(`[MailQueue] draft-update (${item.queueId}): no server IDs for originalQueueId=${payload.originalQueueId} or serverDraftGmailMessageId=${payload.serverDraftGmailMessageId}, falling back to draft-create`);
       item.type = 'draft-create';
       await this.processDraftCreate(item);
       return;
@@ -638,8 +665,10 @@ export class MailQueueService {
 
       if (newUid == null) {
         log.warn(`[MailQueue] draft-update (${item.queueId}): APPEND did not return UID`);
-        // Remove old mapping, set result null
-        this.queueIdToServerIds.delete(payload.originalQueueId);
+        // Remove old mapping if it exists, set result null
+        if (payload.originalQueueId) {
+          this.queueIdToServerIds.delete(payload.originalQueueId);
+        }
         item.result = null;
         return;
       }
@@ -695,8 +724,11 @@ export class MailQueueService {
       db.upsertThreadFolder(dbThreadId, item.accountId, GMAIL_DRAFTS_FOLDER);
 
       // Update server ID mapping (point the ORIGINAL queueId to the new server IDs)
+      // Only update if originalQueueId was provided (draft created this session)
       const serverIds: ServerIds = { gmailMessageId, gmailThreadId, imapUid: newUid, imapUidValidity: newUidValidity };
-      this.queueIdToServerIds.set(payload.originalQueueId, serverIds);
+      if (payload.originalQueueId) {
+        this.queueIdToServerIds.set(payload.originalQueueId, serverIds);
+      }
       item.result = serverIds;
 
       log.info(`[MailQueue] draft-update (${item.queueId}): new uid=${newUid}, old uid=${oldServerIds.imapUid} deleted`);

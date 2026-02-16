@@ -159,12 +159,23 @@ export const ComposeStore = signalStore(
     async function saveDraft(): Promise<void> {
       if (!store.accountId() || enqueueInFlight) return;
 
+      // Determine if this is an update or a new draft
+      const currentQueueId = store.queueId();
+      const currentServerGmailMessageId = store.serverGmailMessageId();
+      
+      // Three paths:
+      // 1. Update via queueId (draft created this session)
+      // 2. Update via serverGmailMessageId (draft opened from server)
+      // 3. Create new draft (neither queueId nor serverGmailMessageId)
+      const isUpdateViaQueueId = !!currentQueueId;
+      const isUpdateViaServerGmailMessageId = !currentQueueId && !!currentServerGmailMessageId;
+      const isUpdate = isUpdateViaQueueId || isUpdateViaServerGmailMessageId;
+
       // Block draft-update until the initial draft-create is server-confirmed.
       // This prevents enqueuing an update before the server IDs are available,
       // which would fall back to a duplicate draft-create.
-      const currentQueueId = store.queueId();
-      const isUpdate = !!currentQueueId;
-      if (isUpdate && !store.serverConfirmed()) return;
+      // (Only applies to updates via queueId; updates via serverGmailMessageId don't need confirmation)
+      if (isUpdateViaQueueId && !store.serverConfirmed()) return;
 
       enqueueInFlight = true;
       patchState(store, { saving: true });
@@ -190,7 +201,11 @@ export const ComposeStore = signalStore(
 
         const type = isUpdate ? 'draft-update' : 'draft-create';
         const payload = isUpdate
-          ? { ...basePayload, originalQueueId: currentQueueId }
+          ? {
+              ...basePayload,
+              originalQueueId: currentQueueId || undefined,
+              serverDraftGmailMessageId: currentServerGmailMessageId || undefined,
+            }
           : basePayload;
 
         const description = `Save draft: ${store.subject() || '(no subject)'}`;
@@ -279,8 +294,8 @@ export const ComposeStore = signalStore(
             accountEmail: context.accountEmail,
             accountDisplayName: context.accountDisplayName,
             queueId: null,
-            serverConfirmed: false,
-            serverGmailMessageId: null,
+            serverConfirmed: context.serverDraftGmailMessageId ? true : false,
+            serverGmailMessageId: context.serverDraftGmailMessageId ?? null,
             to: d.to,
             cc: d.cc,
             bcc: d.bcc,

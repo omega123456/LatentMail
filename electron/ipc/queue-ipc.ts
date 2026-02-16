@@ -33,11 +33,13 @@ export function registerQueueIpcHandlers(): void {
         return ipcError('QUEUE_INVALID_ACCOUNT', 'accountId must be a positive number');
       }
 
-      // Validate draft-update has originalQueueId
+      // Validate draft-update has originalQueueId OR serverDraftGmailMessageId
       if (operation.type === 'draft-update') {
         const payload = operation.payload as unknown as Record<string, unknown>;
-        if (!payload.originalQueueId || typeof payload.originalQueueId !== 'string') {
-          return ipcError('QUEUE_INVALID_PAYLOAD', 'draft-update requires originalQueueId in payload');
+        const hasOriginalQueueId = payload.originalQueueId && typeof payload.originalQueueId === 'string';
+        const hasServerDraftId = payload.serverDraftGmailMessageId && typeof payload.serverDraftGmailMessageId === 'string';
+        if (!hasOriginalQueueId && !hasServerDraftId) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'draft-update requires originalQueueId or serverDraftGmailMessageId in payload');
         }
       }
 
