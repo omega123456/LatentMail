@@ -8,52 +8,7 @@ import { DensityMode } from '../../../core/services/layout.service';
   selector: 'app-email-list-item',
   standalone: true,
   imports: [CommonModule, RelativeTimePipe],
-  template: `
-    <div
-      class="email-item"
-      [class.unread]="!thread().isRead"
-      [class.selected]="isSelected()"
-      [class.compact]="density() === 'compact'"
-      [class.spacious]="density() === 'spacious'"
-      (click)="clicked.emit(thread())"
-    >
-      <div class="email-avatar">
-        {{ getInitial() }}
-      </div>
-      <div class="email-content">
-        <div class="email-top-row">
-          <span class="email-sender" [class.bold]="!thread().isRead">
-            {{ getSenderName() }}
-          </span>
-          <span class="email-date">{{ thread().lastMessageDate | relativeTime }}</span>
-        </div>
-        <div class="email-subject" [class.bold]="!thread().isRead">
-          {{ thread().subject || '(no subject)' }}
-        </div>
-        @if (density() !== 'compact') {
-          <div class="email-snippet">
-            {{ thread().snippet }}
-          </div>
-        }
-      </div>
-      <div class="email-indicators">
-        @if (thread().isStarred) {
-          <span
-            class="material-symbols-outlined star-icon starred"
-            (click)="onStarClick($event)"
-          >star</span>
-        } @else {
-          <span
-            class="material-symbols-outlined star-icon"
-            (click)="onStarClick($event)"
-          >star_border</span>
-        }
-        @if (thread().messageCount > 1) {
-          <span class="message-count">{{ thread().messageCount }}</span>
-        }
-      </div>
-    </div>
-  `,
+  templateUrl: './email-list-item.component.html',
   styles: [`
     .email-item {
       display: flex;

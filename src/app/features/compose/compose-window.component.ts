@@ -1,5 +1,6 @@
 import {
   Component, inject, OnInit, OnDestroy, ElementRef, ViewChild, AfterViewInit,
+  NgZone, ChangeDetectorRef,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -25,145 +26,7 @@ import { DraftAttachment } from '../../core/models/email.model';
     RecipientInputComponent, ComposeToolbarComponent,
     AttachmentUploadComponent, SignatureSelectorComponent,
   ],
-  template: `
-    @if (composeStore.isOpen()) {
-      <div class="compose-backdrop">
-        <div
-          class="compose-window"
-          (click)="$event.stopPropagation()"
-          (dragover)="onDragOver($event)"
-          (drop)="onDrop($event)"
-        >
-          <!-- Header -->
-          <div class="compose-header">
-            <span class="compose-title">
-              @switch (composeStore.mode()) {
-                @case ('reply') { Reply }
-                @case ('reply-all') { Reply All }
-                @case ('forward') { Forward }
-                @default { New Message }
-              }
-            </span>
-            <div class="header-actions">
-              <button class="header-btn" (click)="close()" title="Close">
-                <span class="material-symbols-outlined">close</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- From -->
-          <div class="field-row from-row">
-            <label class="field-label">From</label>
-            <span class="from-value">{{ composeStore.accountDisplayName() }} &lt;{{ composeStore.accountEmail() }}&gt;</span>
-          </div>
-
-          <!-- To -->
-          <app-recipient-input
-            label="To"
-            [value]="composeStore.to()"
-            (valueChange)="composeStore.updateField('to', $event)"
-          />
-
-          <!-- Cc / Bcc toggles -->
-          @if (!composeStore.showCc() || !composeStore.showBcc()) {
-            <div class="cc-toggles">
-              @if (!composeStore.showCc()) {
-                <button class="toggle-btn" (click)="composeStore.toggleCc()">Cc</button>
-              }
-              @if (!composeStore.showBcc()) {
-                <button class="toggle-btn" (click)="composeStore.toggleBcc()">Bcc</button>
-              }
-            </div>
-          }
-
-          @if (composeStore.showCc()) {
-            <app-recipient-input
-              label="Cc"
-              [value]="composeStore.cc()"
-              (valueChange)="composeStore.updateField('cc', $event)"
-            />
-          }
-
-          @if (composeStore.showBcc()) {
-            <app-recipient-input
-              label="Bcc"
-              [value]="composeStore.bcc()"
-              (valueChange)="composeStore.updateField('bcc', $event)"
-            />
-          }
-
-          <!-- Subject -->
-          <div class="field-row">
-            <label class="field-label">Subject</label>
-            <input
-              #subjectInput
-              class="subject-input"
-              [ngModel]="composeStore.subject()"
-              (ngModelChange)="composeStore.updateField('subject', $event)"
-              placeholder="Subject"
-            />
-          </div>
-
-          <!-- Toolbar (only bind when editor exists to avoid NG0100) -->
-          @if (editor) {
-            <app-compose-toolbar [editor]="editor" />
-          }
-
-          <!-- Editor -->
-          <div class="editor-container" #editorContainer (click)="focusEditor()"></div>
-
-          <!-- Attachments -->
-          <app-attachment-upload
-            [attachments]="composeStore.attachments()"
-            (add)="composeStore.addAttachment($event)"
-            (remove)="composeStore.removeAttachment($event)"
-          />
-
-          <!-- Footer -->
-          <div class="compose-footer">
-            <div class="footer-left">
-              <button class="attach-btn" (click)="openAttachPicker()">
-                <span class="material-symbols-outlined">attach_file</span>
-                <span>Attach</span>
-              </button>
-              <app-signature-selector />
-            </div>
-            <div class="footer-right">
-              @if (composeStore.saving()) {
-                <span class="save-status">Saving...</span>
-              } @else if (composeStore.lastSavedAt()) {
-                <span class="save-status">Draft saved</span>
-              }
-              <button class="discard-btn" (click)="discard()">
-                <span class="material-symbols-outlined">delete</span>
-                <span>Discard</span>
-              </button>
-              <button
-                class="send-btn"
-                [disabled]="!composeStore.canSend() || composeStore.sending()"
-                (click)="send()"
-              >
-                @if (composeStore.sending()) {
-                  <span class="material-symbols-outlined spinning">sync</span>
-                  <span>Sending...</span>
-                } @else {
-                  <span class="material-symbols-outlined">send</span>
-                  <span>Send</span>
-                }
-              </button>
-            </div>
-          </div>
-
-          @if (composeStore.error()) {
-            <div class="compose-error">
-              <span class="material-symbols-outlined">error</span>
-              {{ composeStore.error() }}
-            </div>
-          }
-        </div>
-      </div>
-    }
-  `,
+  templateUrl: './compose-window.component.html',
   styles: [`
     .compose-backdrop {
       position: fixed;
@@ -490,6 +353,8 @@ import { DraftAttachment } from '../../core/models/email.model';
 export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly composeStore = inject(ComposeStore);
   private readonly accountsStore = inject(AccountsStore);
+  private readonly ngZone = inject(NgZone);
+  private readonly cdr = inject(ChangeDetectorRef);
 
   @ViewChild('editorContainer') editorContainer!: ElementRef<HTMLElement>;
   @ViewChild('subjectInput') subjectInput?: ElementRef<HTMLInputElement>;
@@ -542,7 +407,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
         return;
       }
 
-      this.editor = new Editor({
+      const ed = new Editor({
         element: container,
         extensions: [
           StarterKit.configure({
@@ -568,6 +433,17 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
             class: 'tiptap',
           },
         },
+      });
+      // Assign outside Angular zone so CD doesn't see the change mid-cycle (avoids NG0100)
+      this.ngZone.runOutsideAngular(() => {
+        setTimeout(() => {
+          if (this.composeStore.isOpen() && !this.editor) {
+            this.editor = ed;
+            this.ngZone.run(() => this.cdr.markForCheck());
+          } else {
+            ed.destroy();
+          }
+        }, 0);
       });
     };
 

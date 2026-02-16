@@ -6,44 +6,7 @@ import { FoldersStore } from '../../../store/folders.store';
   selector: 'app-folder-list',
   standalone: true,
   imports: [CommonModule],
-  template: `
-    <nav class="folder-list">
-      @for (folder of foldersStore.systemFolders(); track folder.gmailLabelId) {
-        <div
-          class="folder-item"
-          [class.active]="folder.gmailLabelId === foldersStore.activeFolderId()"
-          [class.collapsed]="collapsed()"
-          [title]="collapsed() ? folder.name : ''"
-          (click)="onFolderClick(folder.gmailLabelId)"
-        >
-          <span class="material-symbols-outlined">{{ folder.icon || 'folder' }}</span>
-          @if (!collapsed()) {
-            <span class="folder-name">{{ folder.name }}</span>
-            @if (folder.unreadCount > 0) {
-              <span class="unread-count">{{ folder.unreadCount }}</span>
-            }
-          }
-        </div>
-      }
-
-      @if (!collapsed() && foldersStore.userLabels().length > 0) {
-        <div class="labels-header">Labels</div>
-        @for (label of foldersStore.userLabels(); track label.gmailLabelId) {
-          <div
-            class="folder-item"
-            [class.active]="label.gmailLabelId === foldersStore.activeFolderId()"
-            (click)="onFolderClick(label.gmailLabelId)"
-          >
-            <span class="material-symbols-outlined">label</span>
-            <span class="folder-name">{{ label.name }}</span>
-            @if (label.unreadCount > 0) {
-              <span class="unread-count">{{ label.unreadCount }}</span>
-            }
-          </div>
-        }
-      }
-    </nav>
-  `,
+  templateUrl: './folder-list.component.html',
   styles: [`
     .folder-list {
       flex: 1;

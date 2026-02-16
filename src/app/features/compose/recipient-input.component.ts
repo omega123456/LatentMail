@@ -8,47 +8,7 @@ import { Contact } from '../../core/models/email.model';
   selector: 'app-recipient-input',
   standalone: true,
   imports: [CommonModule, FormsModule],
-  template: `
-    <div class="recipient-row">
-      <label class="recipient-label">{{ label() }}</label>
-      <div class="chips-input" (click)="focusInput()">
-        @for (chip of chips(); track chip; let i = $index) {
-          <span class="chip">
-            {{ chip }}
-            <button class="chip-remove" (click)="removeChip(i)">
-              <span class="material-symbols-outlined">close</span>
-            </button>
-          </span>
-        }
-        <input
-          #inputEl
-          class="chip-text-input"
-          [placeholder]="chips().length === 0 ? placeholder() : ''"
-          [(ngModel)]="inputValue"
-          (input)="onInput()"
-          (keydown)="onKeydown($event)"
-          (blur)="onBlur()"
-          (focus)="showSuggestions = true"
-        />
-      </div>
-      @if (showSuggestions && suggestions().length > 0) {
-        <div class="suggestions-dropdown">
-          @for (contact of suggestions(); track contact.email; let i = $index) {
-            <button
-              class="suggestion-item"
-              [class.active]="i === activeSuggestion"
-              (mousedown)="selectSuggestion(contact)"
-            >
-              <span class="suggestion-name">{{ contact.displayName || contact.email }}</span>
-              @if (contact.displayName) {
-                <span class="suggestion-email">&lt;{{ contact.email }}&gt;</span>
-              }
-            </button>
-          }
-        </div>
-      }
-    </div>
-  `,
+  templateUrl: './recipient-input.component.html',
   styles: [`
     :host {
       display: block;

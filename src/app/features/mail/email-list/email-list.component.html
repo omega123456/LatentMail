@@ -1,0 +1,29 @@
+<div class="email-list-container">
+  @if (emailsStore.loading() && emailsStore.threads().length === 0) {
+    <div class="email-list-loading">
+      <span class="material-symbols-outlined spinning">sync</span>
+      <p>Loading emails...</p>
+    </div>
+  } @else if (emailsStore.isEmpty()) {
+    <div class="email-list-empty">
+      <span class="material-symbols-outlined">inbox</span>
+      <p>No emails yet</p>
+      <p class="hint">Emails will appear here after syncing</p>
+    </div>
+  } @else {
+    <cdk-virtual-scroll-viewport
+      [itemSize]="uiStore.densityHeight()"
+      class="email-scroll-viewport"
+      (scrolledIndexChange)="onScroll($event)"
+    >
+      <app-email-list-item
+        *cdkVirtualFor="let thread of emailsStore.threads(); trackBy: trackByThreadId"
+        [thread]="thread"
+        [isSelected]="thread.gmailThreadId === emailsStore.selectedThreadId()"
+        [density]="uiStore.density()"
+        (clicked)="onThreadClick(thread)"
+        (starToggled)="onStarToggle(thread)"
+      />
+    </cdk-virtual-scroll-viewport>
+  }
+</div>

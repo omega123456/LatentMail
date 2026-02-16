@@ -7,56 +7,7 @@ import { MatButtonModule } from '@angular/material/button';
   selector: 'app-settings-shell',
   standalone: true,
   imports: [CommonModule, RouterLink, RouterLinkActive, RouterOutlet, MatButtonModule],
-  template: `
-    <div class="settings-shell">
-      <div class="settings-header">
-        <a routerLink="/mail" class="back-link">
-          <span class="material-symbols-outlined">arrow_back</span>
-          Back to Mail
-        </a>
-        <h1>Settings</h1>
-      </div>
-      <div class="settings-body">
-        <nav class="settings-nav">
-          <a class="nav-item" routerLink="general" routerLinkActive="active">
-            <span class="material-symbols-outlined">settings</span>
-            General
-          </a>
-          <a class="nav-item" routerLink="accounts" routerLinkActive="active">
-            <span class="material-symbols-outlined">account_circle</span>
-            Accounts
-          </a>
-          <a class="nav-item disabled">
-            <span class="material-symbols-outlined">auto_awesome</span>
-            AI
-          </a>
-          <a class="nav-item disabled">
-            <span class="material-symbols-outlined">keyboard</span>
-            Keyboard
-          </a>
-          <a class="nav-item disabled">
-            <span class="material-symbols-outlined">notifications</span>
-            Notifications
-          </a>
-          <a class="nav-item disabled">
-            <span class="material-symbols-outlined">draw</span>
-            Signatures
-          </a>
-          <a class="nav-item disabled">
-            <span class="material-symbols-outlined">filter_list</span>
-            Filters
-          </a>
-          <a class="nav-item" routerLink="queue" routerLinkActive="active">
-            <span class="material-symbols-outlined">pending_actions</span>
-            Queue
-          </a>
-        </nav>
-        <div class="settings-content">
-          <router-outlet />
-        </div>
-      </div>
-    </div>
-  `,
+  templateUrl: './settings-shell.component.html',
   styles: [`
     .settings-shell {
       height: 100%;

@@ -6,32 +6,7 @@ import { ComposeStore, Signature } from '../../store/compose.store';
   selector: 'app-signature-selector',
   standalone: true,
   imports: [CommonModule],
-  template: `
-    <div class="signature-selector" (click)="toggleDropdown()">
-      <span class="material-symbols-outlined">draw</span>
-      <span>{{ composeStore.activeSignature()?.name || 'Signature' }}</span>
-      <span class="material-symbols-outlined arrow">expand_more</span>
-
-      @if (isOpen) {
-        <div class="dropdown" (click)="$event.stopPropagation()">
-          <button class="dropdown-item" (click)="selectSignature(null)">
-            <span>No signature</span>
-            @if (!composeStore.activeSignatureId()) {
-              <span class="material-symbols-outlined check">check</span>
-            }
-          </button>
-          @for (sig of composeStore.signatures(); track sig.id) {
-            <button class="dropdown-item" (click)="selectSignature(sig)">
-              <span>{{ sig.name }}</span>
-              @if (composeStore.activeSignatureId() === sig.id) {
-                <span class="material-symbols-outlined check">check</span>
-              }
-            </button>
-          }
-        </div>
-      }
-    </div>
-  `,
+  templateUrl: './signature-selector.component.html',
   styles: [`
     .signature-selector {
       display: flex;

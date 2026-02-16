@@ -15,16 +15,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
   selector: 'app-auth-callback',
   standalone: true,
   imports: [CommonModule, MatProgressSpinnerModule],
-  template: `
-    <div class="callback-container">
-      <div class="callback-card">
-        <mat-spinner diameter="40"></mat-spinner>
-        <h2>Completing sign-in...</h2>
-        <p>Please complete the authorization in your browser.</p>
-        <p class="hint">You'll be redirected automatically once done.</p>
-      </div>
-    </div>
-  `,
+  templateUrl: './auth-callback.component.html',
   styles: [`
     .callback-container {
       display: flex;

@@ -1,0 +1,64 @@
+<div class="account-switcher" [class.collapsed]="collapsed()">
+  <button
+    class="account-trigger"
+    [matMenuTriggerFor]="accountMenu"
+    [title]="collapsed() ? (accountsStore.activeAccount()?.email || 'Switch account') : ''"
+  >
+    @if (accountsStore.activeAccount(); as active) {
+      <div class="avatar" [style.background-image]="active.avatarUrl ? 'url(' + active.avatarUrl + ')' : ''">
+        @if (!active.avatarUrl) {
+          <span class="avatar-letter">{{ active.email[0].toUpperCase() }}</span>
+        }
+      </div>
+      @if (!collapsed()) {
+        <div class="account-info">
+          <span class="account-name">{{ active.displayName }}</span>
+          <span class="account-email">{{ active.email }}</span>
+        </div>
+        <span class="material-symbols-outlined expand-icon">expand_more</span>
+      }
+    } @else {
+      <span class="material-symbols-outlined">account_circle</span>
+      @if (!collapsed()) {
+        <span class="account-info"><span class="account-name">No account</span></span>
+      }
+    }
+  </button>
+
+  <mat-menu #accountMenu="matMenu" class="account-menu">
+    @for (account of accountsStore.accounts(); track account.id) {
+      <button
+        mat-menu-item
+        (click)="switchAccount(account.id)"
+        [class.active]="account.id === accountsStore.activeAccountId()"
+      >
+        <div class="menu-account">
+          <div class="menu-avatar" [style.background-image]="account.avatarUrl ? 'url(' + account.avatarUrl + ')' : ''">
+            @if (!account.avatarUrl) {
+              <span>{{ account.email[0].toUpperCase() }}</span>
+            }
+          </div>
+          <div class="menu-account-info">
+            <span class="menu-name">{{ account.displayName }}</span>
+            <span class="menu-email">{{ account.email }}</span>
+          </div>
+          @if (account.needsReauth) {
+            <span class="material-symbols-outlined reauth-icon">warning</span>
+          }
+        </div>
+      </button>
+    }
+
+    <mat-divider></mat-divider>
+
+    <button mat-menu-item (click)="addAccount()">
+      <span class="material-symbols-outlined">add</span>
+      <span>Add account</span>
+    </button>
+
+    <button mat-menu-item (click)="manageAccounts()">
+      <span class="material-symbols-outlined">manage_accounts</span>
+      <span>Manage accounts</span>
+    </button>
+  </mat-menu>
+</div>

@@ -1,0 +1,81 @@
+<div class="queue-settings">
+  <h2>Mail Operation Queue</h2>
+  <p class="subtitle">View and manage queued mail operations.</p>
+
+  <!-- Statistics card -->
+  <div class="stats-card">
+    <div class="stat">
+      <span class="material-symbols-outlined stat-icon pending">hourglass_empty</span>
+      <span class="stat-value">{{ queueStore.pendingCount() }}</span>
+      <span class="stat-label">Pending</span>
+    </div>
+    <div class="stat">
+      <span class="material-symbols-outlined stat-icon processing">autorenew</span>
+      <span class="stat-value">{{ queueStore.processingCount() }}</span>
+      <span class="stat-label">Processing</span>
+    </div>
+    <div class="stat">
+      <span class="material-symbols-outlined stat-icon completed">check_circle</span>
+      <span class="stat-value">{{ queueStore.completedCount() }}</span>
+      <span class="stat-label">Done</span>
+    </div>
+    <div class="stat">
+      <span class="material-symbols-outlined stat-icon failed">error</span>
+      <span class="stat-value">{{ queueStore.failedCount() }}</span>
+      <span class="stat-label">Failed</span>
+    </div>
+  </div>
+
+  <!-- Action buttons -->
+  <div class="actions">
+    @if (queueStore.failedCount() > 0) {
+      <button mat-stroked-button color="warn" (click)="retryAll()">
+        <span class="material-symbols-outlined">refresh</span>
+        Retry All Failed
+      </button>
+    }
+    @if (queueStore.completedCount() > 0) {
+      <button mat-stroked-button (click)="clearCompleted()">
+        <span class="material-symbols-outlined">clear_all</span>
+        Clear Completed
+      </button>
+    }
+  </div>
+
+  <!-- Queue items -->
+  @if (queueStore.hasItems()) {
+    <div class="queue-list">
+      @for (item of sortedItems(); track item.queueId) {
+        <div class="queue-item" [class]="'status-' + item.status">
+          <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
+          <div class="item-info">
+            <div class="item-description">{{ item.description }}</div>
+            @if (item.status === 'failed' && item.error) {
+              <div class="item-error">{{ item.error }}</div>
+            }
+          </div>
+          <span class="status-badge" [class]="'badge-' + item.status">
+            {{ statusLabel(item.status) }}
+          </span>
+          <span class="item-time">{{ relativeTime(item.createdAt) }}</span>
+          @if (item.status === 'failed') {
+            <div class="item-actions">
+              <button mat-icon-button (click)="retry(item.queueId)" title="Retry">
+                <span class="material-symbols-outlined">refresh</span>
+              </button>
+              <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  } @else {
+    <div class="empty-state">
+      <span class="material-symbols-outlined empty-icon">check_circle</span>
+      <p>No pending operations</p>
+      <p class="empty-sub">All mail operations have been processed.</p>
+    </div>
+  }
+</div>

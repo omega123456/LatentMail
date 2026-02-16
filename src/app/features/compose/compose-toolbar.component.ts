@@ -6,55 +6,7 @@ import type { Editor } from '@tiptap/core';
   selector: 'app-compose-toolbar',
   standalone: true,
   imports: [CommonModule],
-  template: `
-    <div class="compose-toolbar">
-      <button class="tb-btn" [class.active]="isActive('bold')" (click)="exec('toggleBold')" title="Bold (Ctrl+B)">
-        <span class="material-symbols-outlined">format_bold</span>
-      </button>
-      <button class="tb-btn" [class.active]="isActive('italic')" (click)="exec('toggleItalic')" title="Italic (Ctrl+I)">
-        <span class="material-symbols-outlined">format_italic</span>
-      </button>
-      <button class="tb-btn" [class.active]="isActive('underline')" (click)="exec('toggleUnderline')" title="Underline (Ctrl+U)">
-        <span class="material-symbols-outlined">format_underlined</span>
-      </button>
-      <button class="tb-btn" [class.active]="isActive('strike')" (click)="exec('toggleStrike')" title="Strikethrough">
-        <span class="material-symbols-outlined">format_strikethrough</span>
-      </button>
-
-      <div class="tb-divider"></div>
-
-      <button class="tb-btn" [class.active]="isActive('bulletList')" (click)="exec('toggleBulletList')" title="Bullet List">
-        <span class="material-symbols-outlined">format_list_bulleted</span>
-      </button>
-      <button class="tb-btn" [class.active]="isActive('orderedList')" (click)="exec('toggleOrderedList')" title="Numbered List">
-        <span class="material-symbols-outlined">format_list_numbered</span>
-      </button>
-
-      <div class="tb-divider"></div>
-
-      <button class="tb-btn" [class.active]="isActive('blockquote')" (click)="exec('toggleBlockquote')" title="Quote">
-        <span class="material-symbols-outlined">format_quote</span>
-      </button>
-      <button class="tb-btn" [class.active]="isActive('codeBlock')" (click)="exec('toggleCodeBlock')" title="Code Block">
-        <span class="material-symbols-outlined">code</span>
-      </button>
-      <button class="tb-btn" (click)="exec('setHorizontalRule')" title="Horizontal Rule">
-        <span class="material-symbols-outlined">horizontal_rule</span>
-      </button>
-
-      <div class="tb-divider"></div>
-
-      <button class="tb-btn" [class.active]="isActive('link')" (click)="insertLink()" title="Insert Link">
-        <span class="material-symbols-outlined">link</span>
-      </button>
-      <button class="tb-btn" (click)="exec('undo')" title="Undo (Ctrl+Z)">
-        <span class="material-symbols-outlined">undo</span>
-      </button>
-      <button class="tb-btn" (click)="exec('redo')" title="Redo (Ctrl+Y)">
-        <span class="material-symbols-outlined">redo</span>
-      </button>
-    </div>
-  `,
+  templateUrl: './compose-toolbar.component.html',
   styles: [`
     .compose-toolbar {
       display: flex;

@@ -1,0 +1,97 @@
+@if (emailsStore.loadingThread()) {
+  <div class="reading-pane-loading">
+    <span class="material-symbols-outlined spinning">sync</span>
+    <p>Loading thread...</p>
+  </div>
+} @else if (emailsStore.selectedThread(); as thread) {
+  <div class="reading-pane-content">
+    <!-- Toolbar -->
+    <div class="message-toolbar">
+      @if (isDraftsFolder()) {
+        <button class="toolbar-btn edit-draft-btn" (click)="actionClicked.emit('edit-draft')">
+          <span class="material-symbols-outlined">edit</span>
+          <span>Edit Draft</span>
+        </button>
+        <div class="toolbar-separator"></div>
+      }
+      <button class="toolbar-btn" (click)="actionClicked.emit('reply')">
+        <span class="material-symbols-outlined">reply</span>
+        <span>Reply</span>
+      </button>
+      <button class="toolbar-btn" (click)="actionClicked.emit('reply-all')">
+        <span class="material-symbols-outlined">reply_all</span>
+        <span>Reply All</span>
+      </button>
+      <button class="toolbar-btn" (click)="actionClicked.emit('forward')">
+        <span class="material-symbols-outlined">forward</span>
+        <span>Forward</span>
+      </button>
+      <div class="toolbar-separator"></div>
+      <button class="toolbar-btn" (click)="actionClicked.emit('archive')">
+        <span class="material-symbols-outlined">archive</span>
+      </button>
+      <button class="toolbar-btn" (click)="actionClicked.emit('delete')">
+        <span class="material-symbols-outlined">delete</span>
+      </button>
+      <button class="toolbar-btn" (click)="toggleStar()">
+        <span class="material-symbols-outlined" [class.starred]="thread.isStarred">
+          {{ thread.isStarred ? 'star' : 'star_border' }}
+        </span>
+      </button>
+      <button class="toolbar-btn" (click)="toggleRead()">
+        <span class="material-symbols-outlined">
+          {{ thread.isRead ? 'mark_email_unread' : 'mark_email_read' }}
+        </span>
+      </button>
+    </div>
+
+    <!-- Thread subject -->
+    <div class="thread-subject">
+      <h2>{{ thread.subject || '(no subject)' }}</h2>
+    </div>
+
+    <!-- Messages -->
+    <div class="messages-list">
+      @for (message of emailsStore.selectedMessages(); track message.gmailMessageId; let i = $index; let last = $last) {
+        <div class="message-card" [class.collapsed]="!last && !expandedMessages.has(message.gmailMessageId)">
+          <!-- Message header (always visible) -->
+          <div
+            class="message-header"
+            (click)="toggleExpand(message.gmailMessageId)"
+          >
+            <div class="sender-avatar">{{ getInitial(message) }}</div>
+            <div class="header-content">
+              <div class="header-top">
+                <span class="sender-name">{{ message.fromName || message.fromAddress }}</span>
+                <span class="message-date">{{ message.date | relativeTime }}</span>
+              </div>
+              <div class="header-bottom">
+                <span class="recipients">to {{ getRecipients(message) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Message body (shown when expanded) -->
+          @if (last || expandedMessages.has(message.gmailMessageId)) {
+            <div class="message-body">
+              @if (message.htmlBody) {
+                <div class="html-body" [innerHTML]="sanitizeHtml(message.htmlBody)"></div>
+              } @else if (message.textBody) {
+                <pre class="text-body">{{ message.textBody }}</pre>
+              } @else {
+                <p class="no-body">No content available</p>
+              }
+            </div>
+          } @else {
+            <div class="message-snippet">{{ message.snippet || getSnippet(message) }}</div>
+          }
+        </div>
+      }
+    </div>
+  </div>
+} @else {
+  <div class="reading-pane-empty">
+    <span class="material-symbols-outlined">mail</span>
+    <p>Select an email to read</p>
+  </div>
+}

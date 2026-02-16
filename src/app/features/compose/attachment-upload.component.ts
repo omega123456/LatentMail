@@ -7,30 +7,7 @@ import { FileSizePipe } from '../../shared/pipes/file-size.pipe';
   selector: 'app-attachment-upload',
   standalone: true,
   imports: [CommonModule, FileSizePipe],
-  template: `
-    @if (attachments().length > 0) {
-      <div class="attachment-bar">
-        @for (att of attachments(); track att.filename; let i = $index) {
-          <div class="attachment-chip">
-            <span class="material-symbols-outlined att-icon">attach_file</span>
-            <span class="att-name">{{ att.filename }}</span>
-            <span class="att-size">({{ att.size | fileSize }})</span>
-            <button class="att-remove" (click)="remove.emit(i)">
-              <span class="material-symbols-outlined">close</span>
-            </button>
-          </div>
-        }
-      </div>
-    }
-
-    <input
-      #fileInput
-      type="file"
-      multiple
-      style="display: none"
-      (change)="onFilesSelected($event)"
-    />
-  `,
+  templateUrl: './attachment-upload.component.html',
   styles: [`
     .attachment-bar {
       display: flex;

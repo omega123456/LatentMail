@@ -1,0 +1,70 @@
+<div class="account-settings">
+  <h2>Accounts</h2>
+  <p class="description">Manage your connected Gmail accounts.</p>
+
+  @if (accountsStore.loading()) {
+    <div class="loading-state">
+      <mat-spinner diameter="32"></mat-spinner>
+    </div>
+  }
+
+  @if (accountsStore.error(); as error) {
+    <div class="error-banner">
+      <span class="material-symbols-outlined">error</span>
+      <span>{{ error }}</span>
+    </div>
+  }
+
+  <div class="accounts-list">
+    @for (account of accountsStore.accounts(); track account.id) {
+      <div class="account-card">
+        <div class="account-avatar" [style.background-image]="account.avatarUrl ? 'url(' + account.avatarUrl + ')' : ''">
+          @if (!account.avatarUrl) {
+            <span class="avatar-letter">{{ account.email[0].toUpperCase() }}</span>
+          }
+        </div>
+        <div class="account-details">
+          <span class="account-name">{{ account.displayName }}</span>
+          <span class="account-email">{{ account.email }}</span>
+          @if (account.needsReauth) {
+            <span class="reauth-warning">
+              <span class="material-symbols-outlined">warning</span>
+              Needs re-authentication
+            </span>
+          }
+        </div>
+        <div class="account-actions">
+          @if (account.needsReauth) {
+            <button mat-raised-button color="primary" (click)="reauthAccount(account.id)">
+              Re-authenticate
+            </button>
+          }
+          <button
+            mat-button
+            color="warn"
+            (click)="confirmRemoveAccount(account.id, account.email)"
+            [disabled]="accountsStore.loading()"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+    }
+  </div>
+
+  <div class="add-account-section">
+    <button
+      mat-stroked-button
+      (click)="addAccount()"
+      [disabled]="accountsStore.loginInProgress()"
+    >
+      @if (accountsStore.loginInProgress()) {
+        <mat-spinner diameter="18" class="btn-spinner"></mat-spinner>
+        <span>Adding account...</span>
+      } @else {
+        <span class="material-symbols-outlined">add</span>
+        <span>Add Gmail account</span>
+      }
+    </button>
+  </div>
+</div>

@@ -9,33 +9,7 @@ import { LayoutMode, DensityMode } from '../../../core/services/layout.service';
   selector: 'app-email-list-header',
   standalone: true,
   imports: [CommonModule],
-  template: `
-    <div class="email-list-header">
-      <div class="header-left">
-        <span class="folder-name">{{ foldersStore.activeFolder()?.name || 'Inbox' }}</span>
-        @if (emailsStore.syncing()) {
-          <span class="sync-indicator">
-            <span class="material-symbols-outlined spinning">sync</span>
-          </span>
-        }
-      </div>
-      <div class="header-actions">
-        <!-- Density toggle -->
-        <button class="header-btn" (click)="cycleDensity()" title="Change density">
-          <span class="material-symbols-outlined">
-            {{ densityIcon() }}
-          </span>
-        </button>
-
-        <!-- Layout toggle -->
-        <button class="header-btn" (click)="cycleLayout()" title="Change layout">
-          <span class="material-symbols-outlined">
-            {{ layoutIcon() }}
-          </span>
-        </button>
-      </div>
-    </div>
-  `,
+  templateUrl: './email-list-header.component.html',
   styles: [`
     .email-list-header {
       display: flex;
