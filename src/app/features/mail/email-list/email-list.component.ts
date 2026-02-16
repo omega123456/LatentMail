@@ -94,11 +94,55 @@ import { AccountsStore } from '../../../store/accounts.store';
       padding: 16px;
       color: var(--color-text-secondary);
       font-size: 13px;
+      line-height: 1;
       flex-shrink: 0;
 
       .fetch-icon {
-        font-size: 20px;
+        font-size: inherit;
         color: var(--color-primary);
+        display: flex;
+        align-items: center;
+      }
+
+      .fetch-text {
+        line-height: 1;
+        display: flex;
+        align-items: center;
+      }
+
+      .ellipsis-animated {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        font-weight: bold;
+        letter-spacing: 2px;
+        line-height: 1;
+        font-size: inherit;
+        height: 1em;
+        /* Nudge up so period baseline aligns visually with x-height of label */
+        transform: translateY(-0.06em);
+
+        .dot {
+          animation: ellipsis-dot 1.4s ease-in-out infinite both;
+          line-height: 1;
+
+          &:nth-child(1) { animation-delay: 0s; }
+          &:nth-child(2) { animation-delay: 0.2s; }
+          &:nth-child(3) { animation-delay: 0.4s; }
+        }
+      }
+
+      @keyframes ellipsis-dot {
+        0%, 80%, 100% { opacity: 0.25; }
+        40% { opacity: 1; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .ellipsis-animated .dot {
+          animation: none;
+          opacity: 1;
+        }
       }
 
       &.error {

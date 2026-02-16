@@ -27,7 +27,9 @@
       <!-- Bottom-of-list indicators (inside viewport so they scroll with content) -->
       @if (emailsStore.fetchingMore()) {
         <div class="list-bottom-indicator" role="status" aria-live="polite">
-          <span class="material-symbols-outlined spinning fetch-icon">cloud_download</span>
+          <span class="ellipsis-animated fetch-icon" aria-hidden="true">
+            <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+          </span>
           <span class="fetch-text">Fetching older emails...</span>
         </div>
       } @else if (emailsStore.fetchError()) {
