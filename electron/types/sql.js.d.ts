@@ -11,8 +11,8 @@ declare module 'sql.js' {
   type SqlValue = string | number | Uint8Array | null;
 
   interface Database {
-    run(sql: string, params?: SqlValue[]): Database;
-    exec(sql: string, params?: SqlValue[]): QueryExecResult[];
+    run(sql: string, params?: SqlValue[] | Record<string, SqlValue>): Database;
+    exec(sql: string, params?: SqlValue[] | Record<string, SqlValue>): QueryExecResult[];
     export(): Uint8Array;
     close(): void;
   }

@@ -122,9 +122,9 @@ export function registerMailIpcHandlers(): void {
       if (threads.length === 0) {
         // Debug: check what's actually in the DB
         const rawDb = db.getDatabase();
-        const threadCount = rawDb.exec('SELECT COUNT(*) FROM threads WHERE account_id = ?', [numAccountId]);
-        const tfCount = rawDb.exec('SELECT COUNT(*) FROM thread_folders WHERE account_id = ?', [numAccountId]);
-        const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = ?', [numAccountId]);
+        const threadCount = rawDb.exec('SELECT COUNT(*) FROM threads WHERE account_id = :accountId', { ':accountId': numAccountId });
+        const tfCount = rawDb.exec('SELECT COUNT(*) FROM thread_folders WHERE account_id = :accountId', { ':accountId': numAccountId });
+        const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId', { ':accountId': numAccountId });
         log.info(`DEBUG: total threads=${threadCount[0]?.values[0]?.[0]}, total thread_folders=${tfCount[0]?.values[0]?.[0]}, folders in thread_folders=${JSON.stringify(tfFolders[0]?.values)}`);
       }
       return ipcSuccess(threads);

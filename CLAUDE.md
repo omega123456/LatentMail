@@ -233,8 +233,9 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 ### Database
 
-- Use parameterized queries for all user input (`db.prepare().run(...)`)
-- Wrap multi-statement transactions in `db.transaction(() => { ... })`
+- Use parameterized queries for all user input (`db.run()` / `db.exec()` with params)
+- **Use named placeholders only** — never positional `?`. Use `:name` in SQL and pass an object: `{ ':accountId': id, ':folder': folder }`. Keys must include the colon (per sql.js). This keeps queries readable and avoids parameter-order bugs.
+- Wrap multi-statement transactions in `db.transaction(() => { ... })` (or `BEGIN`/`COMMIT`/`ROLLBACK` where used)
 - Always handle foreign key constraints (CASCADE deletes)
 - Use ISO 8601 format for timestamps (`datetime('now')`)
 
@@ -270,11 +271,12 @@ Use `sqlite3` CLI or DB Browser for SQLite to inspect.
 
 ## Common Gotchas
 
-1. **Native modules**: If you see "Module did not self-register", run `npx @electron/rebuild`
-2. **IMAP UID drift**: Always snapshot UIDs at enqueue time, never resolve during execution
-3. **Folder locking**: Forgetting `withLock()` can corrupt UIDs or cause race conditions
-4. **OAuth token refresh**: Tokens expire after 1 hour; refresh timer runs automatically
-5. **Schema migrations**: Always test on a copy of a real database, not a fresh one
-6. **Queue persistence**: Don't clear queue table manually; use `queue:clear-completed` IPC
-7. **Draft-send lifecycle**: Send operation must either succeed or leave draft untouched (no orphan drafts)
-8. **Gmail folder names**: Use `[Gmail]/...` paths, not localized names (e.g., `[Gmail]/Sent Mail`, not "Sent")
+1. **SQL placeholders**: Use **named** placeholders only (`:name` + object params). Do not add new queries with positional `?` and arrays — see Database conventions above.
+2. **Native modules**: If you see "Module did not self-register", run `npx @electron/rebuild`
+3. **IMAP UID drift**: Always snapshot UIDs at enqueue time, never resolve during execution
+4. **Folder locking**: Forgetting `withLock()` can corrupt UIDs or cause race conditions
+5. **OAuth token refresh**: Tokens expire after 1 hour; refresh timer runs automatically
+6. **Schema migrations**: Always test on a copy of a real database, not a fresh one
+7. **Queue persistence**: Don't clear queue table manually; use `queue:clear-completed` IPC
+8. **Draft-send lifecycle**: Send operation must either succeed or leave draft untouched (no orphan drafts)
+9. **Gmail folder names**: Use `[Gmail]/...` paths, not localized names (e.g., `[Gmail]/Sent Mail`, not "Sent")
