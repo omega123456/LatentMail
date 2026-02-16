@@ -844,6 +844,29 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
+  /**
+   * Unread count per folder as unread *threads* (conversations), to match Gmail's sidebar.
+   * Gmail shows unread conversation count, not unread message count.
+   */
+  getUnreadThreadCountsByFolder(accountId: number): Record<string, number> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT tf.folder, COUNT(DISTINCT t.id) AS cnt
+       FROM thread_folders tf
+       INNER JOIN threads t ON t.id = tf.thread_id
+       WHERE tf.account_id = :accountId AND t.is_read = 0
+       GROUP BY tf.folder`,
+      { ':accountId': accountId }
+    );
+    const out: Record<string, number> = {};
+    if (result.length > 0 && result[0].values.length > 0) {
+      for (const row of result[0].values) {
+        out[row[0] as string] = (row[1] as number) || 0;
+      }
+    }
+    return out;
+  }
+
   getLabelsByAccount(accountId: number): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(

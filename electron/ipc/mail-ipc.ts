@@ -697,12 +697,18 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Get folder list for an account
+  // Get folder list for an account. Unread counts use local unread *thread* count so they match Gmail (conversations, not messages).
   ipcMain.handle(IPC_CHANNELS.MAIL_GET_FOLDERS, async (_event, accountId: string) => {
     try {
       log.info(`Getting folders for account ${accountId}`);
-      const labels = db.getLabelsByAccount(Number(accountId));
-      return ipcSuccess(labels);
+      const numAccountId = Number(accountId);
+      const labels = db.getLabelsByAccount(numAccountId);
+      const unreadByFolder = db.getUnreadThreadCountsByFolder(numAccountId);
+      const labelsWithThreadCounts = labels.map((row) => ({
+        ...row,
+        unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,
+      }));
+      return ipcSuccess(labelsWithThreadCounts);
     } catch (err) {
       log.error('Failed to get folders:', err);
       return ipcError('MAIL_GET_FOLDERS_FAILED', 'Failed to get folders');

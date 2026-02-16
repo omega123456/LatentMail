@@ -547,10 +547,15 @@ export const EmailsStore = signalStore(
       const router = inject(Router);
 
       // Subscribe to mail:data-changed events from the main process.
-      // Refresh threads when the active folder's data has changed.
+      // Refresh folder counts (so sidebar unread matches Gmail) and threads when the active folder's data has changed.
       electronService.onEvent<MailDataChangedPayload>('mail:data-changed').subscribe((event) => {
         const activeAccountId = accountsStore.activeAccountId();
         const activeFolderId = foldersStore.activeFolderId();
+
+        // Refresh folder list so unread/total counts in sidebar match server after flag/move/delete
+        if (activeAccountId != null && event.accountId === activeAccountId) {
+          foldersStore.loadFolders(activeAccountId);
+        }
 
         // Flag updates are already applied optimistically in the renderer.
         // Skipping refresh here avoids unnecessary list churn/jumps when opening unread.
