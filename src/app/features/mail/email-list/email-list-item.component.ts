@@ -27,16 +27,16 @@ import { DensityMode } from '../../../core/services/layout.service';
       border-bottom: 1px solid var(--color-border);
       transition: background-color 120ms ease;
 
+      &.unread {
+        background-color: color-mix(in srgb, var(--color-text-primary) 6%, var(--color-surface));
+      }
+
       &:hover {
         background-color: var(--color-primary-light);
       }
 
       &.selected {
         background-color: var(--color-primary-light);
-      }
-
-      &.unread {
-        background-color: rgba(25, 118, 210, 0.04);
       }
 
       &.compact {
@@ -109,7 +109,7 @@ import { DensityMode } from '../../../core/services/layout.service';
       white-space: nowrap;
 
       &.bold {
-        font-weight: 600;
+        font-weight: 700;
       }
     }
 
@@ -132,7 +132,7 @@ import { DensityMode } from '../../../core/services/layout.service';
       margin-top: 2px;
 
       &.bold {
-        font-weight: 500;
+        font-weight: 600;
       }
     }
 

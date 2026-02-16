@@ -1,6 +1,13 @@
 import { Injectable, NgZone } from '@angular/core';
 import { Observable, Subject } from 'rxjs';
 
+/** Per-channel shared state so we only add one IPC listener per channel (avoids MaxListenersExceededWarning). */
+interface ChannelState<T> {
+  subject: Subject<T>;
+  callback: (_event: unknown, ...args: unknown[]) => void;
+  refCount: number;
+}
+
 interface IpcResponse<T = unknown> {
   success: boolean;
   data?: T;
@@ -77,6 +84,7 @@ declare global {
 export class ElectronService {
   private readonly api: ElectronAPI | undefined;
   private readonly isElectronEnv: boolean;
+  private readonly channelState = new Map<string, ChannelState<unknown>>();
 
   constructor(private ngZone: NgZone) {
     this.api = window.electronAPI;
@@ -262,30 +270,44 @@ export class ElectronService {
   }
 
   // ---- Event streams (main → renderer push events) ----
+  // One IPC listener per channel is shared by all subscribers to avoid MaxListenersExceededWarning.
 
   onEvent<T = unknown>(channel: string): Observable<T> {
-    const subject = new Subject<T>();
+    if (!this.api) {
+      return new Observable<T>();
+    }
 
-    if (this.api) {
+    const state = this.getOrCreateChannelState<T>(channel);
+    return new Observable<T>((subscriber) => {
+      state.refCount++;
+      if (state.refCount === 1) {
+        this.api!.on(channel, state.callback);
+      }
+      const sub = state.subject.subscribe(subscriber);
+      return () => {
+        sub.unsubscribe();
+        state.refCount--;
+        if (state.refCount === 0) {
+          this.api?.off(channel, state.callback);
+          this.channelState.delete(channel);
+        }
+      };
+    });
+  }
+
+  private getOrCreateChannelState<T>(channel: string): ChannelState<T> {
+    let state = this.channelState.get(channel) as ChannelState<T> | undefined;
+    if (!state) {
+      const subject = new Subject<T>();
       const callback = (_event: unknown, ...args: unknown[]) => {
         this.ngZone.run(() => {
           subject.next(args[0] as T);
         });
       };
-
-      this.api.on(channel, callback);
-
-      // Return an observable that cleans up on unsubscribe
-      return new Observable<T>((subscriber) => {
-        const sub = subject.subscribe(subscriber);
-        return () => {
-          sub.unsubscribe();
-          this.api?.off(channel, callback);
-        };
-      });
+      state = { subject, callback, refCount: 0 };
+      this.channelState.set(channel, state as ChannelState<unknown>);
     }
-
-    return subject.asObservable();
+    return state;
   }
 
   // ---- Helper ----
