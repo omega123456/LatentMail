@@ -75,7 +75,7 @@
           @if (last || expandedMessages.has(message.gmailMessageId)) {
             <div class="message-body">
               @if (message.htmlBody) {
-                <div class="html-body" [innerHTML]="sanitizeHtml(message.htmlBody)"></div>
+                <app-email-body-frame [htmlBody]="message.htmlBody" />
               } @else if (message.textBody) {
                 <pre class="text-body">{{ message.textBody }}</pre>
               } @else {

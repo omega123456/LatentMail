@@ -1,15 +1,15 @@
-import { Component, inject, OnChanges, SimpleChanges, input, output } from '@angular/core';
+import { Component, inject, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { EmailsStore } from '../../../store/emails.store';
 import { FoldersStore } from '../../../store/folders.store';
 import { Email } from '../../../core/models/email.model';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
+import { EmailBodyFrameComponent } from './email-body-frame.component';
 
 @Component({
   selector: 'app-reading-pane',
   standalone: true,
-  imports: [CommonModule, RelativeTimePipe],
+  imports: [CommonModule, RelativeTimePipe, EmailBodyFrameComponent],
   templateUrl: './reading-pane.component.html',
   styles: [`
     :host {
@@ -198,32 +198,6 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
       padding: 0 16px 16px 64px;
     }
 
-    .html-body {
-      font-size: 14px;
-      line-height: 1.6;
-      color: var(--color-text-primary);
-      word-break: break-word;
-      overflow-wrap: break-word;
-
-      :host ::ng-deep {
-        img {
-          max-width: 100%;
-          height: auto;
-        }
-
-        a {
-          color: var(--color-primary);
-        }
-
-        blockquote {
-          border-left: 3px solid var(--color-border);
-          margin: 8px 0;
-          padding: 4px 12px;
-          color: var(--color-text-secondary);
-        }
-      }
-    }
-
     .text-body {
       font-size: 14px;
       line-height: 1.6;
@@ -256,8 +230,6 @@ export class ReadingPaneComponent {
   readonly actionClicked = output<string>();
   readonly expandedMessages = new Set<string>();
 
-  private sanitizer = inject(DomSanitizer);
-
   /** Whether the current folder is the Gmail Drafts folder. */
   isDraftsFolder(): boolean {
     const folder = this.foldersStore.activeFolderId();
@@ -279,22 +251,6 @@ export class ReadingPaneComponent {
   getSnippet(email: Email): string {
     if (email.textBody) return email.textBody.substring(0, 100);
     return '';
-  }
-
-  sanitizeHtml(html: string): SafeHtml {
-    // Strip script tags and event handlers for safety
-    // In production, use DOMPurify in the main process before sending to renderer
-    let cleaned = html
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/on\w+="[^"]*"/gi, '')
-      .replace(/on\w+='[^']*'/gi, '');
-    // Strip external stylesheet links to avoid CSP violations (style-src only allows 'self' and fonts.googleapis.com)
-    cleaned = cleaned.replace(/<link[^>]*\srel\s*=\s*["']?stylesheet["']?[^>]*>/gi, '');
-    // Upgrade font URLs to HTTPS so they comply with CSP (style-src allows https://fonts.googleapis.com)
-    cleaned = cleaned
-      .replace(/http:\/\/fonts\.googleapis\.com/gi, 'https://fonts.googleapis.com')
-      .replace(/http:\/\/fonts\.gstatic\.com/gi, 'https://fonts.gstatic.com');
-    return this.sanitizer.bypassSecurityTrustHtml(cleaned);
   }
 
   toggleExpand(messageId: string): void {

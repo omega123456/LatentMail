@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -199,7 +199,7 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
     }
   `]
 })
-export class MailShellComponent implements OnInit, OnDestroy {
+export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly accountsStore = inject(AccountsStore);
   readonly foldersStore = inject(FoldersStore);
   readonly emailsStore = inject(EmailsStore);
@@ -208,12 +208,18 @@ export class MailShellComponent implements OnInit, OnDestroy {
   private readonly electronService = inject(ElectronService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly cdr = inject(ChangeDetectorRef);
   private routeSub?: Subscription;
   private syncSub?: Subscription;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
 
   constructor() { }
+
+  ngAfterViewInit(): void {
+    // Defer one tick so RouterLink href is set before next CD (avoids NG0100)
+    setTimeout(() => this.cdr.detectChanges(), 0);
+  }
 
   ngOnInit(): void {
     this.initializeRouteDrivenState().catch(() => {
