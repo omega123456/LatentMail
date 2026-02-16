@@ -1,6 +1,7 @@
 import { computed, inject } from '@angular/core';
 import { signalStore, withState, withMethods, withComputed, patchState, withHooks } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
+import { ToastService } from '../core/services/toast.service';
 
 export interface QueueItemSnapshot {
   queueId: string;
@@ -39,6 +40,7 @@ export const QueueStore = signalStore(
 
   withMethods((store) => {
     const electronService = inject(ElectronService);
+    const toastService = inject(ToastService);
 
     return {
       /** Fetch full queue state from the main process (used on init / refresh). */
@@ -61,7 +63,19 @@ export const QueueStore = signalStore(
       handleUpdate(update: QueueItemSnapshot): void {
         const currentItems = [...store.items()];
         const idx = currentItems.findIndex(i => i.queueId === update.queueId);
+
+        // Detect status transitions for toast notifications.
+        // Only show toasts when an existing item changes status — not for
+        // newly-appearing items (prevents toasts on initial loadStatus).
         if (idx >= 0) {
+          const previousStatus = currentItems[idx].status;
+          if (previousStatus !== update.status) {
+            if (update.status === 'failed') {
+              toastService.error(`${update.description} failed: ${update.error || 'Unknown error'}`);
+            } else if (update.status === 'completed' && update.type === 'send') {
+              toastService.success('Email sent successfully');
+            }
+          }
           currentItems[idx] = update;
         } else {
           currentItems.push(update);

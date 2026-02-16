@@ -104,8 +104,10 @@ import { DraftAttachment } from '../../core/models/email.model';
             />
           </div>
 
-          <!-- Toolbar -->
-          <app-compose-toolbar [editor]="editor" />
+          <!-- Toolbar (only bind when editor exists to avoid NG0100) -->
+          @if (editor) {
+            <app-compose-toolbar [editor]="editor" />
+          }
 
           <!-- Editor -->
           <div class="editor-container" #editorContainer (click)="focusEditor()"></div>

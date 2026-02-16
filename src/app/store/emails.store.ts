@@ -1,7 +1,15 @@
 import { computed, inject } from '@angular/core';
-import { signalStore, withState, withMethods, withComputed, patchState } from '@ngrx/signals';
+import { signalStore, withState, withMethods, withComputed, patchState, withHooks } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
 import { Thread, Email } from '../core/models/email.model';
+import { AccountsStore } from './accounts.store';
+import { FoldersStore } from './folders.store';
+
+interface MailDataChangedPayload {
+  accountId: number;
+  folders: string[];
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update';
+}
 
 interface EmailsState {
   threads: Thread[];
@@ -49,6 +57,8 @@ export const EmailsStore = signalStore(
 
   withMethods((store) => {
     const electronService = inject(ElectronService);
+    const accountsStore = inject(AccountsStore);
+    const foldersStore = inject(FoldersStore);
 
     return {
       /** Load threads for a folder */
@@ -296,6 +306,76 @@ export const EmailsStore = signalStore(
       clearAll(): void {
         patchState(store, initialState);
       },
+
+      /**
+       * Background refresh of thread list for the active folder.
+       * Does NOT set loading=true (no spinner — this is a background refresh).
+       * Preserves selection when possible; clears if selected thread no longer exists.
+       */
+      async refreshThreads(): Promise<void> {
+        const accountId = accountsStore.activeAccountId();
+        const folderId = foldersStore.activeFolderId();
+        if (!accountId || !folderId) return;
+
+        try {
+          const response = await electronService.fetchEmails(
+            String(accountId),
+            folderId,
+            { limit: PAGE_SIZE, offset: 0 }
+          );
+
+          // Re-check active context — user may have navigated away during fetch
+          if (accountsStore.activeAccountId() !== accountId || foldersStore.activeFolderId() !== folderId) {
+            return;
+          }
+
+          if (response.success && response.data) {
+            const threads = response.data as Thread[];
+            const currentSelectedId = store.selectedThreadId();
+            const selectedStillExists = currentSelectedId
+              ? threads.some(t => t.gmailThreadId === currentSelectedId)
+              : false;
+
+            patchState(store, {
+              threads,
+              hasMore: threads.length >= PAGE_SIZE,
+              currentPage: 0,
+              // Clear selection if the selected thread no longer exists in the refreshed list
+              ...(currentSelectedId && !selectedStillExists
+                ? { selectedThreadId: null, selectedThread: null }
+                : {}),
+            });
+          }
+        } catch {
+          // Best-effort refresh — failures are silently ignored
+        }
+      },
+
     };
-  })
+  }),
+
+  withHooks({
+    onInit(store) {
+      // withHooks.onInit runs in injection context — inject() works here
+      const electronService = inject(ElectronService);
+      const accountsStore = inject(AccountsStore);
+      const foldersStore = inject(FoldersStore);
+
+      // Subscribe to mail:data-changed events from the main process.
+      // Refresh threads when the active folder's data has changed.
+      electronService.onEvent<MailDataChangedPayload>('mail:data-changed').subscribe((event) => {
+        const activeAccountId = accountsStore.activeAccountId();
+        const activeFolderId = foldersStore.activeFolderId();
+
+        if (
+          activeAccountId != null &&
+          event.accountId === activeAccountId &&
+          activeFolderId != null &&
+          event.folders.includes(activeFolderId)
+        ) {
+          store.refreshThreads();
+        }
+      });
+    },
+  }),
 );

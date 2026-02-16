@@ -60,6 +60,7 @@ export const IPC_EVENTS = {
   AI_STATUS: 'ai:status',
   AI_STREAM: 'ai:stream',
   QUEUE_UPDATE: 'queue:update',
+  MAIL_DATA_CHANGED: 'mail:data-changed',
   SYSTEM_NOTIFICATION: 'system:notification',
   SYSTEM_TRAY_ACTION: 'system:tray-action',
 } as const;

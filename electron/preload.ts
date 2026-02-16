@@ -117,6 +117,7 @@ const electronAPI = {
       'ai:status',
       'ai:stream',
       'queue:update',
+      'mail:data-changed',
       'system:notification',
       'system:tray-action',
     ];

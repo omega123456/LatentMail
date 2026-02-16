@@ -1,0 +1,20 @@
+<div class="toast-container" role="status" aria-live="polite">
+  @for (toast of toastService.toasts(); track toast.id) {
+    <div
+      class="toast toast--{{ toast.type }}"
+      [attr.role]="toast.type === 'error' ? 'alert' : null"
+    >
+      <span class="toast-message">{{ toast.message }}</span>
+      <button
+        type="button"
+        class="toast-dismiss"
+        (click)="toastService.dismiss(toast.id)"
+        aria-label="Dismiss"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16" aria-hidden="true">
+          <path d="M18.3 5.71a1 1 0 0 0-1.41 0L12 10.59 7.11 5.7A1 1 0 0 0 5.7 7.11L10.59 12 5.7 16.89a1 1 0 1 0 1.41 1.41L12 13.41l4.89 4.89a1 1 0 0 0 1.41-1.41L13.41 12l4.89-4.89a1 1 0 0 0 0-1.4z"/>
+        </svg>
+      </button>
+    </div>
+  }
+</div>

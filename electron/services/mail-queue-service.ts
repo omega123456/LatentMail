@@ -7,6 +7,7 @@ import { SmtpService } from './smtp-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { buildDraftMime } from './draft-mime';
+import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +117,13 @@ export interface QueueItem {
 /** Serialisable snapshot of a QueueItem sent to the renderer. */
 export type QueueItemSnapshot = Omit<QueueItem, 'payload'>;
 
+/** Payload for the mail:data-changed push event. */
+export interface MailDataChangedPayload {
+  accountId: number;
+  folders: string[];
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update';
+}
+
 // ---------------------------------------------------------------------------
 // Error classification
 // ---------------------------------------------------------------------------
@@ -144,6 +152,9 @@ function classifyError(err: unknown): ErrorCategory {
 // ---------------------------------------------------------------------------
 
 const GMAIL_DRAFTS_FOLDER = '[Gmail]/Drafts';
+const GMAIL_SENT_FOLDER = '[Gmail]/Sent Mail';
+const GMAIL_TRASH_FOLDER = '[Gmail]/Trash';
+const POST_OP_FETCH_LIMIT = 5;
 const MAX_RETRIES = 10;
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_CAP_MS = 60_000;
@@ -354,6 +365,14 @@ export class MailQueueService {
           break;
         default:
           throw new Error(`Unknown operation type: ${item.type}`);
+      }
+
+      // Best-effort post-operation fetch: confirm server state and update local DB.
+      // Failures are logged as warnings — the IMAP action already succeeded.
+      try {
+        await this.postOpFetch(item);
+      } catch (fetchErr) {
+        log.warn(`[MailQueue] Post-op fetch failed for ${item.type} (${item.queueId}): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
       }
 
       // Success
@@ -732,6 +751,7 @@ export class MailQueueService {
   private async processFlag(item: QueueItem): Promise<void> {
     const payload = item.payload as FlagPayload;
     const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
 
     // Build IMAP flags object
     const imapFlags: { read?: boolean; starred?: boolean } = {};
@@ -748,9 +768,17 @@ export class MailQueueService {
       if (!byFolder || Object.keys(byFolder).length === 0) {
         log.warn(`[MailQueue] flag (${item.queueId}): No resolved UIDs — skipping IMAP flag update`);
       } else {
-        for (const [folder, uids] of Object.entries(byFolder)) {
+        // Acquire folder locks in lexicographic order to prevent deadlocks
+        const folders = Object.keys(byFolder).sort();
+        for (const folder of folders) {
+          const uids = byFolder[folder];
           if (uids && uids.length > 0) {
-            await imapService.setFlags(String(item.accountId), folder, uids, imapFlags);
+            const release = await lockManager.acquire(folder);
+            try {
+              await imapService.setFlags(String(item.accountId), folder, uids, imapFlags);
+            } finally {
+              release();
+            }
           }
         }
       }
@@ -942,6 +970,288 @@ export class MailQueueService {
   }
 
   // -----------------------------------------------------------------------
+  // Post-operation fetch — confirm server state & update local DB
+  // -----------------------------------------------------------------------
+
+  /**
+   * Dispatch post-op fetch based on operation type.
+   * Called after the processX method succeeds, before marking as completed.
+   * Best-effort: failures are caught by the caller and logged as warnings.
+   */
+  private async postOpFetch(item: QueueItem): Promise<void> {
+    switch (item.type) {
+      case 'move':
+        await this.postOpFetchMove(item);
+        break;
+      case 'delete':
+        await this.postOpFetchDelete(item);
+        break;
+      case 'flag':
+        await this.postOpFetchFlag(item);
+        break;
+      case 'send':
+        await this.postOpFetchSend(item);
+        break;
+      case 'draft-create':
+        // draft-create already fetches + upserts inline; just emit data-changed
+        this.emitDataChanged(item.accountId, [GMAIL_DRAFTS_FOLDER], 'draft-create');
+        break;
+      case 'draft-update':
+        // draft-update already fetches + upserts inline; just emit data-changed
+        this.emitDataChanged(item.accountId, [GMAIL_DRAFTS_FOLDER], 'draft-update');
+        break;
+    }
+  }
+
+  /**
+   * Post-op fetch for move:
+   * 1. Re-fetch resolved UIDs from source folders to confirm removal (UID-not-found is expected)
+   * 2. Fetch latest N from target folder to pick up newly-moved messages (UIDs change after MOVE)
+   */
+  private async postOpFetchMove(item: QueueItem): Promise<void> {
+    const payload = item.payload as MovePayload;
+    const sourceFolders = payload.resolvedUids ? Object.keys(payload.resolvedUids) : [];
+    const allFolders = [...new Set([...sourceFolders, payload.targetFolder])];
+
+    // Re-fetch resolved UIDs from source folders to confirm removal.
+    // UID-not-found is expected (confirms the move succeeded); any still-present
+    // UIDs get upserted to keep local DB in sync.
+    if (payload.resolvedUids && Object.keys(payload.resolvedUids).length > 0) {
+      await this.fetchUidsAndUpsert(item.accountId, payload.resolvedUids);
+    }
+
+    // Fetch latest N from target folder to pick up newly-moved messages
+    await this.fetchLatestAndUpsert(item.accountId, payload.targetFolder);
+
+    this.emitDataChanged(item.accountId, allFolders, 'move');
+  }
+
+  /**
+   * Post-op fetch for delete: for soft-delete, fetch latest N from Trash.
+   * For permanent delete, skip fetch (message is gone); emit event for source folder.
+   */
+  private async postOpFetchDelete(item: QueueItem): Promise<void> {
+    const payload = item.payload as DeletePayload;
+    const isPermanent = payload.permanent ?? (payload.folder === GMAIL_TRASH_FOLDER);
+
+    if (isPermanent) {
+      // Permanent delete — nothing to fetch; just notify UI
+      this.emitDataChanged(item.accountId, [payload.folder], 'delete');
+    } else {
+      // Soft delete — fetch latest N from Trash to pick up newly-trashed messages
+      await this.fetchLatestAndUpsert(item.accountId, GMAIL_TRASH_FOLDER);
+      this.emitDataChanged(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete');
+    }
+  }
+
+  /**
+   * Post-op fetch for flag: re-fetch each affected UID per folder to confirm flag state.
+   */
+  private async postOpFetchFlag(item: QueueItem): Promise<void> {
+    const payload = item.payload as FlagPayload;
+    const byFolder = payload.resolvedUids;
+    if (!byFolder || Object.keys(byFolder).length === 0) return;
+
+    const folders = Object.keys(byFolder);
+    await this.fetchUidsAndUpsert(item.accountId, byFolder);
+
+    this.emitDataChanged(item.accountId, folders, 'flag');
+  }
+
+  /**
+   * Post-op fetch for send: fetch latest N from Sent Mail to pick up the sent message.
+   */
+  private async postOpFetchSend(item: QueueItem): Promise<void> {
+    await this.fetchLatestAndUpsert(item.accountId, GMAIL_SENT_FOLDER);
+
+    // Also emit for Drafts in case a draft was cleaned up
+    this.emitDataChanged(item.accountId, [GMAIL_SENT_FOLDER, GMAIL_DRAFTS_FOLDER], 'send');
+  }
+
+  /**
+   * Fetch latest N messages from a folder and upsert into local DB.
+   * Acquires folder lock during the IMAP fetch, releases before DB upsert.
+   */
+  private async fetchLatestAndUpsert(accountId: number, folder: string): Promise<void> {
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    let emails: Awaited<ReturnType<typeof imapService.fetchEmails>>;
+
+    // Acquire folder lock only for the IMAP fetch, release before DB upsert
+    const release = await lockManager.acquire(folder);
+    try {
+      emails = await imapService.fetchEmails(String(accountId), folder, { limit: POST_OP_FETCH_LIMIT });
+    } finally {
+      release();
+    }
+
+    this.upsertFetchedEmails(accountId, folder, emails);
+  }
+
+  /**
+   * Fetch specific UIDs from each folder and upsert into local DB.
+   * Acquires folder locks in lexicographic order; releases each after its IMAP fetch.
+   */
+  private async fetchUidsAndUpsert(
+    accountId: number,
+    byFolder: Record<string, number[]>,
+  ): Promise<void> {
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    // Acquire locks in lexicographic order to prevent deadlocks
+    const folders = Object.keys(byFolder).sort();
+
+    for (const folder of folders) {
+      const uids = byFolder[folder];
+      if (!uids || uids.length === 0) continue;
+
+      const fetchedEmails: Array<Awaited<ReturnType<typeof imapService.fetchMessageByUid>>> = [];
+
+      const release = await lockManager.acquire(folder);
+      try {
+        for (const uid of uids) {
+          try {
+            const email = await imapService.fetchMessageByUid(String(accountId), folder, uid);
+            if (email) {
+              fetchedEmails.push(email);
+            }
+          } catch (uidErr) {
+            // UID may no longer exist (e.g. message was moved/expunged) — log and skip
+            log.warn(`[MailQueue] Post-op fetch: UID ${uid} not found in ${folder}: ${uidErr instanceof Error ? uidErr.message : String(uidErr)}`);
+          }
+        }
+      } finally {
+        release();
+      }
+
+      // Upsert fetched emails outside the lock
+      const validEmails = fetchedEmails.filter((e): e is NonNullable<typeof e> => e != null);
+      if (validEmails.length > 0) {
+        this.upsertFetchedEmails(accountId, folder, validEmails);
+      }
+    }
+  }
+
+  /**
+   * Upsert an array of fetched emails into the local DB, including thread associations.
+   * Replicates the upsert pattern from SyncService.syncAccount().
+   */
+  private upsertFetchedEmails(
+    accountId: number,
+    folder: string,
+    emails: Array<{
+      uid: number;
+      gmailMessageId: string;
+      gmailThreadId: string;
+      fromAddress: string;
+      fromName: string;
+      toAddresses: string;
+      ccAddresses: string;
+      bccAddresses: string;
+      subject: string;
+      textBody: string;
+      htmlBody: string;
+      date: string;
+      isRead: boolean;
+      isStarred: boolean;
+      isImportant: boolean;
+      snippet: string;
+      size: number;
+      hasAttachments: boolean;
+      labels: string;
+    }>,
+  ): void {
+    const db = DatabaseService.getInstance();
+
+    // Group emails by thread
+    const threadMap = new Map<string, typeof emails>();
+    for (const email of emails) {
+      const threadId = email.gmailThreadId || email.gmailMessageId;
+      if (!threadMap.has(threadId)) {
+        threadMap.set(threadId, []);
+      }
+      threadMap.get(threadId)!.push(email);
+    }
+
+    // Upsert each email
+    for (const email of emails) {
+      db.upsertEmail({
+        accountId,
+        gmailMessageId: email.gmailMessageId,
+        gmailThreadId: email.gmailThreadId,
+        folder,
+        folderUid: email.uid,
+        fromAddress: email.fromAddress,
+        fromName: email.fromName,
+        toAddresses: email.toAddresses,
+        ccAddresses: email.ccAddresses,
+        bccAddresses: email.bccAddresses,
+        subject: email.subject,
+        textBody: email.textBody,
+        htmlBody: email.htmlBody,
+        date: email.date,
+        isRead: email.isRead,
+        isStarred: email.isStarred,
+        isImportant: email.isImportant,
+        snippet: email.snippet,
+        size: email.size,
+        hasAttachments: email.hasAttachments,
+        labels: email.labels,
+      });
+    }
+
+    // Upsert threads (dedupe emails by gmailMessageId)
+    for (const [threadId, threadEmails] of threadMap) {
+      const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+
+      const latest = uniqueEmails.reduce((a, b) =>
+        new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+      );
+      const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+      const allRead = uniqueEmails.every(e => e.isRead);
+      const anyStarred = uniqueEmails.some(e => e.isStarred);
+
+      const dbThreadId = db.upsertThread({
+        accountId,
+        gmailThreadId: threadId,
+        subject: latest.subject,
+        lastMessageDate: latest.date,
+        participants,
+        messageCount: uniqueEmails.length,
+        snippet: latest.snippet,
+        folder,
+        isRead: allRead,
+        isStarred: anyStarred,
+      });
+
+      db.upsertThreadFolder(dbThreadId, accountId, folder);
+    }
+  }
+
+  /**
+   * Emit mail:data-changed event to all renderer windows.
+   */
+  private emitDataChanged(
+    accountId: number,
+    folders: string[],
+    reason: MailDataChangedPayload['reason'],
+  ): void {
+    const payload: MailDataChangedPayload = { accountId, folders, reason };
+    try {
+      const windows = BrowserWindow.getAllWindows();
+      for (const win of windows) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC_EVENTS.MAIL_DATA_CHANGED, payload);
+        }
+      }
+    } catch {
+      // Window may not exist yet during startup
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Retry scheduling
   // -----------------------------------------------------------------------
 
@@ -986,7 +1296,7 @@ export class MailQueueService {
       const windows = BrowserWindow.getAllWindows();
       for (const win of windows) {
         if (!win.isDestroyed()) {
-          win.webContents.send('queue:update', snapshot);
+          win.webContents.send(IPC_EVENTS.QUEUE_UPDATE, snapshot);
         }
       }
     } catch {
