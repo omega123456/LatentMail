@@ -1,4 +1,4 @@
-import { Component, inject, output, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, inject, output, OnInit, OnDestroy, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FoldersStore } from '../../../store/folders.store';
 import { EmailsStore } from '../../../store/emails.store';
@@ -104,29 +104,13 @@ export class EmailListHeaderComponent implements OnInit, OnDestroy {
   readonly uiStore = inject(UiStore);
   readonly syncClicked = output<void>();
 
-  /** Counter that increments every 30s to trigger relative time recalculation */
+  /** Tick signal: increments every 1s so relative time is stable during change detection (computed only changes when tick or lastSyncTime changes). */
   private readonly tick = signal(0);
   private tickInterval?: ReturnType<typeof setInterval>;
 
-  ngOnInit(): void {
-    this.tickInterval = setInterval(() => {
-      this.tick.update(v => v + 1);
-    }, 30_000);
-  }
-
-  ngOnDestroy(): void {
-    if (this.tickInterval) {
-      clearInterval(this.tickInterval);
-    }
-  }
-
-  onSyncClick(): void {
-    this.syncClicked.emit();
-  }
-
-  relativeTime(): string {
-    // Read tick to establish reactive dependency for periodic updates
-    this.tick();
+  /** Computed relative time string. Depends only on signals, so same value for both CD passes → no NG0100. */
+  readonly relativeTime = computed(() => {
+    this.tick(); // dependency so we recalc when tick fires
     const iso = this.emailsStore.lastSyncTime();
     if (!iso) return '';
     const diff = Date.now() - new Date(iso).getTime();
@@ -139,6 +123,22 @@ export class EmailListHeaderComponent implements OnInit, OnDestroy {
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
+  });
+
+  ngOnInit(): void {
+    this.tickInterval = setInterval(() => {
+      this.tick.update(v => v + 1);
+    }, 1000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.tickInterval) {
+      clearInterval(this.tickInterval);
+    }
+  }
+
+  onSyncClick(): void {
+    this.syncClicked.emit();
   }
 
   densityIcon(): string {

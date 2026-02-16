@@ -21,6 +21,7 @@ interface ElectronAPI {
     search: (accountId: string, query: string) => Promise<IpcResponse>;
     syncAccount: (accountId: string) => Promise<IpcResponse>;
     getFolders: (accountId: string) => Promise<IpcResponse>;
+    fetchOlderEmails: (accountId: string, folderId: string, beforeDate: string, limit: number) => Promise<IpcResponse>;
   };
   auth: {
     login: () => Promise<IpcResponse>;
@@ -122,6 +123,10 @@ export class ElectronService {
 
   async getFolders(accountId: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.mail.getFolders(accountId));
+  }
+
+  async fetchOlderEmails(accountId: string, folderId: string, beforeDate: string, limit: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.fetchOlderEmails(accountId, folderId, beforeDate, limit));
   }
 
   // ---- Auth operations ----

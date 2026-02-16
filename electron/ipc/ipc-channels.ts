@@ -11,6 +11,7 @@ export const IPC_CHANNELS = {
   MAIL_SEARCH: 'mail:search',
   MAIL_SYNC_ACCOUNT: 'mail:sync-account',
   MAIL_GET_FOLDERS: 'mail:get-folders',
+  MAIL_FETCH_OLDER: 'mail:fetch-older',
 
   // Auth operations
   AUTH_LOGIN: 'auth:login',
@@ -61,6 +62,8 @@ export const IPC_EVENTS = {
   AI_STREAM: 'ai:stream',
   QUEUE_UPDATE: 'queue:update',
   MAIL_DATA_CHANGED: 'mail:data-changed',
+  MAIL_NEW_EMAIL: 'mail:new-email',
+  MAIL_NOTIFICATION_CLICK: 'mail:notification-click',
   SYSTEM_NOTIFICATION: 'system:notification',
   SYSTEM_TRAY_ACTION: 'system:tray-action',
 } as const;

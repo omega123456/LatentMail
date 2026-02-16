@@ -1,6 +1,6 @@
-import { Component, inject, output } from '@angular/core';
+import { Component, ViewChild, inject, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ScrollingModule } from '@angular/cdk/scrolling';
+import { CdkVirtualScrollViewport, ScrollingModule } from '@angular/cdk/scrolling';
 import { EmailsStore } from '../../../store/emails.store';
 import { UiStore } from '../../../store/ui.store';
 import { EmailListItemComponent } from './email-list-item.component';
@@ -17,8 +17,9 @@ import { AccountsStore } from '../../../store/accounts.store';
     :host {
       display: flex;
       flex-direction: column;
-      height: 100%;
+      flex: 1;
       min-height: 0;
+      overflow: hidden;
     }
 
     .email-list-container {
@@ -32,6 +33,13 @@ import { AccountsStore } from '../../../store/accounts.store';
     .email-scroll-viewport {
       flex: 1;
       min-height: 0;
+      overflow-x: hidden;
+      width: 100%;
+      max-width: 100%;
+
+      ::ng-deep .cdk-virtual-scroll-content-wrapper {
+        max-width: 100%;
+      }
     }
 
     .email-list-loading, .email-list-empty {
@@ -66,9 +74,74 @@ import { AccountsStore } from '../../../store/accounts.store';
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      .spinning {
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+    }
+
+    .list-bottom-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 16px;
+      color: var(--color-text-secondary);
+      font-size: 13px;
+      flex-shrink: 0;
+
+      .fetch-icon {
+        font-size: 20px;
+        color: var(--color-primary);
+      }
+
+      &.error {
+        .error-icon {
+          font-size: 20px;
+          color: var(--color-error, #d32f2f);
+        }
+        .error-text {
+          color: var(--color-text-secondary);
+        }
+      }
+
+      &.end {
+        .end-icon {
+          font-size: 20px;
+          color: var(--color-text-tertiary);
+        }
+        .end-text {
+          color: var(--color-text-tertiary);
+        }
+      }
+    }
+
+    .retry-btn {
+      background: none;
+      border: none;
+      color: var(--color-primary);
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      padding: 4px 8px;
+      border-radius: 4px;
+
+      &:hover {
+        background-color: var(--color-surface-variant);
+      }
+    }
   `]
 })
 export class EmailListComponent {
+  @ViewChild(CdkVirtualScrollViewport)
+  private viewport?: CdkVirtualScrollViewport;
+
   readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
   readonly accountsStore = inject(AccountsStore);
@@ -95,13 +168,35 @@ export class EmailListComponent {
   }
 
   onScroll(index: number): void {
+    if (index > 0) {
+      this.emailsStore.markListScrolled();
+    }
+
     const threads = this.emailsStore.threads();
-    if (index > threads.length - 10 && this.emailsStore.hasMore()) {
+    const renderedRange = this.viewport?.getRenderedRange();
+    const renderedCount = renderedRange ? Math.max(1, renderedRange.end - renderedRange.start) : 10;
+    const remainingItems = threads.length - (index + renderedCount);
+    const nearBottomThreshold = Math.max(10, renderedCount * 2);
+
+    if (
+      remainingItems <= nearBottomThreshold &&
+      this.emailsStore.hasMore() &&
+      !this.emailsStore.loading() &&
+      !this.emailsStore.fetchingMore()
+    ) {
       const activeAccount = this.accountsStore.activeAccount();
       const activeFolderId = this.foldersStore.activeFolderId();
       if (activeAccount && activeFolderId) {
         this.emailsStore.loadMore(activeAccount.id, activeFolderId);
       }
+    }
+  }
+
+  onRetryFetch(): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    const activeFolderId = this.foldersStore.activeFolderId();
+    if (activeAccount && activeFolderId) {
+      this.emailsStore.loadMoreFromServer(activeAccount.id, activeFolderId);
     }
   }
 }

@@ -32,6 +32,8 @@ const electronAPI = {
       ipcRenderer.invoke('mail:sync-account', accountId) as Promise<IpcResponse>,
     getFolders: (accountId: string) =>
       ipcRenderer.invoke('mail:get-folders', accountId) as Promise<IpcResponse>,
+    fetchOlderEmails: (accountId: string, folderId: string, beforeDate: string, limit: number) =>
+      ipcRenderer.invoke('mail:fetch-older', accountId, folderId, beforeDate, limit) as Promise<IpcResponse>,
   },
 
   // Auth operations
@@ -118,6 +120,8 @@ const electronAPI = {
       'ai:stream',
       'queue:update',
       'mail:data-changed',
+      'mail:new-email',
+      'mail:notification-click',
       'system:notification',
       'system:tray-action',
     ];

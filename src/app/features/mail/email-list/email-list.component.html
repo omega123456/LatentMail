@@ -24,6 +24,24 @@
         (clicked)="onThreadClick(thread)"
         (starToggled)="onStarToggle(thread)"
       />
+      <!-- Bottom-of-list indicators (inside viewport so they scroll with content) -->
+      @if (emailsStore.fetchingMore()) {
+        <div class="list-bottom-indicator" role="status" aria-live="polite">
+          <span class="material-symbols-outlined spinning fetch-icon">cloud_download</span>
+          <span class="fetch-text">Fetching older emails...</span>
+        </div>
+      } @else if (emailsStore.fetchError()) {
+        <div class="list-bottom-indicator error" role="status" aria-live="polite">
+          <span class="material-symbols-outlined error-icon">error</span>
+          <span class="error-text">{{ emailsStore.fetchError() }}</span>
+          <button class="retry-btn" (click)="onRetryFetch()">Retry</button>
+        </div>
+      } @else if (!emailsStore.hasMore() && !emailsStore.isEmpty()) {
+        <div class="list-bottom-indicator end" role="status" aria-live="polite">
+          <span class="material-symbols-outlined end-icon">check_circle</span>
+          <span class="end-text">You've reached the end</span>
+        </div>
+      }
     </cdk-virtual-scroll-viewport>
   }
 </div>

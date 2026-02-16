@@ -462,6 +462,142 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
+  // Fetch older emails from IMAP server (scroll-to-load)
+  ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_OLDER, async (_event, accountId: string, folderId: string, beforeDate: string, limit: number) => {
+    try {
+      log.info(`Fetching older emails for account ${accountId}, folder ${folderId}, before ${beforeDate}, limit ${limit}`);
+      const numAccountId = Number(accountId);
+      const imapService = ImapService.getInstance();
+
+      // Validate date
+      const parsedDate = new Date(beforeDate);
+      if (isNaN(parsedDate.getTime())) {
+        return ipcError('INVALID_DATE', `Invalid beforeDate: ${beforeDate}`);
+      }
+
+      const sanitizedLimit = Math.max(1, Number(limit) || 50);
+
+      const { emails, hasMore } = await imapService.fetchOlderEmails(
+        accountId,
+        folderId,
+        parsedDate,
+        sanitizedLimit
+      );
+
+      if (emails.length === 0) {
+        log.info(`MAIL_FETCH_OLDER: no older emails found for ${folderId}`);
+        return ipcSuccess({ threads: [], hasMore: false });
+      }
+
+      // Upsert fetched emails into DB (same pattern as SyncService.syncAccount)
+      const threadMap = new Map<string, typeof emails>();
+      for (const email of emails) {
+        const threadId = email.gmailThreadId || email.gmailMessageId;
+        if (!threadMap.has(threadId)) {
+          threadMap.set(threadId, []);
+        }
+        threadMap.get(threadId)!.push(email);
+      }
+
+      // Store emails and contacts
+      for (const email of emails) {
+        db.upsertEmail({
+          accountId: numAccountId,
+          gmailMessageId: email.gmailMessageId,
+          gmailThreadId: email.gmailThreadId,
+          folder: folderId,
+          folderUid: email.uid,
+          fromAddress: email.fromAddress,
+          fromName: email.fromName,
+          toAddresses: email.toAddresses,
+          ccAddresses: email.ccAddresses,
+          bccAddresses: email.bccAddresses,
+          subject: email.subject,
+          textBody: email.textBody,
+          htmlBody: email.htmlBody,
+          date: email.date,
+          isRead: email.isRead,
+          isStarred: email.isStarred,
+          isImportant: email.isImportant,
+          snippet: email.snippet,
+          size: email.size,
+          hasAttachments: email.hasAttachments,
+          labels: email.labels,
+        });
+
+        if (email.fromAddress) {
+          db.upsertContact(email.fromAddress, email.fromName);
+        }
+      }
+
+      // Upsert threads (dedupe by gmailMessageId)
+      for (const [threadId, threadEmails] of threadMap) {
+        const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+
+        const latest = uniqueEmails.reduce((a, b) =>
+          new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+        );
+        const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+        const allRead = uniqueEmails.every(e => e.isRead);
+        const anyStarred = uniqueEmails.some(e => e.isStarred);
+
+        const dbThreadId = db.upsertThread({
+          accountId: numAccountId,
+          gmailThreadId: threadId,
+          subject: latest.subject,
+          lastMessageDate: latest.date,
+          participants,
+          messageCount: uniqueEmails.length,
+          snippet: latest.snippet,
+          folder: folderId,
+          isRead: allRead,
+          isStarred: anyStarred,
+        });
+
+        db.upsertThreadFolder(dbThreadId, numAccountId, folderId);
+      }
+
+      // Query DB directly for threads before the requested date (proper SQL pagination)
+      const threads = db.getThreadsByFolderBeforeDate(
+        numAccountId,
+        folderId,
+        beforeDate,
+        sanitizedLimit
+      );
+
+      // Cursor for the next older-page fetch should be based on fetched email dates,
+      // not returned thread dates. A fetch can return zero "older threads" when all
+      // fetched emails belong to already-visible threads.
+      const oldestEmailTs = emails.reduce((minTs, email) => {
+        const ts = new Date(email.date).getTime();
+        if (!Number.isFinite(ts)) return minTs;
+        return ts < minTs ? ts : minTs;
+      }, Number.POSITIVE_INFINITY);
+
+      let nextBeforeDate: string | null = null;
+      if (Number.isFinite(oldestEmailTs)) {
+        nextBeforeDate = new Date(oldestEmailTs).toISOString();
+      }
+
+      // IMAP BEFORE is day-granular. If the cursor does not move older by timestamp,
+      // force one-day backoff to avoid refetching the same UID window forever.
+      if (!nextBeforeDate || new Date(nextBeforeDate).getTime() >= parsedDate.getTime()) {
+        const fallback = new Date(parsedDate);
+        fallback.setDate(fallback.getDate() - 1);
+        nextBeforeDate = fallback.toISOString();
+      }
+
+      log.info(
+        `MAIL_FETCH_OLDER: fetched ${emails.length} emails, upserted ${threadMap.size} threads, ` +
+        `returning ${threads.length} threads, hasMore=${hasMore}, nextBeforeDate=${nextBeforeDate}`
+      );
+      return ipcSuccess({ threads, hasMore, nextBeforeDate });
+    } catch (err) {
+      log.error('Failed to fetch older emails:', err);
+      return ipcError('MAIL_FETCH_OLDER_FAILED', 'Failed to fetch older emails from server');
+    }
+  });
+
   // Get folder list for an account
   ipcMain.handle(IPC_CHANNELS.MAIL_GET_FOLDERS, async (_event, accountId: string) => {
     try {

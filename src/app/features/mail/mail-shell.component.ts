@@ -121,10 +121,17 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
 
     .reading-pane-panel {
       flex: 1;
+      min-width: 0;
       background-color: var(--color-surface);
       display: flex;
+      flex-direction: column;
       overflow: hidden;
       min-width: 300px;
+    }
+
+    .reading-pane-panel app-reading-pane {
+      flex: 1;
+      min-height: 0;
     }
 
     /* --- Bottom preview / list-only --- */
@@ -147,8 +154,14 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
     .reading-pane-bottom {
       border-top: 1px solid var(--color-border);
       display: flex;
+      flex-direction: column;
       overflow: hidden;
       flex-shrink: 0;
+
+      app-reading-pane {
+        flex: 1;
+        min-height: 0;
+      }
     }
 
     /* --- Reauth banner --- */
@@ -197,6 +210,8 @@ export class MailShellComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private routeSub?: Subscription;
   private syncSub?: Subscription;
+  private lastLoadedAccountId: number | null = null;
+  private lastLoadedFolderId: string | null = null;
 
   constructor() { }
 
@@ -222,7 +237,8 @@ export class MailShellComponent implements OnInit, OnDestroy {
         const activeAccount = this.accountsStore.activeAccount();
         if (activeAccount && String(activeAccount.id) === event.accountId) {
           this.foldersStore.loadFolders(activeAccount.id);
-          this.loadEmailsForActiveFolder(activeAccount.id);
+          // Background sync completion should not reset deep-list scroll position.
+          this.emailsStore.refreshThreads();
         }
       }
     });
@@ -238,7 +254,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
     if (activeAccount) {
       const normalizedFolderId = this.foldersStore.normalizeFolderId(folderId);
       this.emailsStore.clearSelection();
-      this.emailsStore.loadThreads(activeAccount.id, normalizedFolderId);
       this.router.navigate(['/mail', activeAccount.id, normalizedFolderId]);
     }
   }
@@ -315,11 +330,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
     }
   }
 
-  private loadEmailsForActiveFolder(accountId: number): void {
-    const folderId = this.foldersStore.activeFolderId() || 'INBOX';
-    this.emailsStore.loadThreads(accountId, folderId);
-  }
-
   private async initializeRouteDrivenState(): Promise<void> {
     await this.accountsStore.loadAccounts();
     await this.applyRouteParams();
@@ -337,6 +347,8 @@ export class MailShellComponent implements OnInit, OnDestroy {
 
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
+      this.lastLoadedAccountId = null;
+      this.lastLoadedFolderId = null;
       return;
     }
 
@@ -346,10 +358,22 @@ export class MailShellComponent implements OnInit, OnDestroy {
       folderIdParam || this.foldersStore.activeFolderId() || 'INBOX'
     );
     this.foldersStore.setActiveFolder(resolvedFolderId);
-    await this.emailsStore.loadThreads(activeAccount.id, resolvedFolderId);
+
+    const shouldReloadThreads =
+      this.lastLoadedAccountId !== activeAccount.id ||
+      this.lastLoadedFolderId !== resolvedFolderId ||
+      this.emailsStore.threads().length === 0;
+
+    if (shouldReloadThreads) {
+      await this.emailsStore.loadThreads(activeAccount.id, resolvedFolderId);
+      this.lastLoadedAccountId = activeAccount.id;
+      this.lastLoadedFolderId = resolvedFolderId;
+    }
 
     if (threadIdParam) {
-      await this.emailsStore.loadThread(activeAccount.id, threadIdParam);
+      if (this.emailsStore.selectedThreadId() !== threadIdParam) {
+        await this.emailsStore.loadThread(activeAccount.id, threadIdParam);
+      }
     } else {
       this.emailsStore.clearSelection();
     }

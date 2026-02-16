@@ -10,11 +10,19 @@ import { DensityMode } from '../../../core/services/layout.service';
   imports: [CommonModule, RelativeTimePipe],
   templateUrl: './email-list-item.component.html',
   styles: [`
+    :host {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+
     .email-item {
       display: flex;
       align-items: flex-start;
       gap: 12px;
       padding: 10px 16px;
+      min-width: 0;
       cursor: pointer;
       border-bottom: 1px solid var(--color-border);
       transition: background-color 120ms ease;
@@ -79,6 +87,7 @@ import { DensityMode } from '../../../core/services/layout.service';
     .email-content {
       flex: 1;
       min-width: 0;
+      width: 0;
       overflow: hidden;
     }
 
@@ -87,9 +96,12 @@ import { DensityMode } from '../../../core/services/layout.service';
       justify-content: space-between;
       align-items: baseline;
       gap: 8px;
+      min-width: 0;
     }
 
     .email-sender {
+      flex: 1;
+      min-width: 0;
       font-size: 14px;
       color: var(--color-text-primary);
       overflow: hidden;
@@ -102,12 +114,16 @@ import { DensityMode } from '../../../core/services/layout.service';
     }
 
     .email-date {
+      flex-shrink: 0;
       font-size: 12px;
       color: var(--color-text-tertiary);
       white-space: nowrap;
     }
 
     .email-subject {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
       font-size: 13px;
       color: var(--color-text-primary);
       overflow: hidden;
@@ -121,6 +137,9 @@ import { DensityMode } from '../../../core/services/layout.service';
     }
 
     .email-snippet {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
       font-size: 12px;
       color: var(--color-text-secondary);
       overflow: hidden;

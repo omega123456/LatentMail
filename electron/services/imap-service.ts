@@ -41,6 +41,8 @@ export class ImapService {
   private static instance: ImapService;
   private connections: Map<string, ImapFlow> = new Map();
   private connecting: Map<string, Promise<ImapFlow>> = new Map();
+  /** Dedicated IDLE connections — separate from the shared pool */
+  private idleConnections: Map<string, ImapFlow> = new Map();
 
   private constructor() {}
 
@@ -140,10 +142,13 @@ export class ImapService {
   }
 
   /**
-   * Disconnect all IMAP connections.
+   * Disconnect all IMAP connections (shared + IDLE).
    */
   async disconnectAll(): Promise<void> {
-    const promises = Array.from(this.connections.keys()).map(id => this.disconnect(id));
+    const promises = [
+      ...Array.from(this.connections.keys()).map(id => this.disconnect(id)),
+      ...Array.from(this.idleConnections.keys()).map(id => this.disconnectIdle(id)),
+    ];
     await Promise.allSettled(promises);
   }
 
@@ -401,6 +406,73 @@ export class ImapService {
   }
 
   /**
+   * Fetch emails older than a given date from a folder.
+   * Uses IMAP SEARCH with BEFORE criterion for scroll-to-load pagination.
+   * Returns emails sorted newest-first (descending by UID), limited to `limit`.
+   */
+  async fetchOlderEmails(
+    accountId: string,
+    folder: string,
+    beforeDate: Date,
+    limit: number = 50
+  ): Promise<{ emails: FetchedEmail[]; hasMore: boolean }> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(folder);
+    try {
+      // IMAP BEFORE is date-only (not datetime). To avoid missing same-day
+      // messages that are older by time-of-day, add 1 day to the search date.
+      // Overlap is handled by deduplication in the DB upsert and renderer.
+      const adjustedDate = new Date(beforeDate);
+      adjustedDate.setDate(adjustedDate.getDate() + 1);
+
+      const searchResult = await client.search(
+        { before: adjustedDate },
+        { uid: true }
+      ) as number[] | false;
+
+      if (!searchResult || searchResult.length === 0) {
+        return { emails: [], hasMore: false };
+      }
+
+      const uids = Array.from(searchResult);
+      // Sort descending (newest first) to get the most recent older emails
+      uids.sort((a, b) => b - a);
+
+      // Fetch one extra to determine if there are more beyond the limit
+      const fetchUids = uids.slice(0, limit);
+      const hasMore = uids.length > limit;
+
+      if (fetchUids.length === 0) {
+        return { emails: [], hasMore: false };
+      }
+
+      const emails: FetchedEmail[] = [];
+      const uidRange = fetchUids.join(',');
+      for await (const msg of client.fetch(uidRange, {
+        uid: true,
+        envelope: true,
+        flags: true,
+        bodyStructure: true,
+        headers: true,
+        source: false,
+        labels: true,
+        threadId: true,
+        size: true,
+      }, { uid: true })) {
+        if (!msg) continue;
+        const email = this.parseMessage(msg as FetchMessageObject, folder);
+        if (email) {
+          emails.push(email);
+        }
+      }
+
+      return { emails, hasMore };
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Set flags on messages.
    */
   async setFlags(
@@ -454,23 +526,103 @@ export class ImapService {
   }
 
   /**
-   * Start IDLE on a folder to listen for new messages.
+   * Create a dedicated IMAP connection for IDLE (separate from shared pool).
+   */
+  async connectIdle(accountId: string): Promise<ImapFlow> {
+    // Tear down existing IDLE connection if any
+    await this.disconnectIdle(accountId);
+
+    const oauthService = OAuthService.getInstance();
+    const db = DatabaseService.getInstance();
+    const account = db.getAccountById(Number(accountId));
+
+    if (!account) {
+      throw new Error(`Account ${accountId} not found`);
+    }
+
+    const accessToken = await oauthService.getAccessToken(accountId);
+
+    const client = new ImapFlow({
+      host: 'imap.gmail.com',
+      port: 993,
+      secure: true,
+      auth: {
+        user: account.email,
+        accessToken: accessToken,
+      },
+      logger: {
+        debug: (msg: unknown) => log.debug(`[IMAP-IDLE ${accountId}]`, msg),
+        info: (msg: unknown) => log.info(`[IMAP-IDLE ${accountId}]`, msg),
+        warn: (msg: unknown) => log.warn(`[IMAP-IDLE ${accountId}]`, msg),
+        error: (msg: unknown) => log.error(`[IMAP-IDLE ${accountId}]`, msg),
+      },
+      emitLogs: false,
+    });
+
+    // Handle close/error — clean up from idleConnections map
+    client.on('close', () => {
+      log.info(`IDLE connection closed for account ${accountId}`);
+      this.idleConnections.delete(accountId);
+    });
+
+    client.on('error', (err: Error) => {
+      log.error(`IDLE connection error for account ${accountId}:`, err);
+      this.idleConnections.delete(accountId);
+    });
+
+    await client.connect();
+    this.idleConnections.set(accountId, client);
+    log.info(`IDLE connection established for account ${accountId} (${account.email})`);
+
+    return client;
+  }
+
+  /**
+   * Disconnect the IDLE connection for an account.
+   */
+  async disconnectIdle(accountId: string): Promise<void> {
+    const client = this.idleConnections.get(accountId);
+    if (client) {
+      try {
+        await client.logout();
+      } catch {
+        // Ignore logout errors
+      }
+      this.idleConnections.delete(accountId);
+    }
+  }
+
+  /**
+   * Start IDLE on a folder using a dedicated connection.
+   * The mailbox lock is intentionally held (keeps mailbox selected for IDLE).
+   * Returns callbacks for connection lifecycle events.
    */
   async startIdle(
     accountId: string,
     folder: string,
-    onNewMail: () => void
+    onNewMail: () => void,
+    onClose?: () => void,
+    onError?: (err: Error) => void,
   ): Promise<void> {
-    const client = await this.connect(accountId);
+    const client = await this.connectIdle(accountId);
     await client.getMailboxLock(folder);
 
     client.on('exists', () => {
-      log.info(`New message detected in ${folder} for account ${accountId}`);
+      log.info(`[IDLE] New message detected in ${folder} for account ${accountId}`);
       onNewMail();
     });
 
-    // Note: The lock keeps the mailbox open for IDLE.
+    // Re-wire close/error to also call the provided callbacks
+    if (onClose) {
+      client.on('close', () => onClose());
+    }
+    if (onError) {
+      client.on('error', (err: Error) => onError(err));
+    }
+
+    // The lock keeps the mailbox open for IDLE.
     // We intentionally do NOT release the lock here — it stays open.
+    log.info(`[IDLE] Started on ${folder} for account ${accountId}`);
   }
 
   /**

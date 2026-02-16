@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { app, BrowserWindow, shell, dialog } from 'electron';
+import { app, BrowserWindow, shell, dialog, Notification } from 'electron';
 import * as path from 'path';
 import log from 'electron-log/main';
 import { registerAllIpcHandlers } from './ipc';
@@ -8,6 +8,9 @@ import { OAuthService } from './services/oauth-service';
 import { SyncService } from './services/sync-service';
 import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
+
+// Suppress unused import warning — Notification is used by SyncService via Electron global
+void Notification;
 
 // Configure logging
 log.initialize();
@@ -57,10 +60,23 @@ if (!gotTheLock) {
       const syncService = SyncService.getInstance();
       syncService.startBackgroundSync();
 
-      // Trigger initial sync for all accounts
-      syncService.syncAllAccounts().catch(err => {
-        log.warn('Initial sync failed:', err);
-      });
+      // Trigger initial sync for all accounts, then start IDLE
+      syncService.syncAllAccounts()
+        .then(() => {
+          // Start IDLE for each active account after initial sync completes
+          const dbForIdle = DatabaseService.getInstance();
+          const accounts = dbForIdle.getAccounts();
+          for (const account of accounts) {
+            if (!account.needs_reauth) {
+              syncService.startIdle(String(account.id)).catch(err => {
+                log.warn(`Failed to start IDLE for account ${account.id}:`, err);
+              });
+            }
+          }
+        })
+        .catch(err => {
+          log.warn('Initial sync failed:', err);
+        });
     } catch (err) {
       log.warn('Failed to start background sync:', err);
     }
@@ -195,9 +211,11 @@ app.on('before-quit', async (event) => {
     }
   }
 
-  // Stop background sync and disconnect IMAP
+  // Stop background sync, IDLE, and disconnect IMAP
   try {
-    SyncService.getInstance().stopBackgroundSync();
+    const syncForQuit = SyncService.getInstance();
+    syncForQuit.stopBackgroundSync();
+    syncForQuit.stopAllIdle().catch(() => {});
     MailQueueService.getInstance().cancelAllRetries();
     ImapService.getInstance().disconnectAll().catch(() => {});
   } catch {

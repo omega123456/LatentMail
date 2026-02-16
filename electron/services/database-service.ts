@@ -742,6 +742,30 @@ export class DatabaseService {
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
+  /**
+   * Get threads in a folder older than the given date, ordered newest-first.
+   * Used by MAIL_FETCH_OLDER to return only the older threads after upserting.
+   */
+  getThreadsByFolderBeforeDate(
+    accountId: number,
+    folder: string,
+    beforeDate: string,
+    limit: number = 50
+  ): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date, t.participants,
+        t.message_count, t.snippet, tf.folder, t.is_read, t.is_starred
+       FROM threads t
+       INNER JOIN thread_folders tf ON t.id = tf.thread_id
+       WHERE t.account_id = ? AND tf.folder = ? AND t.last_message_date < ?
+       ORDER BY t.last_message_date DESC LIMIT ?`,
+      [accountId, folder, beforeDate, limit]
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+  }
+
   getThreadById(accountId: number, gmailThreadId: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(

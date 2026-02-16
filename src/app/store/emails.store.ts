@@ -1,4 +1,5 @@
 import { computed, inject } from '@angular/core';
+import { Router } from '@angular/router';
 import { signalStore, withState, withMethods, withComputed, patchState, withHooks } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
 import { Thread, Email } from '../core/models/email.model';
@@ -9,6 +10,25 @@ interface MailDataChangedPayload {
   accountId: number;
   folders: string[];
   reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update';
+}
+
+interface MailNewEmailPayload {
+  accountId: number;
+  folder: string;
+  newEmails: Array<{
+    gmailMessageId: string;
+    gmailThreadId: string;
+    sender: string;
+    subject: string;
+    snippet: string;
+  }>;
+  totalNewCount: number;
+}
+
+interface MailNotificationClickPayload {
+  accountId: number;
+  gmailThreadId: string;
+  folder: string;
 }
 
 interface EmailsState {
@@ -23,6 +43,12 @@ interface EmailsState {
   syncing: boolean;
   syncProgress: number;
   lastSyncTime: string | null;
+  fetchingMore: boolean;
+  dbExhausted: boolean;
+  fetchError: string | null;
+  serverCursorDate: string | null;
+  hasLoadedMore: boolean;
+  preserveListPosition: boolean;
 }
 
 const initialState: EmailsState = {
@@ -37,9 +63,27 @@ const initialState: EmailsState = {
   syncing: false,
   syncProgress: 0,
   lastSyncTime: null,
+  fetchingMore: false,
+  dbExhausted: false,
+  fetchError: null,
+  serverCursorDate: null,
+  hasLoadedMore: false,
+  preserveListPosition: false,
 };
 
 const PAGE_SIZE = 50;
+
+function getOldestThreadDate(threads: Thread[]): string | null {
+  if (threads.length === 0) return null;
+  return threads[threads.length - 1].lastMessageDate || null;
+}
+
+function isOlderDate(candidate: string, reference: string): boolean {
+  const candidateMs = new Date(candidate).getTime();
+  const referenceMs = new Date(reference).getTime();
+  if (!Number.isFinite(candidateMs) || !Number.isFinite(referenceMs)) return false;
+  return candidateMs < referenceMs;
+}
 
 export const EmailsStore = signalStore(
   { providedIn: 'root' },
@@ -62,10 +106,62 @@ export const EmailsStore = signalStore(
     const accountsStore = inject(AccountsStore);
     const foldersStore = inject(FoldersStore);
 
+    /** Fetch older emails from IMAP server when local DB is exhausted */
+    async function _loadMoreFromServer(accountId: number, folderId: string): Promise<void> {
+      if (store.fetchingMore() || !store.hasMore()) return;
+
+      patchState(store, { fetchingMore: true, fetchError: null });
+
+      try {
+        // Use explicit server cursor when available; fall back to oldest loaded thread.
+        const threads = store.threads();
+        const beforeDate = store.serverCursorDate() || getOldestThreadDate(threads);
+        if (!beforeDate) {
+          patchState(store, { fetchingMore: false, hasMore: false });
+          return;
+        }
+
+        const response = await electronService.fetchOlderEmails(
+          String(accountId),
+          folderId,
+          beforeDate,
+          PAGE_SIZE
+        );
+
+        if (response.success && response.data) {
+          const result = response.data as { threads: Thread[]; hasMore: boolean; nextBeforeDate?: string };
+          const existingIds = new Set(store.threads().map(t => t.gmailThreadId));
+          const newThreads = result.threads.filter(t => !existingIds.has(t.gmailThreadId));
+          const nextCursorDate = result.nextBeforeDate || getOldestThreadDate(result.threads) || beforeDate;
+          const cursorAdvanced = isOlderDate(nextCursorDate, beforeDate);
+          // Never continue auto-pagination when neither visible data nor cursor advances.
+          const hasMore = result.hasMore && (newThreads.length > 0 || cursorAdvanced);
+
+          patchState(store, {
+            threads: [...store.threads(), ...newThreads],
+            fetchingMore: false,
+            hasMore,
+            serverCursorDate: nextCursorDate,
+            hasLoadedMore: store.hasLoadedMore() || newThreads.length > 0,
+          });
+        } else {
+          patchState(store, {
+            fetchingMore: false,
+            fetchError: response.error?.message || 'Failed to fetch older emails from server',
+          });
+        }
+      } catch (err: unknown) {
+        patchState(store, {
+          fetchingMore: false,
+          fetchError: err instanceof Error ? err.message : 'Failed to fetch older emails from server',
+        });
+      }
+    }
+
     return {
       /** Load threads for a folder */
       async loadThreads(accountId: number, folderId: string): Promise<void> {
-        patchState(store, { loading: true, error: null, currentPage: 0, hasMore: true });
+        patchState(store, { loading: true, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false });
         try {
           const response = await electronService.fetchEmails(
             String(accountId),
@@ -74,12 +170,24 @@ export const EmailsStore = signalStore(
           );
           if (response.success && response.data) {
             const threads = response.data as Thread[];
+            const dbHasLess = threads.length < PAGE_SIZE;
             patchState(store, {
               threads,
               loading: false,
-              hasMore: threads.length >= PAGE_SIZE,
+              // DB having fewer than PAGE_SIZE doesn't mean the server has no more.
+              // Keep hasMore=true so scroll-to-load can still trigger server fetch.
+              hasMore: true,
+              dbExhausted: dbHasLess,
               currentPage: 0,
+              serverCursorDate: getOldestThreadDate(threads),
+              hasLoadedMore: false,
+              preserveListPosition: false,
             });
+
+            // If DB is already exhausted on first load, proactively fetch from server
+            if (dbHasLess && threads.length > 0) {
+              _loadMoreFromServer(accountId, folderId);
+            }
           } else {
             patchState(store, {
               loading: false,
@@ -94,12 +202,19 @@ export const EmailsStore = signalStore(
         }
       },
 
-      /** Load more threads (pagination) */
+      /** Load more threads (pagination) — reads from local DB, then server if DB exhausted */
       async loadMore(accountId: number, folderId: string): Promise<void> {
-        if (!store.hasMore() || store.loading()) return;
+        if (!store.hasMore() || store.loading() || store.fetchingMore()) return;
+
+        // If DB is already known to be exhausted, go straight to server fetch
+        if (store.dbExhausted()) {
+          patchState(store, { hasLoadedMore: true });
+          _loadMoreFromServer(accountId, folderId);
+          return;
+        }
 
         const nextPage = store.currentPage() + 1;
-        patchState(store, { loading: true });
+        patchState(store, { loading: true, hasLoadedMore: true, preserveListPosition: true });
         try {
           const response = await electronService.fetchEmails(
             String(accountId),
@@ -108,12 +223,20 @@ export const EmailsStore = signalStore(
           );
           if (response.success && response.data) {
             const newThreads = response.data as Thread[];
+            const dbHasLess = newThreads.length < PAGE_SIZE;
             patchState(store, {
               threads: [...store.threads(), ...newThreads],
               loading: false,
-              hasMore: newThreads.length >= PAGE_SIZE,
               currentPage: nextPage,
+              dbExhausted: dbHasLess,
+              serverCursorDate: getOldestThreadDate([...store.threads(), ...newThreads]),
+              hasLoadedMore: true,
             });
+
+            // If DB is exhausted but server may have more, fetch from server
+            if (dbHasLess && !store.fetchingMore()) {
+              _loadMoreFromServer(accountId, folderId);
+            }
           } else {
             patchState(store, {
               loading: false,
@@ -125,6 +248,16 @@ export const EmailsStore = signalStore(
             loading: false,
             error: err instanceof Error ? err.message : 'Failed to load more emails',
           });
+        }
+      },
+
+      /** Fetch older emails from IMAP server (public alias for retry UI) */
+      loadMoreFromServer: _loadMoreFromServer,
+
+      /** Mark that user has scrolled/interacted with list position. */
+      markListScrolled(): void {
+        if (!store.preserveListPosition()) {
+          patchState(store, { preserveListPosition: true });
         }
       },
 
@@ -258,7 +391,7 @@ export const EmailsStore = signalStore(
           const response = await electronService.searchEmails(String(accountId), query);
           if (response.success && response.data) {
             const results = response.data as Thread[];
-            patchState(store, { threads: results, loading: false, hasMore: false });
+            patchState(store, { threads: results, loading: false, hasMore: false, hasLoadedMore: false, preserveListPosition: false });
           } else {
             patchState(store, {
               loading: false,
@@ -324,8 +457,9 @@ export const EmailsStore = signalStore(
        * Does NOT set loading=true (no spinner — this is a background refresh).
        * Preserves selection when possible; clears if selected thread no longer exists.
        *
-       * If the user has scrolled past page 0 (currentPage > 0), merges new/updated
-       * threads into the existing list instead of replacing it, to preserve scroll position.
+       * If the user has loaded beyond the initial page (DB or server pagination),
+       * merges new/updated threads into the existing list instead of replacing it,
+       * to preserve virtual-scroll position.
        */
       async refreshThreads(): Promise<void> {
         const accountId = accountsStore.activeAccountId();
@@ -347,15 +481,16 @@ export const EmailsStore = signalStore(
           if (response.success && response.data) {
             const freshThreads = response.data as Thread[];
             const currentSelectedId = store.selectedThreadId();
+            const preserveScrolledList =
+              store.preserveListPosition() ||
+              store.hasLoadedMore() ||
+              store.currentPage() > 0;
 
-            if (store.currentPage() > 0) {
+            if (preserveScrolledList) {
               // User has scrolled — merge instead of replace to preserve scroll position.
-              // Prepend genuinely new threads, update existing ones in-place.
+              // Update existing threads in-place. While preserving position, do not prepend
+              // top-of-list arrivals since that shifts virtual-scroll indices and feels jumpy.
               const existingThreads = store.threads();
-              const existingIds = new Set(existingThreads.map(t => t.gmailThreadId));
-
-              // Threads in fresh data not present in current list → new arrivals
-              const newThreads = freshThreads.filter(t => !existingIds.has(t.gmailThreadId));
 
               // Build a lookup for fresh data to update flags (read/starred) on existing threads
               const freshMap = new Map(freshThreads.map(t => [t.gmailThreadId, t]));
@@ -365,9 +500,7 @@ export const EmailsStore = signalStore(
                 return fresh ? { ...t, isRead: fresh.isRead, isStarred: fresh.isStarred, snippet: fresh.snippet, messageCount: fresh.messageCount } : t;
               });
 
-              const mergedThreads = [...newThreads, ...updatedExisting];
-
-              patchState(store, { threads: mergedThreads });
+              patchState(store, { threads: updatedExisting });
             } else {
               // User on first page — replace normally
               const selectedStillExists = currentSelectedId
@@ -376,8 +509,12 @@ export const EmailsStore = signalStore(
 
               patchState(store, {
                 threads: freshThreads,
-                hasMore: freshThreads.length >= PAGE_SIZE,
+                hasMore: true,
+                dbExhausted: freshThreads.length < PAGE_SIZE,
                 currentPage: 0,
+                serverCursorDate: getOldestThreadDate(freshThreads),
+                hasLoadedMore: false,
+                preserveListPosition: false,
                 // Clear selection if the selected thread no longer exists in the refreshed list
                 ...(currentSelectedId && !selectedStillExists
                   ? { selectedThreadId: null, selectedThread: null }
@@ -399,12 +536,19 @@ export const EmailsStore = signalStore(
       const electronService = inject(ElectronService);
       const accountsStore = inject(AccountsStore);
       const foldersStore = inject(FoldersStore);
+      const router = inject(Router);
 
       // Subscribe to mail:data-changed events from the main process.
       // Refresh threads when the active folder's data has changed.
       electronService.onEvent<MailDataChangedPayload>('mail:data-changed').subscribe((event) => {
         const activeAccountId = accountsStore.activeAccountId();
         const activeFolderId = foldersStore.activeFolderId();
+
+        // Flag updates are already applied optimistically in the renderer.
+        // Skipping refresh here avoids unnecessary list churn/jumps when opening unread.
+        if (event.reason === 'flag') {
+          return;
+        }
 
         if (
           activeAccountId != null &&
@@ -413,6 +557,38 @@ export const EmailsStore = signalStore(
           event.folders.includes(activeFolderId)
         ) {
           store.refreshThreads();
+        }
+      });
+
+      // Subscribe to mail:new-email events (IDLE push notifications).
+      // Refresh threads if active folder matches; always refresh folder unread counts.
+      electronService.onEvent<MailNewEmailPayload>('mail:new-email').subscribe((event) => {
+        const activeAccountId = accountsStore.activeAccountId();
+        const activeFolderId = foldersStore.activeFolderId();
+
+        // Always refresh folder unread counts when new emails arrive
+        if (activeAccountId != null && event.accountId === activeAccountId) {
+          foldersStore.loadFolders(activeAccountId);
+        }
+
+        // Refresh thread list if we're viewing the folder that received new mail
+        if (
+          activeAccountId != null &&
+          event.accountId === activeAccountId &&
+          activeFolderId != null &&
+          event.folder === activeFolderId
+        ) {
+          store.refreshThreads();
+        }
+      });
+
+      // Subscribe to mail:notification-click events.
+      // Navigate to the specified account/folder/thread.
+      electronService.onEvent<MailNotificationClickPayload>('mail:notification-click').subscribe((event) => {
+        if (event.gmailThreadId) {
+          router.navigate(['/mail', event.accountId, event.folder, event.gmailThreadId]);
+        } else {
+          router.navigate(['/mail', event.accountId, event.folder]);
         }
       });
     },
