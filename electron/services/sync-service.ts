@@ -468,12 +468,15 @@ export class SyncService {
     }
 
     try {
+      // Baseline: max UID we already have for this folder. Only emails with uid > baseline are "new arrivals".
+      const baselineMaxUid = db.getMaxFolderUid(numAccountId, folder);
+
       // Fetch latest 20 emails (small batch for incremental updates)
       const emails = await imapService.fetchEmails(accountId, folder, { limit: 20 });
 
       if (emails.length === 0) return [];
 
-      // Track which emails are genuinely new (not already in DB)
+      // Track which emails are newly arrived (uid > baseline) for notification only
       const newEmails: NewEmailInfo[] = [];
 
       const threadMap = new Map<string, typeof emails>();
@@ -486,9 +489,6 @@ export class SyncService {
       }
 
       for (const email of emails) {
-        // Check if this email already exists in DB
-        const existing = db.getEmailByGmailMessageId(numAccountId, email.gmailMessageId);
-
         db.upsertEmail({
           accountId: numAccountId,
           gmailMessageId: email.gmailMessageId,
@@ -517,8 +517,8 @@ export class SyncService {
           db.upsertContact(email.fromAddress, email.fromName);
         }
 
-        // Track as new if it didn't exist before
-        if (!existing) {
+        // Notify only for messages that arrived after our last known UID (no baseline = establishing, skip notify)
+        if (baselineMaxUid !== null && email.uid > baselineMaxUid) {
           newEmails.push({
             gmailMessageId: email.gmailMessageId,
             gmailThreadId: email.gmailThreadId,
@@ -593,6 +593,7 @@ export class SyncService {
 
   /**
    * Flush the notification batch: emit event to renderer + show desktop notification.
+   * Dedupes by gmailMessageId so racing IDLE triggers don't show the same email twice.
    */
   private flushNotificationBatch(accountId: string, folder: string): void {
     const batch = this.notificationBatches.get(accountId);
@@ -600,19 +601,27 @@ export class SyncService {
 
     if (!batch || batch.emails.length === 0) return;
 
+    const seen = new Set<string>();
+    const deduped = batch.emails.filter((e) => {
+      if (seen.has(e.gmailMessageId)) return false;
+      seen.add(e.gmailMessageId);
+      return true;
+    });
+    if (deduped.length === 0) return;
+
     const numAccountId = Number(accountId);
     const payload = {
       accountId: numAccountId,
       folder,
-      newEmails: batch.emails,
-      totalNewCount: batch.emails.length,
+      newEmails: deduped,
+      totalNewCount: deduped.length,
     };
 
     // Emit to renderer
     this.emitToRenderer(IPC_EVENTS.MAIL_NEW_EMAIL, payload);
 
     // Show desktop notification
-    this.showDesktopNotification(numAccountId, folder, batch.emails);
+    this.showDesktopNotification(numAccountId, folder, deduped);
   }
 
   /**

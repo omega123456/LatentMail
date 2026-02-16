@@ -951,6 +951,24 @@ export class DatabaseService {
   }
 
   /**
+   * Get the maximum UID stored for an account+folder (for notification baseline).
+   * Returns null if no UIDs are stored for that folder.
+   */
+  getMaxFolderUid(accountId: number, folder: string): number | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT MAX(ef.uid) FROM email_folders ef
+       JOIN emails e ON e.id = ef.email_id
+       WHERE e.account_id = ? AND ef.folder = ? AND ef.uid IS NOT NULL`,
+      [accountId, folder]
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    const val = result[0].values[0][0];
+    if (val == null) return null;
+    return val as number;
+  }
+
+  /**
    * Get folder UIDs for a given email (by gmail_message_id).
    * Returns one entry per folder the email appears in, with the IMAP UID for that folder.
    * Used by flag and move handlers to resolve (account, email) → [(folder, uid)].
