@@ -1,13 +1,29 @@
 <div class="email-list-header">
   <div class="header-left">
     <span class="folder-name">{{ foldersStore.activeFolder()?.name || 'Inbox' }}</span>
-    @if (emailsStore.syncing()) {
-      <span class="sync-indicator">
-        <span class="material-symbols-outlined spinning">sync</span>
-      </span>
-    }
   </div>
   <div class="header-actions">
+    <!-- Sync / Refresh button -->
+    <button
+      class="header-btn"
+      (click)="onSyncClick()"
+      [disabled]="emailsStore.syncing()"
+      [title]="emailsStore.syncing() ? 'Syncing...' : 'Refresh'"
+      [attr.aria-label]="emailsStore.syncing() ? 'Syncing folder' : 'Refresh folder'"
+      [attr.aria-busy]="emailsStore.syncing()"
+    >
+      <span
+        class="material-symbols-outlined"
+        [class.spinning]="emailsStore.syncing()"
+      >refresh</span>
+    </button>
+
+    @if (emailsStore.syncing()) {
+      <span class="sync-time">Syncing...</span>
+    } @else if (emailsStore.lastSyncTime()) {
+      <span class="sync-time">{{ relativeTime() }}</span>
+    }
+
     <!-- Density toggle -->
     <button class="header-btn" (click)="cycleDensity()" title="Change density">
       <span class="material-symbols-outlined">

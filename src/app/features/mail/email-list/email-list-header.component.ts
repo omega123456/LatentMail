@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, output, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FoldersStore } from '../../../store/folders.store';
 import { EmailsStore } from '../../../store/emails.store';
@@ -37,16 +37,6 @@ import { LayoutMode, DensityMode } from '../../../core/services/layout.service';
       white-space: nowrap;
     }
 
-    .sync-indicator {
-      display: flex;
-      align-items: center;
-
-      .material-symbols-outlined {
-        font-size: 16px;
-        color: var(--color-text-tertiary);
-      }
-    }
-
     .spinning {
       animation: spin 1s linear infinite;
     }
@@ -54,6 +44,28 @@ import { LayoutMode, DensityMode } from '../../../core/services/layout.service';
     @keyframes spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .spinning {
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+    }
+
+    .header-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .sync-time {
+      font-size: 12px;
+      color: var(--color-text-tertiary);
+      white-space: nowrap;
     }
 
     .header-actions {
@@ -86,10 +98,48 @@ import { LayoutMode, DensityMode } from '../../../core/services/layout.service';
     }
   `]
 })
-export class EmailListHeaderComponent {
+export class EmailListHeaderComponent implements OnInit, OnDestroy {
   readonly foldersStore = inject(FoldersStore);
   readonly emailsStore = inject(EmailsStore);
   readonly uiStore = inject(UiStore);
+  readonly syncClicked = output<void>();
+
+  /** Counter that increments every 30s to trigger relative time recalculation */
+  private readonly tick = signal(0);
+  private tickInterval?: ReturnType<typeof setInterval>;
+
+  ngOnInit(): void {
+    this.tickInterval = setInterval(() => {
+      this.tick.update(v => v + 1);
+    }, 30_000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.tickInterval) {
+      clearInterval(this.tickInterval);
+    }
+  }
+
+  onSyncClick(): void {
+    this.syncClicked.emit();
+  }
+
+  relativeTime(): string {
+    // Read tick to establish reactive dependency for periodic updates
+    this.tick();
+    const iso = this.emailsStore.lastSyncTime();
+    if (!iso) return '';
+    const diff = Date.now() - new Date(iso).getTime();
+    const seconds = Math.floor(diff / 1000);
+    if (seconds < 10) return 'just now';
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
 
   densityIcon(): string {
     switch (this.uiStore.density()) {

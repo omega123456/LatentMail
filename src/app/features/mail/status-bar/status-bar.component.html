@@ -6,9 +6,9 @@
         Syncing{{ emailsStore.syncProgress() > 0 ? ' ' + emailsStore.syncProgress() + '%' : '...' }}
       </span>
     } @else {
-      <span class="status-item">
-        <span class="material-symbols-outlined">check_circle</span>
-        Synced
+      <span class="status-item" [title]="fullTimestamp()">
+        <span class="material-symbols-outlined">schedule</span>
+        Last synced: {{ relativeTime() }}
       </span>
     }
     <span class="status-separator">|</span>

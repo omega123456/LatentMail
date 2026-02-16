@@ -22,6 +22,7 @@ interface EmailsState {
   currentPage: number;
   syncing: boolean;
   syncProgress: number;
+  lastSyncTime: string | null;
 }
 
 const initialState: EmailsState = {
@@ -35,6 +36,7 @@ const initialState: EmailsState = {
   currentPage: 0,
   syncing: false,
   syncProgress: 0,
+  lastSyncTime: null,
 };
 
 const PAGE_SIZE = 50;
@@ -277,7 +279,11 @@ export const EmailsStore = signalStore(
         try {
           const response = await electronService.syncAccount(String(accountId));
           if (response.success) {
-            patchState(store, { syncing: false, syncProgress: 100 });
+            patchState(store, {
+              syncing: false,
+              syncProgress: 100,
+              lastSyncTime: new Date().toISOString(),
+            });
           } else {
             patchState(store, {
               syncing: false,
@@ -294,7 +300,13 @@ export const EmailsStore = signalStore(
 
       /** Update sync progress (called from sync events) */
       updateSyncProgress(progress: number): void {
-        patchState(store, { syncProgress: progress, syncing: progress < 100 });
+        const isDone = progress >= 100;
+        patchState(store, {
+          syncProgress: progress,
+          syncing: !isDone,
+          // Set lastSyncTime whenever sync completes (via progress event from main process)
+          ...(isDone ? { lastSyncTime: new Date().toISOString() } : {}),
+        });
       },
 
       /** Clear selection */
@@ -311,6 +323,9 @@ export const EmailsStore = signalStore(
        * Background refresh of thread list for the active folder.
        * Does NOT set loading=true (no spinner — this is a background refresh).
        * Preserves selection when possible; clears if selected thread no longer exists.
+       *
+       * If the user has scrolled past page 0 (currentPage > 0), merges new/updated
+       * threads into the existing list instead of replacing it, to preserve scroll position.
        */
       async refreshThreads(): Promise<void> {
         const accountId = accountsStore.activeAccountId();
@@ -330,21 +345,45 @@ export const EmailsStore = signalStore(
           }
 
           if (response.success && response.data) {
-            const threads = response.data as Thread[];
+            const freshThreads = response.data as Thread[];
             const currentSelectedId = store.selectedThreadId();
-            const selectedStillExists = currentSelectedId
-              ? threads.some(t => t.gmailThreadId === currentSelectedId)
-              : false;
 
-            patchState(store, {
-              threads,
-              hasMore: threads.length >= PAGE_SIZE,
-              currentPage: 0,
-              // Clear selection if the selected thread no longer exists in the refreshed list
-              ...(currentSelectedId && !selectedStillExists
-                ? { selectedThreadId: null, selectedThread: null }
-                : {}),
-            });
+            if (store.currentPage() > 0) {
+              // User has scrolled — merge instead of replace to preserve scroll position.
+              // Prepend genuinely new threads, update existing ones in-place.
+              const existingThreads = store.threads();
+              const existingIds = new Set(existingThreads.map(t => t.gmailThreadId));
+
+              // Threads in fresh data not present in current list → new arrivals
+              const newThreads = freshThreads.filter(t => !existingIds.has(t.gmailThreadId));
+
+              // Build a lookup for fresh data to update flags (read/starred) on existing threads
+              const freshMap = new Map(freshThreads.map(t => [t.gmailThreadId, t]));
+
+              const updatedExisting = existingThreads.map(t => {
+                const fresh = freshMap.get(t.gmailThreadId);
+                return fresh ? { ...t, isRead: fresh.isRead, isStarred: fresh.isStarred, snippet: fresh.snippet, messageCount: fresh.messageCount } : t;
+              });
+
+              const mergedThreads = [...newThreads, ...updatedExisting];
+
+              patchState(store, { threads: mergedThreads });
+            } else {
+              // User on first page — replace normally
+              const selectedStillExists = currentSelectedId
+                ? freshThreads.some(t => t.gmailThreadId === currentSelectedId)
+                : false;
+
+              patchState(store, {
+                threads: freshThreads,
+                hasMore: freshThreads.length >= PAGE_SIZE,
+                currentPage: 0,
+                // Clear selection if the selected thread no longer exists in the refreshed list
+                ...(currentSelectedId && !selectedStillExists
+                  ? { selectedThreadId: null, selectedThread: null }
+                  : {}),
+              });
+            }
           }
         } catch {
           // Best-effort refresh — failures are silently ignored

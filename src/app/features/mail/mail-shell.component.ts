@@ -226,8 +226,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
         }
       }
     });
-
-    this.triggerSyncForActiveAccount();
   }
 
   ngOnDestroy(): void {
@@ -325,7 +323,6 @@ export class MailShellComponent implements OnInit, OnDestroy {
   private async initializeRouteDrivenState(): Promise<void> {
     await this.accountsStore.loadAccounts();
     await this.applyRouteParams();
-    this.triggerSyncForActiveAccount();
   }
 
   private async applyRouteParams(): Promise<void> {
@@ -358,9 +355,9 @@ export class MailShellComponent implements OnInit, OnDestroy {
     }
   }
 
-  private triggerSyncForActiveAccount(): void {
+  onManualSync(): void {
     const activeAccount = this.accountsStore.activeAccount();
-    if (activeAccount) {
+    if (activeAccount && !this.emailsStore.syncing()) {
       this.emailsStore.syncAccount(activeAccount.id);
     }
   }
