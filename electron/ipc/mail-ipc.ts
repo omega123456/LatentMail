@@ -3,7 +3,6 @@ import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { SmtpService } from '../services/smtp-service';
 import { SyncService } from '../services/sync-service';
 import { MailQueueService } from '../services/mail-queue-service';
 
@@ -114,7 +113,7 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Send an email
+  // Send an email (via queue)
   ipcMain.handle(IPC_CHANNELS.MAIL_SEND, async (_event, accountId: string, message: {
     to: string;
     cc?: string;
@@ -124,21 +123,39 @@ export function registerMailIpcHandlers(): void {
     html?: string;
     inReplyTo?: string;
     references?: string;
+    attachments?: Array<{ filename: string; content: string; contentType: string }>;
+    originalQueueId?: string;
+    serverDraftGmailMessageId?: string;
   }) => {
     try {
-      log.info(`Sending email from account ${accountId}`);
-      const smtpService = SmtpService.getInstance();
-      const result = await smtpService.sendEmail(accountId, message);
+      log.info(`Enqueuing send for account ${accountId}`);
+      const queueService = MailQueueService.getInstance();
 
-      // No full sync after send — the sent message will appear in Sent folder
-      // on the next scheduled background sync or IDLE event. Draft cleanup
-      // is not handled here — it will be moved to the queue system in Phase 3.
+      const description = `Send to ${message.to}`;
+      const queueId = queueService.enqueue(
+        Number(accountId),
+        'send',
+        {
+          to: message.to,
+          cc: message.cc,
+          bcc: message.bcc,
+          subject: message.subject,
+          text: message.text,
+          html: message.html,
+          inReplyTo: message.inReplyTo,
+          references: message.references,
+          attachments: message.attachments,
+          originalQueueId: message.originalQueueId,
+          serverDraftGmailMessageId: message.serverDraftGmailMessageId,
+        },
+        description,
+      );
 
-      return ipcSuccess(result);
+      return ipcSuccess({ queueId });
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to send email';
-      log.error('Failed to send email:', err);
-      return ipcError('SMTP_SEND_FAILED', errorMessage);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to enqueue send';
+      log.error('Failed to enqueue send:', err);
+      return ipcError('MAIL_SEND_FAILED', errorMessage);
     }
   });
 

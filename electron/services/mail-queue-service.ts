@@ -3,6 +3,7 @@ import log from 'electron-log/main';
 import * as fastq from 'fastq';
 import { randomUUID } from 'crypto';
 import { ImapService } from './imap-service';
+import { SmtpService } from './smtp-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { buildDraftMime } from './draft-mime';
@@ -48,8 +49,10 @@ export interface SendPayload {
   inReplyTo?: string;
   references?: string;
   attachments?: Array<{ filename: string; content: string; contentType: string }>;
-  /** queueId of the draft being sent (optional; for draft cleanup). */
+  /** queueId of the draft being sent (optional; for draft cleanup via in-memory mapping). */
   originalQueueId?: string;
+  /** Server draft's gmail_message_id (optional; for draft cleanup when queueId mapping unavailable). */
+  serverDraftGmailMessageId?: string;
 }
 
 export interface MovePayload {
@@ -346,9 +349,9 @@ export class MailQueueService {
         case 'delete':
           await this.processDelete(item);
           break;
-        // Phase 3 placeholder — will be implemented later
         case 'send':
-          throw new Error(`Operation type "${item.type}" not yet implemented in queue`);
+          await this.processSend(item);
+          break;
         default:
           throw new Error(`Unknown operation type: ${item.type}`);
       }
@@ -363,6 +366,20 @@ export class MailQueueService {
       const errMsg = err instanceof Error ? err.message : String(err);
 
       log.warn(`[MailQueue] Failed ${item.type} (${item.queueId}): [${category}] ${errMsg}`);
+
+      // Send operations are NOT idempotent — if SMTP accepted the message but the
+      // connection dropped before we received the response, retrying would send a
+      // duplicate. Treat ALL send failures as permanent (including auth errors);
+      // the user can manually retry from the queue settings page after confirming
+      // the email wasn't actually sent.
+      if (item.type === 'send') {
+        item.status = 'failed';
+        item.error = errMsg;
+        item.completedAt = new Date().toISOString();
+        this.emitUpdate(item);
+        log.error(`[MailQueue] Send failed (${item.queueId}), no auto-retry (not idempotent): ${errMsg}`);
+        return;
+      }
 
       if (category === 'auth') {
         // Pause the account — all operations wait until unpaused
@@ -779,6 +796,149 @@ export class MailQueueService {
 
     const emailCount = payload.resolvedEmails?.length ?? payload.messageIds.length;
     log.info(`[MailQueue] delete (${item.queueId}): ${emailCount} emails deleted from ${folder} (permanent=${isPermanent})`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Send worker
+  // -----------------------------------------------------------------------
+
+  private async processSend(item: QueueItem): Promise<void> {
+    const payload = item.payload as SendPayload;
+    const smtpService = SmtpService.getInstance();
+    const db = DatabaseService.getInstance();
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    const account = db.getAccountById(item.accountId);
+    if (!account) throw new Error(`Account ${item.accountId} not found`);
+
+    // Build attachments for nodemailer format.
+    // Content arrives as base64 string from the renderer — decode to Buffer
+    // so nodemailer handles it as binary data, not UTF-8 text.
+    // Filter out entries with missing content to avoid sending 0-byte attachments.
+    const attachments = payload.attachments
+      ?.filter((att) => att.content)
+      .map((att) => ({
+        filename: att.filename,
+        content: Buffer.from(att.content, 'base64'),
+        contentType: att.contentType,
+      }));
+
+    // Send the email via SMTP
+    const result = await smtpService.sendEmail(String(item.accountId), {
+      to: payload.to,
+      cc: payload.cc || undefined,
+      bcc: payload.bcc || undefined,
+      subject: payload.subject,
+      text: payload.text || undefined,
+      html: payload.html || undefined,
+      inReplyTo: payload.inReplyTo || undefined,
+      references: payload.references || undefined,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    });
+
+    log.info(`[MailQueue] send (${item.queueId}): SMTP success, messageId=${result.messageId}`);
+
+    // After successful SMTP send, delete the server draft if one exists.
+    // Two resolution paths:
+    //   1. originalQueueId → in-memory queueIdToServerIds mapping (draft created this session)
+    //   2. serverDraftGmailMessageId → resolve UID from local DB (draft opened from server)
+    await this.cleanupDraftAfterSend(item, payload);
+
+    // Sent message appears in Sent folder on next sync — no local DB insert needed.
+    item.result = null;
+  }
+
+  /**
+   * Best-effort draft cleanup after a successful send.
+   * Resolves the draft's server UID via:
+   *   1. In-memory queueIdToServerIds mapping (draft created this session)
+   *   2. Local DB lookup by gmailMessageId (draft opened from server / mapping lost)
+   * Then deletes from IMAP and cleans up local DB associations.
+   */
+  private async cleanupDraftAfterSend(item: QueueItem, payload: SendPayload): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    // Path 1: Resolve via in-memory mapping (draft created in this session)
+    let draftGmailMessageId: string | undefined;
+    let draftImapUid: number | undefined;
+    let draftUidValidity: number | undefined;
+
+    if (payload.originalQueueId) {
+      const serverIds = this.queueIdToServerIds.get(payload.originalQueueId);
+      if (serverIds) {
+        draftGmailMessageId = serverIds.gmailMessageId;
+        draftImapUid = serverIds.imapUid;
+        draftUidValidity = serverIds.imapUidValidity;
+      }
+    }
+
+    // Path 2: Resolve via DB lookup (draft opened from server, or mapping lost after restart)
+    if (!draftImapUid && payload.serverDraftGmailMessageId) {
+      draftGmailMessageId = payload.serverDraftGmailMessageId;
+      const folderUids = db.getFolderUidsForEmail(item.accountId, payload.serverDraftGmailMessageId);
+      const draftsEntry = folderUids.find(fu => fu.folder === GMAIL_DRAFTS_FOLDER);
+      if (draftsEntry) {
+        draftImapUid = draftsEntry.uid;
+        // No stored UIDVALIDITY in this path — pass undefined to skip the check
+        draftUidValidity = undefined;
+      }
+    }
+
+    if (!draftImapUid || !draftGmailMessageId) {
+      if (payload.originalQueueId || payload.serverDraftGmailMessageId) {
+        log.info(`[MailQueue] send (${item.queueId}): Could not resolve draft UID for cleanup — draft may persist until next sync`);
+      }
+      // Clean up mapping even if we couldn't delete
+      if (payload.originalQueueId) {
+        this.queueIdToServerIds.delete(payload.originalQueueId);
+      }
+      return;
+    }
+
+    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER);
+    try {
+      // Delete the draft from the server via IMAP
+      try {
+        await imapService.deleteDraftByUid(
+          String(item.accountId),
+          GMAIL_DRAFTS_FOLDER,
+          draftImapUid,
+          draftUidValidity ?? null,
+        );
+        log.info(`[MailQueue] send (${item.queueId}): Deleted server draft uid=${draftImapUid}`);
+      } catch (delErr) {
+        // Best-effort: draft will be cleaned up by next sync
+        log.warn(`[MailQueue] send (${item.queueId}): Failed to delete server draft uid=${draftImapUid}:`, delErr);
+      }
+
+      // Remove draft from local DB
+      try {
+        db.removeEmailFolderAssociation(item.accountId, draftGmailMessageId, GMAIL_DRAFTS_FOLDER);
+
+        const draftEmail = db.getEmailByGmailMessageId(item.accountId, draftGmailMessageId);
+        if (draftEmail) {
+          const threadId = String(draftEmail['gmailThreadId'] || '');
+          if (threadId && !db.threadHasEmailsInFolder(item.accountId, threadId, GMAIL_DRAFTS_FOLDER)) {
+            const internalThreadId = db.getThreadInternalId(item.accountId, threadId);
+            if (internalThreadId != null) {
+              db.removeThreadFolderAssociation(internalThreadId, GMAIL_DRAFTS_FOLDER);
+            }
+          }
+        }
+      } catch (dbErr) {
+        log.warn(`[MailQueue] send (${item.queueId}): Failed to clean up draft from local DB:`, dbErr);
+      }
+    } finally {
+      release();
+    }
+
+    // Clean up the queueId→serverIds mapping
+    if (payload.originalQueueId) {
+      this.queueIdToServerIds.delete(payload.originalQueueId);
+    }
   }
 
   // -----------------------------------------------------------------------

@@ -80,14 +80,19 @@ export const FoldersStore = signalStore(
               icon: FOLDER_ICON_MAP[f['gmailLabelId'] as string],
             }));
 
-            // Default to INBOX if no active folder
+            // Default to INBOX if no active folder or if current is invalid
             const currentActive = store.activeFolderId();
             const normalizedCurrentActive = currentActive ? normalizeFolderId(currentActive) : null;
             const activeId = normalizedCurrentActive && folders.find(f => f.gmailLabelId === normalizedCurrentActive)
               ? normalizedCurrentActive
               : 'INBOX';
 
-            patchState(store, { folders, activeFolderId: activeId, loading: false });
+            // Only update activeFolderId if it actually changed to avoid triggering change detection errors
+            if (store.activeFolderId() !== activeId) {
+              patchState(store, { folders, activeFolderId: activeId, loading: false });
+            } else {
+              patchState(store, { folders, loading: false });
+            }
           } else {
             patchState(store, {
               loading: false,

@@ -383,15 +383,25 @@ export const ComposeStore = signalStore(
             text: store.textBody() || undefined,
             inReplyTo: store.inReplyTo() || undefined,
             references: store.references() || undefined,
-            attachments: store.attachments().map(a => ({
-              filename: a.filename,
-              content: a.data,
-              contentType: a.mimeType,
-            })),
+            attachments: store.attachments().length > 0
+              ? store.attachments().map(a => ({
+                  filename: a.filename,
+                  content: a.data,
+                  contentType: a.mimeType,
+                }))
+              : undefined,
+            // Pass the draft's queueId so the send worker can delete the server draft
+            // via in-memory mapping (draft created this session)
+            originalQueueId: store.queueId() || undefined,
+            // Also pass server gmailMessageId for drafts opened from server
+            // (fallback when queueId mapping is unavailable)
+            serverDraftGmailMessageId: store.serverGmailMessageId() || undefined,
           };
 
           const response = await electronService.sendMail(String(store.accountId()), message);
           if (response.success) {
+            // Send is now queued — close compose immediately.
+            // The queue worker will handle SMTP send and draft cleanup.
             clearAutoSave();
             unsubscribeFromQueueUpdates();
             patchState(store, initialState);

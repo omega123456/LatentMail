@@ -66,6 +66,17 @@ export function registerQueueIpcHandlers(): void {
         }
       }
 
+      // Validate send payload
+      if (operation.type === 'send') {
+        const payload = operation.payload as unknown as Record<string, unknown>;
+        if (!payload.to || typeof payload.to !== 'string') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'send requires non-empty to string in payload');
+        }
+        if (typeof payload.subject !== 'string' && payload.subject !== undefined) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'send subject must be a string if provided');
+        }
+      }
+
       // Validate delete payload
       if (operation.type === 'delete') {
         const payload = operation.payload as unknown as Record<string, unknown>;

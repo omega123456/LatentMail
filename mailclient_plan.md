@@ -273,6 +273,7 @@ D:\mailclient\
 | `/settings/notifications` | NotificationSettingsComponent | AuthGuard | Notification prefs |
 | `/settings/signatures` | SignatureSettingsComponent | AuthGuard | Signature management |
 | `/settings/filters` | FilterSettingsComponent | AuthGuard | Filter rule management |
+| `/settings/queue` | QueueSettingsComponent | AuthGuard | Mail operation queue management |
 
 ### Navigation Flow
 
@@ -491,9 +492,10 @@ MailClient follows Electron's two-process model with a clear separation of conce
 | **AccountsStore** | Multi-account management | Active account, account list, connection status |
 | **EmailsStore** | Email list and thread data | Current email list, selected thread, loading state, pagination |
 | **FoldersStore** | Folder/label hierarchy | Folder tree per account, unread counts, active folder |
-| **ComposeStore** | Compose window state | Draft content, recipients, attachments, send status |
+| **ComposeStore** | Compose window state | Draft content, recipients, attachments, queueId, send status |
 | **SearchStore** | Search operations | Query, results, filters, search history |
 | **AiStore** | AI feature state | Ollama connection, active model, summaries cache, suggestions |
+| **QueueStore** | Queue operation state | Pending/processing/completed/failed items, queue statistics |
 | **SettingsStore** | Application preferences | Theme, density, layout, shortcuts, notification prefs |
 | **UiStore** | Transient UI state | Sidebar collapsed, reading pane mode, command palette open, loading states |
 
@@ -599,10 +601,12 @@ MailClient follows Electron's two-process model with a clear separation of conce
 **Compose & Send Flow**:
 1. User opens compose (new, reply, or forward)
 2. ComposeStore initializes with context (quoted text, recipients)
-3. Auto-save drafts to local DB periodically
-4. On send: SmtpService delivers via Gmail SMTP
-5. SyncService updates sent folder
-6. ComposeStore clears draft state
+3. Auto-save enqueues draft-create or draft-update operations via MailQueueService every 5 seconds
+4. Queue worker APPENDs draft to Gmail's Drafts folder via IMAP, fetches back server-confirmed data, and updates local DB
+5. On send: ComposeStore enqueues send operation via MailQueueService
+6. Queue worker sends via SmtpService and deletes draft from server
+7. Sent message appears in Sent folder on next sync
+8. ComposeStore clears draft state on successful send
 
 ### API Contracts
 
@@ -647,6 +651,13 @@ All **Renderer → Main** channels use `ipcRenderer.invoke` / `ipcMain.handle` (
 | `ai:stream` | Main → Renderer | Streaming AI response tokens |
 | `db:get-settings` | Renderer → Main | Read settings |
 | `db:set-settings` | Renderer → Main | Write settings |
+| `queue:enqueue` | Renderer → Main | Enqueue a mail operation (draft-create, draft-update, send, move, flag, delete) |
+| `queue:get-status` | Renderer → Main | Get current queue state (all items) |
+| `queue:retry-failed` | Renderer → Main | Retry failed operations (specific queueId or all) |
+| `queue:clear-completed` | Renderer → Main | Remove completed items from queue |
+| `queue:cancel` | Renderer → Main | Cancel a pending operation |
+| `queue:get-pending-count` | Renderer → Main | Get count of non-completed items |
+| `queue:update` | Main → Renderer | Queue item status changed (streaming: queueId, type, status, description, error, result) |
 | `system:notification` | Main → Renderer | New email notification |
 | `system:tray-action` | Main → Renderer | System tray click actions |
 
@@ -1007,6 +1018,8 @@ All **Renderer → Main** channels use `ipcRenderer.invoke` / `ipcMain.handle` (
 │  ✍ Signatures│  ○ Compact (44px)  ● Comfortable (56px)  ○ Spacious (72px) │
 │              │                                                               │
 │  🔀 Filters │  Sidebar                                                      │
+│              │                                                               │
+│  📋 Queue   │  [Toggle] Show unread counts                                  │
 │              │  [Toggle] Show unread counts                                  │
 │              │  [Toggle] Collapse sidebar on startup                         │
 │              │                                                               │
@@ -1324,9 +1337,11 @@ Each AI feature uses a tailored system prompt that:
 
 ### Offline Behavior
 
+All mail operations (draft save, send, move, flag, delete) are queued via MailQueueService. When offline, operations remain in the queue and retry automatically with exponential backoff when connectivity returns.
+
 - **Reading**: Fully functional with cached emails
-- **Composing**: Drafts saved locally; send queued until network available
-- **Send Queue**: When network returns, queued sends are attempted automatically with retry logic
+- **Composing**: Drafts enqueued for save to server; queue processes them when online
+- **Send Queue**: When network returns, queued sends are attempted automatically with retry logic (operations persist in memory across short disconnections; graceful shutdown warning prevents data loss on app close)
 - **Sync**: Paused while offline; resumes automatically when network detected
 - **UI Indicator**: Offline banner shown at top of email list when network unavailable
 
@@ -1427,13 +1442,14 @@ Each AI feature uses a tailored system prompt that:
 
 1. Implement ImapService with imapflow for Gmail IMAP
 2. Implement SmtpService with nodemailer for sending
-3. Build SyncService for initial and incremental sync
-4. Implement DatabaseService CRUD operations for emails/threads
-5. Build SearchService with FTS5 full-text search
-6. Create EmailsStore and FoldersStore
-7. Implement email list with virtual scrolling
-8. Build reading pane with HTML sanitization and sandboxed rendering
-9. Implement thread view with collapsible messages
+3. Implement MailQueueService with fastq for sequential mail operations and FolderLockManager for sync coordination
+4. Build SyncService for initial and incremental sync
+5. Implement DatabaseService CRUD operations for emails/threads
+6. Build SearchService with FTS5 full-text search
+7. Create EmailsStore and FoldersStore
+8. Implement email list with virtual scrolling
+9. Build reading pane with HTML sanitization and sandboxed rendering
+10. Implement thread view with collapsible messages
 
 ### Phase 4 — UI Shell & Layout
 
@@ -1455,8 +1471,8 @@ Each AI feature uses a tailored system prompt that:
 4. Build formatting toolbar with TipTap commands
 5. Implement attachment upload with drag-and-drop
 6. Build signature management (create, edit, select)
-7. Implement draft auto-save
-8. Build ComposeStore for compose state management
+7. Implement draft auto-save via mail operation queue (no local drafts table; server-first approach)
+8. Build ComposeStore with queue-based operation tracking (queueId instead of draftId)
 
 ### Phase 6 — AI Integration (Ollama)
 
@@ -1572,6 +1588,18 @@ Each AI feature uses a tailored system prompt that:
 - [ ] Token refresh failures prompt user to re-authenticate
 - [ ] Ollama unavailability disables AI buttons with explanatory tooltip
 
+### Mail Operation Queue
+- [ ] All draft operations (create, update) go through the queue and are processed sequentially
+- [ ] Send, move, flag, and delete operations go through the queue
+- [ ] Each operation gets a unique queue ID returned immediately to the caller
+- [ ] Draft save creates exactly one entry on the server (no duplicates)
+- [ ] Local DB is only updated after server confirms the operation (server-first guarantee)
+- [ ] Failed operations retry automatically with exponential backoff (max 10 attempts)
+- [ ] Queue settings page shows all operations with correct status and allows retry/clear actions
+- [ ] Graceful shutdown warns user if pending operations exist when closing the app
+- [ ] Operations are processed in FIFO order per account
+- [ ] Queue state updates are reflected in real-time via IPC events
+
 ---
 
 ## Notes and Considerations
@@ -1587,7 +1615,8 @@ Each AI feature uses a tailored system prompt that:
 ### Known Limitations
 - **Gmail Only**: Initial version supports only Gmail; architecture should allow future IMAP provider additions
 - **No Calendar**: Calendar integration deferred to future version
-- **Offline Send Queue**: Composing works offline (drafts saved locally); sends are queued and delivered automatically when network returns
+- **Queue State In-Memory Only**: Queue state is in-memory only. If the app is force-killed (not gracefully closed), pending operations are lost. Graceful shutdown shows a warning dialog when operations are pending. This tradeoff keeps the architecture simple while preventing accidental data loss through user confirmation.
+- **Offline Send Queue**: Composing works offline (drafts enqueued for save); sends are queued and delivered automatically when network returns
 - **Ollama Required for AI**: No cloud AI fallback; AI features require local Ollama installation. All AI buttons show disabled state with tooltip explaining how to install Ollama when it's not detected
 - **Google API Verification**: Distribution beyond testing requires Google's OAuth verification process (privacy policy, app homepage required)
 - **Initial Sync Time**: First sync of a large mailbox may take several minutes; progress indicator shown
