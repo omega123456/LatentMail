@@ -16,39 +16,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
   standalone: true,
   imports: [CommonModule, MatProgressSpinnerModule],
   templateUrl: './auth-callback.component.html',
-  styles: [`
-    .callback-container {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100%;
-      background-color: var(--color-background);
-    }
-
-    .callback-card {
-      text-align: center;
-      padding: 48px;
-
-      h2 {
-        margin: 24px 0 8px;
-        font-size: 20px;
-        font-weight: 600;
-        color: var(--color-text-primary);
-      }
-
-      p {
-        font-size: 14px;
-        color: var(--color-text-secondary);
-        margin: 0;
-      }
-
-      .hint {
-        font-size: 12px;
-        color: var(--color-text-tertiary);
-        margin-top: 8px;
-      }
-    }
-  `]
+  styleUrl: './auth-callback.component.scss',
 })
 export class AuthCallbackComponent implements OnInit {
   private readonly router = inject(Router);

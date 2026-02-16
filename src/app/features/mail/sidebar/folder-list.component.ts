@@ -7,69 +7,7 @@ import { FoldersStore } from '../../../store/folders.store';
   standalone: true,
   imports: [CommonModule],
   templateUrl: './folder-list.component.html',
-  styles: [`
-    .folder-list {
-      flex: 1;
-      overflow-y: auto;
-      overflow-x: hidden;
-    }
-
-    .folder-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 8px 16px;
-      cursor: pointer;
-      color: var(--color-text-primary);
-      transition: background-color 120ms ease;
-      font-size: 14px;
-      white-space: nowrap;
-
-      &:hover {
-        background-color: var(--color-primary-light);
-      }
-
-      &.active {
-        background-color: var(--color-primary-light);
-        color: var(--color-primary);
-        font-weight: 500;
-      }
-
-      &.collapsed {
-        justify-content: center;
-        padding: 10px 0;
-      }
-
-      .material-symbols-outlined {
-        font-size: 20px;
-        flex-shrink: 0;
-      }
-    }
-
-    .folder-name {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .unread-count {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--color-accent);
-      min-width: 20px;
-      text-align: right;
-    }
-
-    .labels-header {
-      padding: 12px 16px 4px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      color: var(--color-text-tertiary);
-      letter-spacing: 0.5px;
-    }
-  `]
+  styleUrl: './folder-list.component.scss',
 })
 export class FolderListComponent {
   readonly foldersStore = inject(FoldersStore);

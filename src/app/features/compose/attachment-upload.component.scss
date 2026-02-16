@@ -1,0 +1,48 @@
+.attachment-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-surface-variant);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.att-icon {
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+}
+
+.att-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-size {
+  color: var(--color-text-tertiary);
+}
+
+.att-remove {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: var(--color-text-tertiary);
+
+  &:hover { color: var(--color-error); }
+
+  .material-symbols-outlined { font-size: 14px; }
+}

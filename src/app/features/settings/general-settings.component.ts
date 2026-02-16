@@ -19,52 +19,7 @@ import { LayoutMode, DensityMode } from '../../core/services/layout.service';
     MatSelectModule, MatFormFieldModule,
   ],
   templateUrl: './general-settings.component.html',
-  styles: [`
-    h2 {
-      font-size: 18px;
-      font-weight: 600;
-      margin: 0 0 24px 0;
-      color: var(--color-text-primary);
-    }
-
-    .settings-section {
-      margin-bottom: 28px;
-
-      h3 {
-        font-size: 14px;
-        font-weight: 600;
-        margin: 0 0 12px 0;
-        color: var(--color-text-primary);
-      }
-    }
-
-    mat-radio-group {
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-
-    .toggle-row {
-      margin-bottom: 12px;
-    }
-
-    .select-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-
-      label {
-        font-size: 14px;
-        color: var(--color-text-primary);
-        white-space: nowrap;
-      }
-    }
-
-    .sync-select {
-      width: 200px;
-    }
-  `]
+  styleUrl: './general-settings.component.scss',
 })
 export class GeneralSettingsComponent implements OnInit {
   readonly themeService = inject(ThemeService);

@@ -7,63 +7,7 @@ import { ElectronService } from '../../core/services/electron.service';
   standalone: true,
   imports: [CommonModule],
   templateUrl: './titlebar.component.html',
-  styles: [`
-    .titlebar {
-      display: flex;
-      align-items: center;
-      height: var(--titlebar-height, 32px);
-      background-color: var(--color-surface);
-      border-bottom: 1px solid var(--color-border);
-      font-size: 12px;
-      color: var(--color-text-primary);
-    }
-
-    .titlebar-drag {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      padding-left: 12px;
-      -webkit-app-region: drag;
-      height: 100%;
-    }
-
-    .titlebar-title {
-      font-weight: 600;
-      font-size: 13px;
-    }
-
-    .titlebar-controls {
-      display: flex;
-      height: 100%;
-      -webkit-app-region: no-drag;
-    }
-
-    .titlebar-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 46px;
-      height: 100%;
-      border: none;
-      background: transparent;
-      color: var(--color-text-primary);
-      cursor: pointer;
-      transition: background-color 120ms ease;
-
-      &:hover {
-        background-color: var(--color-surface-variant);
-      }
-
-      .titlebar-icon {
-        flex-shrink: 0;
-      }
-    }
-
-    .titlebar-btn-close:hover {
-      background-color: var(--color-error);
-      color: white;
-    }
-  `]
+  styleUrl: './titlebar.component.scss',
 })
 export class TitlebarComponent implements OnInit {
   isWindows = signal(false);

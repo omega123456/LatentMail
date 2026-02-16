@@ -16,14 +16,7 @@ export interface ConfirmDialogData {
   standalone: true,
   imports: [CommonModule, MatButtonModule, MatDialogModule],
   templateUrl: './confirm-dialog.component.html',
-  styles: [`
-    p {
-      font-size: 14px;
-      color: var(--color-text-secondary);
-      line-height: 1.5;
-      margin: 0;
-    }
-  `]
+  styleUrl: './confirm-dialog.component.scss',
 })
 export class ConfirmDialogComponent {
   readonly data: ConfirmDialogData = inject(MAT_DIALOG_DATA);

@@ -218,6 +218,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 ### Angular
 
 - **Use external template files** for all components: `templateUrl: './<name>.component.html'`. Do **not** use inline `template: \`...\`` in `@Component()`. Place the `.html` file in the same directory as the component (e.g. `compose-window.component.html` next to `compose-window.component.ts`).
+- **Use external style files** for all components: `styleUrl: './<name>.component.scss'`. Do **not** use inline `styles: [\`...\`]` in `@Component()`. Place the `.scss` file in the same directory as the component and follow SASS nesting conventions.
 - Use standalone components (no NgModules except `AppModule`)
 - Inject services via `inject()` function, not constructor DI
 - Use signals and `computed()` for reactive state
