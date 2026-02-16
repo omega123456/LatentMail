@@ -32,9 +32,18 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
   styles: [`
     .mail-shell {
       display: flex;
+      flex-direction: row;
       height: 100%;
       overflow: hidden;
-      flex-wrap: wrap;
+    }
+
+    /* Wraps main content + status bar so status bar sits at bottom, not right */
+    .main-and-status {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     /* --- Sidebar --- */
@@ -107,6 +116,20 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
       .material-symbols-outlined {
         font-size: 20px;
       }
+    }
+
+    /* Main content area: grows to fill, leaves room for status bar at bottom */
+    .main-content {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+    }
+
+    .main-content > .bottom-layout-container {
+      flex: 1;
+      min-height: 0;
     }
 
     /* --- Three-column layout --- */
@@ -187,14 +210,14 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
       }
     }
 
-    /* --- Status bar occupies full width at bottom --- */
     :host {
       display: flex;
       flex-direction: column;
       height: 100%;
     }
 
-    app-status-bar {
+    /* Status bar: thin bar at bottom of main-and-status column */
+    .main-and-status app-status-bar {
       flex-shrink: 0;
     }
   `]

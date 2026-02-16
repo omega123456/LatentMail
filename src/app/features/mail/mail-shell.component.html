@@ -41,79 +41,70 @@
     </div>
   </aside>
 
-  <!-- Main content area -->
-  @if (uiStore.isThreeColumn()) {
-    <!-- Three-column layout -->
-    <div
-      class="email-list-panel"
-      [style.width.px]="uiStore.emailListWidth()"
-      appResizablePanel
-      [minSize]="240"
-      [maxSize]="600"
-      (resized)="onEmailListResized($event)"
-    >
-      @if (accountsStore.accountsNeedingReauth().length > 0) {
+  <!-- Main content + status bar column (so status bar is at bottom, not right) -->
+  <div class="main-and-status">
+    <div class="main-content">
+      @if (uiStore.isThreeColumn()) {
+      <!-- Three-column layout -->
+      <div class="email-list-panel" [style.width.px]="uiStore.emailListWidth()" appResizablePanel [minSize]="240"
+        [maxSize]="600" (resized)="onEmailListResized($event)">
+        @if (accountsStore.accountsNeedingReauth().length > 0) {
         <div class="reauth-banner">
           <span class="material-symbols-outlined">warning</span>
           <span>Some accounts need re-authentication.</span>
           <a routerLink="/settings/accounts">Fix</a>
         </div>
-      }
-      <app-email-list-header (syncClicked)="onManualSync()" />
-      <app-email-list (threadSelected)="onThreadSelected($event)" />
-    </div>
-
-    <div class="reading-pane-panel">
-      <app-reading-pane (actionClicked)="onAction($event)" />
-    </div>
-  } @else if (uiStore.isBottomPreview()) {
-    <!-- Bottom preview layout -->
-    <div class="bottom-layout-container">
-      @if (accountsStore.accountsNeedingReauth().length > 0) {
-        <div class="reauth-banner">
-          <span class="material-symbols-outlined">warning</span>
-          <span>Some accounts need re-authentication.</span>
-          <a routerLink="/settings/accounts">Fix</a>
-        </div>
-      }
-      <div class="email-list-panel-full">
+        }
         <app-email-list-header (syncClicked)="onManualSync()" />
         <app-email-list (threadSelected)="onThreadSelected($event)" />
       </div>
 
-      @if (emailsStore.selectedThread()) {
-        <div
-          class="reading-pane-bottom"
-          [style.height.%]="uiStore.readingPaneHeight()"
-          appResizablePanel
-          direction="vertical"
-          [minSize]="150"
-          [maxSize]="600"
-          (resized)="onReadingPaneResized($event)"
-        >
+      <div class="reading-pane-panel">
+        <app-reading-pane (actionClicked)="onAction($event)" />
+      </div>
+      } @else if (uiStore.isBottomPreview()) {
+      <!-- Bottom preview layout -->
+      <div class="bottom-layout-container">
+        @if (accountsStore.accountsNeedingReauth().length > 0) {
+        <div class="reauth-banner">
+          <span class="material-symbols-outlined">warning</span>
+          <span>Some accounts need re-authentication.</span>
+          <a routerLink="/settings/accounts">Fix</a>
+        </div>
+        }
+        <div class="email-list-panel-full">
+          <app-email-list-header (syncClicked)="onManualSync()" />
+          <app-email-list (threadSelected)="onThreadSelected($event)" />
+        </div>
+
+        @if (emailsStore.selectedThread()) {
+        <div class="reading-pane-bottom" [style.height.%]="uiStore.readingPaneHeight()" appResizablePanel direction="vertical"
+          [minSize]="150" [maxSize]="600" (resized)="onReadingPaneResized($event)">
           <app-reading-pane (actionClicked)="onAction($event)" />
         </div>
-      }
-    </div>
-  } @else {
-    <!-- List only layout -->
-    <div class="bottom-layout-container">
-      @if (accountsStore.accountsNeedingReauth().length > 0) {
-        <div class="reauth-banner">
-          <span class="material-symbols-outlined">warning</span>
-          <span>Some accounts need re-authentication.</span>
-          <a routerLink="/settings/accounts">Fix</a>
+        }
         </div>
-      }
-      <div class="email-list-panel-full">
-        <app-email-list-header (syncClicked)="onManualSync()" />
-        <app-email-list (threadSelected)="onThreadSelected($event)" />
-      </div>
+        } @else {
+        <!-- List only layout -->
+        <div class="bottom-layout-container">
+          @if (accountsStore.accountsNeedingReauth().length > 0) {
+          <div class="reauth-banner">
+            <span class="material-symbols-outlined">warning</span>
+            <span>Some accounts need re-authentication.</span>
+            <a routerLink="/settings/accounts">Fix</a>
+          </div>
+          }
+          <div class="email-list-panel-full">
+            <app-email-list-header (syncClicked)="onManualSync()" />
+            <app-email-list (threadSelected)="onThreadSelected($event)" />
+          </div>
+        </div>
+        }
     </div>
-  }
 
-  <!-- Status Bar -->
-  <app-status-bar />
+    <!-- Status bar: thin bar at bottom -->
+    <app-status-bar />
+  </div>
 </div>
 
 <!-- Compose Window (overlay) -->
