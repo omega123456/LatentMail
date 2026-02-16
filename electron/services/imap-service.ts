@@ -473,6 +473,38 @@ export class ImapService {
     // We intentionally do NOT release the lock here — it stays open.
   }
 
+  /**
+   * Delete messages by UID from a folder.
+   * For Gmail, moving to Trash is done via IMAP MOVE. Permanent deletion
+   * (from Trash) uses STORE \Deleted + EXPUNGE.
+   *
+   * @param permanent If true, uses STORE \Deleted + EXPUNGE (permanent delete).
+   *                  If false, moves messages to [Gmail]/Trash.
+   */
+  async deleteMessages(
+    accountId: string,
+    folder: string,
+    uids: number[],
+    permanent: boolean = false,
+  ): Promise<void> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const uidRange = uids.join(',');
+      if (permanent) {
+        // Permanent delete: flag as deleted then expunge
+        await client.messageFlagsAdd(uidRange, ['\\Deleted'], { uid: true });
+        await client.messageDelete(uidRange, { uid: true });
+      } else {
+        // Move to Trash
+        await client.messageMove(uidRange, '[Gmail]/Trash', { uid: true });
+      }
+      log.info(`Deleted ${uids.length} message(s) from ${folder} for account ${accountId} (permanent=${permanent})`);
+    } finally {
+      lock.release();
+    }
+  }
+
   // ---- Private helpers ----
 
   /**

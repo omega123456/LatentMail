@@ -5,6 +5,7 @@ import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
 import { SmtpService } from '../services/smtp-service';
 import { SyncService } from '../services/sync-service';
+import { MailQueueService } from '../services/mail-queue-service';
 
 // Threads we've already attempted to fetch bodies for this process (avoids infinite re-fetch for orphans).
 const threadBodyFetchAttempted = new Set<string>();
@@ -141,11 +142,11 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Move messages to a different folder
+  // Move messages to a different folder (via queue)
   ipcMain.handle(IPC_CHANNELS.MAIL_MOVE, async (_event, accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string) => {
     try {
-      log.info(`Moving ${messageIds.length} messages to ${targetFolder} for account ${accountId} (sourceFolder=${sourceFolder || 'auto'})`);
-      const imapService = ImapService.getInstance();
+      log.info(`Enqueuing move of ${messageIds.length} messages to ${targetFolder} for account ${accountId}`);
+      const queueService = MailQueueService.getInstance();
 
       const numAccountId = Number(accountId);
       const resolvedEmails: Array<Record<string, unknown>> = [];
@@ -156,7 +157,6 @@ export function registerMailIpcHandlers(): void {
           resolvedEmails.push(byMessageId);
           continue;
         }
-        // Backward compatibility: older callers passed thread IDs.
         resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
       }
 
@@ -168,93 +168,73 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // Handle orphan threads: if the caller sent a single ID that resolved to zero
-      // emails (e.g. an orphan draft thread with no email rows), clean up its
-      // thread_folders entry for the source folder so it disappears from the list.
-      // Safety: only remove if the thread truly has zero emails in the DB to avoid
-      // hiding valid threads due to DB staleness or Message-ID normalization issues.
+      // Handle orphan threads (zero emails) — clean up immediately
       if (deduped.size === 0 && messageIds.length === 1 && sourceFolder) {
         const orphanThreadId = messageIds[0];
-        // Confirm this is not a known message ID
         const asEmail = db.getEmailByGmailMessageId(numAccountId, orphanThreadId);
         if (!asEmail) {
-          // Verify the thread has zero emails before removing — prevents false cleanup
           const threadEmails = db.getEmailsByThreadId(numAccountId, orphanThreadId);
           if (threadEmails.length === 0) {
             const internalThreadId = db.getThreadInternalId(numAccountId, orphanThreadId);
             if (internalThreadId != null) {
               db.removeThreadFolderAssociation(internalThreadId, sourceFolder);
-              log.info(`MAIL_MOVE: Removed orphan thread ${orphanThreadId} (internal ${internalThreadId}) from folder ${sourceFolder}`);
-            } else {
-              log.warn(`MAIL_MOVE: Orphan thread ${orphanThreadId} has no internal thread ID — cannot clean up`);
+              log.info(`MAIL_MOVE: Removed orphan thread ${orphanThreadId} from ${sourceFolder}`);
             }
             return ipcSuccess(null);
-          } else {
-            log.warn(`MAIL_MOVE: Thread ${orphanThreadId} has ${threadEmails.length} emails but none resolved via message ID — skipping orphan cleanup`);
           }
         }
       }
 
-      // Group messages by source folder using getFolderUidsForEmail (resolves Message-ID → per-folder UIDs)
-      const byFolder = new Map<string, number[]>();
-      // Track which gmailMessageId maps to which source folders for post-move DB update
-      const emailSourceFolders = new Map<string, Set<string>>();
+      // CRITICAL: Snapshot UIDs BEFORE optimistic DB update.
+      // The queue worker uses these pre-resolved UIDs for the IMAP operation.
+      const resolvedUids: Record<string, number[]> = {};
+      const resolvedEmailsMeta: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+
       for (const email of deduped.values()) {
         const gmailMessageId = String(email['gmailMessageId'] || '');
+        const gmailThreadId = String(email['gmailThreadId'] || '');
         const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
 
-        if (folderUids.length === 0) {
-          log.warn(`MAIL_MOVE: No folder UIDs found for email ${gmailMessageId} — IMAP move skipped (will resolve on next sync)`);
-        }
+        resolvedEmailsMeta.push({ gmailMessageId, gmailThreadId });
 
         if (sourceFolder) {
-          // Explicit source folder from the frontend — find the UID for this folder
           const entry = folderUids.find(fu => fu.folder === sourceFolder);
           if (entry) {
-            if (!byFolder.has(sourceFolder)) byFolder.set(sourceFolder, []);
-            byFolder.get(sourceFolder)!.push(entry.uid);
-            if (!emailSourceFolders.has(gmailMessageId)) emailSourceFolders.set(gmailMessageId, new Set());
-            emailSourceFolders.get(gmailMessageId)!.add(sourceFolder);
+            if (!resolvedUids[sourceFolder]) resolvedUids[sourceFolder] = [];
+            resolvedUids[sourceFolder].push(entry.uid);
           }
         } else {
-          // Resolve all folders from the email_folders link table
           for (const { folder, uid } of folderUids) {
-            if (!byFolder.has(folder)) byFolder.set(folder, []);
-            byFolder.get(folder)!.push(uid);
-            if (!emailSourceFolders.has(gmailMessageId)) emailSourceFolders.set(gmailMessageId, new Set());
-            emailSourceFolders.get(gmailMessageId)!.add(folder);
+            if (!resolvedUids[folder]) resolvedUids[folder] = [];
+            resolvedUids[folder].push(uid);
           }
         }
       }
 
-      for (const [folder, uids] of byFolder.entries()) {
-        if (uids.length > 0) {
-          await imapService.moveMessages(accountId, folder, uids, targetFolder);
-        }
-      }
-
-      // Update local DB folder associations directly instead of triggering a full sync.
-      for (const [srcFolder] of byFolder.entries()) {
+      // Optimistic local DB update for folder associations (after UID snapshot).
+      // Iterate all resolved source folders (handles both explicit sourceFolder and auto-resolved).
+      const sourceFolders = Object.keys(resolvedUids);
+      for (const srcFolder of sourceFolders) {
         if (srcFolder === targetFolder) continue;
 
         for (const email of deduped.values()) {
           const gmailMessageId = String(email['gmailMessageId'] || '');
           const gmailThreadId = String(email['gmailThreadId'] || '');
-          const sources = emailSourceFolders.get(gmailMessageId);
-          if (!gmailMessageId || !sources || !sources.has(srcFolder)) continue;
+          if (!gmailMessageId) continue;
 
-          // Move this email's folder association from source to target
-          // New UID in target folder is unknown until next sync — pass null
+          // Check if this email is actually in this source folder
+          const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
+          const inFolder = folderUids.some(fu => fu.folder === srcFolder);
+          if (!inFolder) continue;
+
           db.moveEmailFolder(numAccountId, gmailMessageId, srcFolder, targetFolder, null);
 
-          // Move thread-folder association if thread has no more emails in source
           if (gmailThreadId) {
             const internalThreadId = db.getThreadInternalId(numAccountId, gmailThreadId);
             if (internalThreadId != null) {
               if (!db.threadHasEmailsInFolder(numAccountId, gmailThreadId, srcFolder)) {
                 db.moveThreadFolder(internalThreadId, numAccountId, srcFolder, targetFolder);
               } else {
-                // Thread still has emails in source folder — just add the target association
                 db.upsertThreadFolder(internalThreadId, numAccountId, targetFolder);
               }
             }
@@ -262,22 +242,35 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      log.info(`Move complete: ${deduped.size} emails moved to ${targetFolder}, local DB updated`);
+      const description = `Move ${messageIds.length} email(s) to ${targetFolder}`;
+      const queueId = queueService.enqueue(
+        numAccountId,
+        'move',
+        {
+          messageIds,
+          sourceFolder,
+          targetFolder,
+          resolvedUids,
+          resolvedEmails: resolvedEmailsMeta,
+        },
+        description,
+      );
 
-      return ipcSuccess(null);
+      return ipcSuccess({ queueId });
     } catch (err) {
-      log.error('Failed to move emails:', err);
+      log.error('Failed to enqueue move:', err);
       return ipcError('MAIL_MOVE_FAILED', 'Failed to move emails');
     }
   });
 
-  // Toggle flags on messages
+  // Toggle flags on messages (via queue)
   ipcMain.handle(IPC_CHANNELS.MAIL_FLAG, async (_event, accountId: string, messageIds: string[], flag: string, value: boolean) => {
     try {
-      log.info(`Setting flag ${flag}=${value} on ${messageIds.length} messages for account ${accountId}`);
+      log.info(`Enqueuing flag ${flag}=${value} on ${messageIds.length} messages for account ${accountId}`);
       const numAccountId = Number(accountId);
+      const queueService = MailQueueService.getInstance();
 
-      // Update flags in local DB immediately for responsive UI
+      // Resolve emails and snapshot UIDs BEFORE optimistic DB update
       const flagMap: Record<string, { isRead?: boolean; isStarred?: boolean; isImportant?: boolean }> = {
         read: { isRead: value },
         starred: { isStarred: value },
@@ -290,7 +283,6 @@ export function registerMailIpcHandlers(): void {
           resolvedEmails.push(byMessageId);
           continue;
         }
-        // Backward compatibility: older callers passed thread IDs.
         resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
       }
 
@@ -302,6 +294,18 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
+      // Snapshot UIDs BEFORE optimistic update (prevents race with optimistic move updates)
+      const resolvedUids: Record<string, number[]> = {};
+      for (const email of deduped.values()) {
+        const gmailMessageId = String(email['gmailMessageId'] || '');
+        const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
+        for (const { folder, uid } of folderUids) {
+          if (!resolvedUids[folder]) resolvedUids[folder] = [];
+          resolvedUids[folder].push(uid);
+        }
+      }
+
+      // Optimistic local DB update: set flags immediately for responsive UI
       const dbFlags = flagMap[flag];
       if (dbFlags) {
         for (const email of deduped.values()) {
@@ -309,42 +313,109 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // Also update on IMAP server (best-effort)
-      try {
-        const imapService = ImapService.getInstance();
-        const imapFlags: { read?: boolean; starred?: boolean } = {};
-        if (flag === 'read') imapFlags.read = value;
-        if (flag === 'starred') imapFlags.starred = value;
+      // Enqueue the IMAP flag update via the queue
+      const description = `Flag: ${flag}=${value} on ${messageIds.length} email(s)`;
+      const queueId = queueService.enqueue(
+        numAccountId,
+        'flag',
+        { messageIds, flag, value, resolvedUids },
+        description,
+      );
 
-        if (Object.keys(imapFlags).length > 0) {
-          // Group by folder using getFolderUidsForEmail (resolves Message-ID → per-folder UIDs)
-          const byFolder = new Map<string, number[]>();
-          for (const email of deduped.values()) {
-            const gmailMessageId = String(email['gmailMessageId'] || '');
-            const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
-            if (folderUids.length === 0) {
-              log.warn(`MAIL_FLAG: No folder UIDs found for email ${gmailMessageId} — IMAP flag update skipped (will resolve on next sync)`);
-            }
-            for (const { folder, uid } of folderUids) {
-              if (!byFolder.has(folder)) byFolder.set(folder, []);
-              byFolder.get(folder)!.push(uid);
-            }
-          }
+      return ipcSuccess({ queueId });
+    } catch (err) {
+      log.error('Failed to enqueue flag update:', err);
+      return ipcError('MAIL_FLAG_FAILED', 'Failed to update email flags');
+    }
+  });
 
-          for (const [folder, uids] of byFolder.entries()) {
-            if (uids.length > 0) {
-              await imapService.setFlags(accountId, folder, uids, imapFlags);
+  // Delete messages (via queue)
+  ipcMain.handle(IPC_CHANNELS.MAIL_DELETE, async (_event, accountId: string, messageIds: string[], folder: string) => {
+    try {
+      log.info(`Enqueuing delete of ${messageIds.length} messages from ${folder} for account ${accountId}`);
+      const numAccountId = Number(accountId);
+      const queueService = MailQueueService.getInstance();
+
+      const isPermanent = folder === '[Gmail]/Trash';
+
+      const resolvedEmails: Array<Record<string, unknown>> = [];
+      for (const id of messageIds) {
+        const byMessageId = db.getEmailByGmailMessageId(numAccountId, id);
+        if (byMessageId) {
+          resolvedEmails.push(byMessageId);
+          continue;
+        }
+        resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
+      }
+
+      const deduped = new Map<string, Record<string, unknown>>();
+      for (const email of resolvedEmails) {
+        const gmailMessageId = String(email['gmailMessageId'] || '');
+        if (gmailMessageId) {
+          deduped.set(gmailMessageId, email);
+        }
+      }
+
+      // CRITICAL: Snapshot UIDs BEFORE optimistic DB update.
+      const resolvedUids: number[] = [];
+      const resolvedEmailsMeta: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+
+      for (const email of deduped.values()) {
+        const gmailMessageId = String(email['gmailMessageId'] || '');
+        const gmailThreadId = String(email['gmailThreadId'] || '');
+        resolvedEmailsMeta.push({ gmailMessageId, gmailThreadId });
+
+        const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
+        const entry = folderUids.find(fu => fu.folder === folder);
+        if (entry) {
+          resolvedUids.push(entry.uid);
+        }
+      }
+
+      // Optimistic DB update (after UID snapshot)
+      if (isPermanent) {
+        for (const email of deduped.values()) {
+          db.removeEmailAndAssociations(numAccountId, String(email['gmailMessageId']));
+        }
+      } else {
+        for (const email of deduped.values()) {
+          const gmailMessageId = String(email['gmailMessageId'] || '');
+          const gmailThreadId = String(email['gmailThreadId'] || '');
+          if (!gmailMessageId) continue;
+
+          db.moveEmailFolder(numAccountId, gmailMessageId, folder, '[Gmail]/Trash', null);
+
+          if (gmailThreadId) {
+            const internalThreadId = db.getThreadInternalId(numAccountId, gmailThreadId);
+            if (internalThreadId != null) {
+              if (!db.threadHasEmailsInFolder(numAccountId, gmailThreadId, folder)) {
+                db.moveThreadFolder(internalThreadId, numAccountId, folder, '[Gmail]/Trash');
+              } else {
+                db.upsertThreadFolder(internalThreadId, numAccountId, '[Gmail]/Trash');
+              }
             }
           }
         }
-      } catch (err) {
-        log.warn('Failed to update flags on IMAP server:', err);
       }
 
-      return ipcSuccess(null);
+      const description = `Delete ${messageIds.length} email(s) from ${folder}`;
+      const queueId = queueService.enqueue(
+        numAccountId,
+        'delete',
+        {
+          messageIds,
+          folder,
+          resolvedUids,
+          resolvedEmails: resolvedEmailsMeta,
+          permanent: isPermanent,
+        },
+        description,
+      );
+
+      return ipcSuccess({ queueId });
     } catch (err) {
-      log.error('Failed to update flags:', err);
-      return ipcError('MAIL_FLAG_FAILED', 'Failed to update email flags');
+      log.error('Failed to enqueue delete:', err);
+      return ipcError('MAIL_DELETE_FAILED', 'Failed to delete emails');
     }
   });
 

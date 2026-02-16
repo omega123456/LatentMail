@@ -22,6 +22,8 @@ interface ComposeState {
   queueId: string | null;
   /** Whether the server has confirmed the draft exists (queue completed). */
   serverConfirmed: boolean;
+  /** Server-confirmed gmailMessageId of the draft (for delete on discard). */
+  serverGmailMessageId: string | null;
   to: string;
   cc: string;
   bcc: string;
@@ -49,6 +51,7 @@ const initialState: ComposeState = {
   accountDisplayName: '',
   queueId: null,
   serverConfirmed: false,
+  serverGmailMessageId: null,
   to: '',
   cc: '',
   bcc: '',
@@ -123,7 +126,7 @@ export const ComposeStore = signalStore(
         queueId: string;
         status: string;
         error?: string;
-        result?: unknown;
+        result?: { gmailMessageId?: string };
       }>('queue:update').subscribe((update) => {
         const currentQueueId = store.queueId();
         if (!currentQueueId || update.queueId !== currentQueueId) return;
@@ -133,6 +136,7 @@ export const ComposeStore = signalStore(
             serverConfirmed: true,
             saving: false,
             lastSavedAt: new Date().toISOString(),
+            serverGmailMessageId: update.result?.gmailMessageId || store.serverGmailMessageId(),
           });
         } else if (update.status === 'failed') {
           patchState(store, {
@@ -276,6 +280,7 @@ export const ComposeStore = signalStore(
             accountDisplayName: context.accountDisplayName,
             queueId: null,
             serverConfirmed: false,
+            serverGmailMessageId: null,
             to: d.to,
             cc: d.cc,
             bcc: d.bcc,
@@ -308,6 +313,7 @@ export const ComposeStore = signalStore(
           accountDisplayName: context.accountDisplayName,
           queueId: null,
           serverConfirmed: false,
+          serverGmailMessageId: null,
           to,
           cc,
           bcc: '',
@@ -433,9 +439,20 @@ export const ComposeStore = signalStore(
       async discardDraft(): Promise<void> {
         clearAutoSave();
         unsubscribeFromQueueUpdates();
-        // If the server has confirmed the draft exists, we could enqueue a delete
-        // operation. For now, the draft will remain on the server and be cleaned up
-        // on next sync or manually. Phase 2 will add delete-via-queue.
+        // If the server has confirmed the draft exists, enqueue a delete operation
+        // to remove it from the server's [Gmail]/Drafts folder.
+        const gmailMessageId = store.serverGmailMessageId();
+        if (store.serverConfirmed() && gmailMessageId && store.accountId()) {
+          try {
+            await electronService.deleteEmails(
+              String(store.accountId()),
+              [gmailMessageId],
+              '[Gmail]/Drafts',
+            );
+          } catch {
+            // Best-effort: if delete fails, draft remains on server until next sync
+          }
+        }
         patchState(store, initialState);
       },
     };

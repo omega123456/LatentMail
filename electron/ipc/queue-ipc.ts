@@ -41,6 +41,42 @@ export function registerQueueIpcHandlers(): void {
         }
       }
 
+      // Validate move payload
+      if (operation.type === 'move') {
+        const payload = operation.payload as unknown as Record<string, unknown>;
+        if (!Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'move requires non-empty messageIds array in payload');
+        }
+        if (!payload.targetFolder || typeof payload.targetFolder !== 'string') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'move requires targetFolder string in payload');
+        }
+      }
+
+      // Validate flag payload
+      if (operation.type === 'flag') {
+        const payload = operation.payload as unknown as Record<string, unknown>;
+        if (!Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'flag requires non-empty messageIds array in payload');
+        }
+        if (!payload.flag || typeof payload.flag !== 'string') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'flag requires flag string in payload');
+        }
+        if (typeof payload.value !== 'boolean') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'flag requires value boolean in payload');
+        }
+      }
+
+      // Validate delete payload
+      if (operation.type === 'delete') {
+        const payload = operation.payload as unknown as Record<string, unknown>;
+        if (!Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires non-empty messageIds array in payload');
+        }
+        if (!payload.folder || typeof payload.folder !== 'string') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires folder string in payload');
+        }
+      }
+
       const description = operation.description || `${operation.type} operation`;
       const queueId = queueService.enqueue(
         operation.accountId,

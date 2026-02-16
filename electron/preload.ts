@@ -24,6 +24,8 @@ const electronAPI = {
       ipcRenderer.invoke('mail:move', accountId, messageIds, targetFolder, sourceFolder) as Promise<IpcResponse>,
     flag: (accountId: string, messageIds: string[], flag: string, value: boolean) =>
       ipcRenderer.invoke('mail:flag', accountId, messageIds, flag, value) as Promise<IpcResponse>,
+    delete: (accountId: string, messageIds: string[], folder: string) =>
+      ipcRenderer.invoke('mail:delete', accountId, messageIds, folder) as Promise<IpcResponse>,
     search: (accountId: string, query: string) =>
       ipcRenderer.invoke('mail:search', accountId, query) as Promise<IpcResponse>,
     syncAccount: (accountId: string) =>

@@ -56,17 +56,29 @@ export interface MovePayload {
   messageIds: string[];
   sourceFolder?: string;
   targetFolder: string;
+  /** Pre-resolved UIDs grouped by source folder (snapshotted at enqueue time). */
+  resolvedUids?: Record<string, number[]>;
+  /** Pre-resolved email metadata for DB update (snapshotted at enqueue time). */
+  resolvedEmails?: Array<{ gmailMessageId: string; gmailThreadId: string }>;
 }
 
 export interface FlagPayload {
   messageIds: string[];
   flag: string;
   value: boolean;
+  /** Pre-resolved UIDs grouped by folder (snapshotted at enqueue time). */
+  resolvedUids?: Record<string, number[]>;
 }
 
 export interface DeletePayload {
   messageIds: string[];
   folder: string;
+  /** Pre-resolved UIDs in the target folder (snapshotted at enqueue time). */
+  resolvedUids?: number[];
+  /** Pre-resolved email metadata for DB cleanup (snapshotted at enqueue time). */
+  resolvedEmails?: Array<{ gmailMessageId: string; gmailThreadId: string }>;
+  /** Whether this is a permanent delete (from Trash). */
+  permanent?: boolean;
 }
 
 export type QueuePayload =
@@ -325,11 +337,17 @@ export class MailQueueService {
         case 'draft-update':
           await this.processDraftUpdate(item);
           break;
-        // Phase 2/3 placeholders — will be implemented later
-        case 'send':
         case 'move':
+          await this.processMove(item);
+          break;
         case 'flag':
+          await this.processFlag(item);
+          break;
         case 'delete':
+          await this.processDelete(item);
+          break;
+        // Phase 3 placeholder — will be implemented later
+        case 'send':
           throw new Error(`Operation type "${item.type}" not yet implemented in queue`);
         default:
           throw new Error(`Unknown operation type: ${item.type}`);
@@ -648,6 +666,119 @@ export class MailQueueService {
     } finally {
       release();
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Move worker
+  // -----------------------------------------------------------------------
+
+  private async processMove(item: QueueItem): Promise<void> {
+    const payload = item.payload as MovePayload;
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    // Use pre-resolved UIDs from the payload (snapshotted at enqueue time).
+    // This avoids re-querying the DB after the optimistic update has already
+    // moved/removed the source folder associations.
+    const byFolder = payload.resolvedUids;
+
+    if (!byFolder || Object.keys(byFolder).length === 0) {
+      log.warn(`[MailQueue] move (${item.queueId}): No resolved UIDs in payload — skipping IMAP move`);
+      return;
+    }
+
+    // Perform IMAP MOVE for each source folder (acquire folder lock first)
+    for (const [folder, uids] of Object.entries(byFolder)) {
+      if (!uids || uids.length === 0) continue;
+
+      const release = await lockManager.acquire(folder);
+      try {
+        await imapService.moveMessages(String(item.accountId), folder, uids, payload.targetFolder);
+      } finally {
+        release();
+      }
+    }
+
+    // DB was already updated optimistically by the IPC handler.
+    // No further DB updates needed here — the optimistic update is canonical.
+    // If the IMAP operation fails (throws), the retry mechanism will re-attempt,
+    // and the next sync will reconcile any inconsistency.
+
+    const emailCount = payload.resolvedEmails?.length ?? payload.messageIds.length;
+    log.info(`[MailQueue] move (${item.queueId}): ${emailCount} emails moved to ${payload.targetFolder}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Flag worker
+  // -----------------------------------------------------------------------
+
+  private async processFlag(item: QueueItem): Promise<void> {
+    const payload = item.payload as FlagPayload;
+    const imapService = ImapService.getInstance();
+
+    // Build IMAP flags object
+    const imapFlags: { read?: boolean; starred?: boolean } = {};
+    if (payload.flag === 'read') imapFlags.read = payload.value;
+    if (payload.flag === 'starred') imapFlags.starred = payload.value;
+
+    // Perform IMAP flag update if applicable (read/starred map to IMAP flags)
+    if (Object.keys(imapFlags).length > 0) {
+      // Use pre-resolved UIDs from the payload (snapshotted at enqueue time).
+      // This avoids races with optimistic move updates that may have already
+      // changed folder associations in the DB.
+      const byFolder = payload.resolvedUids;
+
+      if (!byFolder || Object.keys(byFolder).length === 0) {
+        log.warn(`[MailQueue] flag (${item.queueId}): No resolved UIDs — skipping IMAP flag update`);
+      } else {
+        for (const [folder, uids] of Object.entries(byFolder)) {
+          if (uids && uids.length > 0) {
+            await imapService.setFlags(String(item.accountId), folder, uids, imapFlags);
+          }
+        }
+      }
+    }
+
+    // DB was already updated optimistically by the IPC handler.
+    // For 'important' flag: no IMAP equivalent (Gmail labels, not IMAP flags),
+    // so only the local DB update matters.
+
+    log.info(`[MailQueue] flag (${item.queueId}): ${payload.flag}=${payload.value} on ${payload.messageIds.length} emails`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Delete worker
+  // -----------------------------------------------------------------------
+
+  private async processDelete(item: QueueItem): Promise<void> {
+    const payload = item.payload as DeletePayload;
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    const folder = payload.folder;
+    const isPermanent = payload.permanent ?? (folder === '[Gmail]/Trash');
+
+    // Use pre-resolved UIDs from the payload (snapshotted at enqueue time).
+    const uids = payload.resolvedUids;
+
+    if (!uids || uids.length === 0) {
+      log.warn(`[MailQueue] delete (${item.queueId}): No resolved UIDs in payload — skipping IMAP delete`);
+      return;
+    }
+
+    // Perform IMAP delete (with folder lock)
+    const release = await lockManager.acquire(folder);
+    try {
+      await imapService.deleteMessages(String(item.accountId), folder, uids, isPermanent);
+    } finally {
+      release();
+    }
+
+    // DB was already updated optimistically by the IPC handler.
+    // No further DB updates needed here.
+
+    const emailCount = payload.resolvedEmails?.length ?? payload.messageIds.length;
+    log.info(`[MailQueue] delete (${item.queueId}): ${emailCount} emails deleted from ${folder} (permanent=${isPermanent})`);
   }
 
   // -----------------------------------------------------------------------

@@ -7,6 +7,7 @@ export const IPC_CHANNELS = {
   MAIL_SEND: 'mail:send',
   MAIL_MOVE: 'mail:move',
   MAIL_FLAG: 'mail:flag',
+  MAIL_DELETE: 'mail:delete',
   MAIL_SEARCH: 'mail:search',
   MAIL_SYNC_ACCOUNT: 'mail:sync-account',
   MAIL_GET_FOLDERS: 'mail:get-folders',

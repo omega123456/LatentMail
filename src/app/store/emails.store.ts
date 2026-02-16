@@ -212,6 +212,33 @@ export const EmailsStore = signalStore(
         }
       },
 
+      /** Delete emails from a folder */
+      async deleteEmails(
+        accountId: number,
+        messageIds: string[],
+        folder: string,
+        threadId?: string,
+      ): Promise<void> {
+        // Optimistic remove from list
+        const targetThreadId = threadId || store.selectedThreadId() || null;
+        patchState(store, {
+          threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+        });
+
+        try {
+          const response = await electronService.deleteEmails(String(accountId), messageIds, folder);
+          if (!response.success) {
+            patchState(store, {
+              error: response.error?.message || 'Failed to delete emails',
+            });
+          }
+        } catch (err: unknown) {
+          patchState(store, {
+            error: err instanceof Error ? err.message : 'Failed to delete emails',
+          });
+        }
+      },
+
       /** Search emails */
       async searchEmails(accountId: number, query: string): Promise<void> {
         patchState(store, { loading: true, error: null });

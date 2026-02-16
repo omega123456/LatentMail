@@ -1083,6 +1083,99 @@ export class DatabaseService {
     return (result[0].values[0][0] as number) > 0;
   }
 
+  /**
+   * Remove an email and all its folder associations.
+   * Also cleans up orphaned threads (threads with no remaining emails).
+   * Used by the queue delete worker after successful IMAP deletion.
+   */
+  removeEmailAndAssociations(accountId: number, gmailMessageId: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      // Get the email row
+      const emailResult = this.db.exec(
+        'SELECT id, gmail_thread_id FROM emails WHERE account_id = ? AND gmail_message_id = ?',
+        [accountId, gmailMessageId]
+      );
+      if (emailResult.length === 0 || emailResult[0].values.length === 0) {
+        this.db.run('COMMIT');
+        return;
+      }
+      const emailId = emailResult[0].values[0][0] as number;
+      const gmailThreadId = emailResult[0].values[0][1] as string;
+
+      // Remove all folder associations for this email
+      this.db.run('DELETE FROM email_folders WHERE email_id = ?', [emailId]);
+
+      // Remove the email row itself
+      this.db.run('DELETE FROM emails WHERE id = ?', [emailId]);
+
+      // Clean up orphaned thread: if no more emails reference this thread, remove thread + thread_folders
+      if (gmailThreadId) {
+        const remainingResult = this.db.exec(
+          'SELECT COUNT(*) FROM emails WHERE account_id = ? AND gmail_thread_id = ?',
+          [accountId, gmailThreadId]
+        );
+        const remaining = (remainingResult.length > 0 && remainingResult[0].values.length > 0)
+          ? remainingResult[0].values[0][0] as number : 0;
+
+        if (remaining === 0) {
+          // No emails left — remove thread and all its folder associations
+          const threadIdResult = this.db.exec(
+            'SELECT id FROM threads WHERE account_id = ? AND gmail_thread_id = ?',
+            [accountId, gmailThreadId]
+          );
+          if (threadIdResult.length > 0 && threadIdResult[0].values.length > 0) {
+            const threadId = threadIdResult[0].values[0][0] as number;
+            this.db.run('DELETE FROM thread_folders WHERE thread_id = ?', [threadId]);
+            this.db.run('DELETE FROM threads WHERE id = ?', [threadId]);
+          }
+        } else {
+          // Thread still has emails — update thread_folders to remove associations
+          // for folders that no longer have any emails from this thread
+          const threadIdResult = this.db.exec(
+            'SELECT id FROM threads WHERE account_id = ? AND gmail_thread_id = ?',
+            [accountId, gmailThreadId]
+          );
+          if (threadIdResult.length > 0 && threadIdResult[0].values.length > 0) {
+            const threadId = threadIdResult[0].values[0][0] as number;
+            // Get all folders this thread is associated with
+            const tfResult = this.db.exec(
+              'SELECT DISTINCT folder FROM thread_folders WHERE thread_id = ?',
+              [threadId]
+            );
+            if (tfResult.length > 0) {
+              for (const row of tfResult[0].values) {
+                const folder = row[0] as string;
+                // Check if thread still has emails in this folder
+                const countResult = this.db.exec(
+                  `SELECT COUNT(*) FROM emails e
+                   JOIN email_folders ef ON e.id = ef.email_id
+                   WHERE e.account_id = ? AND e.gmail_thread_id = ? AND ef.folder = ?`,
+                  [accountId, gmailThreadId, folder]
+                );
+                const count = (countResult.length > 0 && countResult[0].values.length > 0)
+                  ? countResult[0].values[0][0] as number : 0;
+                if (count === 0) {
+                  this.db.run(
+                    'DELETE FROM thread_folders WHERE thread_id = ? AND folder = ?',
+                    [threadId, folder]
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
   // ---- Contact search (for autocomplete) ----
 
   searchContacts(query: string, limit: number = 10): Array<Record<string, unknown>> {
