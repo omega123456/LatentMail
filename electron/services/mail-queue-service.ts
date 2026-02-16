@@ -154,6 +154,7 @@ function classifyError(err: unknown): ErrorCategory {
 const GMAIL_DRAFTS_FOLDER = '[Gmail]/Drafts';
 const GMAIL_SENT_FOLDER = '[Gmail]/Sent Mail';
 const GMAIL_TRASH_FOLDER = '[Gmail]/Trash';
+const GMAIL_STARRED_FOLDER = '[Gmail]/Starred';
 const POST_OP_FETCH_LIMIT = 5;
 const MAX_RETRIES = 10;
 const BACKOFF_BASE_MS = 2_000;
@@ -1046,6 +1047,8 @@ export class MailQueueService {
 
   /**
    * Post-op fetch for flag: re-fetch each affected UID per folder to confirm flag state.
+   * For starred flag operations, also fetch/reconcile [Gmail]/Starred to keep folder
+   * membership in sync (star adds the message to the folder, unstar removes it).
    */
   private async postOpFetchFlag(item: QueueItem): Promise<void> {
     const payload = item.payload as FlagPayload;
@@ -1054,6 +1057,27 @@ export class MailQueueService {
 
     const folders = Object.keys(byFolder);
     await this.fetchUidsAndUpsert(item.accountId, byFolder);
+
+    // Starred flag operations affect [Gmail]/Starred folder membership.
+    // Star → message appears in the folder; Unstar → message disappears.
+    if (payload.flag === 'starred') {
+      try {
+        if (payload.value) {
+          // Starring: fetch latest from [Gmail]/Starred to pick up newly-starred messages
+          await this.fetchLatestAndUpsert(item.accountId, GMAIL_STARRED_FOLDER);
+        } else {
+          // Unstarring: reconcile [Gmail]/Starred to remove stale associations
+          await this.reconcileFolder(item.accountId, GMAIL_STARRED_FOLDER);
+        }
+      } catch (err) {
+        log.warn(`[MailQueue] Post-op Starred folder sync failed (${item.queueId}): ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Include [Gmail]/Starred in the changed folders
+      if (!folders.includes(GMAIL_STARRED_FOLDER)) {
+        folders.push(GMAIL_STARRED_FOLDER);
+      }
+    }
 
     this.emitDataChanged(item.accountId, folders, 'flag');
   }
@@ -1131,6 +1155,73 @@ export class MailQueueService {
       if (validEmails.length > 0) {
         this.upsertFetchedEmails(accountId, folder, validEmails);
       }
+    }
+  }
+
+  /**
+   * Targeted folder reconciliation: compare local email_folders UIDs against the
+   * server's complete UID set and remove stale associations. Used after unstar to
+   * clean [Gmail]/Starred promptly without waiting for a full account sync.
+   *
+   * This mirrors the reconciliation logic in SyncService.syncAccount() but is
+   * scoped to a single folder.
+   */
+  private async reconcileFolder(accountId: number, folder: string): Promise<void> {
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+    const db = DatabaseService.getInstance();
+
+    // Fetch the complete UID set from the server (lightweight SEARCH ALL)
+    let serverUids: number[];
+    const release = await lockManager.acquire(folder);
+    try {
+      serverUids = await imapService.fetchFolderUids(String(accountId), folder);
+    } finally {
+      release();
+    }
+
+    const serverUidSet = new Set(serverUids);
+
+    // Query local DB for all (emailId, uid) pairs associated with this folder
+    const localFolderUids = db.getEmailFolderUids(accountId, folder);
+
+    // Find stale local entries: present locally but not on server
+    const staleEntries = localFolderUids.filter(entry => !serverUidSet.has(entry.uid));
+
+    if (staleEntries.length === 0) return;
+
+    log.info(`[MailQueue] reconcileFolder: removing ${staleEntries.length} stale associations from ${folder} for account ${accountId}`);
+
+    const rawDb = db.getDatabase();
+    rawDb.run('BEGIN');
+    try {
+      for (const stale of staleEntries) {
+        // Remove email-folder association
+        db.removeEmailFolderAssociation(accountId, stale.gmailMessageId, folder);
+
+        // Check if the email's thread still has emails in this folder
+        const email = db.getEmailByGmailMessageId(accountId, stale.gmailMessageId);
+        if (email) {
+          const threadId = String(email['gmailThreadId'] || '');
+          if (threadId && !db.threadHasEmailsInFolder(accountId, threadId, folder)) {
+            const internalThreadId = db.getThreadInternalId(accountId, threadId);
+            if (internalThreadId != null) {
+              db.removeThreadFolderAssociation(internalThreadId, folder);
+              log.info(`[MailQueue] reconcileFolder: removed thread-folder for thread ${threadId} from ${folder}`);
+            }
+          }
+        }
+      }
+      rawDb.run('COMMIT');
+    } catch (err) {
+      rawDb.run('ROLLBACK');
+      throw err;
+    }
+
+    // Remove orphaned threads (threads with zero folder associations)
+    const orphansRemoved = db.removeOrphanedThreads(accountId);
+    if (orphansRemoved > 0) {
+      log.info(`[MailQueue] reconcileFolder: removed ${orphansRemoved} orphaned threads for account ${accountId}`);
     }
   }
 

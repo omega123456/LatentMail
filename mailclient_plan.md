@@ -26,9 +26,9 @@
 
 ## Overview
 
-MailClient is a cross-platform desktop email client for **Windows 10+ (x64)** and **macOS 12+ (Apple Silicon and Intel)**, built with **Electron 40+** and **Angular 21+**. It features a clean, minimal design inspired by Mailbird, supports Gmail via IMAP with OAuth2 (system browser + loopback redirect), and integrates local AI through Ollama for intelligent email management. The application stores emails locally in SQLite for offline reading and fast full-text search.
+MailClient is a cross-platform desktop email client for **Windows 10+ (x64)** and **macOS 12+ (Apple Silicon and Intel)**, built with **Electron 40+** and **Angular 21+**. It features a clean, minimal design inspired by Mailbird, supports Gmail via IMAP with OAuth2 (system browser + loopback redirect), and integrates local AI through Ollama for intelligent email management. The application stores emails locally in SQLite for offline reading and uses hybrid search (local DB first, then IMAP server; results deduplicated by server email id).
 
-> **Technology Rationale**: Electron was chosen over Tauri for its mature ecosystem, broad Angular integration support, and proven track record with email clients. Angular was chosen for its strong typing, dependency injection, and enterprise-grade architecture. SQLite was chosen over IndexedDB for its superior full-text search (FTS5), cross-process accessibility from the main process, and proven performance with large datasets.
+> **Technology Rationale**: Electron was chosen over Tauri for its mature ecosystem, broad Angular integration support, and proven track record with email clients. Angular was chosen for its strong typing, dependency injection, and enterprise-grade architecture. SQLite (via **sql.js** WASM) was chosen for local email storage: no native compilation, in-memory DB with persist to disk, cross-process accessibility from the main process. Search is hybrid: local DB first (cached metadata), then IMAP server (Gmail) for full coverage; results deduplicated by server email id.
 
 ### Key Technology Choices
 
@@ -39,7 +39,7 @@ MailClient is a cross-platform desktop email client for **Windows 10+ (x64)** an
 | **UI Components** | Angular Material + Tailwind CSS |
 | **State Management** | NgRx SignalStore |
 | **Rich Text Editor** | TipTap (ProseMirror-based) |
-| **Local Database** | SQLite (via better-sqlite3) |
+| **Local Database** | SQLite (via sql.js WASM — in-memory, persist to disk) |
 | **Email Protocol** | IMAP/SMTP via imapflow + nodemailer |
 | **AI Integration** | Ollama REST API (local, user-configurable models) |
 | **Icons** | Material Symbols (outlined) |
@@ -54,7 +54,7 @@ MailClient is a cross-platform desktop email client for **Windows 10+ (x64)** an
 1. **Cross-platform**: Run natively on Windows and macOS with platform-appropriate packaging
 2. **Gmail-first**: Seamless Gmail integration via OAuth2 (system browser + loopback redirect, no embedded webview)
 3. **Multi-account**: Support multiple Gmail accounts with unified inbox and per-account views
-4. **Local-first**: All emails cached in SQLite for offline reading and fast full-text search
+4. **Local-first**: All emails cached in SQLite for offline reading; search queries local cache first, then IMAP server, with results deduplicated by server email id
 5. **AI-powered**: Full suite of local AI features via Ollama — summarize, compose, sort, filter, search, and transform text
 6. **Clean & minimal UI**: Mailbird-inspired design with dark/light themes, switchable layouts, and comfortable density
 7. **Keyboard-driven**: Full keyboard shortcut support with command palette for power users
@@ -98,7 +98,7 @@ D:\mailclient\
 │   │   ├── oauth-service.ts          # Google OAuth2 token management
 │   │   ├── database-service.ts       # SQLite database operations
 │   │   ├── sync-service.ts           # Email sync orchestration
-│   │   ├── search-service.ts         # Full-text search via SQLite FTS5
+│   │   ├── search-service.ts         # Hybrid search (local DB + IMAP server, dedupe by gmail_message_id)
 │   │   ├── ollama-service.ts         # Ollama REST API client
 │   │   ├── notification-service.ts   # Desktop notifications
 │   │   ├── credential-service.ts    # Secure credential storage (Electron safeStorage)
@@ -315,7 +315,7 @@ MailClient follows Electron's two-process model with a clear separation of conce
 │                     │                                │
 │  ┌──────────────────┴──────────────────────────────┐│
 │  │           Database Service (SQLite)              ││
-│  │  (better-sqlite3 + FTS5 full-text search)       ││
+│  │  (sql.js WASM; search = local + IMAP server)   ││
 │  └─────────────────────────────────────────────────┘│
 │                                                      │
 │  ┌─────────────────┐  ┌───────────────────────────┐│
@@ -392,16 +392,16 @@ MailClient follows Electron's two-process model with a clear separation of conce
 > **Note**: Google forbids OAuth in embedded webviews for desktop apps. This app uses the "installed application" flow with a loopback IP redirect (`http://127.0.0.1:{port}/callback`). No client secret is embedded in the app binary — the app is registered as a "Desktop" type OAuth client in Google Cloud Console, which uses PKCE instead of a client secret.
 
 #### DatabaseService
-**Purpose**: Manages the local SQLite database for offline email storage and search
+**Purpose**: Manages the local SQLite database for offline email storage and local search
 
 **Responsibilities**:
 - Initialize database schema and run migrations
 - CRUD operations for emails, threads, contacts, labels, and settings
-- Full-text search via FTS5 virtual tables
+- Local search over cached emails (metadata: subject, from, to, date, flags; body when present)
 - Manage per-account data isolation
 - Handle database compaction and cleanup
 
-**Key Dependencies**: better-sqlite3
+**Key Dependencies**: sql.js (WASM)
 
 #### SyncService
 **Purpose**: Orchestrates synchronization between Gmail and local database
@@ -421,15 +421,17 @@ MailClient follows Electron's two-process model with a clear separation of conce
 **Key Dependencies**: ImapService, DatabaseService
 
 #### SearchService
-**Purpose**: Provides fast full-text search across locally cached emails
+**Purpose**: Hybrid search — query local DB first, then IMAP server; merge and deduplicate results for a complete result set.
 
 **Responsibilities**:
-- Index email content in SQLite FTS5 tables
-- Support Gmail-style search operators (from:, to:, subject:, has:attachment, label:)
-- Return ranked search results with snippet highlighting
-- Maintain search index during sync operations
+- Accept structured search parameters (from LLM or direct Gmail-style operators) and optionally a Gmail raw query string
+- **Local first**: Run search against SQLite (DatabaseService) using subject, from, to, date, flags (metadata/LIKE); return matching emails from cache
+- **Server then**: Run same criteria (or Gmail raw string) via ImapService using IMAP SEARCH (imapflow `SearchObject`: from, to, subject, body, text, since, before, seen, flagged; or `gmraw`/`gmailraw` for Gmail raw syntax)
+- **Merge and deduplicate**: Combine local and server result sets; deduplicate by server-side email id (e.g. `gmail_message_id`) so each message appears once; prefer local row when both exist for consistent display
+- Support Gmail-style operators in both local and server paths
+- Return unified, ranked results with snippet highlighting where available
 
-**Key Dependencies**: DatabaseService
+**Key Dependencies**: DatabaseService, ImapService
 
 #### OllamaService
 **Purpose**: Interfaces with the local Ollama instance for all AI features
@@ -574,20 +576,27 @@ MailClient follows Electron's two-process model with a clear separation of conce
 - Cached AI operation results to avoid redundant processing
 - Key fields: operation type, input hash, model used, result, created timestamp, expiry
 
-**search_index** (FTS5 virtual table)
-- Full-text search index over email subjects, bodies, and sender names
-- Supports Gmail-style query operators
+**search_index** (optional denormalized table)
+- Optional cache for local metadata search (subject, from, body when available); not required for server-side search
+- Server-side search via IMAP provides full coverage (Gmail indexes all mail); local search covers cached emails for fast offline results
 
 ### Data Flow Patterns
+
+**Search Flow** (hybrid local + server):
+1. User enters natural language query or Gmail-style search string in search bar
+2. If AI is enabled: OllamaService receives query; LLM is given system prompt that includes the **search JSON structure and options** (imapflow `SearchObject` fields and/or Gmail raw query syntax) and returns structured search parameters (e.g. `{ from, to, subject, since, before, seen, flagged }`) or a Gmail raw string (`gmraw`)
+3. SearchService runs **local search first**: DatabaseService queries SQLite with those parameters (subject, from, to, date, flags); returns list of matching emails (by `gmail_message_id`)
+4. SearchService runs **server search**: ImapService executes IMAP SEARCH with same criteria (or `gmraw`) per folder or [Gmail]/All Mail; fetches envelope (and optionally snippet) for matching UIDs; returns server results with `gmail_message_id`
+5. **Deduplicate**: Merge local and server result sets; key by server-side email id (`gmail_message_id`); each message appears once; when both local and server have the same id, prefer local row for consistency (already cached)
+6. Return merged, deduplicated list to renderer; SearchStore updates; search results UI displays
 
 **Email Sync Flow**:
 1. SyncService triggers sync (on schedule or manual)
 2. ImapService fetches new/changed messages from Gmail
 3. DatabaseService stores messages in SQLite
-4. SearchService updates FTS5 index
-5. Main process sends IPC event to renderer
-6. EmailsStore updates with new data
-7. UI components react to store changes
+4. Main process sends IPC event to renderer
+5. EmailsStore updates with new data
+6. UI components react to store changes
 
 **AI Operation Flow**:
 1. User triggers AI action (summarize, compose, etc.)
@@ -638,14 +647,14 @@ All **Renderer → Main** channels use `ipcRenderer.invoke` / `ipcMain.handle` (
 | `mail:send` | Renderer → Main | Send composed email |
 | `mail:move` | Renderer → Main | Move email to folder |
 | `mail:flag` | Renderer → Main | Toggle email flags (read, star, etc.) |
-| `mail:search` | Renderer → Main | Execute search query |
+| `mail:search` | Renderer → Main | Execute search (local then server; dedupe by gmail_message_id) |
 | `auth:login` | Renderer → Main | Initiate OAuth flow |
 | `auth:logout` | Renderer → Main | Remove account |
 | `auth:refresh` | Main → Renderer | Token refresh status |
 | `ai:summarize` | Renderer → Main | Summarize thread |
 | `ai:compose` | Renderer → Main | AI compose assistance |
 | `ai:categorize` | Renderer → Main | Categorize emails |
-| `ai:search` | Renderer → Main | Natural language search |
+| `ai:search` | Renderer → Main | Natural language → structured search params; then same as mail:search |
 | `ai:transform` | Renderer → Main | Text transformation |
 | `ai:status` | Main → Renderer | Ollama connection status |
 | `ai:stream` | Main → Renderer | Streaming AI response tokens |
@@ -1093,7 +1102,7 @@ All **Renderer → Main** channels use `ipcRenderer.invoke` / `ipcMain.handle` (
 | **Text Transform** | Compose toolbar submenu | `POST /api/chat` | Transform selected text: improve, shorten, formalize, casualize |
 | **Auto-Categorize** | Background on sync, manual trigger | `POST /api/chat` (structured output) | Classify email into categories: Primary, Updates, Promotions, Social, Newsletters |
 | **Smart Filter** | AI filter builder in settings | `POST /api/chat` (structured output) | Generate filter rules from natural language description |
-| **Natural Language Search** | AI search in search bar | `POST /api/chat` | Convert natural language query to structured search parameters |
+| **Natural Language Search** | AI search in search bar | `POST /api/chat` (structured output) | LLM given search JSON structure and options (imapflow SearchObject / Gmail raw); outputs structured params or `gmraw`; SearchService queries local DB first, then server (IMAP SEARCH); results deduplicated by server email id (`gmail_message_id`) |
 | **Follow-up Reminder** | Background check on sent emails | `POST /api/chat` | Detect sent emails that likely expect a reply but haven't received one |
 
 ### AI System Prompt Design
@@ -1103,6 +1112,11 @@ Each AI feature uses a tailored system prompt that:
 - Provides context (thread content, user preferences)
 - Specifies output format (structured JSON for categorization/filters, plain text for summaries)
 - Sets constraints (conciseness, tone matching, privacy awareness)
+
+**Natural Language Search**: The LLM must be given **knowledge of the search JSON structure and options** so it can output a valid search spec. Include in the system prompt:
+- **Structured option**: imapflow `SearchObject` fields (e.g. `from`, `to`, `subject`, `body`, `text`, `since`, `before`, `on`, `sentSince`, `sentBefore`, `sentOn`, `seen`, `flagged`, `draft`, `larger`, `smaller`, `header`, `not`, `or`) with types (string, Date, boolean)
+- **Gmail raw option**: `gmraw` / `gmailraw` — Gmail search syntax string (e.g. `from:john after:2025/02/01 subject:project is:starred`) for server-side search
+- Output: either a JSON object matching SearchObject for both local and IMAP use, or a single `gmraw` string when the query is best expressed in Gmail syntax
 
 ### AI Response Caching
 
@@ -1195,7 +1209,7 @@ Each AI feature uses a tailored system prompt that:
 
 **Forge Plugins**:
 - `@electron-forge/plugin-vite` — Vite integration for Angular build
-- `@electron-forge/plugin-auto-unpack-natives` — Native module handling (better-sqlite3)
+- Optional: `@electron-forge/plugin-auto-unpack-natives` — Only if adding native modules later (database uses sql.js WASM, no native DB driver)
 
 ### Security Configuration
 
@@ -1205,12 +1219,11 @@ Each AI feature uses a tailored system prompt that:
 - Content Security Policy restricting inline scripts and external resources
 - Email HTML rendered in sandboxed iframe with restricted permissions
 
-### Native Module Build Notes
+### Database Implementation (sql.js)
 
-- **better-sqlite3** requires native compilation per Electron version and platform
-- Must be rebuilt using `electron-rebuild` or `@electron/rebuild` during packaging
-- Ensure the SQLite build includes FTS5 extension (verify at runtime on first launch)
-- CI/CD must run native rebuilds for each target platform (Windows x64, macOS x64, macOS arm64)
+- **sql.js**: SQLite compiled to WebAssembly; no native compilation. Database runs in-memory in the main process; on init, the DB file is read from user data dir (or created empty); changes are persisted to disk on a schedule (e.g. after writes). No `@electron/rebuild` needed for the database layer.
+- Local search uses LIKE on metadata (subject, from, to, date, flags); server-side search via IMAP provides full coverage. FTS5 is unavailable in the sql.js WASM build.
+- If other native modules are added later, use `@electron/rebuild` and optionally `@electron-forge/plugin-auto-unpack-natives` for packaging.
 
 ### Styling Integration (Angular Material + Tailwind)
 
@@ -1309,13 +1322,12 @@ Each AI feature uses a tailored system prompt that:
 2. Sync inbox headers (last 30 days by default, configurable)
 3. Sync other folders in background
 4. Email bodies fetched on demand (when user opens a thread) and cached locally
-5. Full-text search index built incrementally as bodies are fetched
+5. Search uses hybrid flow: local cache (metadata) plus server-side IMAP SEARCH when needed; no separate full-text index required for server search
 
 **Incremental Sync** (ongoing):
 1. Use IMAP CONDSTORE/QRESYNC to detect changes since last sync
 2. Fetch new messages, update changed flags, remove deleted messages
-3. Update FTS5 search index for new/changed content
-4. Emit progress events to renderer
+3. Emit progress events to renderer
 
 **Real-time Updates**:
 - IMAP IDLE connection maintained for the active account's inbox
@@ -1368,7 +1380,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 
 ### Process Isolation
 
-- **Main Process**: Owns all native modules (SQLite, IMAP, SMTP, file system); never exposes raw Node.js APIs to renderer
+- **Main Process**: Owns database (sql.js), IMAP/SMTP, file system; never exposes raw Node.js APIs to renderer
 - **Renderer Process**: Sandboxed, no Node.js access; communicates exclusively via typed IPC through contextBridge
 - **Preload Script**: Minimal surface area; only exposes the `window.electronAPI` object with typed methods
 
@@ -1423,7 +1435,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 6. Implement Electron main process entry with window management and single-instance lock
 7. Set up preload script with typed contextBridge API
 8. Create IPC channel infrastructure, channel constants, and ElectronService in renderer
-9. Set up SQLite database with schema, FTS5 virtual table, and migration runner
+9. Set up SQLite database with schema and migration runner
 10. Implement CredentialService using Electron safeStorage API
 11. Set up electron-log for structured logging
 12. Create developer README with setup instructions
@@ -1445,7 +1457,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 3. Implement MailQueueService with fastq for sequential mail operations and FolderLockManager for sync coordination
 4. Build SyncService for initial and incremental sync
 5. Implement DatabaseService CRUD operations for emails/threads
-6. Build SearchService with FTS5 full-text search
+6. Build SearchService with hybrid search (local DB first, then IMAP server; merge and deduplicate by `gmail_message_id`)
 7. Create EmailsStore and FoldersStore
 8. Implement email list with virtual scrolling
 9. Build reading pane with HTML sanitization and sandboxed rendering
@@ -1485,7 +1497,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 7. Build text transform features (improve, shorten, formalize, casualize)
 8. Implement auto-categorization (Primary, Updates, Promotions, Social, Newsletters)
 9. Build AI-assisted filter creation
-10. Implement natural language search
+10. Implement natural language search (LLM given search JSON structure/options; output drives local-then-server search; results deduplicated by server email id)
 11. Build follow-up reminder detection
 12. Implement AI response caching
 
@@ -1520,7 +1532,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 5. Write E2E tests for critical user flows (Playwright)
 6. Configure Electron Forge build for Windows x64 (.exe via Squirrel)
 7. Configure Electron Forge build for macOS x64 + arm64 (.dmg)
-8. Set up native module rebuilds (better-sqlite3) for each target platform
+8. Set up sql.js database (load WASM, init from file path, schema and migration runner)
 9. Test on both platforms (Windows 10+, macOS 12+)
 10. Performance optimization (lazy loading, virtual scrolling, memory management)
 11. Code signing setup (Windows Authenticode, macOS notarization) — for distribution
@@ -1533,7 +1545,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 - [ ] User can sign in with Gmail via OAuth2 and see their inbox
 - [ ] User can add multiple Gmail accounts and switch between them
 - [ ] Emails are synced and cached locally in SQLite for offline reading
-- [ ] Full-text search works across all cached emails with Gmail-style operators
+- [ ] Search works hybrid: local DB first, then IMAP server; results merged and deduplicated by server email id (`gmail_message_id`); Gmail-style operators supported
 - [ ] User can compose, reply, reply-all, and forward emails with rich text formatting
 - [ ] User can archive, delete, star, and move emails between folders
 - [ ] Email threads display as collapsible conversations
@@ -1547,7 +1559,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 - [ ] AI compose assistant generates email drafts from prompts
 - [ ] Text transform (improve/shorten/formalize/casualize) works on selected text
 - [ ] Auto-categorization classifies emails into correct categories
-- [ ] Natural language search converts queries to structured search
+- [ ] Natural language search: LLM given search JSON structure/options, outputs structured params or Gmail raw; local-then-server search with deduplication by server email id
 - [ ] AI features degrade gracefully when Ollama is unavailable
 
 ### UI/UX
@@ -1644,12 +1656,12 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 | `tailwindcss` | Utility-first CSS |
 | `imapflow` | IMAP client library |
 | `nodemailer` | SMTP email sending |
-| `better-sqlite3` | SQLite database driver (with FTS5) |
+| `sql.js` | SQLite via WASM (in-memory DB, persist to disk) |
 | `@tiptap/core` + extensions | Rich text editor |
 | `dompurify` | HTML sanitization |
 | `electron-log` | Structured logging for main + renderer |
 | `@electron-forge/cli` | Build and packaging |
-| `@electron/rebuild` | Native module rebuilds for Electron |
+| `@electron/rebuild` | Optional; only if native modules are added (not required for sql.js) |
 | `vitest` | Unit testing |
 | `@testing-library/angular` | Component testing |
 | `playwright` | E2E testing |

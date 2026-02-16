@@ -5,6 +5,7 @@ import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
 import { SyncService } from '../services/sync-service';
 import { MailQueueService } from '../services/mail-queue-service';
+import { FolderLockManager } from '../services/folder-lock-manager';
 
 // Threads we've already attempted to fetch bodies for this process (avoids infinite re-fetch for orphans).
 const threadBodyFetchAttempted = new Set<string>();
@@ -18,14 +19,112 @@ export function registerMailIpcHandlers(): void {
       log.info(`Fetching emails for account ${accountId}, folder ${folderId}`);
       const limit = options?.limit || 50;
       const offset = options?.offset || 0;
-      const threads = db.getThreadsByFolder(Number(accountId), folderId, limit, offset);
+      const numAccountId = Number(accountId);
+      let threads = db.getThreadsByFolder(numAccountId, folderId, limit, offset);
       log.info(`MAIL_FETCH_EMAILS: account=${accountId} folder=${folderId} returned ${threads.length} threads`);
+
+      // Targeted IMAP fallback for [Gmail]/Starred: if the local DB returns zero
+      // threads on the first page, fetch from server to populate folder associations.
+      // This handles the case where starred messages exist on the server but
+      // thread_folders for [Gmail]/Starred are stale or not yet synced.
+      if (threads.length === 0 && offset === 0 && folderId === '[Gmail]/Starred') {
+        log.info(`MAIL_FETCH_EMAILS: [Gmail]/Starred is empty locally — fetching from IMAP`);
+        try {
+          const imapService = ImapService.getInstance();
+          const lockManager = FolderLockManager.getInstance();
+
+          let emails: Awaited<ReturnType<typeof imapService.fetchEmails>>;
+          const release = await lockManager.acquire(folderId);
+          try {
+            emails = await imapService.fetchEmails(accountId, folderId, { limit: 100 });
+          } finally {
+            release();
+          }
+
+          if (emails.length > 0) {
+            // Group by thread for upsert
+            const threadMap = new Map<string, typeof emails>();
+            for (const email of emails) {
+              const threadId = email.gmailThreadId || email.gmailMessageId;
+              if (!threadMap.has(threadId)) {
+                threadMap.set(threadId, []);
+              }
+              threadMap.get(threadId)!.push(email);
+            }
+
+            // Upsert emails
+            for (const email of emails) {
+              db.upsertEmail({
+                accountId: numAccountId,
+                gmailMessageId: email.gmailMessageId,
+                gmailThreadId: email.gmailThreadId,
+                folder: folderId,
+                folderUid: email.uid,
+                fromAddress: email.fromAddress,
+                fromName: email.fromName,
+                toAddresses: email.toAddresses,
+                ccAddresses: email.ccAddresses,
+                bccAddresses: email.bccAddresses,
+                subject: email.subject,
+                textBody: email.textBody,
+                htmlBody: email.htmlBody,
+                date: email.date,
+                isRead: email.isRead,
+                isStarred: email.isStarred,
+                isImportant: email.isImportant,
+                snippet: email.snippet,
+                size: email.size,
+                hasAttachments: email.hasAttachments,
+                labels: email.labels,
+              });
+
+              if (email.fromAddress) {
+                db.upsertContact(email.fromAddress, email.fromName);
+              }
+            }
+
+            // Upsert threads
+            for (const [threadId, threadEmails] of threadMap) {
+              const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+              const latest = uniqueEmails.reduce((a, b) =>
+                new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+              );
+              const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+              const allRead = uniqueEmails.every(e => e.isRead);
+              const anyStarred = uniqueEmails.some(e => e.isStarred);
+
+              const dbThreadId = db.upsertThread({
+                accountId: numAccountId,
+                gmailThreadId: threadId,
+                subject: latest.subject,
+                lastMessageDate: latest.date,
+                participants,
+                messageCount: uniqueEmails.length,
+                snippet: latest.snippet,
+                folder: folderId,
+                isRead: allRead,
+                isStarred: anyStarred,
+              });
+
+              db.upsertThreadFolder(dbThreadId, numAccountId, folderId);
+            }
+
+            log.info(`MAIL_FETCH_EMAILS: Starred IMAP fallback fetched ${emails.length} emails, ${threadMap.size} threads`);
+
+            // Re-query DB to get properly formatted results
+            threads = db.getThreadsByFolder(numAccountId, folderId, limit, offset);
+          }
+        } catch (imapErr) {
+          log.warn(`MAIL_FETCH_EMAILS: Starred IMAP fallback failed (returning empty):`, imapErr);
+        }
+      }
+
       if (threads.length === 0) {
         // Debug: check what's actually in the DB
         const rawDb = db.getDatabase();
-        const threadCount = rawDb.exec('SELECT COUNT(*) FROM threads WHERE account_id = ?', [Number(accountId)]);
-        const tfCount = rawDb.exec('SELECT COUNT(*) FROM thread_folders WHERE account_id = ?', [Number(accountId)]);
-        const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = ?', [Number(accountId)]);
+        const threadCount = rawDb.exec('SELECT COUNT(*) FROM threads WHERE account_id = ?', [numAccountId]);
+        const tfCount = rawDb.exec('SELECT COUNT(*) FROM thread_folders WHERE account_id = ?', [numAccountId]);
+        const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = ?', [numAccountId]);
         log.info(`DEBUG: total threads=${threadCount[0]?.values[0]?.[0]}, total thread_folders=${tfCount[0]?.values[0]?.[0]}, folders in thread_folders=${JSON.stringify(tfFolders[0]?.values)}`);
       }
       return ipcSuccess(threads);

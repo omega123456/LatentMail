@@ -308,11 +308,19 @@ export const EmailsStore = signalStore(
             ),
           });
         } else if (flag === 'starred') {
-          patchState(store, {
-            threads: store.threads().map(t =>
-              t.gmailThreadId === targetThreadId ? { ...t, isStarred: value } : t
-            ),
-          });
+          const activeFolderId = foldersStore.activeFolderId();
+          if (!value && activeFolderId === '[Gmail]/Starred') {
+            // Unstarring while viewing Starred → optimistically remove thread from list
+            patchState(store, {
+              threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+            });
+          } else {
+            patchState(store, {
+              threads: store.threads().map(t =>
+                t.gmailThreadId === targetThreadId ? { ...t, isStarred: value } : t
+              ),
+            });
+          }
         }
 
         try {
@@ -546,8 +554,22 @@ export const EmailsStore = signalStore(
 
         // Flag updates are already applied optimistically in the renderer.
         // Skipping refresh here avoids unnecessary list churn/jumps when opening unread.
+        // EXCEPTION: [Gmail]/Starred folder membership changes on star/unstar flag ops,
+        // so we must refresh when viewing Starred or when the event touches Starred.
         if (event.reason === 'flag') {
-          return;
+          const isStarredView = activeFolderId === '[Gmail]/Starred';
+          const eventTouchesStarred = event.folders.includes('[Gmail]/Starred');
+          if (isStarredView && activeAccountId != null && event.accountId === activeAccountId) {
+            // Viewing Starred — always refresh on flag events from same account
+            store.refreshThreads();
+            return;
+          }
+          if (!eventTouchesStarred) {
+            return;
+          }
+          // Fall through to refresh for flag changes that touch Starred while viewing another folder
+          // (e.g., user stars from INBOX — if Starred is somehow the active view this won't fire,
+          //  but the above block catches that case already)
         }
 
         if (
