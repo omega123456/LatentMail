@@ -23,16 +23,19 @@ export function registerAiIpcHandlers(): void {
   ollama.startHealthChecks();
 
   ipcMain.handle(IPC_CHANNELS.AI_SUMMARIZE, async (event, threadContent: string, requestId?: string) => {
+    log.info('[AI] summarize request', { requestId, contentLen: threadContent?.length ?? 0 });
     try {
       if (!threadContent || typeof threadContent !== 'string') {
+        log.warn('[AI] summarize rejected: invalid input');
         return ipcError('AI_INVALID_INPUT', 'Thread content is required');
       }
       const win = BrowserWindow.fromWebContents(event.sender);
       const summary = await ollama.summarizeThread(threadContent, win ?? undefined, requestId);
+      log.info('[AI] summarize success', { requestId, summaryLen: summary?.length ?? 0 });
       return ipcSuccess({ summary });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to summarize thread';
-      log.error('Failed to summarize:', err);
+      log.error('[AI] summarize failed', { requestId, message }, err);
       if (message.includes('No AI model selected')) {
         return ipcError('AI_NO_MODEL', message);
       }
@@ -43,21 +46,24 @@ export function registerAiIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AI_COMPOSE,
     async (event, prompt: string, context?: string, requestId?: string) => {
-    try {
-      if (!prompt || typeof prompt !== 'string') {
-        return ipcError('AI_INVALID_INPUT', 'Compose prompt is required');
+      log.info('[AI] compose request', { requestId, promptLen: prompt?.length ?? 0, hasContext: !!context });
+      try {
+        if (!prompt || typeof prompt !== 'string') {
+          log.warn('[AI] compose rejected: invalid prompt');
+          return ipcError('AI_INVALID_INPUT', 'Compose prompt is required');
+        }
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const result = await ollama.composeEmail(prompt, context, win ?? undefined, requestId);
+        log.info('[AI] compose success', { requestId, resultLen: result?.length ?? 0 });
+        return ipcSuccess({ text: result });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to generate AI composition';
+        log.error('[AI] compose failed', { requestId, message }, err);
+        if (message.includes('No AI model selected')) {
+          return ipcError('AI_NO_MODEL', message);
+        }
+        return ipcError('AI_COMPOSE_FAILED', message);
       }
-      const win = BrowserWindow.fromWebContents(event.sender);
-      const result = await ollama.composeEmail(prompt, context, win ?? undefined, requestId);
-      return ipcSuccess({ text: result });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to generate AI composition';
-      log.error('Failed to AI compose:', err);
-      if (message.includes('No AI model selected')) {
-        return ipcError('AI_NO_MODEL', message);
-      }
-      return ipcError('AI_COMPOSE_FAILED', message);
-    }
     }
   );
 
@@ -98,28 +104,31 @@ export function registerAiIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.AI_TRANSFORM,
     async (event, text: string, transformation: string, requestId?: string) => {
-    try {
-      if (!text || typeof text !== 'string') {
-        return ipcError('AI_INVALID_INPUT', 'Text is required');
+      log.info('[AI] transform request', { requestId, transformation, textLen: text?.length ?? 0 });
+      try {
+        if (!text || typeof text !== 'string') {
+          log.warn('[AI] transform rejected: invalid text');
+          return ipcError('AI_INVALID_INPUT', 'Text is required');
+        }
+        if (!transformation || typeof transformation !== 'string') {
+          return ipcError('AI_INVALID_INPUT', 'Transformation type is required');
+        }
+        const validTransformations = ['improve', 'shorten', 'formalize', 'casualize'];
+        if (!validTransformations.includes(transformation)) {
+          return ipcError('AI_INVALID_INPUT', `Invalid transformation. Must be one of: ${validTransformations.join(', ')}`);
+        }
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const result = await ollama.transformText(text, transformation, win ?? undefined, requestId);
+        log.info('[AI] transform success', { requestId, resultLen: result?.length ?? 0 });
+        return ipcSuccess({ text: result });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to transform text';
+        log.error('[AI] transform failed', { requestId, message }, err);
+        if (message.includes('No AI model selected')) {
+          return ipcError('AI_NO_MODEL', message);
+        }
+        return ipcError('AI_TRANSFORM_FAILED', message);
       }
-      if (!transformation || typeof transformation !== 'string') {
-        return ipcError('AI_INVALID_INPUT', 'Transformation type is required');
-      }
-      const validTransformations = ['improve', 'shorten', 'formalize', 'casualize'];
-      if (!validTransformations.includes(transformation)) {
-        return ipcError('AI_INVALID_INPUT', `Invalid transformation. Must be one of: ${validTransformations.join(', ')}`);
-      }
-      const win = BrowserWindow.fromWebContents(event.sender);
-      const result = await ollama.transformText(text, transformation, win ?? undefined, requestId);
-      return ipcSuccess({ text: result });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to transform text';
-      log.error('Failed to transform text:', err);
-      if (message.includes('No AI model selected')) {
-        return ipcError('AI_NO_MODEL', message);
-      }
-      return ipcError('AI_TRANSFORM_FAILED', message);
-    }
     }
   );
 
@@ -182,15 +191,18 @@ export function registerAiIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.AI_GENERATE_REPLIES, async (_event, threadContent: string) => {
+    log.info('[AI] generate-replies request', { contentLen: threadContent?.length ?? 0 });
     try {
       if (!threadContent || typeof threadContent !== 'string') {
+        log.warn('[AI] generate-replies rejected: invalid input');
         return ipcError('AI_INVALID_INPUT', 'Thread content is required');
       }
       const suggestions = await ollama.generateReplySuggestions(threadContent);
+      log.info('[AI] generate-replies success', { count: suggestions?.length ?? 0 });
       return ipcSuccess({ suggestions });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate reply suggestions';
-      log.error('Failed to generate replies:', err);
+      log.error('[AI] generate-replies failed', { message }, err);
       if (message.includes('No AI model selected')) {
         return ipcError('AI_NO_MODEL', message);
       }

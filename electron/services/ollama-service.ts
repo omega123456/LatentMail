@@ -191,9 +191,11 @@ export class OllamaService {
   }): Promise<string> {
     const model = options?.model || this.currentModel;
     if (!model) {
+      log.warn('[Ollama] chat called with no model selected');
       throw new Error('No AI model selected. Please select a model in Settings > AI.');
     }
 
+    log.info('[Ollama] chat request', { model, stream: false, messageCount: messages.length });
     const body: OllamaChatRequest = {
       model,
       messages,
@@ -220,13 +222,17 @@ export class OllamaService {
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
+        log.error('[Ollama] chat HTTP error', { status: response.status, body: text.slice(0, 200) });
         throw new Error(`Ollama chat failed (${response.status}): ${text}`);
       }
 
       const data = await response.json() as OllamaChatResponse;
-      return data.message?.content || '';
+      const content = data.message?.content || '';
+      log.info('[Ollama] chat response', { model, contentLen: content.length });
+      return content;
     } catch (err) {
       clearTimeout(timeout);
+      log.error('[Ollama] chat failed', err);
       throw err;
     }
   }
@@ -248,9 +254,11 @@ export class OllamaService {
   ): Promise<string> {
     const model = options?.model || this.currentModel;
     if (!model) {
+      log.warn('[Ollama] chatStream called with no model selected');
       throw new Error('No AI model selected. Please select a model in Settings > AI.');
     }
 
+    log.info('[Ollama] chatStream request', { model, stream: true, messageCount: messages.length });
     const body: OllamaChatRequest = {
       model,
       messages,
@@ -277,10 +285,12 @@ export class OllamaService {
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
+        log.error('[Ollama] chatStream HTTP error', { status: response.status, body: text.slice(0, 200) });
         throw new Error(`Ollama stream failed (${response.status}): ${text}`);
       }
 
       if (!response.body) {
+        log.error('[Ollama] chatStream: response has no body');
         throw new Error('Ollama response has no body');
       }
 
@@ -330,9 +340,11 @@ export class OllamaService {
         }
       }
 
+      log.info('[Ollama] chatStream complete', { model, fullTextLen: fullText.length });
       return fullText;
     } catch (err) {
       clearTimeout(timeout);
+      log.error('[Ollama] chatStream failed', err);
       throw err;
     }
   }
@@ -451,6 +463,9 @@ Return ONLY the JSON array, no other text.`,
     streamToWindow?: BrowserWindow,
     requestId?: string
   ): Promise<string> {
+    const streaming = !!(streamToWindow && !streamToWindow.isDestroyed());
+    log.info('[Ollama] composeEmail', { requestId, promptLen: prompt.length, hasContext: !!context, streaming });
+
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
@@ -492,10 +507,13 @@ Return ONLY the email body text (no subject line, no metadata).`,
           requestId,
         });
       }
+      log.info('[Ollama] composeEmail done (streamed)', { requestId, resultLen: result.length });
       return result;
     }
 
-    return this.chat(messages);
+    const result = await this.chat(messages);
+    log.info('[Ollama] composeEmail done (non-stream)', { requestId, resultLen: result.length });
+    return result;
   }
 
   /** Transform text (improve, shorten, formalize, casualize) */

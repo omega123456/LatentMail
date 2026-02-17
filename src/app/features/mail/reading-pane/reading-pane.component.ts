@@ -1,4 +1,4 @@
-import { Component, inject, output, OnInit, OnDestroy } from '@angular/core';
+import { Component, inject, output, OnInit, OnDestroy, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { EmailsStore } from '../../../store/emails.store';
@@ -25,6 +25,18 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   readonly actionClicked = output<string>();
   readonly expandedMessages = new Set<string>();
   private aiStreamSub?: Subscription;
+
+  constructor() {
+    // Clear AI summary when switching to a different thread so the previous thread's summary is not shown
+    effect(() => {
+      const currentId = this.emailsStore.selectedThreadId();
+      const summaryForId = this.aiStore.summaryThreadId();
+      if (summaryForId != null && summaryForId !== currentId) {
+        this.aiStore.clearSummary();
+        this.aiStore.clearReplies();
+      }
+    });
+  }
 
   ngOnInit(): void {
     // Subscribe to AI streaming events

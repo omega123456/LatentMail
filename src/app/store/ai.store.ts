@@ -167,6 +167,7 @@ export const AiStore = signalStore(
           patchState(store, {
             summaryText: data.summary,
             summaryLoading: false,
+            summaryRequestId: null,
           });
         } else {
           if (store.summaryRequestId() !== requestId) {
@@ -174,6 +175,7 @@ export const AiStore = signalStore(
           }
           patchState(store, {
             summaryLoading: false,
+            summaryRequestId: null,
             error: response.error?.message || 'Failed to summarize',
           });
         }
@@ -186,7 +188,8 @@ export const AiStore = signalStore(
             return;
           }
           if (event.done) {
-            patchState(store, { summaryLoading: false, summaryRequestId: null });
+            // Only clear loading; leave summaryRequestId so summarize() can match when IPC resolves
+            patchState(store, { summaryLoading: false });
           } else {
             patchState(store, {
               summaryText: store.summaryText() + event.token,
@@ -197,7 +200,8 @@ export const AiStore = signalStore(
             return;
           }
           if (event.done) {
-            patchState(store, { composeLoading: false, composeRequestId: null });
+            // Only clear loading; leave composeRequestId so aiCompose() can match when IPC resolves
+            patchState(store, { composeLoading: false });
           } else {
             patchState(store, {
               composeResult: store.composeResult() + event.token,
@@ -208,7 +212,8 @@ export const AiStore = signalStore(
             return;
           }
           if (event.done) {
-            patchState(store, { transformLoading: false, transformRequestId: null });
+            // Only clear loading; leave transformRequestId so transform() can match when IPC resolves
+            patchState(store, { transformLoading: false });
           } else {
             patchState(store, {
               transformResult: store.transformResult() + event.token,
@@ -250,16 +255,16 @@ export const AiStore = signalStore(
         });
         const response = await electronService.aiCompose(prompt, context, requestId);
         if (response.success && response.data) {
-          const data = response.data as { text: string };
+          const text = (response.data as { text: string }).text;
           if (store.composeRequestId() !== requestId) {
             return null;
           }
           patchState(store, {
-            composeResult: data.text,
+            composeResult: text,
             composeLoading: false,
             composeRequestId: null,
           });
-          return data.text;
+          return text;
         } else {
           if (store.composeRequestId() !== requestId) {
             return null;
