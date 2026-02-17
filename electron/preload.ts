@@ -50,20 +50,26 @@ const electronAPI = {
 
   // AI operations
   ai: {
-    summarize: (threadContent: string) =>
-      ipcRenderer.invoke('ai:summarize', threadContent) as Promise<IpcResponse>,
-    compose: (prompt: string, context?: string) =>
-      ipcRenderer.invoke('ai:compose', prompt, context) as Promise<IpcResponse>,
+    summarize: (threadContent: string, requestId?: string) =>
+      ipcRenderer.invoke('ai:summarize', threadContent, requestId) as Promise<IpcResponse>,
+    compose: (prompt: string, context?: string, requestId?: string) =>
+      ipcRenderer.invoke('ai:compose', prompt, context, requestId) as Promise<IpcResponse>,
     categorize: (emailContent: string) =>
       ipcRenderer.invoke('ai:categorize', emailContent) as Promise<IpcResponse>,
     search: (naturalQuery: string) =>
       ipcRenderer.invoke('ai:search', naturalQuery) as Promise<IpcResponse>,
-    transform: (text: string, transformation: string) =>
-      ipcRenderer.invoke('ai:transform', text, transformation) as Promise<IpcResponse>,
+    transform: (text: string, transformation: string, requestId?: string) =>
+      ipcRenderer.invoke('ai:transform', text, transformation, requestId) as Promise<IpcResponse>,
     getModels: () =>
       ipcRenderer.invoke('ai:get-models') as Promise<IpcResponse>,
     getStatus: () =>
       ipcRenderer.invoke('ai:get-status') as Promise<IpcResponse>,
+    setUrl: (url: string) =>
+      ipcRenderer.invoke('ai:set-url', url) as Promise<IpcResponse>,
+    setModel: (model: string) =>
+      ipcRenderer.invoke('ai:set-model', model) as Promise<IpcResponse>,
+    generateReplies: (threadContent: string) =>
+      ipcRenderer.invoke('ai:generate-replies', threadContent) as Promise<IpcResponse>,
   },
 
   // Compose operations (signatures & contacts only — draft ops moved to queue)

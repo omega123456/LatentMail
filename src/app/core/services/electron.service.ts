@@ -37,13 +37,16 @@ interface ElectronAPI {
     getAccountCount: () => Promise<IpcResponse>;
   };
   ai: {
-    summarize: (threadContent: string) => Promise<IpcResponse>;
-    compose: (prompt: string, context?: string) => Promise<IpcResponse>;
+    summarize: (threadContent: string, requestId?: string) => Promise<IpcResponse>;
+    compose: (prompt: string, context?: string, requestId?: string) => Promise<IpcResponse>;
     categorize: (emailContent: string) => Promise<IpcResponse>;
     search: (naturalQuery: string) => Promise<IpcResponse>;
-    transform: (text: string, transformation: string) => Promise<IpcResponse>;
+    transform: (text: string, transformation: string, requestId?: string) => Promise<IpcResponse>;
     getModels: () => Promise<IpcResponse>;
     getStatus: () => Promise<IpcResponse>;
+    setUrl: (url: string) => Promise<IpcResponse>;
+    setModel: (model: string) => Promise<IpcResponse>;
+    generateReplies: (threadContent: string) => Promise<IpcResponse>;
   };
   compose: {
     searchContacts: (query: string) => Promise<IpcResponse>;
@@ -157,12 +160,12 @@ export class ElectronService {
 
   // ---- AI operations ----
 
-  async aiSummarize(threadContent: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.ai.summarize(threadContent));
+  async aiSummarize(threadContent: string, requestId?: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.summarize(threadContent, requestId));
   }
 
-  async aiCompose(prompt: string, context?: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.ai.compose(prompt, context));
+  async aiCompose(prompt: string, context?: string, requestId?: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.compose(prompt, context, requestId));
   }
 
   async aiCategorize(emailContent: string): Promise<IpcResponse> {
@@ -173,8 +176,8 @@ export class ElectronService {
     return this.invoke(() => this.api!.ai.search(naturalQuery));
   }
 
-  async aiTransform(text: string, transformation: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.ai.transform(text, transformation));
+  async aiTransform(text: string, transformation: string, requestId?: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.transform(text, transformation, requestId));
   }
 
   async aiGetModels(): Promise<IpcResponse> {
@@ -183,6 +186,18 @@ export class ElectronService {
 
   async aiGetStatus(): Promise<IpcResponse> {
     return this.invoke(() => this.api!.ai.getStatus());
+  }
+
+  async aiSetUrl(url: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.setUrl(url));
+  }
+
+  async aiSetModel(model: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.setModel(model));
+  }
+
+  async aiGenerateReplies(threadContent: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.generateReplies(threadContent));
   }
 
   // ---- Compose operations (signatures & contacts only) ----

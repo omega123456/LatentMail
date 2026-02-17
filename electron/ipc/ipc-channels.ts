@@ -27,6 +27,9 @@ export const IPC_CHANNELS = {
   AI_TRANSFORM: 'ai:transform',
   AI_GET_MODELS: 'ai:get-models',
   AI_GET_STATUS: 'ai:get-status',
+  AI_SET_URL: 'ai:set-url',
+  AI_SET_MODEL: 'ai:set-model',
+  AI_GENERATE_REPLIES: 'ai:generate-replies',
 
   // Queue operations
   QUEUE_ENQUEUE: 'queue:enqueue',

@@ -208,3 +208,129 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+// AI toolbar buttons
+.ai-btn {
+  color: var(--color-primary);
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+
+    &:hover {
+      background: none;
+      color: var(--color-primary);
+    }
+  }
+}
+
+// AI Summary Panel
+.ai-summary-panel,
+.ai-replies-panel {
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-surface-variant);
+}
+
+.ai-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.ai-icon {
+  font-size: 16px;
+  color: var(--color-primary);
+}
+
+.ai-panel-title {
+  flex: 1;
+}
+
+.ai-panel-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+
+  &:hover {
+    background-color: var(--color-border);
+    color: var(--color-text-primary);
+  }
+
+  .material-symbols-outlined {
+    font-size: 16px;
+  }
+}
+
+.ai-panel-body {
+  padding: 0 16px 12px;
+}
+
+.ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+
+  .material-symbols-outlined {
+    font-size: 16px;
+    color: var(--color-primary);
+  }
+}
+
+.ai-summary-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-typing-indicator {
+  color: var(--color-primary);
+  font-size: 14px;
+  animation: blink 1.2s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.reply-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reply-chip {
+  display: block;
+  text-align: left;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: all 120ms ease;
+
+  &:hover {
+    border-color: var(--color-primary);
+    background-color: var(--color-primary-light);
+  }
+}

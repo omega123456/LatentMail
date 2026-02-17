@@ -1,0 +1,141 @@
+<div class="ai-settings">
+  <h2>AI Settings</h2>
+  <p class="section-description">
+    MailClient uses Ollama for local AI features. Install Ollama from
+    <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer">ollama.ai</a>
+    to enable AI-powered email summarization, smart replies, and more.
+  </p>
+
+  <!-- Connection Status -->
+  <div class="setting-section">
+    <h3>Connection</h3>
+    <div class="connection-status" [class.connected]="aiStore.connected()" [class.disconnected]="!aiStore.connected()">
+      <span class="status-dot"></span>
+      <span class="status-text">
+        {{ aiStore.connected() ? 'Connected' : 'Disconnected' }}
+      </span>
+    </div>
+
+    <div class="url-input-row">
+      <label class="field-label">Ollama URL</label>
+      <div class="url-input-group">
+        <input
+          type="text"
+          class="url-input"
+          [ngModel]="urlInput()"
+          (ngModelChange)="urlInput.set($event)"
+          placeholder="http://localhost:11434"
+        />
+        <button
+          class="action-btn"
+          (click)="saveUrl()"
+          [disabled]="testingConnection()"
+        >
+          {{ testingConnection() ? 'Testing...' : 'Save & Test' }}
+        </button>
+      </div>
+    </div>
+
+    <button
+      class="action-btn secondary"
+      (click)="testConnection()"
+      [disabled]="testingConnection()"
+    >
+      <span class="material-symbols-outlined">refresh</span>
+      {{ testingConnection() ? 'Testing...' : 'Test Connection' }}
+    </button>
+  </div>
+
+  <!-- Model Selection -->
+  <div class="setting-section">
+    <h3>Model</h3>
+    @if (aiStore.modelsLoading()) {
+      <div class="loading-state">
+        <span class="material-symbols-outlined spinning">sync</span>
+        Loading models...
+      </div>
+    } @else if (!aiStore.connected()) {
+      <div class="empty-state">
+        <span class="material-symbols-outlined">cloud_off</span>
+        <p>Connect to Ollama to see available models.</p>
+      </div>
+    } @else if (aiStore.availableModels().length === 0) {
+      <div class="empty-state">
+        <span class="material-symbols-outlined">smart_toy</span>
+        <p>No models found. Pull a model using <code>ollama pull llama3.2</code></p>
+      </div>
+    } @else {
+      <div class="model-list">
+        @for (model of aiStore.availableModels(); track model.name) {
+          <div
+            class="model-card"
+            [class.selected]="model.name === aiStore.currentModel()"
+            (click)="selectModel(model.name)"
+          >
+            <div class="model-info">
+              <span class="model-name">{{ model.name }}</span>
+              @if (model.size) {
+                <span class="model-size">{{ formatSize(model.size) }}</span>
+              }
+            </div>
+            @if (model.name === aiStore.currentModel()) {
+              <span class="material-symbols-outlined check-icon">check_circle</span>
+            }
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <!-- Features Info -->
+  <div class="setting-section">
+    <h3>Available Features</h3>
+    <div class="feature-list">
+      <div class="feature-item" [class.disabled]="!aiStore.isAvailable()">
+        <span class="material-symbols-outlined">summarize</span>
+        <div>
+          <strong>Thread Summary</strong>
+          <p>Get AI-generated summaries of email threads</p>
+        </div>
+      </div>
+      <div class="feature-item" [class.disabled]="!aiStore.isAvailable()">
+        <span class="material-symbols-outlined">quickreply</span>
+        <div>
+          <strong>Smart Reply</strong>
+          <p>Generate contextual reply suggestions</p>
+        </div>
+      </div>
+      <div class="feature-item" [class.disabled]="!aiStore.isAvailable()">
+        <span class="material-symbols-outlined">edit_note</span>
+        <div>
+          <strong>AI Compose</strong>
+          <p>Write emails from natural language prompts</p>
+        </div>
+      </div>
+      <div class="feature-item" [class.disabled]="!aiStore.isAvailable()">
+        <span class="material-symbols-outlined">auto_fix_high</span>
+        <div>
+          <strong>Text Transform</strong>
+          <p>Improve, shorten, formalize, or casualize text</p>
+        </div>
+      </div>
+      <div class="feature-item" [class.disabled]="!aiStore.isAvailable()">
+        <span class="material-symbols-outlined">category</span>
+        <div>
+          <strong>Auto-Categorize</strong>
+          <p>Automatically sort emails into categories</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  @if (aiStore.error()) {
+    <div class="error-banner">
+      <span class="material-symbols-outlined">error</span>
+      {{ aiStore.error() }}
+      <button class="dismiss-btn" (click)="aiStore.clearError()">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+  }
+</div>

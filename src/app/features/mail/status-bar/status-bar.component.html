@@ -15,6 +15,11 @@
     <span class="status-item">
       {{ accountsStore.accountCount() }} account{{ accountsStore.accountCount() !== 1 ? 's' : '' }}
     </span>
+    <span class="status-separator">|</span>
+    <span class="status-item ai-status" [class.connected]="aiStore.connected()" [class.disconnected]="!aiStore.connected()">
+      <span class="material-symbols-outlined">auto_awesome</span>
+      {{ aiStore.statusLabel() }}
+    </span>
   </div>
   <div class="status-right">
     <span class="status-item hint">

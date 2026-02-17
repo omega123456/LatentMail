@@ -30,6 +30,16 @@
     color: var(--color-primary);
   }
 
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+
+    &:hover {
+      background: none;
+      color: var(--color-text-secondary);
+    }
+  }
+
   .material-symbols-outlined {
     font-size: 18px;
   }
@@ -40,4 +50,227 @@
   height: 20px;
   background-color: var(--color-border);
   margin: 0 4px;
+}
+
+// AI Assist button and dropdown
+.ai-dropdown-container {
+  position: relative;
+}
+
+.ai-assist-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  padding: 4px 10px;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 500;
+
+  .ai-label {
+    font-size: 12px;
+  }
+
+  .arrow {
+    font-size: 16px;
+    transition: transform 120ms ease;
+  }
+
+  &.active .arrow {
+    transform: rotate(180deg);
+  }
+}
+
+.ai-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 200px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+  padding: 4px;
+}
+
+.ai-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+  }
+
+  .material-symbols-outlined {
+    font-size: 18px;
+    color: var(--color-primary);
+  }
+}
+
+.ai-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--color-primary);
+
+  .material-symbols-outlined {
+    font-size: 16px;
+  }
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+// AI Compose Prompt Dialog
+.ai-prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.ai-prompt-dialog {
+  width: 480px;
+  max-width: 90vw;
+  background-color: var(--color-surface);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.ai-prompt-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+
+  .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--color-primary);
+  }
+}
+
+.ai-prompt-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+    color: var(--color-text-primary);
+  }
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
+}
+
+.ai-prompt-body {
+  padding: 16px 20px;
+}
+
+.ai-prompt-input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.15);
+  }
+
+  &::placeholder {
+    color: var(--color-text-tertiary);
+  }
+}
+
+.ai-prompt-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--color-border);
+}
+
+.ai-prompt-cancel {
+  padding: 8px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+  }
+}
+
+.ai-prompt-submit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background-color: var(--color-primary);
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .material-symbols-outlined {
+    font-size: 16px;
+  }
 }

@@ -44,4 +44,94 @@
   <button class="tb-btn" (click)="exec('redo')" title="Redo (Ctrl+Y)">
     <span class="material-symbols-outlined">redo</span>
   </button>
+
+  <div class="tb-divider"></div>
+
+  <!-- AI Assist dropdown -->
+  <div class="ai-dropdown-container">
+    <button
+      class="tb-btn ai-assist-btn"
+      [class.active]="showAiMenu()"
+      [disabled]="!aiStore.connected()"
+      [title]="aiStore.connected() ? 'AI Assist' : 'Ollama not connected'"
+      (click)="toggleAiMenu()"
+    >
+      <span class="material-symbols-outlined">auto_awesome</span>
+      <span class="ai-label">AI Assist</span>
+      <span class="material-symbols-outlined arrow">expand_more</span>
+    </button>
+
+    @if (showAiMenu()) {
+      <div class="ai-menu" (click)="$event.stopPropagation()">
+        <button class="ai-menu-item" (click)="openAiCompose()">
+          <span class="material-symbols-outlined">edit_note</span>
+          Write for me
+        </button>
+        <button class="ai-menu-item" (click)="transformText('improve')">
+          <span class="material-symbols-outlined">auto_fix_high</span>
+          Improve writing
+        </button>
+        <button class="ai-menu-item" (click)="transformText('shorten')">
+          <span class="material-symbols-outlined">compress</span>
+          Make shorter
+        </button>
+        <button class="ai-menu-item" (click)="transformText('formalize')">
+          <span class="material-symbols-outlined">business_center</span>
+          Make formal
+        </button>
+        <button class="ai-menu-item" (click)="transformText('casualize')">
+          <span class="material-symbols-outlined">sentiment_satisfied</span>
+          Make casual
+        </button>
+      </div>
+    }
+  </div>
+
+  @if (aiStore.composeLoading() || aiStore.transformLoading()) {
+    <div class="ai-progress">
+      <span class="material-symbols-outlined spinning">sync</span>
+      <span>AI working...</span>
+    </div>
+  }
 </div>
+
+<!-- AI Compose Prompt Dialog -->
+@if (showAiPrompt()) {
+  <div class="ai-prompt-overlay" (click)="closeAiPrompt()">
+    <div class="ai-prompt-dialog" (click)="$event.stopPropagation()">
+      <div class="ai-prompt-header">
+        <span class="material-symbols-outlined">auto_awesome</span>
+        <span>AI Compose</span>
+        <button class="ai-prompt-close" (click)="closeAiPrompt()">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="ai-prompt-body">
+        <textarea
+          class="ai-prompt-input"
+          [ngModel]="aiPromptText()"
+          (ngModelChange)="aiPromptText.set($event)"
+          placeholder="Describe the email you want to write..."
+          rows="3"
+          (keydown.enter)="$event.preventDefault(); submitAiCompose()"
+        ></textarea>
+      </div>
+      <div class="ai-prompt-footer">
+        <button class="ai-prompt-cancel" (click)="closeAiPrompt()">Cancel</button>
+        <button
+          class="ai-prompt-submit"
+          [disabled]="!aiPromptText().trim() || aiStore.composeLoading()"
+          (click)="submitAiCompose()"
+        >
+          @if (aiStore.composeLoading()) {
+            <span class="material-symbols-outlined spinning">sync</span>
+            Generating...
+          } @else {
+            <span class="material-symbols-outlined">auto_awesome</span>
+            Generate
+          }
+        </button>
+      </div>
+    </div>
+  </div>
+}

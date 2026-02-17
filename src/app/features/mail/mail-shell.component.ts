@@ -116,6 +116,24 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
 
+    // Handle AI reply suggestions with prefix "reply-with:..."
+    if (action.startsWith('reply-with:')) {
+      const suggestionText = action.substring('reply-with:'.length);
+      this.openComposeForAction('reply');
+      // Set the suggested text as plain text (no HTML injection)
+      setTimeout(() => {
+        this.composeStore.updateField('textBody', suggestionText);
+        // Escape HTML entities to prevent XSS from AI output
+        const escaped = suggestionText
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+        this.composeStore.updateField('htmlBody', `<p>${escaped}</p>`);
+      }, 200);
+      return;
+    }
+
     switch (action) {
       case 'archive':
         this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/All Mail', thread.gmailThreadId, currentFolder);

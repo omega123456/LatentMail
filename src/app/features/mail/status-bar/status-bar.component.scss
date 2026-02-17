@@ -49,3 +49,17 @@
 .hint {
   opacity: 0.7;
 }
+
+.ai-status {
+  &.connected {
+    color: var(--color-success, #388E3C);
+  }
+
+  &.disconnected {
+    opacity: 0.6;
+  }
+
+  .material-symbols-outlined {
+    font-size: 13px;
+  }
+}

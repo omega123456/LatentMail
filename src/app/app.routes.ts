@@ -47,6 +47,11 @@ export const routes: Routes = [
           import('./features/settings/account-settings.component').then(m => m.AccountSettingsComponent),
       },
       {
+        path: 'ai',
+        loadComponent: () =>
+          import('./features/settings/ai-settings.component').then(m => m.AiSettingsComponent),
+      },
+      {
         path: 'queue',
         loadComponent: () =>
           import('./features/settings/queue-settings.component').then(m => m.QueueSettingsComponent),

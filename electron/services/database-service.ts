@@ -1372,6 +1372,88 @@ export class DatabaseService {
     return obj;
   }
 
+  // ---- AI Cache operations ----
+
+  /**
+   * Get a cached AI result by operation type, input hash, and model.
+   * Returns null if not found or expired.
+   */
+  getAiCacheResult(operation: string, inputHash: string, model: string): string | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT result FROM ai_cache
+       WHERE operation_type = :operation AND input_hash = :inputHash AND model = :model
+       AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+      { ':operation': operation, ':inputHash': inputHash, ':model': model }
+    );
+    if (result.length > 0 && result[0].values.length > 0) {
+      return result[0].values[0][0] as string;
+    }
+    return null;
+  }
+
+  /**
+   * Store an AI result in the cache.
+   * @param expiresInDays - Number of days until expiry. Null for no expiry.
+   */
+  setAiCacheResult(
+    operation: string,
+    inputHash: string,
+    model: string,
+    resultText: string,
+    expiresInDays: number | null
+  ): void {
+    if (!this.db) throw new Error('Database not initialized');
+    const expiresAt = expiresInDays != null
+      ? new Date(Date.now() + (Math.floor(expiresInDays) * 24 * 60 * 60 * 1000)).toISOString()
+      : null;
+
+    this.db.run(
+      `INSERT INTO ai_cache (operation_type, input_hash, model, result, expires_at)
+       VALUES (:operation, :inputHash, :model, :result, :expiresAt)
+       ON CONFLICT(operation_type, input_hash, model) DO UPDATE SET
+         result = excluded.result, created_at = datetime('now'), expires_at = excluded.expires_at`,
+      {
+        ':operation': operation,
+        ':inputHash': inputHash,
+        ':model': model,
+        ':result': resultText,
+        ':expiresAt': expiresAt,
+      }
+    );
+
+    this.scheduleSave();
+  }
+
+  /**
+   * Clear expired AI cache entries.
+   */
+  clearExpiredAiCache(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run("DELETE FROM ai_cache WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')");
+    this.scheduleSave();
+  }
+
+  /**
+   * Clear AI cache entries for a specific operation type and input hash.
+   * Used to invalidate cache when underlying data changes (e.g., thread gets new messages).
+   */
+  invalidateAiCache(operation: string, inputHash?: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    if (inputHash) {
+      this.db.run(
+        'DELETE FROM ai_cache WHERE operation_type = :operation AND input_hash = :inputHash',
+        { ':operation': operation, ':inputHash': inputHash }
+      );
+    } else {
+      this.db.run(
+        'DELETE FROM ai_cache WHERE operation_type = :operation',
+        { ':operation': operation }
+      );
+    }
+    this.scheduleSave();
+  }
+
   close(): void {
     if (this.db) {
       if (this.saveTimer) {

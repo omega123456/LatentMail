@@ -43,7 +43,82 @@
           {{ thread.isRead ? 'mark_email_unread' : 'mark_email_read' }}
         </span>
       </button>
+      <div class="toolbar-separator"></div>
+      <!-- AI Actions -->
+      <button
+        class="toolbar-btn ai-btn"
+        (click)="summarize()"
+        [disabled]="!aiStore.connected() || aiStore.summaryLoading()"
+        [title]="aiStore.connected() ? 'AI Summarize' : 'Ollama not connected'"
+      >
+        <span class="material-symbols-outlined">auto_awesome</span>
+        <span>Summarize</span>
+      </button>
+      <button
+        class="toolbar-btn ai-btn"
+        (click)="generateReplies()"
+        [disabled]="!aiStore.connected() || aiStore.replySuggestionsLoading()"
+        [title]="aiStore.connected() ? 'Smart Reply' : 'Ollama not connected'"
+      >
+        <span class="material-symbols-outlined">quickreply</span>
+        <span>Smart Reply</span>
+      </button>
     </div>
+
+    <!-- AI Summary Panel (shown below toolbar when active) -->
+    @if (aiStore.summaryText() || aiStore.summaryLoading()) {
+      <div class="ai-summary-panel">
+        <div class="ai-panel-header">
+          <span class="material-symbols-outlined ai-icon">auto_awesome</span>
+          <span class="ai-panel-title">AI Summary</span>
+          <button class="ai-panel-close" (click)="closeSummary()">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        <div class="ai-panel-body">
+          @if (aiStore.summaryLoading() && !aiStore.summaryText()) {
+            <div class="ai-loading">
+              <span class="material-symbols-outlined spinning">sync</span>
+              Generating summary...
+            </div>
+          } @else {
+            <div class="ai-summary-text">{{ aiStore.summaryText() }}</div>
+            @if (aiStore.summaryLoading()) {
+              <span class="ai-typing-indicator">●●●</span>
+            }
+          }
+        </div>
+      </div>
+    }
+
+    <!-- AI Reply Suggestions (shown below toolbar/summary when active) -->
+    @if (aiStore.replySuggestions().length > 0 || aiStore.replySuggestionsLoading()) {
+      <div class="ai-replies-panel">
+        <div class="ai-panel-header">
+          <span class="material-symbols-outlined ai-icon">quickreply</span>
+          <span class="ai-panel-title">Smart Replies</span>
+          <button class="ai-panel-close" (click)="closeReplies()">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        <div class="ai-panel-body">
+          @if (aiStore.replySuggestionsLoading()) {
+            <div class="ai-loading">
+              <span class="material-symbols-outlined spinning">sync</span>
+              Generating replies...
+            </div>
+          } @else {
+            <div class="reply-suggestions">
+              @for (suggestion of aiStore.replySuggestions(); track $index) {
+                <button class="reply-chip" (click)="useReplySuggestion(suggestion)">
+                  {{ suggestion }}
+                </button>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    }
 
     <!-- Thread subject -->
     <div class="thread-subject">
