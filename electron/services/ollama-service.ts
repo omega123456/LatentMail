@@ -646,6 +646,116 @@ Return ONLY the JSON, no other text.`,
     }
   }
 
+  /** AI-assisted filter creation: generate filter rules from natural language description */
+  async generateFilter(description: string, accountId: number): Promise<{
+    name: string;
+    conditions: Array<{ field: string; operator: string; value: string }>;
+    actions: Array<{ type: string; value?: string }>;
+  }> {
+    const messages: OllamaChatMessage[] = [
+      {
+        role: 'system',
+        content: `You are an email filter assistant. Generate an email filter rule based on the user's natural language description.
+
+Return a JSON object with the following structure:
+{
+  "name": "Filter name",
+  "conditions": [
+    {"field": "from|to|subject|body|has-attachment", "operator": "contains|equals|starts-with|ends-with|matches", "value": "some value"}
+  ],
+  "actions": [
+    {"type": "label|archive|delete|star|mark-read|move", "value": "optional label name or folder"}
+  ]
+}
+
+Field options: from, to, subject, body, has-attachment
+Operator options: contains, equals, starts-with, ends-with, matches
+Action type options: label, archive, delete, star, mark-read, move
+
+You may specify multiple conditions and multiple actions.
+Return ONLY the JSON object, no other text.`,
+      },
+      {
+        role: 'user',
+        content: description,
+      },
+    ];
+
+    const result = await this.chat(messages, { format: 'json', temperature: 0.3 });
+    try {
+      const parsed = JSON.parse(result) as {
+        name: string;
+        conditions: Array<{ field: string; operator: string; value: string }>;
+        actions: Array<{ type: string; value?: string }>;
+      };
+      return {
+        name: parsed.name || 'AI-generated filter',
+        conditions: Array.isArray(parsed.conditions) ? parsed.conditions : [],
+        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+      };
+    } catch {
+      log.warn('[Ollama] Failed to parse filter generation result:', result);
+      throw new Error('AI returned invalid filter format');
+    }
+  }
+
+  /** Detect if a sent email likely expects a follow-up reply */
+  async detectFollowUp(emailContent: string): Promise<{
+    needsFollowUp: boolean;
+    reason: string;
+    suggestedDate?: string;
+  }> {
+    const cacheKey = this.getCacheKey('followup', emailContent);
+    const cached = this.getCachedResult('followup', cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as { needsFollowUp: boolean; reason: string; suggestedDate?: string };
+      } catch {
+        // Cache was invalid, regenerate
+      }
+    }
+
+    const messages: OllamaChatMessage[] = [
+      {
+        role: 'system',
+        content: `You are an email follow-up assistant. Analyze the email below and determine if it likely expects a reply or follow-up from the recipient(s).
+
+Consider:
+- Does the email ask a question?
+- Does it request action or feedback?
+- Is it a proposal or request awaiting approval?
+- Does it end with language suggesting a reply is expected?
+
+Return a JSON object:
+{
+  "needsFollowUp": true/false,
+  "reason": "Brief explanation of why follow-up is or isn't needed",
+  "suggestedDate": "YYYY-MM-DD suggested follow-up date (3-7 days from now, only if needsFollowUp is true)"
+}
+
+Return ONLY the JSON, no other text.`,
+      },
+      {
+        role: 'user',
+        content: emailContent,
+      },
+    ];
+
+    const result = await this.chat(messages, { format: 'json', temperature: 0.3 });
+    try {
+      const parsed = JSON.parse(result) as { needsFollowUp: boolean; reason: string; suggestedDate?: string };
+      const output = {
+        needsFollowUp: !!parsed.needsFollowUp,
+        reason: parsed.reason || '',
+        suggestedDate: parsed.suggestedDate,
+      };
+      this.setCachedResult('followup', cacheKey, JSON.stringify(output));
+      return output;
+    } catch {
+      return { needsFollowUp: false, reason: 'Could not determine follow-up status' };
+    }
+  }
+
   // ============================
   // AI Cache helpers
   // ============================

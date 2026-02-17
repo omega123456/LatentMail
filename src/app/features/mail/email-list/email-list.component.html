@@ -17,7 +17,7 @@
       (scrolledIndexChange)="onScroll($event)"
     >
       <app-email-list-item
-        *cdkVirtualFor="let thread of emailsStore.threads(); trackBy: trackByThreadId"
+        *cdkVirtualFor="let thread of filteredThreads(); trackBy: trackByThreadId"
         [thread]="thread"
         [isSelected]="thread.gmailThreadId === emailsStore.selectedThreadId()"
         [density]="uiStore.density()"

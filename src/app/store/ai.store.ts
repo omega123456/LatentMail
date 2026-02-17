@@ -1,7 +1,7 @@
 import { computed, inject } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
-import { AiModel, AiStreamEvent } from '../core/models/ai.model';
+import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult } from '../core/models/ai.model';
 
 export interface AiState {
   connected: boolean;
@@ -29,6 +29,15 @@ export interface AiState {
   categorizeLoading: boolean;
   // Search
   searchLoading: boolean;
+  searchResult: { structured?: Record<string, unknown>; gmraw?: string } | null;
+  // Filter generation
+  filterSuggestion: AiFilterSuggestion | null;
+  filterLoading: boolean;
+  // Follow-up detection
+  followUpResult: AiFollowUpResult | null;
+  followUpLoading: boolean;
+  // Category cache (threadId → category)
+  categoryCache: Record<string, AiCategory>;
   // General
   error: string | null;
   modelsLoading: boolean;
@@ -54,6 +63,12 @@ const initialState: AiState = {
   categorizeResult: '',
   categorizeLoading: false,
   searchLoading: false,
+  searchResult: null,
+  filterSuggestion: null,
+  filterLoading: false,
+  followUpResult: null,
+  followUpLoading: false,
+  categoryCache: {},
   error: null,
   modelsLoading: false,
 };
@@ -333,6 +348,127 @@ export const AiStore = signalStore(
       /** Clear error */
       clearError(): void {
         patchState(store, { error: null });
+      },
+
+      /** Categorize an email and cache the result by thread ID */
+      async categorize(threadId: string, emailContent: string): Promise<AiCategory | null> {
+        // Check cache first
+        const cached = store.categoryCache()[threadId];
+        if (cached) {
+          return cached;
+        }
+
+        patchState(store, { categorizeLoading: true, error: null });
+        const response = await electronService.aiCategorize(emailContent);
+        if (response.success && response.data) {
+          const data = response.data as { category: string };
+          const category = (data.category || 'Primary') as AiCategory;
+          patchState(store, {
+            categorizeResult: category,
+            categorizeLoading: false,
+            categoryCache: { ...store.categoryCache(), [threadId]: category },
+          });
+          return category;
+        } else {
+          patchState(store, {
+            categorizeLoading: false,
+            error: response.error?.message || 'Failed to categorize',
+          });
+          return null;
+        }
+      },
+
+      /** Batch categorize threads (won't re-categorize cached ones) */
+      async categorizeThreads(threads: Array<{ threadId: string; content: string }>): Promise<void> {
+        const uncached = threads.filter(t => !store.categoryCache()[t.threadId]);
+        for (const thread of uncached) {
+          await this.categorize(thread.threadId, thread.content);
+        }
+      },
+
+      /** Get a category from cache */
+      getCachedCategory(threadId: string): AiCategory | null {
+        return store.categoryCache()[threadId] || null;
+      },
+
+      /** Clear category cache */
+      clearCategoryCache(): void {
+        patchState(store, { categoryCache: {} });
+      },
+
+      /** AI search: convert natural language to structured search params */
+      async aiSearch(query: string): Promise<{ structured?: Record<string, unknown>; gmraw?: string } | null> {
+        patchState(store, { searchLoading: true, searchResult: null, error: null });
+        const response = await electronService.aiSearch(query);
+        if (response.success && response.data) {
+          const data = response.data as { structured?: Record<string, unknown>; gmraw?: string };
+          patchState(store, {
+            searchLoading: false,
+            searchResult: data,
+          });
+          return data;
+        } else {
+          patchState(store, {
+            searchLoading: false,
+            error: response.error?.message || 'AI search failed',
+          });
+          return null;
+        }
+      },
+
+      /** Generate a filter from natural language */
+      async generateFilter(description: string, accountId: number): Promise<AiFilterSuggestion | null> {
+        patchState(store, { filterLoading: true, filterSuggestion: null, error: null });
+        const response = await electronService.aiGenerateFilter(description, accountId);
+        if (response.success && response.data) {
+          const data = response.data as AiFilterSuggestion;
+          patchState(store, {
+            filterLoading: false,
+            filterSuggestion: data,
+          });
+          return data;
+        } else {
+          patchState(store, {
+            filterLoading: false,
+            error: response.error?.message || 'Failed to generate filter',
+          });
+          return null;
+        }
+      },
+
+      /** Clear filter suggestion */
+      clearFilterSuggestion(): void {
+        patchState(store, { filterSuggestion: null, filterLoading: false });
+      },
+
+      /** Detect follow-up need for a sent email */
+      async detectFollowUp(emailContent: string): Promise<AiFollowUpResult | null> {
+        patchState(store, { followUpLoading: true, followUpResult: null, error: null });
+        const response = await electronService.aiDetectFollowUp(emailContent);
+        if (response.success && response.data) {
+          const data = response.data as AiFollowUpResult;
+          patchState(store, {
+            followUpLoading: false,
+            followUpResult: data,
+          });
+          return data;
+        } else {
+          patchState(store, {
+            followUpLoading: false,
+            error: response.error?.message || 'Failed to detect follow-up',
+          });
+          return null;
+        }
+      },
+
+      /** Clear follow-up result */
+      clearFollowUp(): void {
+        patchState(store, { followUpResult: null, followUpLoading: false });
+      },
+
+      /** Clear search result */
+      clearSearchResult(): void {
+        patchState(store, { searchResult: null, searchLoading: false });
       },
     };
   })

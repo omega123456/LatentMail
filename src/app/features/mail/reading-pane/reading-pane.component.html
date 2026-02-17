@@ -63,6 +63,17 @@
         <span class="material-symbols-outlined">quickreply</span>
         <span>Smart Reply</span>
       </button>
+      @if (isSentFolder()) {
+        <button
+          class="toolbar-btn ai-btn"
+          (click)="detectFollowUp()"
+          [disabled]="!aiStore.connected() || aiStore.followUpLoading()"
+          [title]="aiStore.connected() ? 'Check Follow-up' : 'Ollama not connected'"
+        >
+          <span class="material-symbols-outlined">{{ aiStore.followUpLoading() ? 'sync' : 'notifications_active' }}</span>
+          <span>Follow-up</span>
+        </button>
+      }
     </div>
 
     <!-- AI Summary Panel (shown below toolbar when active) -->
@@ -113,6 +124,43 @@
                 <button class="reply-chip" (click)="useReplySuggestion(suggestion)">
                   {{ suggestion }}
                 </button>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    <!-- AI Follow-up Detection (shown for sent emails) -->
+    @if (aiStore.followUpResult() || aiStore.followUpLoading()) {
+      <div class="ai-followup-panel">
+        <div class="ai-panel-header">
+          <span class="material-symbols-outlined ai-icon">notifications_active</span>
+          <span class="ai-panel-title">Follow-up Check</span>
+          <button class="ai-panel-close" (click)="closeFollowUp()">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        <div class="ai-panel-body">
+          @if (aiStore.followUpLoading()) {
+            <div class="ai-loading">
+              <span class="material-symbols-outlined spinning">sync</span>
+              Analyzing follow-up needs...
+            </div>
+          } @else if (aiStore.followUpResult(); as result) {
+            <div class="followup-result" [class.needs-followup]="result.needsFollowUp" [class.no-followup]="!result.needsFollowUp">
+              <div class="followup-status">
+                <span class="material-symbols-outlined">
+                  {{ result.needsFollowUp ? 'priority_high' : 'check_circle' }}
+                </span>
+                <span>{{ result.needsFollowUp ? 'Follow-up recommended' : 'No follow-up needed' }}</span>
+              </div>
+              <p class="followup-reason">{{ result.reason }}</p>
+              @if (result.needsFollowUp && result.suggestedDate) {
+                <p class="followup-date">
+                  <span class="material-symbols-outlined">event</span>
+                  Suggested follow-up: {{ result.suggestedDate }}
+                </p>
               }
             </div>
           }

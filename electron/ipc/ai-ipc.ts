@@ -209,4 +209,47 @@ export function registerAiIpcHandlers(): void {
       return ipcError('AI_GENERATE_REPLIES_FAILED', message);
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.AI_GENERATE_FILTER, async (_event, description: string, accountId: number) => {
+    log.info('[AI] generate-filter request', { descLen: description?.length ?? 0, accountId });
+    try {
+      if (!description || typeof description !== 'string') {
+        log.warn('[AI] generate-filter rejected: invalid input');
+        return ipcError('AI_INVALID_INPUT', 'Filter description is required');
+      }
+      if (!accountId || typeof accountId !== 'number') {
+        return ipcError('AI_INVALID_INPUT', 'Account ID is required');
+      }
+      const filter = await ollama.generateFilter(description, accountId);
+      log.info('[AI] generate-filter success', { name: filter.name, condCount: filter.conditions.length, actionCount: filter.actions.length });
+      return ipcSuccess(filter);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate filter';
+      log.error('[AI] generate-filter failed', { message }, err);
+      if (message.includes('No AI model selected')) {
+        return ipcError('AI_NO_MODEL', message);
+      }
+      return ipcError('AI_GENERATE_FILTER_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AI_DETECT_FOLLOWUP, async (_event, emailContent: string) => {
+    log.info('[AI] detect-followup request', { contentLen: emailContent?.length ?? 0 });
+    try {
+      if (!emailContent || typeof emailContent !== 'string') {
+        log.warn('[AI] detect-followup rejected: invalid input');
+        return ipcError('AI_INVALID_INPUT', 'Email content is required');
+      }
+      const result = await ollama.detectFollowUp(emailContent);
+      log.info('[AI] detect-followup success', { needsFollowUp: result.needsFollowUp });
+      return ipcSuccess(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to detect follow-up';
+      log.error('[AI] detect-followup failed', { message }, err);
+      if (message.includes('No AI model selected')) {
+        return ipcError('AI_NO_MODEL', message);
+      }
+      return ipcError('AI_DETECT_FOLLOWUP_FAILED', message);
+    }
+  });
 }

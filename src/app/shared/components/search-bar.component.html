@@ -1,0 +1,30 @@
+<div class="search-bar" [class.focused]="focused()">
+  <span class="material-symbols-outlined search-icon">search</span>
+  <input
+    class="search-bar-input"
+    type="text"
+    [placeholder]="aiMode() ? 'Ask AI to find emails...' : 'Search emails...'"
+    [value]="query()"
+    (input)="query.set($any($event.target).value)"
+    (keydown)="onKeydown($event)"
+    (focus)="focused.set(true)"
+    (blur)="focused.set(false)"
+  />
+  @if (aiStore.searchLoading()) {
+    <span class="material-symbols-outlined spinning search-loading">sync</span>
+  }
+  @if (query()) {
+    <button class="search-action-btn" (click)="onClear()" title="Clear search">
+      <span class="material-symbols-outlined">close</span>
+    </button>
+  }
+  <button
+    class="search-action-btn ai-toggle"
+    [class.active]="aiMode()"
+    [disabled]="!aiStore.isAvailable()"
+    (click)="toggleAiMode()"
+    [title]="aiStore.isAvailable() ? (aiMode() ? 'Switch to direct search' : 'Switch to AI search') : 'Ollama not connected'"
+  >
+    <span class="material-symbols-outlined">auto_awesome</span>
+  </button>
+</div>

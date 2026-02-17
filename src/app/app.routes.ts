@@ -56,6 +56,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/settings/queue-settings.component').then(m => m.QueueSettingsComponent),
       },
+      {
+        path: 'filters',
+        loadComponent: () =>
+          import('./features/settings/filter-settings.component').then(m => m.FilterSettingsComponent),
+      },
     ],
   },
   {

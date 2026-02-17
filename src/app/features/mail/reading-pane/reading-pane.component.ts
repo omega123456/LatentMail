@@ -34,6 +34,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       if (summaryForId != null && summaryForId !== currentId) {
         this.aiStore.clearSummary();
         this.aiStore.clearReplies();
+        this.aiStore.clearFollowUp();
       }
     });
   }
@@ -167,5 +168,25 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   /** Close reply suggestions */
   closeReplies(): void {
     this.aiStore.clearReplies();
+  }
+
+  /** Detect if the current email needs follow-up */
+  async detectFollowUp(): Promise<void> {
+    const content = this.getThreadContent();
+    if (!content) {
+      return;
+    }
+    await this.aiStore.detectFollowUp(content);
+  }
+
+  /** Close follow-up panel */
+  closeFollowUp(): void {
+    this.aiStore.clearFollowUp();
+  }
+
+  /** Whether the current folder is the Gmail Sent folder */
+  isSentFolder(): boolean {
+    const folder = this.foldersStore.activeFolderId();
+    return folder === '[Gmail]/Sent Mail' || folder === 'Sent' || folder === '[Gmail]/Sent';
   }
 }

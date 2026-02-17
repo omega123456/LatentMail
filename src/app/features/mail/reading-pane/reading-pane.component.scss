@@ -230,7 +230,8 @@
 
 // AI Summary Panel
 .ai-summary-panel,
-.ai-replies-panel {
+.ai-replies-panel,
+.ai-followup-panel {
   border-bottom: 1px solid var(--color-border);
   background-color: var(--color-surface-variant);
 }
@@ -332,5 +333,49 @@
   &:hover {
     border-color: var(--color-primary);
     background-color: var(--color-primary-light);
+  }
+}
+
+// Follow-up detection
+.followup-result {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.followup-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  margin-bottom: 4px;
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
+}
+
+.needs-followup .followup-status {
+  color: var(--color-accent);
+}
+
+.no-followup .followup-status {
+  color: var(--color-success);
+}
+
+.followup-reason {
+  margin: 0 0 4px;
+  color: var(--color-text-secondary);
+}
+
+.followup-date {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+
+  .material-symbols-outlined {
+    font-size: 14px;
   }
 }

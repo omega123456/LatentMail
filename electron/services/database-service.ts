@@ -1454,6 +1454,119 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
+  // ---- Filter CRUD operations ----
+
+  /**
+   * Get all filters for an account.
+   */
+  getFilters(accountId: number): Array<{
+    id: number;
+    accountId: number;
+    name: string;
+    conditions: string;
+    actions: string;
+    isEnabled: boolean;
+    isAiGenerated: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, name, conditions, actions, is_enabled, is_ai_generated, created_at, updated_at
+       FROM filters WHERE account_id = :accountId ORDER BY created_at DESC`,
+      { ':accountId': accountId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map(row => ({
+      id: row[0] as number,
+      accountId: row[1] as number,
+      name: row[2] as string,
+      conditions: row[3] as string,
+      actions: row[4] as string,
+      isEnabled: !!(row[5] as number),
+      isAiGenerated: !!(row[6] as number),
+      createdAt: row[7] as string,
+      updatedAt: row[8] as string,
+    }));
+  }
+
+  /**
+   * Save a new filter.
+   */
+  saveFilter(filter: {
+    accountId: number;
+    name: string;
+    conditions: string;
+    actions: string;
+    isEnabled: boolean;
+    isAiGenerated: boolean;
+  }): number {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT INTO filters (account_id, name, conditions, actions, is_enabled, is_ai_generated)
+       VALUES (:accountId, :name, :conditions, :actions, :isEnabled, :isAiGenerated)`,
+      {
+        ':accountId': filter.accountId,
+        ':name': filter.name,
+        ':conditions': filter.conditions,
+        ':actions': filter.actions,
+        ':isEnabled': filter.isEnabled ? 1 : 0,
+        ':isAiGenerated': filter.isAiGenerated ? 1 : 0,
+      }
+    );
+    const idResult = this.db.exec('SELECT last_insert_rowid()');
+    const id = idResult.length > 0 ? (idResult[0].values[0][0] as number) : 0;
+    this.scheduleSave();
+    return id;
+  }
+
+  /**
+   * Update an existing filter.
+   */
+  updateFilter(filter: {
+    id: number;
+    name: string;
+    conditions: string;
+    actions: string;
+    isEnabled: boolean;
+  }): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `UPDATE filters SET name = :name, conditions = :conditions, actions = :actions,
+       is_enabled = :isEnabled, updated_at = datetime('now')
+       WHERE id = :id`,
+      {
+        ':id': filter.id,
+        ':name': filter.name,
+        ':conditions': filter.conditions,
+        ':actions': filter.actions,
+        ':isEnabled': filter.isEnabled ? 1 : 0,
+      }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Delete a filter by ID.
+   */
+  deleteFilter(id: number): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('DELETE FROM filters WHERE id = :id', { ':id': id });
+    this.scheduleSave();
+  }
+
+  /**
+   * Toggle filter enabled/disabled state.
+   */
+  toggleFilter(id: number, isEnabled: boolean): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'UPDATE filters SET is_enabled = :isEnabled, updated_at = datetime(\'now\') WHERE id = :id',
+      { ':id': id, ':isEnabled': isEnabled ? 1 : 0 }
+    );
+    this.scheduleSave();
+  }
+
   close(): void {
     if (this.db) {
       if (this.saveTimer) {

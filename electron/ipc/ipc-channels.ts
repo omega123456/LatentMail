@@ -30,6 +30,8 @@ export const IPC_CHANNELS = {
   AI_SET_URL: 'ai:set-url',
   AI_SET_MODEL: 'ai:set-model',
   AI_GENERATE_REPLIES: 'ai:generate-replies',
+  AI_GENERATE_FILTER: 'ai:generate-filter',
+  AI_DETECT_FOLLOWUP: 'ai:detect-followup',
 
   // Queue operations
   QUEUE_ENQUEUE: 'queue:enqueue',
@@ -48,6 +50,11 @@ export const IPC_CHANNELS = {
   // Database/settings operations
   DB_GET_SETTINGS: 'db:get-settings',
   DB_SET_SETTINGS: 'db:set-settings',
+  DB_GET_FILTERS: 'db:get-filters',
+  DB_SAVE_FILTER: 'db:save-filter',
+  DB_UPDATE_FILTER: 'db:update-filter',
+  DB_DELETE_FILTER: 'db:delete-filter',
+  DB_TOGGLE_FILTER: 'db:toggle-filter',
 
   // System operations
   SYSTEM_MINIMIZE: 'system:minimize',

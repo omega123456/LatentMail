@@ -47,6 +47,8 @@ interface ElectronAPI {
     setUrl: (url: string) => Promise<IpcResponse>;
     setModel: (model: string) => Promise<IpcResponse>;
     generateReplies: (threadContent: string) => Promise<IpcResponse>;
+    generateFilter: (description: string, accountId: number) => Promise<IpcResponse>;
+    detectFollowUp: (emailContent: string) => Promise<IpcResponse>;
   };
   compose: {
     searchContacts: (query: string) => Promise<IpcResponse>;
@@ -65,6 +67,11 @@ interface ElectronAPI {
   db: {
     getSettings: (keys?: string[]) => Promise<IpcResponse>;
     setSettings: (settings: Record<string, string>) => Promise<IpcResponse>;
+    getFilters: (accountId: number) => Promise<IpcResponse>;
+    saveFilter: (filter: unknown) => Promise<IpcResponse>;
+    updateFilter: (filter: unknown) => Promise<IpcResponse>;
+    deleteFilter: (filterId: number) => Promise<IpcResponse>;
+    toggleFilter: (filterId: number, isEnabled: boolean) => Promise<IpcResponse>;
   };
   system: {
     minimize: () => Promise<void>;
@@ -200,6 +207,14 @@ export class ElectronService {
     return this.invoke(() => this.api!.ai.generateReplies(threadContent));
   }
 
+  async aiGenerateFilter(description: string, accountId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.generateFilter(description, accountId));
+  }
+
+  async aiDetectFollowUp(emailContent: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.detectFollowUp(emailContent));
+  }
+
   // ---- Compose operations (signatures & contacts only) ----
 
   async searchContacts(query: string): Promise<IpcResponse> {
@@ -258,6 +273,26 @@ export class ElectronService {
 
   async setSettings(settings: Record<string, string>): Promise<IpcResponse> {
     return this.invoke(() => this.api!.db.setSettings(settings));
+  }
+
+  async getFilters(accountId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.db.getFilters(accountId));
+  }
+
+  async saveFilter(filter: unknown): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.db.saveFilter(filter));
+  }
+
+  async updateFilter(filter: unknown): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.db.updateFilter(filter));
+  }
+
+  async deleteFilter(filterId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.db.deleteFilter(filterId));
+  }
+
+  async toggleFilter(filterId: number, isEnabled: boolean): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.db.toggleFilter(filterId, isEnabled));
   }
 
   // ---- System operations ----

@@ -1,10 +1,12 @@
-import { Component, ViewChild, inject, output, effect } from '@angular/core';
+import { Component, ViewChild, inject, output, effect, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CdkVirtualScrollViewport, ScrollingModule } from '@angular/cdk/scrolling';
 import { EmailsStore } from '../../../store/emails.store';
 import { UiStore } from '../../../store/ui.store';
+import { AiStore } from '../../../store/ai.store';
 import { EmailListItemComponent } from './email-list-item.component';
 import { Thread } from '../../../core/models/email.model';
+import { AiCategory } from '../../../core/models/ai.model';
 import { FoldersStore } from '../../../store/folders.store';
 import { AccountsStore } from '../../../store/accounts.store';
 
@@ -23,7 +25,22 @@ export class EmailListComponent {
   readonly foldersStore = inject(FoldersStore);
   readonly accountsStore = inject(AccountsStore);
   readonly uiStore = inject(UiStore);
+  readonly aiStore = inject(AiStore);
   readonly threadSelected = output<Thread>();
+
+  /** Active category filter from the header */
+  readonly categoryFilter = signal<AiCategory | null>(null);
+
+  /** Threads filtered by category when a category filter is active */
+  readonly filteredThreads = computed(() => {
+    const threads = this.emailsStore.threads();
+    const filter = this.categoryFilter();
+    if (!filter) {
+      return threads;
+    }
+    const cache = this.aiStore.categoryCache();
+    return threads.filter(t => cache[t.gmailThreadId] === filter);
+  });
 
   constructor() {
     // Reset scroll to top when folder/account switches trigger a fresh thread load.
@@ -86,5 +103,9 @@ export class EmailListComponent {
     if (activeAccount && activeFolderId) {
       this.emailsStore.loadMoreFromServer(activeAccount.id, activeFolderId);
     }
+  }
+
+  setCategoryFilter(category: AiCategory | null): void {
+    this.categoryFilter.set(category);
   }
 }

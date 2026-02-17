@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef, signal, ViewChildren, QueryList } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -10,6 +10,7 @@ import { ReadingPaneComponent } from './reading-pane/reading-pane.component';
 import { StatusBarComponent } from './status-bar/status-bar.component';
 import { ResizablePanelDirective } from './resizable-panel.directive';
 import { ComposeWindowComponent } from '../compose/compose-window.component';
+import { SearchBarComponent } from '../../shared/components/search-bar.component';
 import { AccountsStore } from '../../store/accounts.store';
 import { FoldersStore } from '../../store/folders.store';
 import { EmailsStore } from '../../store/emails.store';
@@ -17,6 +18,8 @@ import { ComposeStore } from '../../store/compose.store';
 import { UiStore } from '../../store/ui.store';
 import { ElectronService } from '../../core/services/electron.service';
 import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
+import { AiStore } from '../../store/ai.store';
+import { AiCategory } from '../../core/models/ai.model';
 
 @Component({
   selector: 'app-mail-shell',
@@ -27,6 +30,7 @@ import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
     EmailListComponent, EmailListHeaderComponent,
     ReadingPaneComponent, StatusBarComponent,
     ResizablePanelDirective, ComposeWindowComponent,
+    SearchBarComponent,
   ],
   templateUrl: './mail-shell.component.html',
   styleUrl: './mail-shell.component.scss',
@@ -38,10 +42,15 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly composeStore = inject(ComposeStore);
   readonly uiStore = inject(UiStore);
   private readonly electronService = inject(ElectronService);
+  private readonly aiStore = inject(AiStore);
   private readonly cdr = inject(ChangeDetectorRef);
   private syncSub?: Subscription;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
+  private isSearchActive = false;
+  readonly activeCategoryFilter = signal<AiCategory | null>(null);
+
+  @ViewChildren(EmailListComponent) emailLists!: QueryList<EmailListComponent>;
 
   constructor() { }
 
@@ -86,6 +95,10 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       this.emailsStore.loadThreads(activeAccount.id, normalizedFolderId);
       this.lastLoadedAccountId = activeAccount.id;
       this.lastLoadedFolderId = normalizedFolderId;
+      // Reset category filter and cache on folder switch
+      this.activeCategoryFilter.set(null);
+      this.aiStore.clearCategoryCache();
+      this.emailLists?.forEach(list => list.setCategoryFilter(null));
     }
   }
 
@@ -250,6 +263,10 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     await this.emailsStore.loadThreads(accountId, 'INBOX');
     this.lastLoadedAccountId = accountId;
     this.lastLoadedFolderId = 'INBOX';
+    // Reset category filter and cache on account switch
+    this.activeCategoryFilter.set(null);
+    this.aiStore.clearCategoryCache();
+    this.emailLists?.forEach(list => list.setCategoryFilter(null));
   }
 
   onManualSync(): void {
@@ -268,6 +285,29 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       accountEmail: activeAccount.email,
       accountDisplayName: activeAccount.displayName,
     });
+  }
+
+  onSearch(query: string): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) return;
+    this.isSearchActive = true;
+    this.emailsStore.searchEmails(activeAccount.id, query);
+  }
+
+  onSearchCleared(): void {
+    if (!this.isSearchActive) return;
+    this.isSearchActive = false;
+    const activeAccount = this.accountsStore.activeAccount();
+    const folderId = this.foldersStore.activeFolderId() || 'INBOX';
+    if (activeAccount) {
+      this.emailsStore.loadThreads(activeAccount.id, folderId);
+    }
+  }
+
+  onCategoryFilterChanged(category: AiCategory | null): void {
+    this.activeCategoryFilter.set(category);
+    // Update all email list instances
+    this.emailLists?.forEach(list => list.setCategoryFilter(category));
   }
 
   private openComposeForAction(mode: ComposeMode): void {

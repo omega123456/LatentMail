@@ -1,0 +1,218 @@
+<div class="filter-settings">
+  <h2>Filters</h2>
+  <p class="section-description">Create rules to automatically organize incoming emails.</p>
+
+  <!-- AI Filter Generator -->
+  @if (aiStore.isAvailable()) {
+    <div class="ai-generator">
+      <div class="ai-header">
+        <span class="material-symbols-outlined">auto_awesome</span>
+        <span>AI Filter Builder</span>
+      </div>
+      <div class="ai-input-row">
+        <input
+          class="ai-description-input"
+          type="text"
+          placeholder="Describe your filter in plain language, e.g. 'Move newsletters from tech companies to a Tech folder'"
+          [value]="aiDescription()"
+          (input)="aiDescription.set($any($event.target).value)"
+          (keydown.enter)="generateWithAi()"
+          [disabled]="aiGenerating()"
+        />
+        <button
+          class="ai-generate-btn"
+          (click)="generateWithAi()"
+          [disabled]="!aiDescription().trim() || aiGenerating()"
+        >
+          @if (aiGenerating()) {
+            <span class="material-symbols-outlined spinning">sync</span>
+          } @else {
+            <span class="material-symbols-outlined">auto_awesome</span>
+          }
+          Generate
+        </button>
+      </div>
+    </div>
+  }
+
+  <!-- Error message -->
+  @if (error()) {
+    <div class="error-banner">
+      <span class="material-symbols-outlined">error</span>
+      {{ error() }}
+    </div>
+  }
+
+  <!-- Filter List -->
+  <div class="filter-list-header">
+    <h3>Your Filters</h3>
+    <button class="add-filter-btn" (click)="openNewFilter()">
+      <span class="material-symbols-outlined">add</span>
+      New Filter
+    </button>
+  </div>
+
+  @if (loading()) {
+    <div class="loading">
+      <span class="material-symbols-outlined spinning">sync</span>
+      Loading filters...
+    </div>
+  } @else if (filters().length === 0) {
+    <div class="empty-state">
+      <span class="material-symbols-outlined">filter_list</span>
+      <p>No filters yet</p>
+      <p class="hint">Create a filter to automatically organize your emails</p>
+    </div>
+  } @else {
+    <div class="filter-list">
+      @for (filter of filters(); track filter.id) {
+        <div class="filter-card" [class.disabled]="!filter.isEnabled">
+          <div class="filter-header">
+            <div class="filter-info">
+              <span class="filter-name">{{ filter.name }}</span>
+              @if (filter.isAiGenerated) {
+                <span class="ai-badge">
+                  <span class="material-symbols-outlined">auto_awesome</span>
+                  AI
+                </span>
+              }
+            </div>
+            <div class="filter-actions">
+              <button class="icon-btn" (click)="toggleFilterEnabled(filter)" [title]="filter.isEnabled ? 'Disable' : 'Enable'">
+                <span class="material-symbols-outlined">
+                  {{ filter.isEnabled ? 'toggle_on' : 'toggle_off' }}
+                </span>
+              </button>
+              <button class="icon-btn" (click)="editFilter(filter)" title="Edit">
+                <span class="material-symbols-outlined">edit</span>
+              </button>
+              <button class="icon-btn danger" (click)="deleteFilter(filter.id)" title="Delete">
+                <span class="material-symbols-outlined">delete</span>
+              </button>
+            </div>
+          </div>
+          <div class="filter-details">
+            <div class="filter-conditions">
+              @for (cond of filter.conditions; track $index) {
+                <span class="condition-chip">{{ conditionFieldLabel(cond.field) }} {{ cond.operator }} "{{ cond.value }}"</span>
+              }
+            </div>
+            <div class="filter-actions-list">
+              <span class="action-arrow">→</span>
+              @for (action of filter.actions; track $index) {
+                <span class="action-chip">{{ actionTypeLabel(action.type) }}{{ action.value ? ': ' + action.value : '' }}</span>
+              }
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Filter Editor (modal-like overlay) -->
+  @if (showEditor()) {
+    <div class="editor-overlay" (click)="cancelEdit()">
+      <div class="editor-panel" (click)="$event.stopPropagation()">
+        <div class="editor-header">
+          <h3>{{ editingFilter()?.id ? 'Edit Filter' : 'New Filter' }}</h3>
+          <button class="icon-btn" (click)="cancelEdit()">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div class="editor-body">
+          <!-- Filter name -->
+          <div class="form-group">
+            <label>Filter Name</label>
+            <input
+              type="text"
+              class="form-input"
+              [value]="editingFilter()?.name || ''"
+              (input)="updateFilterName($any($event.target).value)"
+              placeholder="e.g., Archive newsletters"
+            />
+          </div>
+
+          <!-- Conditions -->
+          <div class="form-group">
+            <label>Conditions</label>
+            @for (cond of $any(editingFilter()?.conditions || []); track $index; let i = $index) {
+              <div class="condition-row">
+                <select class="form-select" [value]="cond.field" (change)="updateCondition(i, 'field', $any($event.target).value)">
+                  <option value="from">From</option>
+                  <option value="to">To</option>
+                  <option value="subject">Subject</option>
+                  <option value="body">Body</option>
+                  <option value="has-attachment">Has Attachment</option>
+                </select>
+                <select class="form-select" [value]="cond.operator" (change)="updateCondition(i, 'operator', $any($event.target).value)">
+                  <option value="contains">Contains</option>
+                  <option value="equals">Equals</option>
+                  <option value="starts-with">Starts with</option>
+                  <option value="ends-with">Ends with</option>
+                  <option value="matches">Matches</option>
+                </select>
+                <input
+                  type="text"
+                  class="form-input condition-value"
+                  [value]="cond.value"
+                  (input)="updateCondition(i, 'value', $any($event.target).value)"
+                  placeholder="Value"
+                />
+                <button class="icon-btn danger" (click)="removeCondition(i)">
+                  <span class="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            }
+            <button class="add-row-btn" (click)="addCondition()">
+              <span class="material-symbols-outlined">add</span>
+              Add Condition
+            </button>
+          </div>
+
+          <!-- Actions -->
+          <div class="form-group">
+            <label>Actions</label>
+            @for (action of $any(editingFilter()?.actions || []); track $index; let i = $index) {
+              <div class="action-row">
+                <select class="form-select" [value]="action.type" (change)="updateAction(i, 'type', $any($event.target).value)">
+                  <option value="label">Add Label</option>
+                  <option value="archive">Archive</option>
+                  <option value="delete">Delete</option>
+                  <option value="star">Star</option>
+                  <option value="mark-read">Mark Read</option>
+                  <option value="move">Move to</option>
+                </select>
+                @if (action.type === 'label' || action.type === 'move') {
+                  <input
+                    type="text"
+                    class="form-input"
+                    [value]="action.value || ''"
+                    (input)="updateAction(i, 'value', $any($event.target).value)"
+                    [placeholder]="action.type === 'label' ? 'Label name' : 'Folder name'"
+                  />
+                }
+                <button class="icon-btn danger" (click)="removeAction(i)">
+                  <span class="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            }
+            <button class="add-row-btn" (click)="addAction()">
+              <span class="material-symbols-outlined">add</span>
+              Add Action
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-footer">
+          <button class="cancel-btn" (click)="cancelEdit()">Cancel</button>
+          <button
+            class="save-btn"
+            (click)="saveEditingFilter()"
+            [disabled]="!editingFilter()?.name || !$any(editingFilter()?.conditions)?.length || !$any(editingFilter()?.actions)?.length"
+          >Save Filter</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

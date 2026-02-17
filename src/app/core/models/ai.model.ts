@@ -47,3 +47,17 @@ export interface AiSearchResult {
 export interface AiCategorization {
   category: 'Primary' | 'Updates' | 'Promotions' | 'Social' | 'Newsletters';
 }
+
+export interface AiFilterSuggestion {
+  name: string;
+  conditions: Array<{ field: string; operator: string; value: string }>;
+  actions: Array<{ type: string; value?: string }>;
+}
+
+export interface AiFollowUpResult {
+  needsFollowUp: boolean;
+  reason: string;
+  suggestedDate?: string;
+}
+
+export type AiCategory = 'Primary' | 'Updates' | 'Promotions' | 'Social' | 'Newsletters';

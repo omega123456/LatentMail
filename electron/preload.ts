@@ -70,6 +70,10 @@ const electronAPI = {
       ipcRenderer.invoke('ai:set-model', model) as Promise<IpcResponse>,
     generateReplies: (threadContent: string) =>
       ipcRenderer.invoke('ai:generate-replies', threadContent) as Promise<IpcResponse>,
+    generateFilter: (description: string, accountId: number) =>
+      ipcRenderer.invoke('ai:generate-filter', description, accountId) as Promise<IpcResponse>,
+    detectFollowUp: (emailContent: string) =>
+      ipcRenderer.invoke('ai:detect-followup', emailContent) as Promise<IpcResponse>,
   },
 
   // Compose operations (signatures & contacts only — draft ops moved to queue)
@@ -106,6 +110,16 @@ const electronAPI = {
       ipcRenderer.invoke('db:get-settings', keys) as Promise<IpcResponse>,
     setSettings: (settings: Record<string, string>) =>
       ipcRenderer.invoke('db:set-settings', settings) as Promise<IpcResponse>,
+    getFilters: (accountId: number) =>
+      ipcRenderer.invoke('db:get-filters', accountId) as Promise<IpcResponse>,
+    saveFilter: (filter: unknown) =>
+      ipcRenderer.invoke('db:save-filter', filter) as Promise<IpcResponse>,
+    updateFilter: (filter: unknown) =>
+      ipcRenderer.invoke('db:update-filter', filter) as Promise<IpcResponse>,
+    deleteFilter: (filterId: number) =>
+      ipcRenderer.invoke('db:delete-filter', filterId) as Promise<IpcResponse>,
+    toggleFilter: (filterId: number, isEnabled: boolean) =>
+      ipcRenderer.invoke('db:toggle-filter', filterId, isEnabled) as Promise<IpcResponse>,
   },
 
   // System operations
