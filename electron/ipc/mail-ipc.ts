@@ -13,6 +13,51 @@ const threadBodyFetchAttempted = new Set<string>();
 export function registerMailIpcHandlers(): void {
   const db = DatabaseService.getInstance();
 
+  const normalizeSearchQueries = (queryInput: unknown): string[] => {
+    if (typeof queryInput === 'string') {
+      const trimmed = queryInput.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    if (Array.isArray(queryInput)) {
+      return queryInput
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    }
+    return [];
+  };
+
+  const attachThreadFolders = (threads: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+    const threadIds = threads
+      .map((thread) => {
+        const rawId = thread['id'];
+        if (typeof rawId === 'number') {
+          return rawId;
+        }
+        if (typeof rawId === 'string') {
+          const parsed = Number(rawId);
+          return Number.isFinite(parsed) ? parsed : null;
+        }
+        return null;
+      })
+      .filter((threadId): threadId is number => threadId != null && threadId > 0);
+
+    if (threadIds.length === 0) {
+      return threads;
+    }
+
+    const folderMap = db.getFoldersForThreadBatch(threadIds);
+    return threads.map((thread) => {
+      const rawId = thread['id'];
+      const threadId = typeof rawId === 'number' ? rawId : Number(rawId);
+      const folders = Number.isFinite(threadId) ? folderMap.get(threadId) : undefined;
+      if (!folders || folders.length === 0) {
+        return thread;
+      }
+      return { ...thread, folders };
+    });
+  };
+
   // Fetch emails/threads for a folder (local-first from DB)
   ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_EMAILS, async (_event, accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => {
     try {
@@ -536,17 +581,31 @@ export function registerMailIpcHandlers(): void {
   });
 
   // Search emails locally — returns thread-grouped results across all folders
-  ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH, async (_event, accountId: string, query: string) => {
+  ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH, async (_event, accountId: string, queryInput: string | string[]) => {
     try {
-      if (!accountId || !query || typeof query !== 'string') {
-        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Account ID and query are required');
+      if (!accountId || isNaN(Number(accountId))) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Valid account ID is required');
       }
-      if (query.length > 2048) {
-        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Query too long (max 2048 characters)');
+
+      const queries = normalizeSearchQueries(queryInput);
+      if (queries.length === 0) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'At least one search query is required');
       }
-      log.info(`[MAIL_SEARCH] Searching "${query}" for account ${accountId}`);
-      const results = db.searchEmails(Number(accountId), query);
-      log.info(`[MAIL_SEARCH] Found ${results.length} threads for query "${query}"`);
+      for (const query of queries) {
+        if (query.length > 2048) {
+          return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Query too long (max 2048 characters)');
+        }
+      }
+
+      const numAccountId = Number(accountId);
+      log.info(`[MAIL_SEARCH] Searching ${queries.length} query variant(s) for account ${accountId}`);
+
+      const rawResults = queries.length === 1
+        ? db.searchEmails(numAccountId, queries[0])
+        : db.searchEmailsMulti(numAccountId, queries);
+      const results = attachThreadFolders(rawResults);
+
+      log.info(`[MAIL_SEARCH] Found ${results.length} merged thread result(s) for account ${accountId}`);
       return ipcSuccess(results);
     } catch (err) {
       log.error('[MAIL_SEARCH] Failed to search:', err);
@@ -555,17 +614,25 @@ export function registerMailIpcHandlers(): void {
   });
 
   // Search emails via IMAP using Gmail X-GM-RAW — upserts results to DB, returns thread-grouped results
-  ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH_IMAP, async (_event, accountId: string, query: string) => {
+  ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH_IMAP, async (_event, accountId: string, queryInput: string | string[]) => {
     try {
       if (!accountId || isNaN(Number(accountId))) {
         return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Valid account ID is required');
       }
-      if (!query || typeof query !== 'string') {
-        return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Search query is required');
+
+      const queries = normalizeSearchQueries(queryInput);
+      if (queries.length === 0) {
+        return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'At least one search query is required');
       }
-      if (query.length > 2048) {
-        return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Query too long (max 2048 characters)');
+      for (const query of queries) {
+        if (query.length > 2048) {
+          return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Query too long (max 2048 characters)');
+        }
       }
+
+      const combinedQuery = queries.length === 1
+        ? queries[0]
+        : queries.map((query) => `(${query})`).join(' OR ');
 
       const numAccountId = Number(accountId);
       const imapService = ImapService.getInstance();
@@ -573,14 +640,12 @@ export function registerMailIpcHandlers(): void {
       const folder = '[Gmail]/All Mail';
       const lockKey = `${accountId}:${folder}`;
 
-      log.info(`[MAIL_SEARCH_IMAP] Searching "${query}" via IMAP for account ${accountId}`);
+      log.info(`[MAIL_SEARCH_IMAP] Searching ${queries.length} query variant(s) via IMAP for account ${accountId}`);
 
-      // Acquire folder lock scoped to account + folder
       let emails: Awaited<ReturnType<typeof imapService.searchEmails>>;
       const release = await lockManager.acquire(lockKey);
       try {
-        // Wrap IMAP search with a hard 30s timeout to prevent indefinite hangs
-        const searchPromise = imapService.searchEmails(accountId, query, 100);
+        const searchPromise = imapService.searchEmails(accountId, combinedQuery, 100);
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('IMAP search timed out')), 30_000)
         );
@@ -590,11 +655,10 @@ export function registerMailIpcHandlers(): void {
       }
 
       if (emails.length === 0) {
-        log.info(`[MAIL_SEARCH_IMAP] No IMAP results for query "${query}"`);
+        log.info(`[MAIL_SEARCH_IMAP] No IMAP results for ${queries.length} query variant(s)`);
         return ipcSuccess({ threads: [], resultCount: 0 });
       }
 
-      // Group by thread for upsert
       const threadMap = new Map<string, typeof emails>();
       for (const email of emails) {
         const threadId = email.gmailThreadId || email.gmailMessageId;
@@ -604,11 +668,9 @@ export function registerMailIpcHandlers(): void {
         threadMap.get(threadId)!.push(email);
       }
 
-      // Upsert all data in a single transaction for atomicity
       const rawDb = db.getDatabase();
       rawDb.run('BEGIN');
       try {
-        // Upsert emails with folder set to [Gmail]/All Mail
         for (const email of emails) {
           db.upsertEmail({
             accountId: numAccountId,
@@ -634,31 +696,23 @@ export function registerMailIpcHandlers(): void {
             labels: email.labels,
           });
 
-          // Upsert contacts
           if (email.fromAddress) {
             db.upsertContact(email.fromAddress, email.fromName);
           }
         }
 
-        // Upsert thread-folder associations and safe-merge thread metadata.
-        // Only update thread metadata if the existing thread has LESS data (avoid overwriting
-        // a complete local thread with partial IMAP search results).
         for (const [threadId, threadEmails] of threadMap) {
-          const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+          const uniqueEmails = [...new Map(threadEmails.map((email) => [email.gmailMessageId, email])).values()];
           const latest = uniqueEmails.reduce((a, b) =>
             new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
           );
-          const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
-          const allRead = uniqueEmails.every(e => e.isRead);
-          const anyStarred = uniqueEmails.some(e => e.isStarred);
+          const participants = [...new Set(uniqueEmails.map((email) => email.fromAddress))].join(', ');
+          const allRead = uniqueEmails.every((email) => email.isRead);
+          const anyStarred = uniqueEmails.some((email) => email.isStarred);
 
-          // Check if thread already exists with better data
           const existingThread = db.getThreadById(numAccountId, threadId);
           const existingMessageCount = (existingThread?.['messageCount'] as number) || 0;
 
-          // Only upsert thread metadata when IMAP has equal or more messages,
-          // or the thread doesn't exist yet. This prevents partial search results
-          // from downgrading thread data.
           if (!existingThread || uniqueEmails.length >= existingMessageCount) {
             const dbThreadId = db.upsertThread({
               accountId: numAccountId,
@@ -674,7 +728,6 @@ export function registerMailIpcHandlers(): void {
             });
             db.upsertThreadFolder(dbThreadId, numAccountId, folder);
           } else {
-            // Thread exists with more data — just ensure folder association exists
             const existingId = existingThread['id'] as number;
             db.upsertThreadFolder(existingId, numAccountId, folder);
           }
@@ -686,19 +739,16 @@ export function registerMailIpcHandlers(): void {
         throw upsertErr;
       }
 
-      // Build thread results directly from the IMAP result set (not re-querying with parser).
-      // This avoids feature mismatch: the IMAP query may use operators the local parser doesn't support.
       const threads: Array<Record<string, unknown>> = [];
       for (const [threadId, threadEmails] of threadMap) {
-        const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+        const uniqueEmails = [...new Map(threadEmails.map((email) => [email.gmailMessageId, email])).values()];
         const latest = uniqueEmails.reduce((a, b) =>
           new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
         );
-        const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
-        const allRead = uniqueEmails.every(e => e.isRead);
-        const anyStarred = uniqueEmails.some(e => e.isStarred);
+        const participants = [...new Set(uniqueEmails.map((email) => email.fromAddress))].join(', ');
+        const allRead = uniqueEmails.every((email) => email.isRead);
+        const anyStarred = uniqueEmails.some((email) => email.isStarred);
 
-        // Use existing thread metadata if it has more complete data
         const existingThread = db.getThreadById(numAccountId, threadId);
 
         threads.push({
@@ -716,13 +766,15 @@ export function registerMailIpcHandlers(): void {
         });
       }
 
-      // Sort by date descending
       threads.sort((a, b) =>
         new Date(b['lastMessageDate'] as string).getTime() - new Date(a['lastMessageDate'] as string).getTime()
       );
 
-      log.info(`[MAIL_SEARCH_IMAP] IMAP search found ${emails.length} emails, ${threadMap.size} threads, returning ${threads.length} thread results`);
-      return ipcSuccess({ threads, resultCount: threads.length });
+      const threadsWithFolders = attachThreadFolders(threads);
+      log.info(
+        `[MAIL_SEARCH_IMAP] IMAP search found ${emails.length} emails, ${threadMap.size} threads, returning ${threadsWithFolders.length} thread results`
+      );
+      return ipcSuccess({ threads: threadsWithFolders, resultCount: threadsWithFolders.length });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'IMAP search failed';
       log.error('[MAIL_SEARCH_IMAP] Failed:', err);

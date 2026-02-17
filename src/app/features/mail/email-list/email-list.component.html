@@ -21,6 +21,7 @@
         [thread]="thread"
         [isSelected]="thread.gmailThreadId === emailsStore.selectedThreadId()"
         [density]="uiStore.density()"
+        [showFolderBadge]="foldersStore.searchActive()"
         (clicked)="onThreadClick(thread)"
         (starToggled)="onStarToggle(thread)"
       />

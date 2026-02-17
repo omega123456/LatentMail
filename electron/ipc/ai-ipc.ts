@@ -3,6 +3,7 @@ import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { OllamaService } from '../services/ollama-service';
 import { DatabaseService } from '../services/database-service';
+import { SearchIntent, SearchQueryGenerator } from '../utils/search-query-generator';
 
 function isAllowedOllamaUrl(rawUrl: string): boolean {
   try {
@@ -15,6 +16,161 @@ function isAllowedOllamaUrl(rawUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+const SYSTEM_FOLDERS = [
+  'INBOX',
+  '[Gmail]/Sent Mail',
+  '[Gmail]/Drafts',
+  '[Gmail]/Trash',
+  '[Gmail]/Spam',
+  '[Gmail]/Starred',
+  '[Gmail]/Important',
+];
+
+function dedupeStrings(values: string[]): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    deduped.push(trimmed);
+  }
+  return deduped;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isValidDateRange(value: unknown): boolean {
+  if (value == null) {
+    return true;
+  }
+  if (typeof value !== 'object') {
+    return false;
+  }
+  const dateRange = value as Record<string, unknown>;
+  if (dateRange['after'] != null && typeof dateRange['after'] !== 'string') {
+    return false;
+  }
+  if (dateRange['before'] != null && typeof dateRange['before'] !== 'string') {
+    return false;
+  }
+  if (dateRange['relative'] != null && typeof dateRange['relative'] !== 'string') {
+    return false;
+  }
+  return true;
+}
+
+function isValidFlags(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const flags = value as Record<string, unknown>;
+  if (flags['unread'] != null && typeof flags['unread'] !== 'boolean') {
+    return false;
+  }
+  if (flags['starred'] != null && typeof flags['starred'] !== 'boolean') {
+    return false;
+  }
+  if (flags['important'] != null && typeof flags['important'] !== 'boolean') {
+    return false;
+  }
+  if (flags['hasAttachment'] != null && typeof flags['hasAttachment'] !== 'boolean') {
+    return false;
+  }
+  return true;
+}
+
+function isSearchIntent(value: unknown): value is SearchIntent {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (!isStringArray(candidate['keywords']) || candidate['keywords'].length === 0) {
+    return false;
+  }
+  if (!isStringArray(candidate['synonyms'])) {
+    return false;
+  }
+  if (candidate['direction'] !== 'sent' && candidate['direction'] !== 'received' && candidate['direction'] !== 'any') {
+    return false;
+  }
+  if (candidate['folder'] !== null && typeof candidate['folder'] !== 'string') {
+    return false;
+  }
+  if (candidate['sender'] !== null && typeof candidate['sender'] !== 'string') {
+    return false;
+  }
+  if (candidate['recipient'] !== null && typeof candidate['recipient'] !== 'string') {
+    return false;
+  }
+  if (!isValidDateRange(candidate['dateRange'])) {
+    return false;
+  }
+  if (!isValidFlags(candidate['flags'])) {
+    return false;
+  }
+  if (!isStringArray(candidate['exactPhrases'])) {
+    return false;
+  }
+  if (!isStringArray(candidate['negations'])) {
+    return false;
+  }
+  return true;
+}
+
+function buildFolderContext(
+  providedFolders: unknown,
+  labels: Array<Record<string, unknown>>
+): string[] {
+  if (isStringArray(providedFolders) && providedFolders.length > 0) {
+    return dedupeStrings([...SYSTEM_FOLDERS, ...providedFolders]);
+  }
+
+  const customLabels: Array<{ gmailLabelId: string; name: string; totalCount: number }> = [];
+  const dbFolders: string[] = [];
+
+  for (const label of labels) {
+    const gmailLabelId = typeof label['gmailLabelId'] === 'string' ? label['gmailLabelId'] : '';
+    const name = typeof label['name'] === 'string' ? label['name'] : '';
+    const type = typeof label['type'] === 'string' ? label['type'] : '';
+    const totalCount = typeof label['totalCount'] === 'number' ? label['totalCount'] : 0;
+
+    if (!gmailLabelId && !name) {
+      continue;
+    }
+
+    const isSystem = type.toLowerCase() === 'system' || SYSTEM_FOLDERS.includes(gmailLabelId);
+    if (isSystem) {
+      if (gmailLabelId) {
+        dbFolders.push(gmailLabelId);
+      }
+      if (name) {
+        dbFolders.push(name);
+      }
+      continue;
+    }
+
+    customLabels.push({ gmailLabelId, name, totalCount });
+  }
+
+  customLabels.sort((a, b) => b.totalCount - a.totalCount);
+
+  const topCustomFolders = customLabels
+    .slice(0, 30)
+    .flatMap((label) => [label.gmailLabelId, label.name])
+    .filter((value) => value.length > 0);
+
+  return dedupeStrings([...SYSTEM_FOLDERS, ...dbFolders, ...topCustomFolders]);
 }
 
 export function registerAiIpcHandlers(): void {
@@ -85,7 +241,7 @@ export function registerAiIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (_event, accountId: string, naturalQuery: string) => {
+  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (_event, accountId: string, naturalQuery: string, folders?: unknown) => {
     try {
       if (!accountId || isNaN(Number(accountId))) {
         return ipcError('AI_INVALID_INPUT', 'Valid account ID is required');
@@ -97,22 +253,50 @@ export function registerAiIpcHandlers(): void {
         return ipcError('AI_INVALID_INPUT', 'Query too long (max 2048 characters)');
       }
 
-      // Retrieve user email from database for context
       const db = DatabaseService.getInstance();
-      const account = db.getAccountById(Number(accountId));
+      const numAccountId = Number(accountId);
+      const account = db.getAccountById(numAccountId);
       const userEmail = account?.email || '';
-      const todayDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const todayDate = new Date().toISOString().split('T')[0];
+      const labels = db.getLabelsByAccount(numAccountId);
+      const folderContext = buildFolderContext(folders, labels);
 
-      log.info('[AI] search request', { accountId, queryLen: naturalQuery.length, userEmail: userEmail ? '(set)' : '(empty)' });
-      const result = await ollama.naturalLanguageSearch(naturalQuery, userEmail, todayDate);
-      log.info('[AI] search success', { query: result.query });
-      return ipcSuccess(result);
+      log.info('[AI] search request', {
+        accountId,
+        queryLen: naturalQuery.length,
+        userEmail: userEmail ? '(set)' : '(empty)',
+        folderCount: folderContext.length,
+      });
+
+      let intent: SearchIntent;
+      try {
+        intent = await ollama.extractSearchIntent(naturalQuery, userEmail, todayDate, folderContext);
+      } catch (intentError) {
+        log.warn('[AI] search intent extraction failed, falling back to raw query', intentError);
+        return ipcSuccess({ intent: null, queries: [naturalQuery] });
+      }
+
+      if (!isSearchIntent(intent)) {
+        log.warn('[AI] search intent validation failed, falling back to raw query');
+        return ipcSuccess({ intent: null, queries: [naturalQuery] });
+      }
+
+      const queries = SearchQueryGenerator.generate(intent);
+      if (!Array.isArray(queries) || queries.length === 0) {
+        log.warn('[AI] search query generation returned no queries, falling back to raw query');
+        return ipcSuccess({ intent: null, queries: [naturalQuery] });
+      }
+
+      log.info('[AI] search success', {
+        accountId,
+        queryCount: queries.length,
+        direction: intent.direction,
+        hasFolder: !!intent.folder,
+      });
+      return ipcSuccess({ intent, queries });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
       log.error('[AI] search failed:', err);
-      if (message.includes('No AI model selected')) {
-        return ipcError('AI_NO_MODEL', message);
-      }
       return ipcError('AI_SEARCH_FAILED', message);
     }
   });

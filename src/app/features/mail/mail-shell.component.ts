@@ -294,18 +294,20 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  onSearch(event: { query: string; originalQuery: string }): void {
+  onSearch(event: { queries: string[]; originalQuery: string }): void {
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
       return;
     }
 
+    const effectiveQuery = event.queries.join(' OR ');
+
     // Activate search mode in FoldersStore (saves previous folder, shows virtual folder)
-    this.foldersStore.activateSearch(event.originalQuery, event.query);
+    this.foldersStore.activateSearch(event.originalQuery, effectiveQuery);
 
     // Clear selection and start two-phase search
     this.emailsStore.clearSelection();
-    this.emailsStore.searchEmails(activeAccount.id, event.query);
+    this.emailsStore.searchEmails(activeAccount.id, event.queries);
   }
 
   onSearchCleared(): void {

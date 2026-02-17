@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AiStore } from '../../store/ai.store';
 import { AccountsStore } from '../../store/accounts.store';
+import { FoldersStore } from '../../store/folders.store';
 
 @Component({
   selector: 'app-search-bar',
@@ -15,7 +16,8 @@ import { AccountsStore } from '../../store/accounts.store';
 export class SearchBarComponent implements OnInit, OnDestroy {
   readonly aiStore = inject(AiStore);
   readonly accountsStore = inject(AccountsStore);
-  readonly searchExecuted = output<{ query: string; originalQuery: string }>();
+  readonly foldersStore = inject(FoldersStore);
+  readonly searchExecuted = output<{ queries: string[]; originalQuery: string }>();
   readonly searchCleared = output<void>();
 
   readonly query = signal('');
@@ -57,23 +59,34 @@ export class SearchBarComponent implements OnInit, OnDestroy {
     const originalQuery = q;
 
     if (this.aiMode() && this.aiStore.isAvailable()) {
-      // Use AI to convert natural language to Gmail search query
+      // Use AI to extract intent and generate multiple query variants
       const accountId = this.accountsStore.activeAccountId();
       if (!accountId) {
         // Fallback: use original query if no active account
-        this.searchExecuted.emit({ query: q, originalQuery });
+        this.searchExecuted.emit({ queries: [q], originalQuery });
         return;
       }
-      const result = await this.aiStore.aiSearch(String(accountId), q);
-      if (result && result.query) {
-        this.searchExecuted.emit({ query: result.query, originalQuery });
+
+      const folderNames = Array.from(
+        new Set(
+          this.foldersStore
+            .folders()
+            .flatMap((folder) => [folder.gmailLabelId, folder.name])
+            .map((folderName) => folderName.trim())
+            .filter((folderName) => folderName.length > 0)
+        )
+      );
+
+      const result = await this.aiStore.aiSearch(String(accountId), q, folderNames);
+      if (result && Array.isArray(result.queries) && result.queries.length > 0) {
+        this.searchExecuted.emit({ queries: result.queries, originalQuery });
       } else {
         // Fallback: use original query
-        this.searchExecuted.emit({ query: q, originalQuery });
+        this.searchExecuted.emit({ queries: [q], originalQuery });
       }
     } else {
       // Direct search — query and originalQuery are the same
-      this.searchExecuted.emit({ query: q, originalQuery });
+      this.searchExecuted.emit({ queries: [q], originalQuery });
     }
   }
 

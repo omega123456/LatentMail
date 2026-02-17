@@ -5,7 +5,7 @@
  * with named placeholders for use by DatabaseService.searchEmails().
  *
  * Supported operators:
- *   from:, to:, subject:, is:unread, is:read, is:starred,
+ *   from:, to:, subject:, body:, in:, label:, is:unread, is:read, is:starred,
  *   has:attachment, after:, before:, newer_than:, older_than:,
  *   negation (-), exact phrases ("")
  *
@@ -20,6 +20,24 @@ export interface ParsedQuery {
   params: Record<string, unknown>;
 }
 
+export interface ParseGmailQueryOptions {
+  accountId?: number;
+  paramPrefix?: string;
+}
+
+const FOLDER_ALIAS_MAP: Record<string, string | null> = {
+  inbox: 'INBOX',
+  sent: '[Gmail]/Sent Mail',
+  drafts: '[Gmail]/Drafts',
+  trash: '[Gmail]/Trash',
+  spam: '[Gmail]/Spam',
+  starred: '[Gmail]/Starred',
+  important: '[Gmail]/Important',
+  all: null,
+  allmail: null,
+  'all-mail': null,
+};
+
 /** Escape SQL LIKE wildcard characters in user-provided values. */
 function escapeLike(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
@@ -27,7 +45,6 @@ function escapeLike(value: string): string {
 
 /** Convert Gmail date (YYYY/MM/DD) to ISO date string (YYYY-MM-DD). */
 function gmailDateToIso(dateStr: string): string | null {
-  // Accept YYYY/MM/DD or YYYY-MM-DD
   const normalized = dateStr.replace(/\//g, '-');
   const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (!match) {
@@ -53,25 +70,45 @@ function parseRelativeTime(value: string): string | null {
   const now = new Date();
 
   switch (unit) {
-    case 'd':
+    case 'd': {
       now.setDate(now.getDate() - amount);
       break;
-    case 'm':
+    }
+    case 'm': {
       now.setMonth(now.getMonth() - amount);
       break;
-    case 'y':
+    }
+    case 'y': {
       now.setFullYear(now.getFullYear() - amount);
       break;
-    default:
+    }
+    default: {
       return null;
+    }
   }
 
   return now.toISOString();
 }
 
+function normalizeParamPrefix(rawPrefix: string | undefined): string {
+  const sanitized = (rawPrefix || '').replace(/[^a-zA-Z0-9_]/g, '');
+  if (!sanitized) {
+    return 'sqp';
+  }
+  return `sqp_${sanitized}`;
+}
+
+function resolveFolderAlias(value: string): string | null | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(FOLDER_ALIAS_MAP, normalized)) {
+    return FOLDER_ALIAS_MAP[normalized];
+  }
+  return undefined;
+}
+
 interface Token {
   negated: boolean;
-  operator: string | null; // null for plain keyword
+  operator: string | null;
   value: string;
 }
 
@@ -85,7 +122,6 @@ function tokenize(query: string): Token[] {
   const len = query.length;
 
   while (i < len) {
-    // Skip whitespace
     while (i < len && /\s/.test(query[i])) {
       i++;
     }
@@ -99,7 +135,6 @@ function tokenize(query: string): Token[] {
       i++;
     }
 
-    // Check for quoted phrase
     if (query[i] === '"') {
       const closeQuote = query.indexOf('"', i + 1);
       if (closeQuote !== -1) {
@@ -108,7 +143,6 @@ function tokenize(query: string): Token[] {
         i = closeQuote + 1;
         continue;
       }
-      // No closing quote — treat rest as value
       const rest = query.substring(i + 1).trim();
       if (rest) {
         tokens.push({ negated, operator: null, value: rest });
@@ -116,7 +150,6 @@ function tokenize(query: string): Token[] {
       break;
     }
 
-    // Read until whitespace
     let word = '';
     while (i < len && !/\s/.test(query[i])) {
       word += query[i];
@@ -127,19 +160,16 @@ function tokenize(query: string): Token[] {
       continue;
     }
 
-    // Check for operator:value pattern
     const colonIdx = word.indexOf(':');
     if (colonIdx > 0 && colonIdx < word.length - 1) {
       const op = word.substring(0, colonIdx).toLowerCase();
       let val = word.substring(colonIdx + 1);
 
-      // Handle quoted value after operator (e.g. subject:"project deadline")
       if (val.startsWith('"')) {
         val = val.substring(1);
         if (val.endsWith('"')) {
           val = val.substring(0, val.length - 1);
         } else {
-          // Value continues past whitespace until closing quote
           const closeQuote = query.indexOf('"', i);
           if (closeQuote !== -1) {
             val += query.substring(i, closeQuote);
@@ -150,10 +180,8 @@ function tokenize(query: string): Token[] {
 
       tokens.push({ negated, operator: op, value: val });
     } else if (colonIdx > 0 && colonIdx === word.length - 1) {
-      // Malformed: operator with no value (e.g. "from:") — treat as plain keyword
       tokens.push({ negated, operator: null, value: word });
     } else {
-      // Plain keyword
       tokens.push({ negated, operator: null, value: word });
     }
   }
@@ -163,20 +191,22 @@ function tokenize(query: string): Token[] {
 
 /**
  * Parse a Gmail-style query string into SQL WHERE clause and named params.
- *
- * @param query - The Gmail search query string
- * @param accountParamName - The named parameter for account ID (default ':accountId')
- * @returns ParsedQuery with whereClause and params
  */
-export function parseGmailQuery(query: string): ParsedQuery {
+export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions): ParsedQuery {
   const tokens = tokenize(query.trim());
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   let paramCounter = 0;
+  const paramPrefix = normalizeParamPrefix(options?.paramPrefix);
+  const accountId = options?.accountId;
+
+  if (typeof accountId === 'number' && Number.isFinite(accountId)) {
+    params[':accountId'] = accountId;
+  }
 
   function nextParam(): string {
     paramCounter++;
-    return `:sqp${paramCounter}`;
+    return `:${paramPrefix}${paramCounter}`;
   }
 
   for (const token of tokens) {
@@ -184,7 +214,6 @@ export function parseGmailQuery(query: string): ParsedQuery {
     const not = negated ? 'NOT ' : '';
 
     if (operator === null) {
-      // Plain keyword — search across multiple fields
       const param = nextParam();
       const escaped = escapeLike(value);
       params[param] = `%${escaped}%`;
@@ -209,9 +238,7 @@ export function parseGmailQuery(query: string): ParsedQuery {
         const param = nextParam();
         const escaped = escapeLike(value);
         params[param] = `%${escaped}%`;
-        conditions.push(
-          `${not}(e.to_addresses LIKE ${param} ESCAPE '\\')`
-        );
+        conditions.push(`${not}(e.to_addresses LIKE ${param} ESCAPE '\\')`);
         break;
       }
 
@@ -219,8 +246,100 @@ export function parseGmailQuery(query: string): ParsedQuery {
         const param = nextParam();
         const escaped = escapeLike(value);
         params[param] = `%${escaped}%`;
+        conditions.push(`${not}(e.subject LIKE ${param} ESCAPE '\\')`);
+        break;
+      }
+
+      case 'body': {
+        const param = nextParam();
+        const escaped = escapeLike(value);
+        params[param] = `%${escaped}%`;
+        conditions.push(`${not}(e.text_body LIKE ${param} ESCAPE '\\' OR e.html_body LIKE ${param} ESCAPE '\\')`);
+        break;
+      }
+
+      case 'in': {
+        const rawFolder = value.trim();
+        if (!rawFolder) {
+          break;
+        }
+
+        const mappedFolder = resolveFolderAlias(rawFolder);
+        if (mappedFolder === null) {
+          if (negated) {
+            conditions.push('1 = 0');
+          }
+          break;
+        }
+
+        if (typeof mappedFolder === 'string') {
+          const folderParam = nextParam();
+          params[folderParam] = mappedFolder.toLowerCase();
+          conditions.push(
+            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.email_id = e.id AND LOWER(ef_in.folder) = ${folderParam})`
+          );
+          break;
+        }
+
+        const folderParam = nextParam();
+        params[folderParam] = rawFolder.toLowerCase();
+
+        if (typeof accountId !== 'number' || !Number.isFinite(accountId)) {
+          conditions.push(
+            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.email_id = e.id AND LOWER(ef_in.folder) = ${folderParam})`
+          );
+          break;
+        }
+
+        const labelNameParam = nextParam();
+        params[labelNameParam] = rawFolder.toLowerCase();
         conditions.push(
-          `${not}(e.subject LIKE ${param} ESCAPE '\\')`
+          `${not}EXISTS (
+            SELECT 1
+            FROM email_folders ef_in
+            WHERE ef_in.email_id = e.id
+              AND (
+                LOWER(ef_in.folder) = ${folderParam}
+                OR LOWER(ef_in.folder) IN (
+                  SELECT LOWER(l.gmail_label_id)
+                  FROM labels l
+                  WHERE l.account_id = :accountId
+                    AND LOWER(l.name) = ${labelNameParam}
+                )
+              )
+          )`
+        );
+        break;
+      }
+
+      case 'label': {
+        const labelName = value.trim();
+        if (!labelName) {
+          break;
+        }
+        if (typeof accountId !== 'number' || !Number.isFinite(accountId)) {
+          if (negated) {
+            conditions.push('1 = 1');
+          } else {
+            conditions.push('1 = 0');
+          }
+          break;
+        }
+
+        const labelParam = nextParam();
+        params[labelParam] = labelName.toLowerCase();
+        conditions.push(
+          `${not}EXISTS (
+            SELECT 1
+            FROM email_folders ef_label
+            WHERE ef_label.email_id = e.id
+              AND LOWER(ef_label.folder) IN (
+                SELECT LOWER(l.gmail_label_id)
+                FROM labels l
+                WHERE l.account_id = :accountId
+                  AND LOWER(l.name) = ${labelParam}
+              )
+          )`
         );
         break;
       }
@@ -236,7 +355,6 @@ export function parseGmailQuery(query: string): ParsedQuery {
         } else if (lowerVal === 'important') {
           conditions.push(negated ? 'e.is_important = 0' : 'e.is_important = 1');
         } else {
-          // Unknown is: value — treat as plain keyword
           const param = nextParam();
           const escaped = escapeLike(`is:${value}`);
           params[param] = `%${escaped}%`;
@@ -252,7 +370,6 @@ export function parseGmailQuery(query: string): ParsedQuery {
         if (lowerVal === 'attachment') {
           conditions.push(negated ? 'e.has_attachments = 0' : 'e.has_attachments = 1');
         } else {
-          // Unknown has: value — treat as plain keyword
           const param = nextParam();
           const escaped = escapeLike(`has:${value}`);
           params[param] = `%${escaped}%`;
@@ -320,7 +437,6 @@ export function parseGmailQuery(query: string): ParsedQuery {
       }
 
       default: {
-        // Unknown operator — treat entire token as plain keyword
         const param = nextParam();
         const escaped = escapeLike(`${operator}:${value}`);
         params[param] = `%${escaped}%`;

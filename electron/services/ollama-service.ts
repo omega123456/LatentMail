@@ -2,6 +2,7 @@ import log from 'electron-log/main';
 import { BrowserWindow } from 'electron';
 import { DatabaseService } from './database-service';
 import * as crypto from 'crypto';
+import { SearchIntent } from '../utils/search-query-generator';
 
 export interface OllamaModel {
   name: string;
@@ -607,6 +608,137 @@ Return ONLY the category name as a JSON object: {"category": "Primary"}`,
   }
 
   /**
+   * Extract structured search intent from natural language.
+   */
+  async extractSearchIntent(
+    query: string,
+    userEmail: string,
+    todayDate: string,
+    folders: string[]
+  ): Promise<SearchIntent> {
+    const normalizedFolders = Array.from(
+      new Set(
+        folders
+          .map((folder) => folder.trim())
+          .filter((folder) => folder.length > 0)
+      )
+    ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    const cacheInput = `${query}|${userEmail}|${todayDate}|${normalizedFolders.join(',')}`;
+    const cacheKey = this.getCacheKey('search-intent', cacheInput);
+    const cached = this.getCachedResult('search-intent', cacheKey);
+    if (cached) {
+      try {
+        const parsedCached = JSON.parse(cached) as unknown;
+        if (this.isSearchIntent(parsedCached)) {
+          log.debug('[Ollama] extractSearchIntent: returning cached result', { query, cacheKey });
+          return this.normalizeSearchIntent(parsedCached);
+        }
+        log.warn('[Ollama] extractSearchIntent: cached value failed validation, regenerating');
+      } catch {
+        log.warn('[Ollama] extractSearchIntent: failed to parse cached value, regenerating');
+      }
+    }
+
+    const folderList = normalizedFolders.length > 0
+      ? normalizedFolders.map((folder) => `- ${folder}`).join('\n')
+      : '- (none provided)';
+
+    const messages: OllamaChatMessage[] = [
+      {
+        role: 'system',
+        content: `You are a JSON extraction engine. You parse email search queries into structured JSON for use with Gmail's search API.
+
+OUTPUT FORMAT:
+You MUST return a single JSON object with ALL 10 keys listed below. Never omit any key. Never add extra keys. Never wrap the JSON in markdown or explanation.
+
+REQUIRED KEYS (all 10 must be present):
+1. "keywords"      - string array, MUST have at least 1 item. The email TOPIC words from the user's query. Do NOT include sender, recipient, folder, or date — those go in their own fields. Use the user's actual words; do NOT invent or rephrase. Split multi-word topics into separate tokens ("invoice payment" => ["invoice","payment"]). Omit filler/navigation words: the, and, from, my, emails, about, with, that, for, to, is, are, a, an, of, in, only, any, all, incoming, outgoing, received, sent. If the user's query has no topic (only a sender/recipient), use the sender's brand or domain as the sole keyword.
+2. "synonyms"      - string array. 4-8 alternative words the actual email is likely to contain instead of the keywords. Include verb/noun forms (expiry→expiring,expired,expires), technical variants, and terms a service would use in a real notification email. Prefer single words. Use [] only when sender alone uniquely identifies the email.
+3. "direction"     - string. MUST be exactly one of: "sent", "received", "any". DEFAULT is "any". Only use "sent" or "received" when the user's query contains an explicit directional word (see DIRECTION RULES below). When in doubt, use "any".
+4. "folder"        - string or null. Only set this to a label/folder name from the available list if the user explicitly names a non-standard folder (e.g. "Work", "Newsletters"). Standard folders (Inbox, Sent, Drafts, Trash, Spam, Starred, Important) are handled via "direction" or "flags", not here. Use null otherwise.
+5. "sender"        - string or null. The sender the user explicitly specifies. Accepts full email addresses, domain names, or names. Use the most specific value: if the user says "from billing.stripe.com", set "billing.stripe.com" — do NOT broaden to "stripe" or "stripe.com". Use null if no specific sender is mentioned.
+6. "recipient"     - string or null. The recipient the user explicitly specifies (e.g. "sent to james@example.com"). Accepts email addresses, domain names, or names. Use null if no specific recipient is mentioned.
+7. "dateRange"     - object or null. Capture any time constraint. Use {"relative":"7d"} for relative ranges (e.g. "last week"=7d, "last month"=30d, "last year"=1y), {"after":"YYYY/MM/DD"} and/or {"before":"YYYY/MM/DD"} for absolute dates. Omit sub-keys that are not mentioned. Use null if no date is specified.
+8. "flags"         - object. MUST always be present. Only include sub-keys the user EXPLICITLY asks for: "unread" (boolean), "starred" (boolean), "important" (boolean), "hasAttachment" (boolean). Omit any flag the user did not mention. Use {} when no flags are requested.
+9. "exactPhrases"  - string array. Multi-word phrases the user quotes with " " or says must appear exactly. Use [] if none.
+10. "negations"    - string array. Topic words the user explicitly excludes ("not X", "without X", "except X", "no X"). Do NOT include sender/folder exclusions here. Use [] if none.
+
+KEYWORD RULES:
+- Keywords = email topic only. Sender/recipient/folder/dates/flags live in their own fields.
+- Use the user's actual words. Do NOT abstract or invent. "password reset" => ["password","reset"].
+- Keep brand names, technical terms, and domain names intact as single tokens if they ARE the topic.
+- If the user names a specific sender with no other topic (e.g. "emails from stripe.com"), use just the brand as the keyword (e.g. ["stripe"]) and put the exact sender in the "sender" field.
+
+SENDER / RECIPIENT RULES:
+- "from X", "only from X", "sent by X", "by X" => sender: X
+- "to X", "sent to X" => recipient: X
+- Domain names are fully valid: "from noreply@github.com" => sender: "noreply@github.com"; "from github.com" => sender: "github.com"
+- Use the EXACT domain/address the user provides. Do NOT broaden or generalize.
+
+DIRECTION RULES:
+- DEFAULT is "any". Only use "sent" or "received" when the user's query contains an EXPLICIT directional word.
+- EXPLICIT "sent" cues: "I sent", "outgoing", "my sent mail", "emails I sent", "sent by me"
+- EXPLICIT "received" cues: "incoming", "received", "sent to me", "in my inbox", "emails I got"
+- If the query is just a topic with no directional word (e.g. "queue issues on my pi", "invoice from stripe", "password reset") => direction: "any"
+- NOTE: direction describes who sent the email, NOT which folder it's in. "sent folder" => direction: "sent", folder: null.
+
+FOLDER RULES:
+- Set folder ONLY when the user names a specific non-standard label from the available list below.
+- Inbox, Sent, Drafts, Trash, Spam, Starred, Important are expressed via direction/flags, not folder.
+
+EXAMPLES:
+Input: "unread invoices from Stripe with attachments"
+Output:
+{"keywords":["invoice"],"synonyms":["receipt","payment","charge","bill","billing","statement","paid"],"direction":"received","folder":null,"sender":"stripe.com","recipient":null,"dateRange":null,"flags":{"unread":true,"hasAttachment":true},"exactPhrases":[],"negations":[]}
+
+Input: "disk health report emails I sent last week"
+Output:
+{"keywords":["disk","health","report"],"synonyms":["S.M.A.R.T","drive","storage","status","diagnostic","failure","warning"],"direction":"sent","folder":null,"sender":null,"recipient":null,"dateRange":{"relative":"7d"},"flags":{},"exactPhrases":[],"negations":[]}
+
+CONTEXT:
+- User email: ${userEmail || '(unknown)'}
+- Today's date: ${todayDate}
+- Available folders/labels:
+${folderList}`,
+      },
+      {
+        role: 'user',
+        content: query,
+      },
+    ];
+
+    const raw = await this.chat(messages, { format: 'json', temperature: 0.2 });
+    log.info('[Ollama] extractSearchIntent: raw response', { query, raw });
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      const objectMatch = raw.match(/\{[\s\S]*\}/);
+      if (!objectMatch) {
+        throw new Error('AI returned non-JSON search intent');
+      }
+      parsed = JSON.parse(objectMatch[0]) as unknown;
+    }
+
+    parsed = this.backfillSearchIntent(parsed);
+
+    if (!this.isSearchIntent(parsed)) {
+      log.warn('[Ollama] extractSearchIntent: invalid structure after backfill', { raw, parsed });
+      throw new Error('AI returned invalid SearchIntent structure');
+    }
+
+    const normalizedIntent = this.normalizeSearchIntent(parsed);
+    if (normalizedIntent.keywords.length === 0) {
+      throw new Error('AI returned SearchIntent without keywords');
+    }
+
+    this.setCachedResult('search-intent', cacheKey, JSON.stringify(normalizedIntent));
+    return normalizedIntent;
+  }
+
+  /**
    * Natural language search: convert a natural language query into a Gmail search string.
    *
    * @param query - The user's natural language query
@@ -722,6 +854,222 @@ Do not include any explanation, markdown, or text outside the JSON.`,
     const output = { query: parsedQuery };
     this.setCachedResult('search', cacheKey, JSON.stringify(output));
     return output;
+  }
+
+  private isSearchIntent(value: unknown): value is SearchIntent {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    if (!this.isStringArray(candidate['keywords']) || candidate['keywords'].length === 0) {
+      return false;
+    }
+    if (!this.isStringArray(candidate['synonyms'])) {
+      return false;
+    }
+    if (candidate['direction'] !== 'sent' && candidate['direction'] !== 'received' && candidate['direction'] !== 'any') {
+      return false;
+    }
+    if (candidate['folder'] !== null && typeof candidate['folder'] !== 'string') {
+      return false;
+    }
+    if (candidate['sender'] !== null && typeof candidate['sender'] !== 'string') {
+      return false;
+    }
+    if (candidate['recipient'] !== null && typeof candidate['recipient'] !== 'string') {
+      return false;
+    }
+    if (!this.isValidDateRange(candidate['dateRange'])) {
+      return false;
+    }
+    if (!this.isValidFlags(candidate['flags'])) {
+      return false;
+    }
+    if (!this.isStringArray(candidate['exactPhrases'])) {
+      return false;
+    }
+    if (!this.isStringArray(candidate['negations'])) {
+      return false;
+    }
+    return true;
+  }
+
+  private isStringArray(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every((item) => typeof item === 'string');
+  }
+
+  private isValidDateRange(value: unknown): boolean {
+    if (value == null) {
+      return true;
+    }
+    if (typeof value !== 'object') {
+      return false;
+    }
+    const dateRange = value as Record<string, unknown>;
+    if (dateRange['after'] != null && typeof dateRange['after'] !== 'string') {
+      return false;
+    }
+    if (dateRange['before'] != null && typeof dateRange['before'] !== 'string') {
+      return false;
+    }
+    if (dateRange['relative'] != null && typeof dateRange['relative'] !== 'string') {
+      return false;
+    }
+    return true;
+  }
+
+  private isValidFlags(value: unknown): boolean {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+    const flags = value as Record<string, unknown>;
+    if (flags['unread'] != null && typeof flags['unread'] !== 'boolean') {
+      return false;
+    }
+    if (flags['starred'] != null && typeof flags['starred'] !== 'boolean') {
+      return false;
+    }
+    if (flags['important'] != null && typeof flags['important'] !== 'boolean') {
+      return false;
+    }
+    if (flags['hasAttachment'] != null && typeof flags['hasAttachment'] !== 'boolean') {
+      return false;
+    }
+    return true;
+  }
+
+  private backfillSearchIntent(value: unknown): unknown {
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+    const obj = value as Record<string, unknown>;
+    const patched: Record<string, unknown> = { ...obj };
+    const patchedFields: string[] = [];
+
+    if (!Array.isArray(patched['keywords'])) {
+      patched['keywords'] = [];
+      patchedFields.push('keywords');
+    }
+    if (!Array.isArray(patched['synonyms'])) {
+      patched['synonyms'] = [];
+      patchedFields.push('synonyms');
+    }
+    if (patched['direction'] !== 'sent' && patched['direction'] !== 'received' && patched['direction'] !== 'any') {
+      patchedFields.push(`direction(${String(patched['direction'])} -> "any")`);
+      patched['direction'] = 'any';
+    }
+    if (!('folder' in patched) || (typeof patched['folder'] !== 'string' && patched['folder'] !== null)) {
+      patched['folder'] = null;
+      patchedFields.push('folder');
+    }
+    if (!('sender' in patched) || (typeof patched['sender'] !== 'string' && patched['sender'] !== null)) {
+      patched['sender'] = null;
+      patchedFields.push('sender');
+    }
+    if (!('recipient' in patched) || (typeof patched['recipient'] !== 'string' && patched['recipient'] !== null)) {
+      patched['recipient'] = null;
+      patchedFields.push('recipient');
+    }
+    if (!('dateRange' in patched) || (patched['dateRange'] !== null && typeof patched['dateRange'] !== 'object')) {
+      patched['dateRange'] = null;
+      patchedFields.push('dateRange');
+    }
+    if (!patched['flags'] || typeof patched['flags'] !== 'object') {
+      patched['flags'] = {};
+      patchedFields.push('flags');
+    } else {
+      const flags = patched['flags'] as Record<string, unknown>;
+      const cleanedFlags: Record<string, boolean> = {};
+      for (const key of ['unread', 'starred', 'important', 'hasAttachment']) {
+        if (typeof flags[key] === 'boolean') {
+          cleanedFlags[key] = flags[key];
+        } else if (flags[key] !== undefined) {
+          patchedFields.push(`flags.${key}(dropped non-boolean: ${String(flags[key])})`);
+        }
+      }
+      patched['flags'] = cleanedFlags;
+    }
+    if (!Array.isArray(patched['exactPhrases'])) {
+      patched['exactPhrases'] = [];
+      patchedFields.push('exactPhrases');
+    }
+    if (!Array.isArray(patched['negations'])) {
+      patched['negations'] = [];
+      patchedFields.push('negations');
+    }
+
+    if (patchedFields.length > 0) {
+      log.debug('[Ollama] backfillSearchIntent: patched fields', { patchedFields });
+    }
+
+    return patched;
+  }
+
+  private normalizeSearchIntent(intent: SearchIntent): SearchIntent {
+    const keywords = Array.from(
+      new Set(
+        intent.keywords
+          .map((keyword) => keyword.trim())
+          .filter((keyword) => keyword.length > 0)
+      )
+    );
+    const synonyms = Array.from(
+      new Set(
+        intent.synonyms
+          .map((synonym) => synonym.trim())
+          .filter((synonym) => synonym.length > 0)
+      )
+    );
+    const exactPhrases = Array.from(
+      new Set(
+        intent.exactPhrases
+          .map((phrase) => phrase.trim())
+          .filter((phrase) => phrase.length > 0)
+      )
+    );
+    const negations = Array.from(
+      new Set(
+        intent.negations
+          .map((negation) => negation.trim())
+          .filter((negation) => negation.length > 0)
+      )
+    );
+
+    const folder = intent.folder && intent.folder.trim().length > 0 ? intent.folder.trim() : null;
+    const sender = intent.sender && intent.sender.trim().length > 0 ? intent.sender.trim() : null;
+    const recipient = intent.recipient && intent.recipient.trim().length > 0 ? intent.recipient.trim() : null;
+
+    let dateRange: SearchIntent['dateRange'] = null;
+    if (intent.dateRange) {
+      const after = intent.dateRange.after?.trim();
+      const before = intent.dateRange.before?.trim();
+      const relative = intent.dateRange.relative?.trim();
+      if (after || before || relative) {
+        dateRange = {
+          ...(after ? { after } : {}),
+          ...(before ? { before } : {}),
+          ...(relative ? { relative } : {}),
+        };
+      }
+    }
+
+    return {
+      keywords,
+      synonyms,
+      direction: intent.direction,
+      folder,
+      sender,
+      recipient,
+      dateRange,
+      flags: {
+        ...(intent.flags.unread !== undefined ? { unread: intent.flags.unread } : {}),
+        ...(intent.flags.starred !== undefined ? { starred: intent.flags.starred } : {}),
+        ...(intent.flags.important !== undefined ? { important: intent.flags.important } : {}),
+        ...(intent.flags.hasAttachment !== undefined ? { hasAttachment: intent.flags.hasAttachment } : {}),
+      },
+      exactPhrases,
+      negations,
+    };
   }
 
   /** AI-assisted filter creation: generate filter rules from natural language description */

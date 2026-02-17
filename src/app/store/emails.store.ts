@@ -51,7 +51,7 @@ interface EmailsState {
   preserveListPosition: boolean;
   // Search state
   searchActive: boolean;
-  searchQuery: string | null;
+  searchQuery: string | string[] | null;
   searchPhase: 'idle' | 'local' | 'imap' | 'done';
   searchRequestId: string | null;
 }
@@ -407,7 +407,7 @@ export const EmailsStore = signalStore(
        * Phase 1: Local DB search (immediate results)
        * Phase 2: IMAP search (background, merges progressively)
        */
-      async searchEmails(accountId: number, query: string): Promise<void> {
+      async searchEmails(accountId: number, query: string | string[]): Promise<void> {
         const requestId = crypto.randomUUID();
         patchState(store, {
           loading: true,

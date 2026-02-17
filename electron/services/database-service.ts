@@ -936,11 +936,13 @@ export class DatabaseService {
    * Groups results by gmail_thread_id and computes thread metadata.
    */
   searchEmails(accountId: number, query: string, limit: number = 100): Array<Record<string, unknown>> {
-    if (!this.db) throw new Error('Database not initialized');
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
 
     // Lazy-import to avoid circular dependencies at module load time
     const { parseGmailQuery } = require('../utils/gmail-query-parser');
-    const parsed = parseGmailQuery(query) as { whereClause: string; params: Record<string, unknown> };
+    const parsed = parseGmailQuery(query, { accountId }) as { whereClause: string; params: Record<string, unknown> };
 
     // Build query: find matching emails, then group by thread
     const params = {
@@ -977,6 +979,158 @@ export class DatabaseService {
     if (result.length === 0) {
       return [];
     }
+    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+  }
+
+  /**
+   * Search with multiple Gmail queries. Each query is parsed and executed independently,
+   * then matching gmail_thread_id values are unioned in JavaScript and fetched in one pass.
+   */
+  searchEmailsMulti(accountId: number, queries: string[], limit: number = 100): Array<Record<string, unknown>> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const normalizedQueries = queries
+      .map((query) => query.trim())
+      .filter((query) => query.length > 0);
+    if (normalizedQueries.length === 0) {
+      return [];
+    }
+
+    // Lazy-import to avoid circular dependencies at module load time
+    const { parseGmailQuery } = require('../utils/gmail-query-parser');
+
+    const threadIdSet = new Set<string>();
+
+    for (let index = 0; index < normalizedQueries.length; index++) {
+      const query = normalizedQueries[index];
+      const parsed = parseGmailQuery(query, {
+        accountId,
+        paramPrefix: `mq${index + 1}_`,
+      }) as { whereClause: string; params: Record<string, unknown> };
+
+      const params = {
+        ':accountId': accountId,
+        ':limit': limit,
+        ...parsed.params,
+      } as Record<string, number | string | null>;
+
+      const result = this.db.exec(
+        `SELECT DISTINCT e.gmail_thread_id
+         FROM emails e
+         WHERE e.account_id = :accountId AND (${parsed.whereClause})
+         ORDER BY e.date DESC
+         LIMIT :limit`,
+        params
+      );
+
+      if (result.length === 0) {
+        continue;
+      }
+      for (const row of result[0].values) {
+        const threadId = row[0] as string | null;
+        if (threadId) {
+          threadIdSet.add(threadId);
+        }
+      }
+    }
+
+    if (threadIdSet.size === 0) {
+      return [];
+    }
+
+    return this.getThreadsByGmailThreadIds(accountId, Array.from(threadIdSet), limit);
+  }
+
+  /**
+   * Fetch folder associations for many thread internal IDs in one query.
+   */
+  getFoldersForThreadBatch(threadIds: number[]): Map<number, string[]> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const map = new Map<number, string[]>();
+    const uniqueThreadIds = Array.from(new Set(threadIds.filter((threadId) => Number.isFinite(threadId))));
+    if (uniqueThreadIds.length === 0) {
+      return map;
+    }
+
+    const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
+    const params: Record<string, number> = {};
+    for (let index = 0; index < uniqueThreadIds.length; index++) {
+      params[`:threadId${index}`] = uniqueThreadIds[index];
+    }
+
+    const result = this.db.exec(
+      `SELECT thread_id, folder
+       FROM thread_folders
+       WHERE thread_id IN (${placeholders.join(', ')})
+       ORDER BY thread_id ASC, folder ASC`,
+      params
+    );
+
+    if (result.length === 0) {
+      return map;
+    }
+
+    for (const row of result[0].values) {
+      const threadId = row[0] as number;
+      const folder = row[1] as string;
+      if (!map.has(threadId)) {
+        map.set(threadId, []);
+      }
+      map.get(threadId)!.push(folder);
+    }
+
+    return map;
+  }
+
+  private getThreadsByGmailThreadIds(accountId: number, gmailThreadIds: string[], limit: number): Array<Record<string, unknown>> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const uniqueIds = Array.from(new Set(gmailThreadIds.filter((threadId) => threadId.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = uniqueIds.map((_, index) => `:threadId${index}`);
+    const params: Record<string, number | string> = {
+      ':accountId': accountId,
+      ':limit': limit,
+    };
+    for (let index = 0; index < uniqueIds.length; index++) {
+      params[`:threadId${index}`] = uniqueIds[index];
+    }
+
+    const result = this.db.exec(
+      `SELECT
+         t.id,
+         t.account_id,
+         t.gmail_thread_id,
+         t.subject,
+         t.last_message_date,
+         t.participants,
+         t.message_count,
+         t.snippet,
+         'search' AS folder,
+         t.is_read,
+         t.is_starred
+       FROM threads t
+       WHERE t.account_id = :accountId
+         AND t.gmail_thread_id IN (${placeholders.join(', ')})
+       ORDER BY t.last_message_date DESC
+       LIMIT :limit`,
+      params
+    );
+
+    if (result.length === 0) {
+      return [];
+    }
+
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 

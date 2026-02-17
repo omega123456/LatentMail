@@ -37,6 +37,12 @@
         (click)="onStarClick($event)"
       >star_border</span>
     }
+    @if (folderBadge(); as badge) {
+      <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title">
+        <span class="material-symbols-outlined folder-badge-icon">{{ badge.icon }}</span>
+        <span class="folder-badge-text">{{ badge.displayName }}</span>
+      </span>
+    }
     @if (thread().messageCount > 1) {
       <span class="message-count">{{ thread().messageCount }}</span>
     }

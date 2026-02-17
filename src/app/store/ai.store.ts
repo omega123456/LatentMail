@@ -1,7 +1,7 @@
 import { computed, inject } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
-import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult } from '../core/models/ai.model';
+import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult, SearchIntent } from '../core/models/ai.model';
 
 export interface AiState {
   connected: boolean;
@@ -29,7 +29,7 @@ export interface AiState {
   categorizeLoading: boolean;
   // Search
   searchLoading: boolean;
-  searchResult: { query: string } | null;
+  searchResult: { intent: SearchIntent | null; queries: string[] } | null;
   // Filter generation
   filterSuggestion: AiFilterSuggestion | null;
   filterLoading: boolean;
@@ -396,12 +396,12 @@ export const AiStore = signalStore(
         patchState(store, { categoryCache: {} });
       },
 
-      /** AI search: convert natural language to Gmail search query */
-      async aiSearch(accountId: string, query: string): Promise<{ query: string } | null> {
+      /** AI search: convert natural language into structured intent + query variants */
+      async aiSearch(accountId: string, query: string, folders?: string[]): Promise<{ intent: SearchIntent | null; queries: string[] } | null> {
         patchState(store, { searchLoading: true, searchResult: null, error: null });
-        const response = await electronService.aiSearch(accountId, query);
+        const response = await electronService.aiSearch(accountId, query, folders);
         if (response.success && response.data) {
-          const data = response.data as { query: string };
+          const data = response.data as { intent: SearchIntent | null; queries: string[] };
           patchState(store, {
             searchLoading: false,
             searchResult: data,

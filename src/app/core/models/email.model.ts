@@ -34,6 +34,7 @@ export interface Thread {
   folder: string;
   isRead: boolean;
   isStarred: boolean;
+  folders?: string[];
   messages?: Email[];
 }
 

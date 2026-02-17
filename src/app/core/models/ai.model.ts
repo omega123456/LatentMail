@@ -39,6 +39,33 @@ export interface AiStreamEvent {
   requestId?: string;
 }
 
+export interface SearchIntentDateRange {
+  after?: string;
+  before?: string;
+  relative?: string;
+}
+
+export interface SearchIntentFlags {
+  unread?: boolean;
+  starred?: boolean;
+  important?: boolean;
+  hasAttachment?: boolean;
+}
+
+export interface SearchIntent {
+  keywords: string[];
+  synonyms: string[];
+  direction: 'sent' | 'received' | 'any';
+  folder: string | null;
+  sender: string | null;
+  recipient: string | null;
+  dateRange: SearchIntentDateRange | null;
+  flags: SearchIntentFlags;
+  exactPhrases: string[];
+  negations: string[];
+}
+
+/** @deprecated Use SearchIntent and generated queries instead. */
 export interface AiSearchResult {
   query: string;
 }
