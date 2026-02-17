@@ -3,6 +3,7 @@ import { BrowserWindow } from 'electron';
 import { DatabaseService } from './database-service';
 import * as crypto from 'crypto';
 import { SearchIntent } from '../utils/search-query-generator';
+import { loadPrompt } from '../utils/prompt-loader';
 
 export interface OllamaModel {
   name: string;
@@ -369,13 +370,7 @@ export class OllamaService {
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are an email assistant. Summarize the following email thread concisely.
-Provide:
-1. A brief 1-2 sentence summary
-2. Key points as bullet points
-3. Any action items
-
-Keep it concise and factual. Do not add information not present in the emails.`,
+        content: loadPrompt('summarize-thread'),
       },
       {
         role: 'user',
@@ -426,14 +421,7 @@ Keep it concise and factual. Do not add information not present in the emails.`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are an email assistant. Based on the email thread below, generate exactly 3 short reply suggestions.
-Each suggestion should be a complete, ready-to-send reply (1-2 sentences).
-Use different tones: one professional, one casual, one grateful/appreciative.
-
-Return a JSON array of exactly 3 strings. Example:
-["Thanks for the update! I'll review this by end of day.", "Got it, looks good to me.", "I really appreciate you sharing this — I'll take a look right away."]
-
-Return ONLY the JSON array, no other text.`,
+        content: loadPrompt('reply-suggestions'),
       },
       {
         role: 'user',
@@ -470,10 +458,9 @@ Return ONLY the JSON array, no other text.`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are an email writing assistant. Write an email based on the user's instructions.
-${context ? 'Use the provided context/thread for reference.' : ''}
-Write naturally and professionally. Include a greeting and sign-off unless the user specifies otherwise.
-Return ONLY the email body text (no subject line, no metadata).`,
+        content: loadPrompt('compose-email', {
+          contextInstruction: context ? 'Use the provided context/thread for reference.\n\n' : '',
+        }),
       },
     ];
 
@@ -524,15 +511,14 @@ Return ONLY the email body text (no subject line, no metadata).`,
     streamToWindow?: BrowserWindow,
     requestId?: string
   ): Promise<string> {
-    const transformPrompts: Record<string, string> = {
-      improve: 'Improve the writing quality of the following text. Fix grammar, improve clarity, and enhance readability. Keep the same meaning and tone.',
-      shorten: 'Make the following text shorter and more concise while keeping the key message intact. Remove unnecessary words and filler.',
-      formalize: 'Rewrite the following text in a more formal, professional tone. Keep the same meaning.',
-      casualize: 'Rewrite the following text in a more casual, friendly tone. Keep the same meaning.',
-    };
-
-    const systemPrompt = transformPrompts[transformation]
-      || `Transform the following text: ${transformation}`;
+    const transformFile =
+      ['improve', 'shorten', 'formalize', 'casualize'].includes(transformation)
+        ? `transform-${transformation}`
+        : 'transform-default';
+    const systemPrompt = loadPrompt(
+      transformFile,
+      transformFile === 'transform-default' ? { transformation } : undefined
+    );
 
     const messages: OllamaChatMessage[] = [
       {
@@ -581,14 +567,7 @@ Return ONLY the email body text (no subject line, no metadata).`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are an email categorization assistant. Classify the following email into exactly ONE of these categories:
-- Primary (personal or important messages that need attention)
-- Updates (notifications, confirmations, receipts)
-- Promotions (marketing, deals, newsletters from companies)
-- Social (social network notifications, community updates)
-- Newsletters (subscribed content, digests, editorial newsletters)
-
-Return ONLY the category name as a JSON object: {"category": "Primary"}`,
+        content: loadPrompt('categorize-email'),
       },
       {
         role: 'user',
@@ -647,60 +626,11 @@ Return ONLY the category name as a JSON object: {"category": "Primary"}`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are a JSON extraction engine. You parse email search queries into structured JSON for use with Gmail's search API.
-
-OUTPUT FORMAT:
-You MUST return a single JSON object with ALL 10 keys listed below. Never omit any key. Never add extra keys. Never wrap the JSON in markdown or explanation.
-
-REQUIRED KEYS (all 10 must be present):
-1. "keywords"      - string array, MUST have at least 1 item. The email TOPIC words from the user's query. Do NOT include sender, recipient, folder, or date — those go in their own fields. Use the user's actual words; do NOT invent or rephrase. Split multi-word topics into separate tokens ("invoice payment" => ["invoice","payment"]). Omit filler/navigation words: the, and, from, my, emails, about, with, that, for, to, is, are, a, an, of, in, only, any, all, incoming, outgoing, received, sent. If the user's query has no topic (only a sender/recipient), use the sender's brand or domain as the sole keyword.
-2. "synonyms"      - string array. 4-8 alternative words the actual email is likely to contain instead of the keywords. Include verb/noun forms (expiry→expiring,expired,expires), technical variants, and terms a service would use in a real notification email. Prefer single words. Use [] only when sender alone uniquely identifies the email.
-3. "direction"     - string. MUST be exactly one of: "sent", "received", "any". DEFAULT is "any". Only use "sent" or "received" when the user's query contains an explicit directional word (see DIRECTION RULES below). When in doubt, use "any".
-4. "folder"        - string or null. Only set this to a label/folder name from the available list if the user explicitly names a non-standard folder (e.g. "Work", "Newsletters"). Standard folders (Inbox, Sent, Drafts, Trash, Spam, Starred, Important) are handled via "direction" or "flags", not here. Use null otherwise.
-5. "sender"        - string or null. The sender the user explicitly specifies. Accepts full email addresses, domain names, or names. Use the most specific value: if the user says "from billing.stripe.com", set "billing.stripe.com" — do NOT broaden to "stripe" or "stripe.com". Use null if no specific sender is mentioned.
-6. "recipient"     - string or null. The recipient the user explicitly specifies (e.g. "sent to james@example.com"). Accepts email addresses, domain names, or names. Use null if no specific recipient is mentioned.
-7. "dateRange"     - object or null. Capture any time constraint. Use {"relative":"7d"} for relative ranges (e.g. "last week"=7d, "last month"=30d, "last year"=1y), {"after":"YYYY/MM/DD"} and/or {"before":"YYYY/MM/DD"} for absolute dates. Omit sub-keys that are not mentioned. Use null if no date is specified.
-8. "flags"         - object. MUST always be present. Only include sub-keys the user EXPLICITLY asks for: "unread" (boolean), "starred" (boolean), "important" (boolean), "hasAttachment" (boolean). Omit any flag the user did not mention. Use {} when no flags are requested.
-9. "exactPhrases"  - string array. Multi-word phrases the user quotes with " " or says must appear exactly. Use [] if none.
-10. "negations"    - string array. Topic words the user explicitly excludes ("not X", "without X", "except X", "no X"). Do NOT include sender/folder exclusions here. Use [] if none.
-
-KEYWORD RULES:
-- Keywords = email topic only. Sender/recipient/folder/dates/flags live in their own fields.
-- Use the user's actual words. Do NOT abstract or invent. "password reset" => ["password","reset"].
-- Keep brand names, technical terms, and domain names intact as single tokens if they ARE the topic.
-- If the user names a specific sender with no other topic (e.g. "emails from stripe.com"), use just the brand as the keyword (e.g. ["stripe"]) and put the exact sender in the "sender" field.
-
-SENDER / RECIPIENT RULES:
-- "from X", "only from X", "sent by X", "by X" => sender: X
-- "to X", "sent to X" => recipient: X
-- Domain names are fully valid: "from noreply@github.com" => sender: "noreply@github.com"; "from github.com" => sender: "github.com"
-- Use the EXACT domain/address the user provides. Do NOT broaden or generalize.
-
-DIRECTION RULES:
-- DEFAULT is "any". Only use "sent" or "received" when the user's query contains an EXPLICIT directional word.
-- EXPLICIT "sent" cues: "I sent", "outgoing", "my sent mail", "emails I sent", "sent by me"
-- EXPLICIT "received" cues: "incoming", "received", "sent to me", "in my inbox", "emails I got"
-- If the query is just a topic with no directional word (e.g. "queue issues on my pi", "invoice from stripe", "password reset") => direction: "any"
-- NOTE: direction describes who sent the email, NOT which folder it's in. "sent folder" => direction: "sent", folder: null.
-
-FOLDER RULES:
-- Set folder ONLY when the user names a specific non-standard label from the available list below.
-- Inbox, Sent, Drafts, Trash, Spam, Starred, Important are expressed via direction/flags, not folder.
-
-EXAMPLES:
-Input: "unread invoices from Stripe with attachments"
-Output:
-{"keywords":["invoice"],"synonyms":["receipt","payment","charge","bill","billing","statement","paid"],"direction":"received","folder":null,"sender":"stripe.com","recipient":null,"dateRange":null,"flags":{"unread":true,"hasAttachment":true},"exactPhrases":[],"negations":[]}
-
-Input: "disk health report emails I sent last week"
-Output:
-{"keywords":["disk","health","report"],"synonyms":["S.M.A.R.T","drive","storage","status","diagnostic","failure","warning"],"direction":"sent","folder":null,"sender":null,"recipient":null,"dateRange":{"relative":"7d"},"flags":{},"exactPhrases":[],"negations":[]}
-
-CONTEXT:
-- User email: ${userEmail || '(unknown)'}
-- Today's date: ${todayDate}
-- Available folders/labels:
-${folderList}`,
+        content: loadPrompt('extract-search-intent', {
+          userEmail: userEmail || '(unknown)',
+          todayDate,
+          folderList,
+        }),
       },
       {
         role: 'user',
@@ -767,53 +697,7 @@ ${folderList}`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are a Gmail search query translator. Convert the user's natural language into a single Gmail search query string.
-
-## Your task
-Take the user's natural language description and produce a Gmail search query using the operators below. Return ONLY a JSON object with one field: "query".
-
-## Context
-- The user's email address is: ${userEmail}
-- Today's date is: ${todayDate}
-
-## Gmail search operators you can use (ONLY these — do not use any others)
-| Operator | Meaning | Example |
-|----------|---------|---------|
-| from: | Sender name or partial address | from:james |
-| to: | Recipient | to:sarah |
-| subject: | Subject keywords | subject:meeting |
-| has:attachment | Has attachments | has:attachment |
-| is:unread | Unread messages | is:unread |
-| is:read | Read messages | is:read |
-| is:starred | Starred messages | is:starred |
-| is:important | Important messages | is:important |
-| after: | After date (YYYY/MM/DD) | after:2025/02/01 |
-| before: | Before date (YYYY/MM/DD) | before:2025/02/15 |
-| newer_than: | Relative recency | newer_than:7d |
-| older_than: | Relative age | older_than:3d |
-| "" | Exact phrase | "project deadline" |
-| - | Negation | -from:noreply |
-
-**Do NOT use** these operators: cc:, bcc:, filename:, larger:, smaller:, label:, in:, OR, parentheses (). They are not supported by this search system.
-
-## Critical rules
-1. **Never invent email addresses.** If the user says "from james", produce \`from:james\`, NOT \`from:james@example.com\`. Never append @example.com or any domain.
-2. **Simple name queries**: "james" → \`james\` (matches across all fields). Do NOT add operators unless the user's intent is specific.
-3. **Sender queries**: "from james" → \`from:james\`. "emails james sent me" → \`from:james\`.
-4. **Self-reference**: "emails I sent" or "my sent emails" → \`from:${userEmail}\`. "emails to me" → \`to:${userEmail}\`.
-5. **Date handling**:
-   - "last week" → \`newer_than:7d\`
-   - "yesterday" → \`newer_than:1d\`
-   - "this month" → compute \`after:YYYY/MM/01\` from today's date
-   - "in January" or "in January 2025" → \`after:2025/01/01 before:2025/02/01\`
-   - "last month" → compute the prior month's date range
-6. **Compound queries**: "unread emails from james about the project with attachments" → \`is:unread from:james subject:project has:attachment\`
-7. **Passthrough**: If the query already contains Gmail operators (from:, is:, etc.), pass it through with minimal cleanup.
-8. **Minimal transformation**: Don't over-engineer. If the user types a simple keyword, just return that keyword. Gmail will match it across all fields.
-
-## Output format
-Return ONLY a JSON object: {"query": "your gmail search string"}
-Do not include any explanation, markdown, or text outside the JSON.`,
+        content: loadPrompt('natural-language-search', { userEmail, todayDate }),
       },
       {
         role: 'user',
@@ -1081,25 +965,7 @@ Do not include any explanation, markdown, or text outside the JSON.`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are an email filter assistant. Generate an email filter rule based on the user's natural language description.
-
-Return a JSON object with the following structure:
-{
-  "name": "Filter name",
-  "conditions": [
-    {"field": "from|to|subject|body|has-attachment", "operator": "contains|equals|starts-with|ends-with|matches", "value": "some value"}
-  ],
-  "actions": [
-    {"type": "label|archive|delete|star|mark-read|move", "value": "optional label name or folder"}
-  ]
-}
-
-Field options: from, to, subject, body, has-attachment
-Operator options: contains, equals, starts-with, ends-with, matches
-Action type options: label, archive, delete, star, mark-read, move
-
-You may specify multiple conditions and multiple actions.
-Return ONLY the JSON object, no other text.`,
+        content: loadPrompt('generate-filter'),
       },
       {
         role: 'user',
@@ -1144,22 +1010,7 @@ Return ONLY the JSON object, no other text.`,
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are an email follow-up assistant. Analyze the email below and determine if it likely expects a reply or follow-up from the recipient(s).
-
-Consider:
-- Does the email ask a question?
-- Does it request action or feedback?
-- Is it a proposal or request awaiting approval?
-- Does it end with language suggesting a reply is expected?
-
-Return a JSON object:
-{
-  "needsFollowUp": true/false,
-  "reason": "Brief explanation of why follow-up is or isn't needed",
-  "suggestedDate": "YYYY-MM-DD suggested follow-up date (3-7 days from now, only if needsFollowUp is true)"
-}
-
-Return ONLY the JSON, no other text.`,
+        content: loadPrompt('detect-follow-up'),
       },
       {
         role: 'user',
