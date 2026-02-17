@@ -11,6 +11,14 @@ REQUIRED KEYS (all 10 must be present):
 5. "sender"        - string or null. The sender the user explicitly specifies. Accepts full email addresses, domain names, or names. Use the most specific value: if the user says "from billing.stripe.com", set "billing.stripe.com" — do NOT broaden to "stripe" or "stripe.com". Use null if no specific sender is mentioned.
 6. "recipient"     - string or null. The recipient the user explicitly specifies (e.g. "sent to james@example.com"). Accepts email addresses, domain names, or names. Use null if no specific recipient is mentioned.
 7. "dateRange"     - object or null. Capture any time constraint. Use {"relative":"7d"} for relative ranges (e.g. "last week"=7d, "last month"=30d, "last year"=1y), {"after":"YYYY/MM/DD"} and/or {"before":"YYYY/MM/DD"} for absolute dates. Omit sub-keys that are not mentioned. Use null if no date is specified.
+   IMPORTANT — Gmail's `after:` and `before:` operators are EXCLUSIVE (they do NOT include the boundary date itself). To make the user's intended range inclusive, you MUST adjust:
+     - "after" ⇒ subtract 1 day from the user's intended start date.
+     - "before" ⇒ add 1 day to the user's intended end date.
+   Examples:
+     - User says "from October" (meaning Oct 1–Oct 31) ⇒ after: "YYYY/09/30", before: "YYYY/11/01"
+     - User says "on January 15th" ⇒ after: "YYYY/01/14", before: "YYYY/01/16"
+     - User says "since March 5th" ⇒ after: "YYYY/03/04" (no before)
+     - User says "before December" ⇒ before: "YYYY/12/01" (no after)
 8. "flags"         - object. MUST always be present. Only include sub-keys the user EXPLICITLY asks for: "unread" (boolean), "starred" (boolean), "important" (boolean), "hasAttachment" (boolean). Omit any flag the user did not mention. Use {} when no flags are requested.
 9. "exactPhrases"  - string array. Multi-word phrases the user quotes with " " or says must appear exactly. Use [] if none.
 10. "negations"    - string array. Topic words the user explicitly excludes ("not X", "without X", "except X", "no X"). Do NOT include sender/folder exclusions here. Use [] if none.
@@ -26,6 +34,7 @@ SENDER / RECIPIENT RULES:
 - "to X", "sent to X" => recipient: X
 - Domain names are fully valid: "from noreply@github.com" => sender: "noreply@github.com"; "from github.com" => sender: "github.com"
 - Use the EXACT domain/address the user provides. Do NOT broaden or generalize.
+- The user writes in natural language. Use context and common sense to distinguish between fields — e.g. "from" can introduce a sender OR a time range depending on what follows. Only assign a value to "sender" when it clearly refers to a person, company, domain, or email address.
 
 DIRECTION RULES:
 - DEFAULT is "any". Only use "sent" or "received" when the user's query contains an EXPLICIT directional word.
