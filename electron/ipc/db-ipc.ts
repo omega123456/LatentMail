@@ -57,6 +57,7 @@ export function registerDbIpcHandlers(): void {
     actions: string;
     isEnabled: boolean;
     isAiGenerated: boolean;
+    sortOrder?: number;
   }) => {
     try {
       if (!filter || !filter.accountId || !filter.name) {
@@ -87,6 +88,7 @@ export function registerDbIpcHandlers(): void {
     conditions: string;
     actions: string;
     isEnabled: boolean;
+    sortOrder?: number;
   }) => {
     try {
       if (!filter || !filter.id || !filter.name) {

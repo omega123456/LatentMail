@@ -123,7 +123,7 @@ export type QueueItemSnapshot = Omit<QueueItem, 'payload'>;
 export interface MailDataChangedPayload {
   accountId: number;
   folders: string[];
-  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update';
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter';
 }
 
 // ---------------------------------------------------------------------------

@@ -17,4 +17,5 @@ export interface Filter {
   actions: FilterAction[];
   isEnabled: boolean;
   isAiGenerated: boolean;
+  sortOrder?: number;
 }

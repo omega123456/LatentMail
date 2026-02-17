@@ -122,6 +122,14 @@ const electronAPI = {
       ipcRenderer.invoke('db:delete-filter', filterId) as Promise<IpcResponse>,
     toggleFilter: (filterId: number, isEnabled: boolean) =>
       ipcRenderer.invoke('db:toggle-filter', filterId, isEnabled) as Promise<IpcResponse>,
+    getUserLabels: (accountId: number) =>
+      ipcRenderer.invoke('db:get-user-labels', accountId) as Promise<IpcResponse>,
+  },
+
+  // Filter operations
+  filter: {
+    applyAll: (accountId: number) =>
+      ipcRenderer.invoke('filter:apply-all', accountId) as Promise<IpcResponse>,
   },
 
   // System operations

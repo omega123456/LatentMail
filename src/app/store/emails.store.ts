@@ -9,7 +9,7 @@ import { FoldersStore } from './folders.store';
 interface MailDataChangedPayload {
   accountId: number;
   folders: string[];
-  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update';
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter';
 }
 
 interface MailNewEmailPayload {

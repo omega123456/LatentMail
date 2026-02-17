@@ -87,6 +87,9 @@ export const FoldersStore = signalStore(
     userLabels: computed(() =>
       store.folders().filter(f => f.type === 'user')
     ),
+    filterLabelFolders: computed(() =>
+      store.folders().filter(f => f.type === 'filter-label')
+    ),
     inboxUnread: computed(() => {
       const inbox = store.folders().find(f => f.gmailLabelId === 'INBOX');
       return inbox?.unreadCount ?? 0;
@@ -108,11 +111,11 @@ export const FoldersStore = signalStore(
               accountId: f['accountId'] as number,
               gmailLabelId: f['gmailLabelId'] as string,
               name: f['name'] as string,
-              type: f['type'] as 'system' | 'user',
+              type: f['type'] as 'system' | 'user' | 'filter-label',
               color: f['color'] as string | undefined,
               unreadCount: f['unreadCount'] as number,
               totalCount: f['totalCount'] as number,
-              icon: FOLDER_ICON_MAP[f['gmailLabelId'] as string],
+              icon: (f['icon'] as string | undefined) || FOLDER_ICON_MAP[f['gmailLabelId'] as string],
             }));
 
             // Default to INBOX if no active folder or if current is invalid

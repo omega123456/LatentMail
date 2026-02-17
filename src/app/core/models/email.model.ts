@@ -38,6 +38,7 @@ export interface Thread {
   isStarred: boolean;
   folders?: string[];
   messages?: Email[];
+  label?: { id: number; name: string; color?: string };
 }
 
 export interface Attachment {

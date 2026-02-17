@@ -27,6 +27,10 @@ export class FilterSettingsComponent implements OnInit {
   readonly aiDescription = signal('');
   readonly aiGenerating = signal(false);
 
+  // Run Filters Now
+  readonly runningFilters = signal(false);
+  readonly filterResult = signal<string | null>(null);
+
   // Edit/create state
   readonly editingFilter = signal<Partial<Filter> | null>(null);
   readonly showEditor = signal(false);
@@ -54,6 +58,7 @@ export class FilterSettingsComponent implements OnInit {
         actions: string;
         isEnabled: boolean;
         isAiGenerated: boolean;
+        sortOrder: number;
       }> };
       this.filters.set(
         (data.filters || []).map(f => {
@@ -73,6 +78,7 @@ export class FilterSettingsComponent implements OnInit {
             ...f,
             conditions,
             actions,
+            sortOrder: f.sortOrder,
           };
         })
       );
@@ -150,6 +156,41 @@ export class FilterSettingsComponent implements OnInit {
       this.filters.update(filters =>
         filters.map(f => f.id === filter.id ? { ...f, isEnabled: !f.isEnabled } : f)
       );
+    }
+  }
+
+  /** Run all enabled filters on unfiltered INBOX emails */
+  async runFiltersNow(): Promise<void> {
+    const account = this.accountsStore.activeAccount();
+    if (!account) {
+      return;
+    }
+
+    this.runningFilters.set(true);
+    this.filterResult.set(null);
+    this.error.set(null);
+
+    const response = await this.electronService.applyFilters(account.id);
+    this.runningFilters.set(false);
+
+    if (response.success && response.data) {
+      const result = response.data as {
+        emailsProcessed: number;
+        emailsMatched: number;
+        actionsDispatched: number;
+        errors: number;
+      };
+      if (result.emailsProcessed === 0) {
+        this.filterResult.set('No unfiltered emails to process');
+      } else {
+        this.filterResult.set(
+          `Processed ${result.emailsProcessed} email${result.emailsProcessed !== 1 ? 's' : ''}, ` +
+          `${result.emailsMatched} matched` +
+          (result.errors > 0 ? `, ${result.errors} error${result.errors !== 1 ? 's' : ''}` : '')
+        );
+      }
+    } else {
+      this.error.set(response.error?.message || 'Failed to run filters');
     }
   }
 
@@ -268,5 +309,75 @@ export class FilterSettingsComponent implements OnInit {
       move: 'Move to',
     };
     return labels[type] || type;
+  }
+
+  /** Move a filter up in priority (lower sort_order = higher priority) */
+  async moveFilterUp(filter: Filter): Promise<void> {
+    const currentFilters = this.filters();
+    const index = currentFilters.findIndex(f => f.id === filter.id);
+    if (index <= 0) {
+      return;
+    }
+
+    const above = currentFilters[index - 1];
+    // Swap sort_order values
+    const aboveOrder = above.sortOrder ?? index - 1;
+    const currentOrder = filter.sortOrder ?? index;
+
+    await Promise.all([
+      this.electronService.updateFilter({
+        id: filter.id,
+        name: filter.name,
+        conditions: JSON.stringify(filter.conditions),
+        actions: JSON.stringify(filter.actions),
+        isEnabled: filter.isEnabled,
+        sortOrder: aboveOrder,
+      }),
+      this.electronService.updateFilter({
+        id: above.id,
+        name: above.name,
+        conditions: JSON.stringify(above.conditions),
+        actions: JSON.stringify(above.actions),
+        isEnabled: above.isEnabled,
+        sortOrder: currentOrder,
+      }),
+    ]);
+
+    await this.loadFilters();
+  }
+
+  /** Move a filter down in priority (higher sort_order = lower priority) */
+  async moveFilterDown(filter: Filter): Promise<void> {
+    const currentFilters = this.filters();
+    const index = currentFilters.findIndex(f => f.id === filter.id);
+    if (index < 0 || index >= currentFilters.length - 1) {
+      return;
+    }
+
+    const below = currentFilters[index + 1];
+    // Swap sort_order values
+    const belowOrder = below.sortOrder ?? index + 1;
+    const currentOrder = filter.sortOrder ?? index;
+
+    await Promise.all([
+      this.electronService.updateFilter({
+        id: filter.id,
+        name: filter.name,
+        conditions: JSON.stringify(filter.conditions),
+        actions: JSON.stringify(filter.actions),
+        isEnabled: filter.isEnabled,
+        sortOrder: belowOrder,
+      }),
+      this.electronService.updateFilter({
+        id: below.id,
+        name: below.name,
+        conditions: JSON.stringify(below.conditions),
+        actions: JSON.stringify(below.actions),
+        isEnabled: below.isEnabled,
+        sortOrder: currentOrder,
+      }),
+    ]);
+
+    await this.loadFilters();
   }
 }

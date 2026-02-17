@@ -4,6 +4,7 @@ import { ImapService } from './imap-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { OAuthService } from './oauth-service';
+import { FilterService } from './filter-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 /** Gmail special-use folder mappings (All Mail excluded — not shown or synced) */
@@ -271,6 +272,18 @@ export class SyncService {
             }
           } catch (reconcileErr) {
             log.warn(`Reconciliation failed for folder ${folder} account ${accountId} (continuing):`, reconcileErr);
+          }
+
+          // Run filter evaluation on newly synced INBOX emails
+          if (folder === 'INBOX') {
+            try {
+              log.debug(`[SyncService] Triggering filter processing for account ${accountId} after INBOX sync`);
+              const filterService = FilterService.getInstance();
+              const filterResult = await filterService.processNewEmails(numAccountId);
+              log.debug(`[SyncService] Filter processing completed for account ${accountId}: ${filterResult.emailsMatched} matched, ${filterResult.actionsDispatched} actions dispatched`);
+            } catch (filterErr) {
+              log.warn(`[SyncService] Filter processing failed for INBOX account ${accountId} (continuing):`, filterErr);
+            }
           }
         } catch (err) {
           log.warn(`Failed to sync folder ${folder} for account ${accountId}:`, err);
@@ -552,6 +565,18 @@ export class SyncService {
         });
 
         db.upsertThreadFolder(dbThreadId, numAccountId, folder);
+      }
+
+      // Run filter evaluation on newly fetched INBOX emails
+      if (folder === 'INBOX') {
+        try {
+          log.debug(`[IDLE] Triggering filter processing for account ${accountId} after incremental INBOX fetch`);
+          const filterService = FilterService.getInstance();
+          const filterResult = await filterService.processNewEmails(numAccountId);
+          log.debug(`[IDLE] Filter processing completed for account ${accountId}: ${filterResult.emailsMatched} matched, ${filterResult.actionsDispatched} actions dispatched`);
+        } catch (filterErr) {
+          log.warn(`[IDLE] Filter processing failed for INBOX account ${accountId} (continuing):`, filterErr);
+        }
       }
 
       if (newEmails.length > 0) {

@@ -37,6 +37,12 @@
         (click)="onStarClick($event)"
       >star_border</span>
     }
+    @if (labelBadge(); as lbl) {
+      <span class="label-chip" [title]="lbl.name">
+        <span class="material-symbols-outlined label-chip-icon">sell</span>
+        <span class="label-chip-text">{{ lbl.name }}</span>
+      </span>
+    }
     @if (folderBadge(); as badge) {
       <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title">
         <span class="material-symbols-outlined folder-badge-icon">{{ badge.icon }}</span>

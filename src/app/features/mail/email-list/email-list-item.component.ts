@@ -53,6 +53,17 @@ export class EmailListItemComponent {
   readonly clicked = output<Thread>();
   readonly starToggled = output<Thread>();
 
+  readonly labelBadge = computed(() => {
+    const label = this.thread().label;
+    if (!label) {
+      return null;
+    }
+    return {
+      name: label.name,
+      color: label.color,
+    };
+  });
+
   readonly folderBadge = computed<FolderBadgeInfo | null>(() => {
     if (!this.showFolderBadge()) {
       return null;

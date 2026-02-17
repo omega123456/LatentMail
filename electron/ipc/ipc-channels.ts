@@ -56,6 +56,10 @@ export const IPC_CHANNELS = {
   DB_UPDATE_FILTER: 'db:update-filter',
   DB_DELETE_FILTER: 'db:delete-filter',
   DB_TOGGLE_FILTER: 'db:toggle-filter',
+  DB_GET_USER_LABELS: 'db:get-user-labels',
+
+  // Filter operations
+  FILTER_APPLY_ALL: 'filter:apply-all',
 
   // System operations
   SYSTEM_MINIMIZE: 'system:minimize',

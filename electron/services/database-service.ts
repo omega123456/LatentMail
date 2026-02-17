@@ -124,6 +124,10 @@ export class DatabaseService {
       this.migrateV4toV5();
     }
 
+    if (currentVersion < 6) {
+      this.migrateV5toV6();
+    }
+
     // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
     this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
     this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
@@ -381,6 +385,67 @@ export class DatabaseService {
     }
 
     log.info('Migration v4 → v5 complete');
+  }
+
+  /**
+   * Migrate from schema v5 to v6: add filter execution support.
+   * - New tables: user_labels, email_labels
+   * - New column: emails.is_filtered
+   * - New column: filters.sort_order (backfilled from id)
+   */
+  private migrateV5toV6(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    log.info('Running migration v5 → v6: filter execution engine tables');
+
+    // Add is_filtered column to emails (idempotent)
+    const emailCols = this.db.exec("PRAGMA table_info(emails)");
+    const hasIsFiltered = emailCols.length > 0 && emailCols[0].values.some(
+      (row) => (row[1] as string) === 'is_filtered'
+    );
+    if (!hasIsFiltered) {
+      this.db.run('ALTER TABLE emails ADD COLUMN is_filtered INTEGER NOT NULL DEFAULT 0');
+    }
+
+    // Add sort_order column to filters (idempotent)
+    const filterCols = this.db.exec("PRAGMA table_info(filters)");
+    const hasSortOrder = filterCols.length > 0 && filterCols[0].values.some(
+      (row) => (row[1] as string) === 'sort_order'
+    );
+    if (!hasSortOrder) {
+      this.db.run('ALTER TABLE filters ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+      // Backfill: set sort_order = id to preserve creation-order as initial priority
+      this.db.run('UPDATE filters SET sort_order = id');
+    }
+
+    // Create user_labels table (idempotent via IF NOT EXISTS)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS user_labels (
+        id INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        color TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        UNIQUE(account_id, name)
+      )
+    `);
+
+    // Create email_labels table (idempotent via IF NOT EXISTS)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS email_labels (
+        id INTEGER PRIMARY KEY,
+        email_id INTEGER NOT NULL,
+        label_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+        FOREIGN KEY (label_id) REFERENCES user_labels(id) ON DELETE CASCADE,
+        UNIQUE(email_id)
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_email_labels_account_label ON email_labels(account_id, label_id)');
+
+    log.info('Migration v5 → v6 complete');
   }
 
   /** Persist the in-memory database to disk */
@@ -1654,13 +1719,14 @@ export class DatabaseService {
     actions: string;
     isEnabled: boolean;
     isAiGenerated: boolean;
+    sortOrder: number;
     createdAt: string;
     updatedAt: string;
   }> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, name, conditions, actions, is_enabled, is_ai_generated, created_at, updated_at
-       FROM filters WHERE account_id = :accountId ORDER BY created_at DESC`,
+      `SELECT id, account_id, name, conditions, actions, is_enabled, is_ai_generated, sort_order, created_at, updated_at
+       FROM filters WHERE account_id = :accountId ORDER BY sort_order ASC, id ASC`,
       { ':accountId': accountId }
     );
     if (result.length === 0) return [];
@@ -1672,8 +1738,9 @@ export class DatabaseService {
       actions: row[4] as string,
       isEnabled: !!(row[5] as number),
       isAiGenerated: !!(row[6] as number),
-      createdAt: row[7] as string,
-      updatedAt: row[8] as string,
+      sortOrder: (row[7] as number) || 0,
+      createdAt: row[8] as string,
+      updatedAt: row[9] as string,
     }));
   }
 
@@ -1687,11 +1754,21 @@ export class DatabaseService {
     actions: string;
     isEnabled: boolean;
     isAiGenerated: boolean;
+    sortOrder?: number;
   }): number {
     if (!this.db) throw new Error('Database not initialized');
+    // If no sort_order provided, place at end (max + 1)
+    let sortOrder = filter.sortOrder;
+    if (sortOrder == null) {
+      const maxResult = this.db.exec(
+        'SELECT COALESCE(MAX(sort_order), 0) FROM filters WHERE account_id = :accountId',
+        { ':accountId': filter.accountId }
+      );
+      sortOrder = ((maxResult[0]?.values[0]?.[0] as number) || 0) + 1;
+    }
     this.db.run(
-      `INSERT INTO filters (account_id, name, conditions, actions, is_enabled, is_ai_generated)
-       VALUES (:accountId, :name, :conditions, :actions, :isEnabled, :isAiGenerated)`,
+      `INSERT INTO filters (account_id, name, conditions, actions, is_enabled, is_ai_generated, sort_order)
+       VALUES (:accountId, :name, :conditions, :actions, :isEnabled, :isAiGenerated, :sortOrder)`,
       {
         ':accountId': filter.accountId,
         ':name': filter.name,
@@ -1699,6 +1776,7 @@ export class DatabaseService {
         ':actions': filter.actions,
         ':isEnabled': filter.isEnabled ? 1 : 0,
         ':isAiGenerated': filter.isAiGenerated ? 1 : 0,
+        ':sortOrder': sortOrder,
       }
     );
     const idResult = this.db.exec('SELECT last_insert_rowid()');
@@ -1716,19 +1794,30 @@ export class DatabaseService {
     conditions: string;
     actions: string;
     isEnabled: boolean;
+    sortOrder?: number;
   }): void {
     if (!this.db) throw new Error('Database not initialized');
+    const updates = [
+      'name = :name',
+      'conditions = :conditions',
+      'actions = :actions',
+      'is_enabled = :isEnabled',
+      "updated_at = datetime('now')",
+    ];
+    const params: Record<string, string | number> = {
+      ':id': filter.id,
+      ':name': filter.name,
+      ':conditions': filter.conditions,
+      ':actions': filter.actions,
+      ':isEnabled': filter.isEnabled ? 1 : 0,
+    };
+    if (filter.sortOrder != null) {
+      updates.push('sort_order = :sortOrder');
+      params[':sortOrder'] = filter.sortOrder;
+    }
     this.db.run(
-      `UPDATE filters SET name = :name, conditions = :conditions, actions = :actions,
-       is_enabled = :isEnabled, updated_at = datetime('now')
-       WHERE id = :id`,
-      {
-        ':id': filter.id,
-        ':name': filter.name,
-        ':conditions': filter.conditions,
-        ':actions': filter.actions,
-        ':isEnabled': filter.isEnabled ? 1 : 0,
-      }
+      `UPDATE filters SET ${updates.join(', ')} WHERE id = :id`,
+      params
     );
     this.scheduleSave();
   }
@@ -1752,6 +1841,324 @@ export class DatabaseService {
       { ':id': id, ':isEnabled': isEnabled ? 1 : 0 }
     );
     this.scheduleSave();
+  }
+
+  // ---- User Label operations (filter execution) ----
+
+  /**
+   * Upsert a user label by name for an account. Returns the label ID.
+   * Creates if not exists, returns existing ID if it does.
+   */
+  upsertUserLabel(accountId: number, name: string, color?: string | null): number {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT INTO user_labels (account_id, name, color)
+       VALUES (:accountId, :name, :color)
+       ON CONFLICT(account_id, name) DO UPDATE SET
+        color = COALESCE(excluded.color, user_labels.color)`,
+      { ':accountId': accountId, ':name': name, ':color': color || null }
+    );
+    const result = this.db.exec(
+      'SELECT id FROM user_labels WHERE account_id = :accountId AND name = :name',
+      { ':accountId': accountId, ':name': name }
+    );
+    const id = result[0].values[0][0] as number;
+    this.scheduleSave();
+    return id;
+  }
+
+  /**
+   * Get all user labels for an account with unread thread counts.
+   */
+  getUserLabels(accountId: number): Array<{
+    id: number;
+    accountId: number;
+    name: string;
+    color: string | null;
+    unreadCount: number;
+  }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT ul.id, ul.account_id, ul.name, ul.color,
+        (SELECT COUNT(DISTINCT t.id)
+         FROM email_labels el2
+         JOIN emails e2 ON e2.id = el2.email_id
+         JOIN threads t ON t.account_id = e2.account_id AND t.gmail_thread_id = e2.gmail_thread_id
+         WHERE el2.label_id = ul.id AND t.is_read = 0
+        ) AS unread_count
+       FROM user_labels ul
+       WHERE ul.account_id = :accountId
+       ORDER BY ul.name ASC`,
+      { ':accountId': accountId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map(row => ({
+      id: row[0] as number,
+      accountId: row[1] as number,
+      name: row[2] as string,
+      color: row[3] as string | null,
+      unreadCount: (row[4] as number) || 0,
+    }));
+  }
+
+  /**
+   * Assign a label to an email. Enforces one-label-per-email via UNIQUE constraint.
+   * Uses INSERT OR IGNORE to skip if email already has a label.
+   */
+  assignEmailLabel(emailId: number, labelId: number, accountId: number): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT OR IGNORE INTO email_labels (email_id, label_id, account_id)
+       VALUES (:emailId, :labelId, :accountId)`,
+      { ':emailId': emailId, ':labelId': labelId, ':accountId': accountId }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Remove a label assignment from an email.
+   */
+  removeEmailLabel(emailId: number): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'DELETE FROM email_labels WHERE email_id = :emailId',
+      { ':emailId': emailId }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Check if an email already has a label assigned.
+   */
+  emailHasLabel(emailId: number): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      'SELECT 1 FROM email_labels WHERE email_id = :emailId LIMIT 1',
+      { ':emailId': emailId }
+    );
+    return result.length > 0 && result[0].values.length > 0;
+  }
+
+  /**
+   * Get threads by user label (for virtual label folder browsing).
+   * Returns the same column shape as getThreadsByFolder.
+   */
+  getThreadsByUserLabel(
+    accountId: number,
+    labelId: number,
+    limit: number = 50,
+    offset: number = 0
+  ): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT DISTINCT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date,
+        t.participants, t.message_count, t.snippet, 'label::' || :labelId AS folder,
+        t.is_read, t.is_starred
+       FROM threads t
+       JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       JOIN email_labels el ON el.email_id = e.id
+       WHERE el.label_id = :labelId AND el.account_id = :accountId
+       ORDER BY t.last_message_date DESC LIMIT :limit OFFSET :offset`,
+      { ':accountId': accountId, ':labelId': labelId, ':limit': limit, ':offset': offset }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+  }
+
+  /**
+   * Get threads by user label before a given date (for pagination in virtual label folders).
+   */
+  getThreadsByUserLabelBeforeDate(
+    accountId: number,
+    labelId: number,
+    beforeDate: string,
+    limit: number = 50
+  ): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT DISTINCT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date,
+        t.participants, t.message_count, t.snippet, 'label::' || :labelId AS folder,
+        t.is_read, t.is_starred
+       FROM threads t
+       JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       JOIN email_labels el ON el.email_id = e.id
+       WHERE el.label_id = :labelId AND el.account_id = :accountId AND t.last_message_date < :beforeDate
+       ORDER BY t.last_message_date DESC LIMIT :limit`,
+      { ':accountId': accountId, ':labelId': labelId, ':beforeDate': beforeDate, ':limit': limit }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+  }
+
+  /**
+   * Get label info for a batch of thread IDs. Returns a map of threadId → label info.
+   * Uses the most recent labeled email per thread (by email date descending).
+   */
+  getLabelsForThreadBatch(threadIds: number[]): Map<number, { labelId: number; labelName: string; labelColor: string | null }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const map = new Map<number, { labelId: number; labelName: string; labelColor: string | null }>();
+    const uniqueIds = Array.from(new Set(threadIds.filter(id => Number.isFinite(id))));
+    if (uniqueIds.length === 0) return map;
+
+    const placeholders = uniqueIds.map((_, i) => `:tid${i}`);
+    const params: Record<string, number> = {};
+    for (let i = 0; i < uniqueIds.length; i++) {
+      params[`:tid${i}`] = uniqueIds[i];
+    }
+
+    // For each thread, get the label from the most recent labeled email
+    const result = this.db.exec(
+      `SELECT t.id AS thread_id, ul.id AS label_id, ul.name AS label_name, ul.color AS label_color
+       FROM threads t
+       JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       JOIN email_labels el ON el.email_id = e.id
+       JOIN user_labels ul ON ul.id = el.label_id
+       WHERE t.id IN (${placeholders.join(', ')})
+       ORDER BY e.date DESC`,
+      params
+    );
+
+    if (result.length === 0) return map;
+
+    // First occurrence per thread_id wins (most recent by ORDER BY e.date DESC)
+    for (const row of result[0].values) {
+      const threadId = row[0] as number;
+      if (!map.has(threadId)) {
+        map.set(threadId, {
+          labelId: row[1] as number,
+          labelName: row[2] as string,
+          labelColor: row[3] as string | null,
+        });
+      }
+    }
+
+    return map;
+  }
+
+  /**
+   * Delete a user label by ID. CASCADE removes all email_labels entries.
+   */
+  deleteUserLabel(labelId: number): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('DELETE FROM user_labels WHERE id = :labelId', { ':labelId': labelId });
+    this.scheduleSave();
+  }
+
+  // ---- Filter execution support ----
+
+  /**
+   * Get unfiltered INBOX emails for an account.
+   * Returns full email data needed for condition matching.
+   */
+  getUnfilteredInboxEmails(accountId: number): Array<{
+    id: number;
+    gmailMessageId: string;
+    gmailThreadId: string;
+    fromAddress: string;
+    fromName: string;
+    toAddresses: string;
+    subject: string;
+    textBody: string | null;
+    htmlBody: string | null;
+    hasAttachments: boolean;
+  }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT e.id, e.gmail_message_id, e.gmail_thread_id, e.from_address, e.from_name,
+        e.to_addresses, e.subject, e.text_body, e.html_body, e.has_attachments
+       FROM emails e
+       JOIN email_folders ef ON ef.email_id = e.id
+       WHERE e.account_id = :accountId AND ef.folder = 'INBOX' AND e.is_filtered = 0`,
+      { ':accountId': accountId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map(row => ({
+      id: row[0] as number,
+      gmailMessageId: row[1] as string,
+      gmailThreadId: row[2] as string,
+      fromAddress: row[3] as string,
+      fromName: (row[4] as string) || '',
+      toAddresses: (row[5] as string) || '',
+      subject: (row[6] as string) || '',
+      textBody: row[7] as string | null,
+      htmlBody: row[8] as string | null,
+      hasAttachments: !!(row[9] as number),
+    }));
+  }
+
+  /**
+   * Mark emails as filtered (batch update). Wrapped in transaction.
+   */
+  markEmailsAsFiltered(emailIds: number[]): void {
+    if (!this.db) throw new Error('Database not initialized');
+    if (emailIds.length === 0) return;
+
+    this.db.run('BEGIN');
+    try {
+      // Batch in groups to stay within SQLite variable limits
+      const batchSize = 500;
+      for (let i = 0; i < emailIds.length; i += batchSize) {
+        const batch = emailIds.slice(i, i + batchSize);
+        const placeholders = batch.map((_, idx) => `:eid${idx}`);
+        const params: Record<string, number> = {};
+        for (let j = 0; j < batch.length; j++) {
+          params[`:eid${j}`] = batch[j];
+        }
+        this.db.run(
+          `UPDATE emails SET is_filtered = 1 WHERE id IN (${placeholders.join(', ')})`,
+          params
+        );
+      }
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  /**
+   * Get enabled filters for an account, ordered by sort_order ascending then id ascending.
+   */
+  getEnabledFiltersOrdered(accountId: number): Array<{
+    id: number;
+    accountId: number;
+    name: string;
+    conditions: string;
+    actions: string;
+    sortOrder: number;
+  }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, name, conditions, actions, sort_order
+       FROM filters
+       WHERE account_id = :accountId AND is_enabled = 1
+       ORDER BY sort_order ASC, id ASC`,
+      { ':accountId': accountId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map(row => ({
+      id: row[0] as number,
+      accountId: row[1] as number,
+      name: row[2] as string,
+      conditions: row[3] as string,
+      actions: row[4] as string,
+      sortOrder: (row[5] as number) || 0,
+    }));
+  }
+
+  /**
+   * Get the INBOX UID for an email (by internal email ID).
+   * Returns null if the email is not in INBOX or has no UID.
+   */
+  getInboxUidForEmail(emailId: number): number | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT uid FROM email_folders WHERE email_id = :emailId AND folder = 'INBOX' AND uid IS NOT NULL`,
+      { ':emailId': emailId }
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    return result[0].values[0][0] as number;
   }
 
   close(): void {

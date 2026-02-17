@@ -58,6 +58,52 @@ export function registerMailIpcHandlers(): void {
     });
   };
 
+  /**
+   * Enrich threads with label info from user_labels.
+   * Adds a `label` field to each thread if any of its emails has a label assigned.
+   */
+  const attachThreadLabels = (threads: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+    const threadIds = threads
+      .map((thread) => {
+        const rawId = thread['id'];
+        if (typeof rawId === 'number') {
+          return rawId;
+        }
+        if (typeof rawId === 'string') {
+          const parsed = Number(rawId);
+          return Number.isFinite(parsed) ? parsed : null;
+        }
+        return null;
+      })
+      .filter((threadId): threadId is number => threadId != null && threadId > 0);
+
+    if (threadIds.length === 0) {
+      return threads;
+    }
+
+    const labelMap = db.getLabelsForThreadBatch(threadIds);
+    if (labelMap.size === 0) {
+      return threads;
+    }
+
+    return threads.map((thread) => {
+      const rawId = thread['id'];
+      const threadId = typeof rawId === 'number' ? rawId : Number(rawId);
+      const labelInfo = Number.isFinite(threadId) ? labelMap.get(threadId) : undefined;
+      if (!labelInfo) {
+        return thread;
+      }
+      return {
+        ...thread,
+        label: {
+          id: labelInfo.labelId,
+          name: labelInfo.labelName,
+          color: labelInfo.labelColor,
+        },
+      };
+    });
+  };
+
   // Fetch emails/threads for a folder (local-first from DB)
   ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_EMAILS, async (_event, accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => {
     try {
@@ -65,6 +111,19 @@ export function registerMailIpcHandlers(): void {
       const limit = options?.limit || 50;
       const offset = options?.offset || 0;
       const numAccountId = Number(accountId);
+
+      // Handle virtual label folder: label::<id>
+      if (folderId.startsWith('label::')) {
+        const labelId = Number(folderId.substring(7));
+        if (!Number.isFinite(labelId) || labelId <= 0) {
+          return ipcError('MAIL_INVALID_FOLDER', `Invalid label folder ID: ${folderId}`);
+        }
+        let threads = db.getThreadsByUserLabel(numAccountId, labelId, limit, offset);
+        threads = attachThreadFolders(threads);
+        threads = attachThreadLabels(threads);
+        return ipcSuccess(threads);
+      }
+
       let threads = db.getThreadsByFolder(numAccountId, folderId, limit, offset);
       log.info(`MAIL_FETCH_EMAILS: account=${accountId} folder=${folderId} returned ${threads.length} threads`);
 
@@ -172,7 +231,9 @@ export function registerMailIpcHandlers(): void {
         const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId', { ':accountId': numAccountId });
         log.info(`DEBUG: total threads=${threadCount[0]?.values[0]?.[0]}, total thread_folders=${tfCount[0]?.values[0]?.[0]}, folders in thread_folders=${JSON.stringify(tfFolders[0]?.values)}`);
       }
-      return ipcSuccess(threads);
+      // Enrich threads with label info
+      const enrichedThreads = attachThreadLabels(threads);
+      return ipcSuccess(enrichedThreads);
     } catch (err) {
       log.error('Failed to fetch emails:', err);
       return ipcError('MAIL_FETCH_FAILED', 'Failed to fetch emails');
@@ -811,6 +872,24 @@ export function registerMailIpcHandlers(): void {
     try {
       log.info(`Fetching older emails for account ${accountId}, folder ${folderId}, before ${beforeDate}, limit ${limit}`);
       const numAccountId = Number(accountId);
+
+      // Handle virtual label folder: label::<id> — local-only pagination
+      if (folderId.startsWith('label::')) {
+        const labelId = Number(folderId.substring(7));
+        if (!Number.isFinite(labelId) || labelId <= 0) {
+          return ipcError('MAIL_INVALID_FOLDER', `Invalid label folder ID: ${folderId}`);
+        }
+        const parsedLabelDate = new Date(beforeDate);
+        if (isNaN(parsedLabelDate.getTime())) {
+          return ipcError('INVALID_DATE', `Invalid beforeDate: ${beforeDate}`);
+        }
+        const sanitizedLabelLimit = Math.max(1, Number(limit) || 50);
+        let threads = db.getThreadsByUserLabelBeforeDate(numAccountId, labelId, beforeDate, sanitizedLabelLimit);
+        threads = attachThreadFolders(threads);
+        threads = attachThreadLabels(threads);
+        return ipcSuccess({ threads, hasMore: threads.length === sanitizedLabelLimit });
+      }
+
       const imapService = ImapService.getInstance();
 
       // Validate date
@@ -955,7 +1034,22 @@ export function registerMailIpcHandlers(): void {
           ...row,
           unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,
         }));
-      return ipcSuccess(labelsWithThreadCounts);
+
+      // Append user-defined filter label folders as virtual entries
+      const userLabels = db.getUserLabels(numAccountId);
+      const filterLabelFolders = userLabels.map((label) => ({
+        id: label.id,
+        accountId: numAccountId,
+        gmailLabelId: `label::${label.id}`,
+        name: label.name,
+        type: 'filter-label',
+        color: label.color,
+        unreadCount: label.unreadCount,
+        totalCount: 0,
+        icon: 'sell',
+      }));
+
+      return ipcSuccess([...labelsWithThreadCounts, ...filterLabelFolders]);
     } catch (err) {
       log.error('Failed to get folders:', err);
       return ipcError('MAIL_GET_FOLDERS_FAILED', 'Failed to get folders');

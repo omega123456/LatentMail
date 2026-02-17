@@ -6,6 +6,7 @@ import { registerAuthIpcHandlers } from './auth-ipc';
 import { registerAiIpcHandlers } from './ai-ipc';
 import { registerComposeIpcHandlers } from './compose-ipc';
 import { registerQueueIpcHandlers } from './queue-ipc';
+import { registerFilterIpcHandlers } from './filter-ipc';
 
 export function registerAllIpcHandlers(): void {
   log.info('Registering IPC handlers...');
@@ -17,6 +18,7 @@ export function registerAllIpcHandlers(): void {
   registerAiIpcHandlers();
   registerComposeIpcHandlers();
   registerQueueIpcHandlers();
+  registerFilterIpcHandlers();
 
   log.info('All IPC handlers registered');
 }

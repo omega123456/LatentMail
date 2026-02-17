@@ -46,11 +46,32 @@
   <!-- Filter List -->
   <div class="filter-list-header">
     <h3>Your Filters</h3>
-    <button class="add-filter-btn" (click)="openNewFilter()">
-      <span class="material-symbols-outlined">add</span>
-      New Filter
-    </button>
+    <div class="filter-header-actions">
+      <button
+        class="run-filters-btn"
+        (click)="runFiltersNow()"
+        [disabled]="runningFilters()"
+        title="Run all enabled filters on unfiltered INBOX emails"
+      >
+        @if (runningFilters()) {
+          <span class="material-symbols-outlined spinning">sync</span>
+        } @else {
+          <span class="material-symbols-outlined">play_arrow</span>
+        }
+        Run Filters Now
+      </button>
+      <button class="add-filter-btn" (click)="openNewFilter()">
+        <span class="material-symbols-outlined">add</span>
+        New Filter
+      </button>
+    </div>
   </div>
+  @if (filterResult()) {
+    <div class="filter-result-message">
+      <span class="material-symbols-outlined">check_circle</span>
+      {{ filterResult() }}
+    </div>
+  }
 
   @if (loading()) {
     <div class="loading">
@@ -78,6 +99,12 @@
               }
             </div>
             <div class="filter-actions">
+              <button class="icon-btn" (click)="moveFilterUp(filter)" title="Move up (higher priority)" [disabled]="$first">
+                <span class="material-symbols-outlined">arrow_upward</span>
+              </button>
+              <button class="icon-btn" (click)="moveFilterDown(filter)" title="Move down (lower priority)" [disabled]="$last">
+                <span class="material-symbols-outlined">arrow_downward</span>
+              </button>
               <button class="icon-btn" (click)="toggleFilterEnabled(filter)" [title]="filter.isEnabled ? 'Disable' : 'Enable'">
                 <span class="material-symbols-outlined">
                   {{ filter.isEnabled ? 'toggle_on' : 'toggle_off' }}
