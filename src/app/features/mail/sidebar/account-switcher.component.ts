@@ -1,4 +1,4 @@
-import { Component, inject, input } from '@angular/core';
+import { Component, inject, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { MatMenuModule } from '@angular/material/menu';
@@ -18,15 +18,17 @@ export class AccountSwitcherComponent {
   readonly collapsed = input(false);
   private readonly router = inject(Router);
 
+  /** Emits the account ID when the user switches or adds an account. */
+  readonly accountSwitched = output<number>();
+
   switchAccount(accountId: number): void {
-    this.accountsStore.setActiveAccount(accountId);
-    this.router.navigate(['/mail', accountId, 'INBOX']);
+    this.accountSwitched.emit(accountId);
   }
 
   async addAccount(): Promise<void> {
     const account = await this.accountsStore.login();
     if (account) {
-      this.router.navigate(['/mail', account.id, 'INBOX']);
+      this.accountSwitched.emit(account.id);
     }
   }
 

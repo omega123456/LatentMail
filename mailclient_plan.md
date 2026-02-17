@@ -53,7 +53,6 @@ MailClient is a cross-platform desktop email client for **Windows 10+ (x64)** an
 
 1. **Cross-platform**: Run natively on Windows and macOS with platform-appropriate packaging
 2. **Gmail-first**: Seamless Gmail integration via OAuth2 (system browser + loopback redirect, no embedded webview)
-3. **Multi-account**: Support multiple Gmail accounts with unified inbox and per-account views
 4. **Local-first**: All emails cached in SQLite for offline reading; search queries local cache first, then IMAP server, with results deduplicated by server email id
 5. **AI-powered**: Full suite of local AI features via Ollama — summarize, compose, sort, filter, search, and transform text
 6. **Clean & minimal UI**: Mailbird-inspired design with dark/light themes, switchable layouts, and comfortable density
@@ -261,7 +260,6 @@ D:\mailclient\
 | `/auth` | AuthLandingComponent | SetupGuard | Welcome/sign-in page for first-time users |
 | `/auth/callback` | AuthCallbackComponent | — | OAuth2 redirect handler |
 | `/mail` | MailShellComponent | AuthGuard | Main email interface — redirects to last-used account/folder |
-| `/mail/unified` | MailShellComponent | AuthGuard | Unified inbox (all accounts merged, sorted by date) |
 | `/mail/:accountId` | MailShellComponent | AuthGuard | Account-specific view (defaults to inbox) |
 | `/mail/:accountId/:folderId` | MailShellComponent | AuthGuard | Folder-specific email list |
 | `/mail/:accountId/:folderId/:threadId` | MailShellComponent | AuthGuard | Specific thread in reading pane |
@@ -429,7 +427,6 @@ MailClient follows Electron's two-process model with a clear separation of conce
 - **Server then**: Run same criteria (or Gmail raw string) via ImapService using IMAP SEARCH (imapflow `SearchObject`: from, to, subject, body, text, since, before, seen, flagged; or `gmraw`/`gmailraw` for Gmail raw syntax)
 - **Merge and deduplicate**: Combine local and server result sets; deduplicate by server-side email id (e.g. `gmail_message_id`) so each message appears once; prefer local row when both exist for consistent display
 - Support Gmail-style operators in both local and server paths
-- Return unified, ranked results with snippet highlighting where available
 
 **Key Dependencies**: DatabaseService, ImapService
 

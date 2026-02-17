@@ -1,6 +1,6 @@
 import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink, ActivatedRoute, Router } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { AccountSwitcherComponent } from './sidebar/account-switcher.component';
 import { FolderListComponent } from './sidebar/folder-list.component';
@@ -38,10 +38,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly composeStore = inject(ComposeStore);
   readonly uiStore = inject(UiStore);
   private readonly electronService = inject(ElectronService);
-  private readonly route = inject(ActivatedRoute);
-  private readonly router = inject(Router);
   private readonly cdr = inject(ChangeDetectorRef);
-  private routeSub?: Subscription;
   private syncSub?: Subscription;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
@@ -54,14 +51,8 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnInit(): void {
-    this.initializeRouteDrivenState().catch(() => {
+    this.initializeStoreState().catch(() => {
       // Initialization failures are reflected in individual stores.
-    });
-
-    this.routeSub = this.route.params.subscribe(() => {
-      this.applyRouteParams().catch(() => {
-        // Route handling failures are reflected in individual stores.
-      });
     });
 
     this.syncSub = this.electronService.onEvent<{
@@ -83,7 +74,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnDestroy(): void {
-    this.routeSub?.unsubscribe();
     this.syncSub?.unsubscribe();
   }
 
@@ -92,7 +82,10 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     if (activeAccount) {
       const normalizedFolderId = this.foldersStore.normalizeFolderId(folderId);
       this.emailsStore.clearSelection();
-      this.router.navigate(['/mail', activeAccount.id, normalizedFolderId]);
+      this.foldersStore.setActiveFolder(normalizedFolderId);
+      this.emailsStore.loadThreads(activeAccount.id, normalizedFolderId);
+      this.lastLoadedAccountId = activeAccount.id;
+      this.lastLoadedFolderId = normalizedFolderId;
     }
   }
 
@@ -111,12 +104,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
           thread.gmailThreadId
         );
       }
-
-      this.router.navigate([
-        '/mail', activeAccount.id,
-        this.foldersStore.activeFolderId() || 'INBOX',
-        thread.gmailThreadId
-      ]);
     }
   }
 
@@ -168,22 +155,27 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  private async initializeRouteDrivenState(): Promise<void> {
+  /**
+   * Store-driven initialization (replaces route-driven init).
+   * Honors pre-populated store state (e.g. from notification click
+   * or returning from settings) to avoid redundant loads.
+   */
+  private async initializeStoreState(): Promise<void> {
     await this.accountsStore.loadAccounts();
-    await this.applyRouteParams();
-  }
 
-  private async applyRouteParams(): Promise<void> {
-    const params = this.route.snapshot.params;
-    const accountIdParam = params['accountId'];
-    const folderIdParam = params['folderId'];
-    const threadIdParam = params['threadId'];
-
-    if (accountIdParam) {
-      this.accountsStore.setActiveAccount(Number(accountIdParam));
+    // Use pre-set active account (e.g. from notification handler) or pick first
+    let activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      const accounts = this.accountsStore.accounts();
+      if (accounts.length === 0) {
+        this.lastLoadedAccountId = null;
+        this.lastLoadedFolderId = null;
+        return;
+      }
+      this.accountsStore.setActiveAccount(accounts[0].id);
+      activeAccount = this.accountsStore.activeAccount();
     }
 
-    const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
       this.lastLoadedAccountId = null;
       this.lastLoadedFolderId = null;
@@ -192,29 +184,54 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     await this.foldersStore.loadFolders(activeAccount.id);
 
+    // Use pre-set active folder or default to INBOX, then normalize
     const resolvedFolderId = this.foldersStore.normalizeFolderId(
-      folderIdParam || this.foldersStore.activeFolderId() || 'INBOX'
+      this.foldersStore.activeFolderId() || 'INBOX'
     );
     this.foldersStore.setActiveFolder(resolvedFolderId);
 
-    const shouldReloadThreads =
-      this.lastLoadedAccountId !== activeAccount.id ||
-      this.lastLoadedFolderId !== resolvedFolderId ||
-      this.emailsStore.threads().length === 0;
+    // Skip loadThreads if threads are already populated for this exact context.
+    // This handles two cases:
+    // 1. Notification handler pre-loaded threads (lastLoaded* are null, component is new)
+    // 2. Returning from settings (stores persist, threads still match active account/folder)
+    // We check the store's activeAccountId + activeFolderId to ensure the existing
+    // threads correspond to the current selection, not stale data from a different context.
+    const storeAccountId = this.accountsStore.activeAccountId();
+    const storeFolderId = this.foldersStore.activeFolderId();
+    const threadsAlreadyValid =
+      this.emailsStore.threads().length > 0 &&
+      storeAccountId === activeAccount.id &&
+      storeFolderId === resolvedFolderId;
 
-    if (shouldReloadThreads) {
+    const shouldLoadThreads =
+      !threadsAlreadyValid ||
+      (this.lastLoadedAccountId !== null &&
+        (this.lastLoadedAccountId !== activeAccount.id ||
+          this.lastLoadedFolderId !== resolvedFolderId));
+
+    if (shouldLoadThreads) {
       await this.emailsStore.loadThreads(activeAccount.id, resolvedFolderId);
-      this.lastLoadedAccountId = activeAccount.id;
-      this.lastLoadedFolderId = resolvedFolderId;
     }
 
-    if (threadIdParam) {
-      if (this.emailsStore.selectedThreadId() !== threadIdParam) {
-        await this.emailsStore.loadThread(activeAccount.id, threadIdParam);
-      }
-    } else {
-      this.emailsStore.clearSelection();
-    }
+    this.lastLoadedAccountId = activeAccount.id;
+    this.lastLoadedFolderId = resolvedFolderId;
+
+    // Don't clear selection if already set (e.g. from notification handler)
+    // Selection is only cleared explicitly on folder switch
+  }
+
+  /**
+   * Handle account switch from the account switcher component.
+   * Loads folders and threads for the newly selected account.
+   */
+  async onAccountSwitch(accountId: number): Promise<void> {
+    this.accountsStore.setActiveAccount(accountId);
+    await this.foldersStore.loadFolders(accountId);
+    this.foldersStore.setActiveFolder('INBOX');
+    this.emailsStore.clearSelection();
+    await this.emailsStore.loadThreads(accountId, 'INBOX');
+    this.lastLoadedAccountId = accountId;
+    this.lastLoadedFolderId = 'INBOX';
   }
 
   onManualSync(): void {

@@ -26,30 +26,6 @@ export const routes: Routes = [
       import('./features/mail/mail-shell.component').then(m => m.MailShellComponent),
   },
   {
-    path: 'mail/unified',
-    canActivate: [authGuard],
-    loadComponent: () =>
-      import('./features/mail/mail-shell.component').then(m => m.MailShellComponent),
-  },
-  {
-    path: 'mail/:accountId',
-    canActivate: [authGuard],
-    loadComponent: () =>
-      import('./features/mail/mail-shell.component').then(m => m.MailShellComponent),
-  },
-  {
-    path: 'mail/:accountId/:folderId',
-    canActivate: [authGuard],
-    loadComponent: () =>
-      import('./features/mail/mail-shell.component').then(m => m.MailShellComponent),
-  },
-  {
-    path: 'mail/:accountId/:folderId/:threadId',
-    canActivate: [authGuard],
-    loadComponent: () =>
-      import('./features/mail/mail-shell.component').then(m => m.MailShellComponent),
-  },
-  {
     path: 'settings',
     canActivate: [authGuard],
     loadComponent: () =>

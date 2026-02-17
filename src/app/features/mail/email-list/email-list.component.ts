@@ -1,4 +1,4 @@
-import { Component, ViewChild, inject, output } from '@angular/core';
+import { Component, ViewChild, inject, output, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CdkVirtualScrollViewport, ScrollingModule } from '@angular/cdk/scrolling';
 import { EmailsStore } from '../../../store/emails.store';
@@ -24,6 +24,17 @@ export class EmailListComponent {
   readonly accountsStore = inject(AccountsStore);
   readonly uiStore = inject(UiStore);
   readonly threadSelected = output<Thread>();
+
+  constructor() {
+    // Reset scroll to top when folder/account switches trigger a fresh thread load.
+    // loadThreads() sets preserveListPosition to false — when that happens, scroll to top.
+    effect(() => {
+      const preserve = this.emailsStore.preserveListPosition();
+      if (!preserve && this.viewport) {
+        this.viewport.scrollToIndex(0);
+      }
+    });
+  }
 
   trackByThreadId(_index: number, thread: Thread): string {
     return thread.gmailThreadId;

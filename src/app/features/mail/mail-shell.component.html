@@ -9,7 +9,7 @@
     [maxSize]="400"
     (resized)="onSidebarResized($event)"
   >
-    <app-account-switcher [collapsed]="uiStore.sidebarCollapsed()" />
+    <app-account-switcher [collapsed]="uiStore.sidebarCollapsed()" (accountSwitched)="onAccountSwitch($event)" />
 
     <!-- Compose button -->
     <button class="compose-btn" [class.collapsed]="uiStore.sidebarCollapsed()" (click)="openNewCompose()">

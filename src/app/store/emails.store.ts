@@ -610,12 +610,37 @@ export const EmailsStore = signalStore(
       });
 
       // Subscribe to mail:notification-click events.
-      // Navigate to the specified account/folder/thread.
-      electronService.onEvent<MailNotificationClickPayload>('mail:notification-click').subscribe((event) => {
-        if (event.gmailThreadId) {
-          router.navigate(['/mail', event.accountId, event.folder, event.gmailThreadId]);
-        } else {
-          router.navigate(['/mail', event.accountId, event.folder]);
+      // Perform store operations first, then navigate cross-view if needed.
+      electronService.onEvent<MailNotificationClickPayload>('mail:notification-click').subscribe(async (event) => {
+        try {
+          // 1. Ensure accounts are loaded
+          await accountsStore.loadAccounts();
+
+          // 2. Set active account
+          accountsStore.setActiveAccount(event.accountId);
+
+          // 3. Load folders for the target account
+          await foldersStore.loadFolders(event.accountId);
+
+          // 4. Set active folder
+          foldersStore.setActiveFolder(event.folder);
+
+          // 5. Load threads for the target folder
+          await store.loadThreads(event.accountId, event.folder);
+
+          // 6. Load the specific thread if provided
+          if (event.gmailThreadId) {
+            await store.loadThread(event.accountId, event.gmailThreadId);
+          }
+
+          // 7. Cross-view navigation: only navigate if not already on the mail view
+          if (!router.url.startsWith('/mail')) {
+            router.navigate(['/mail']);
+          }
+        } catch (err: unknown) {
+          // Failures are reflected in individual store error states.
+          // No toast or retry needed — user can manually navigate.
+          console.error('Notification click handler failed:', err);
         }
       });
     },
