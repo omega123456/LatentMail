@@ -6,14 +6,13 @@ import { FolderLockManager } from './folder-lock-manager';
 import { OAuthService } from './oauth-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
-/** Gmail special-use folder mappings */
+/** Gmail special-use folder mappings (All Mail excluded — not shown or synced) */
 const GMAIL_FOLDER_MAP: Record<string, { name: string; icon: string }> = {
   '\\Inbox': { name: 'Inbox', icon: 'inbox' },
   '\\Drafts': { name: 'Drafts', icon: 'edit_note' },
   '\\Sent': { name: 'Sent', icon: 'send' },
   '\\Trash': { name: 'Trash', icon: 'delete' },
   '\\Junk': { name: 'Spam', icon: 'report' },
-  '\\All': { name: 'All Mail', icon: 'all_inbox' },
   '\\Flagged': { name: 'Starred', icon: 'star' },
   '\\Important': { name: 'Important', icon: 'label_important' },
 };
@@ -88,6 +87,9 @@ export class SyncService {
       const numAccountId = Number(accountId);
 
       for (const mb of mailboxes) {
+        if (mb.path === '[Gmail]/All Mail') {
+          continue; // All Mail not stored or synced
+        }
         const specialUseInfo = GMAIL_FOLDER_MAP[mb.specialUse];
         db.upsertLabel({
           accountId: numAccountId,
@@ -108,9 +110,10 @@ export class SyncService {
 
       log.info(`Sync scope: isInitialSync=${isInitialSync}, sinceDate=${sinceDate.toISOString()}, lastSyncAt=${syncState.lastSyncAt}`);
 
-      // 3. Sync priority folders first, then others
+      // 3. Sync priority folders first, then others (exclude All Mail)
+      const ALL_MAIL_PATH = '[Gmail]/All Mail';
       const allFolders = mailboxes
-        .filter(mb => mb.listed && mb.messages > 0)
+        .filter(mb => mb.listed && mb.messages > 0 && mb.path !== ALL_MAIL_PATH)
         .map(mb => mb.path);
 
       const priorityFolders = PRIORITY_FOLDERS.filter(f => allFolders.includes(f));

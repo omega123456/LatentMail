@@ -583,7 +583,7 @@ MailClient follows Electron's two-process model with a clear separation of conce
 1. User enters natural language query or Gmail-style search string in search bar
 2. If AI is enabled: OllamaService receives query; LLM is given system prompt that includes the **search JSON structure and options** (imapflow `SearchObject` fields and/or Gmail raw query syntax) and returns structured search parameters (e.g. `{ from, to, subject, since, before, seen, flagged }`) or a Gmail raw string (`gmraw`)
 3. SearchService runs **local search first**: DatabaseService queries SQLite with those parameters (subject, from, to, date, flags); returns list of matching emails (by `gmail_message_id`)
-4. SearchService runs **server search**: ImapService executes IMAP SEARCH with same criteria (or `gmraw`) per folder or [Gmail]/All Mail; fetches envelope (and optionally snippet) for matching UIDs; returns server results with `gmail_message_id`
+4. SearchService runs **server search**: ImapService executes IMAP SEARCH with same criteria (or `gmraw`) per folder; fetches envelope (and optionally snippet) for matching UIDs; returns server results with `gmail_message_id` (All Mail folder is not used)
 5. **Deduplicate**: Merge local and server result sets; key by server-side email id (`gmail_message_id`); each message appears once; when both local and server have the same id, prefer local row for consistency (already cached)
 6. Return merged, deduplicated list to renderer; SearchStore updates; search results UI displays
 

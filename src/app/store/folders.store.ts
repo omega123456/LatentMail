@@ -24,7 +24,6 @@ const FOLDER_ICON_MAP: Record<string, string> = {
   '[Gmail]/Drafts': 'edit_note',
   '[Gmail]/Trash': 'delete',
   '[Gmail]/Spam': 'report',
-  '[Gmail]/All Mail': 'all_inbox',
   '[Gmail]/Starred': 'star',
   '[Gmail]/Important': 'label_important',
 };

@@ -347,62 +347,71 @@ export class ImapService {
   }
 
   /**
-   * Fetch all messages in a Gmail thread.
+   * Fetch all messages in a Gmail thread from the thread's known folders (no All Mail in normal path).
+   * If the thread only exists in All Mail (e.g. after archive), falls back to All Mail for that fetch.
    */
   async fetchThread(
     accountId: string,
     gmailThreadId: string
   ): Promise<FetchedEmail[]> {
-    const client = await this.connect(accountId);
-
-    // Search across all mail for this thread ID
-    const lock = await client.getMailboxLock('[Gmail]/All Mail');
-    try {
-      // Gmail-specific: search by thread ID using X-GM-THRID
-      const searchResult = await client.search({ threadId: gmailThreadId }, { uid: true }) as number[] | false;
-
-      if (!searchResult || searchResult.length === 0) return [];
-
-      const uids = Array.from(searchResult);
-      const emails: FetchedEmail[] = [];
-      const uidRange = uids.join(',');
-      for await (const msg of client.fetch(uidRange, {
-        uid: true,
-        envelope: true,
-        flags: true,
-        bodyStructure: true,
-        headers: true,
-        source: true,
-        labels: true,
-        threadId: true,
-        size: true,
-      }, { uid: true })) {
-        if (!msg) continue;
-        const fetchMsg = msg as FetchMessageObject;
-        const email = this.parseMessage(fetchMsg, '[Gmail]/All Mail');
-        if (email) {
-          if (fetchMsg.source) {
-            try {
-              const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
-                ? fetchMsg.source
-                : Buffer.from(fetchMsg.source);
-              const parsed = await simpleParser(sourceBuffer);
-              email.textBody = (parsed.text || '').trim();
-              email.htmlBody = (parsed.html || '').trim();
-            } catch (err) {
-              log.warn('Failed to parse thread message body:', err);
-            }
-          }
-          emails.push(email);
-        }
-      }
-
-      // Sort by date ascending (oldest first in thread)
-      emails.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-      return emails;
-    } finally {
-      lock.release();
+    const db = DatabaseService.getInstance();
+    const numAccountId = Number(accountId);
+    let folders = db.getFoldersForThread(numAccountId, gmailThreadId);
+    const ALL_MAIL_PATH = '[Gmail]/All Mail';
+    folders = folders.filter((f) => f !== ALL_MAIL_PATH);
+    if (folders.length === 0) {
+      folders = [ALL_MAIL_PATH]; // Fallback so archived-only threads still load
     }
+
+    const client = await this.connect(accountId);
+    const byMessageId = new Map<string, FetchedEmail>();
+
+    for (const folder of folders) {
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const searchResult = await client.search({ threadId: gmailThreadId }, { uid: true }) as number[] | false;
+        if (!searchResult || searchResult.length === 0) continue;
+
+        const uids = Array.from(searchResult);
+        const uidRange = uids.join(',');
+        for await (const msg of client.fetch(uidRange, {
+          uid: true,
+          envelope: true,
+          flags: true,
+          bodyStructure: true,
+          headers: true,
+          source: true,
+          labels: true,
+          threadId: true,
+          size: true,
+        }, { uid: true })) {
+          if (!msg) continue;
+          const fetchMsg = msg as FetchMessageObject;
+          const email = this.parseMessage(fetchMsg, folder);
+          if (email) {
+            if (fetchMsg.source) {
+              try {
+                const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
+                  ? fetchMsg.source
+                  : Buffer.from(fetchMsg.source);
+                const parsed = await simpleParser(sourceBuffer);
+                email.textBody = (parsed.text || '').trim();
+                email.htmlBody = (parsed.html || '').trim();
+              } catch (err) {
+                log.warn('Failed to parse thread message body:', err);
+              }
+            }
+            byMessageId.set(email.gmailMessageId, email);
+          }
+        }
+      } finally {
+        lock.release();
+      }
+    }
+
+    const emails = Array.from(byMessageId.values());
+    emails.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return emails;
   }
 
   /**

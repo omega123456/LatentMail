@@ -208,10 +208,13 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 ## Code Style and Conventions
 
+### CRITICAL
+
+- **Always use curly braces for control statements** — no single-line `if`/`else`/`for`/`while`/`do`. Every branch or loop body must be wrapped in `{ }`.
+
 ### TypeScript
 
 - Use strict mode (enabled in both `tsconfig.json` and `tsconfig.electron.json`)
-- **Always use curly braces for control statements** — no single-line `if`/`else`/`for`/`while`/`do`. Every branch or loop body must be wrapped in `{ }`.
 - Prefer `interface` over `type` for object shapes
 - Use `unknown` over `any` for IPC payloads, narrow with type guards
 - All IPC handlers must return `Promise<IpcResponse<T>>`

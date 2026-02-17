@@ -704,10 +704,12 @@ export function registerMailIpcHandlers(): void {
       const numAccountId = Number(accountId);
       const labels = db.getLabelsByAccount(numAccountId);
       const unreadByFolder = db.getUnreadThreadCountsByFolder(numAccountId);
-      const labelsWithThreadCounts = labels.map((row) => ({
-        ...row,
-        unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,
-      }));
+      const labelsWithThreadCounts = labels
+        .filter((row) => (row.gmailLabelId as string) !== '[Gmail]/All Mail')
+        .map((row) => ({
+          ...row,
+          unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,
+        }));
       return ipcSuccess(labelsWithThreadCounts);
     } catch (err) {
       log.error('Failed to get folders:', err);

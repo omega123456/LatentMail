@@ -1150,6 +1150,21 @@ export class DatabaseService {
   }
 
   /**
+   * Get folder paths for a thread (from thread_folders). Used by fetchThread to fetch from each folder instead of All Mail.
+   */
+  getFoldersForThread(accountId: number, gmailThreadId: string): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const threadId = this.getThreadInternalId(accountId, gmailThreadId);
+    if (threadId == null) return [];
+    const result = this.db.exec(
+      'SELECT DISTINCT folder FROM thread_folders WHERE thread_id = :threadId AND account_id = :accountId',
+      { ':threadId': threadId, ':accountId': accountId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
+  }
+
+  /**
    * Get all thread IDs (internal) that have emails in a given folder.
    * Used for reconciliation to find threads that should be disassociated from a folder.
    */
