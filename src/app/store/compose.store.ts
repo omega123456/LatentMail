@@ -320,6 +320,18 @@ export const ComposeStore = signalStore(
           htmlBody = `<br><br><div class="signature">${defaultSig.html}</div>` + htmlBody;
         }
 
+        // Prepend prefill body (e.g. AI smart reply) before signature/quoted text
+        let textBody = '';
+        if (context.prefillBody) {
+          textBody = context.prefillBody;
+          const escaped = context.prefillBody
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+          htmlBody = `<p>${escaped}</p>` + htmlBody;
+        }
+
         patchState(store, {
           isOpen: true,
           mode: context.mode,
@@ -334,7 +346,7 @@ export const ComposeStore = signalStore(
           bcc: '',
           subject,
           htmlBody,
-          textBody: '',
+          textBody,
           inReplyTo,
           references,
           attachments: [],

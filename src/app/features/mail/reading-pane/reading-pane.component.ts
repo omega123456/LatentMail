@@ -27,13 +27,19 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   private aiStreamSub?: Subscription;
 
   constructor() {
-    // Clear AI summary when switching to a different thread so the previous thread's summary is not shown
+    // Clear AI panels when switching to a different thread so previous thread's data is not shown
     effect(() => {
       const currentId = this.emailsStore.selectedThreadId();
       const summaryForId = this.aiStore.summaryThreadId();
+      const repliesForId = this.aiStore.replySuggestionsThreadId();
+      const followUpForId = this.aiStore.followUpThreadId();
       if (summaryForId != null && summaryForId !== currentId) {
         this.aiStore.clearSummary();
+      }
+      if (repliesForId != null && repliesForId !== currentId) {
         this.aiStore.clearReplies();
+      }
+      if (followUpForId != null && followUpForId !== currentId) {
         this.aiStore.clearFollowUp();
       }
     });
@@ -56,6 +62,15 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   isDraftsFolder(): boolean {
     const folder = this.foldersStore.activeFolderId();
     return folder === '[Gmail]/Drafts';
+  }
+
+  /** Whether this message is a draft (appears in [Gmail]/Drafts). Used to show Draft badge in thread. */
+  isDraftMessage(message: Email): boolean {
+    const folders = message.folders;
+    if (!folders || folders.length === 0) {
+      return false;
+    }
+    return folders.includes('[Gmail]/Drafts');
   }
 
   getInitial(email: Email): string {
@@ -148,11 +163,12 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
 
   /** Generate smart reply suggestions */
   async generateReplies(): Promise<void> {
+    const thread = this.emailsStore.selectedThread();
     const content = this.getThreadContent();
     if (!content) {
       return;
     }
-    await this.aiStore.generateReplies(content);
+    await this.aiStore.generateReplies(content, thread?.gmailThreadId);
   }
 
   /** Use a reply suggestion (emit it to the parent to open compose) */
@@ -172,11 +188,12 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
 
   /** Detect if the current email needs follow-up */
   async detectFollowUp(): Promise<void> {
+    const thread = this.emailsStore.selectedThread();
     const content = this.getThreadContent();
     if (!content) {
       return;
     }
-    await this.aiStore.detectFollowUp(content);
+    await this.aiStore.detectFollowUp(content, thread?.gmailThreadId);
   }
 
   /** Close follow-up panel */

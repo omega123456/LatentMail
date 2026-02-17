@@ -20,6 +20,8 @@ export interface Email {
   size?: number;
   hasAttachments: boolean;
   labels?: string;
+  /** Folders this message appears in (from email_folders). Set when loading a thread so UI can show e.g. Draft badge. */
+  folders?: string[];
 }
 
 export interface Thread {
@@ -95,4 +97,6 @@ export interface ComposeContext {
   originalMessage?: Email;
   /** gmailMessageId of a server draft opened from [Gmail]/Drafts for edit (backend resolves UID) */
   serverDraftGmailMessageId?: string;
+  /** Pre-fill the compose body with this text (e.g. AI smart reply suggestion) */
+  prefillBody?: string;
 }

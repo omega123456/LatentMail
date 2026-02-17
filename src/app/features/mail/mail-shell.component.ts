@@ -139,18 +139,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     // Handle AI reply suggestions with prefix "reply-with:..."
     if (action.startsWith('reply-with:')) {
       const suggestionText = action.substring('reply-with:'.length);
-      this.openComposeForAction('reply');
-      // Set the suggested text as plain text (no HTML injection)
-      setTimeout(() => {
-        this.composeStore.updateField('textBody', suggestionText);
-        // Escape HTML entities to prevent XSS from AI output
-        const escaped = suggestionText
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;');
-        this.composeStore.updateField('htmlBody', `<p>${escaped}</p>`);
-      }, 200);
+      this.openComposeForAction('reply', suggestionText);
       return;
     }
 
@@ -338,7 +327,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     this.emailLists?.forEach(list => list.setCategoryFilter(category));
   }
 
-  private openComposeForAction(mode: ComposeMode): void {
+  private openComposeForAction(mode: ComposeMode, prefillBody?: string): void {
     const activeAccount = this.accountsStore.activeAccount();
     const thread = this.emailsStore.selectedThread();
     if (!activeAccount || !thread) return;
@@ -354,6 +343,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       accountDisplayName: activeAccount.displayName,
       originalThread: thread,
       originalMessage: lastMessage || undefined,
+      prefillBody,
     });
   }
 

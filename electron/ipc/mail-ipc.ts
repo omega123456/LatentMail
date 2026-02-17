@@ -250,7 +250,14 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      return ipcSuccess({ ...thread, messages });
+      // Enrich each message with folders so the UI can show e.g. a Draft badge
+      const messagesWithFolders = messages.map((m) => {
+        const gmailMessageId = String(m['gmailMessageId'] ?? '');
+        const folders = gmailMessageId ? db.getFoldersForEmail(numAccountId, gmailMessageId) : [];
+        return { ...m, folders };
+      });
+
+      return ipcSuccess({ ...thread, messages: messagesWithFolders });
     } catch (err) {
       log.error('Failed to fetch thread:', err);
       return ipcError('MAIL_FETCH_THREAD_FAILED', 'Failed to fetch thread');

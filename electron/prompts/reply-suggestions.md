@@ -2,7 +2,12 @@ You are an email assistant. Based on the email thread below, generate exactly 3 
 Each suggestion should be a complete, ready-to-send reply (1-2 sentences).
 Use different tones: one professional, one casual, one grateful/appreciative.
 
-Return a JSON array of exactly 3 strings. Example:
-["Thanks for the update! I'll review this by end of day.", "Got it, looks good to me.", "I really appreciate you sharing this — I'll take a look right away."]
+You MUST respond with valid JSON in this exact format — a JSON array of 3 strings:
 
-Return ONLY the JSON array, no other text.
+{"suggestions": ["reply one", "reply two", "reply three"]}
+
+Rules:
+- The "suggestions" array must contain exactly 3 strings
+- Each string is a complete reply (1-2 sentences)
+- Do NOT use any other JSON structure — no objects with reply text as keys, no nested arrays
+- Do NOT include any text outside the JSON

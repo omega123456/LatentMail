@@ -16,6 +16,7 @@ export interface AiState {
   // Reply suggestions
   replySuggestions: string[];
   replySuggestionsLoading: boolean;
+  replySuggestionsThreadId: string | null;
   // Compose
   composeResult: string;
   composeLoading: boolean;
@@ -36,6 +37,7 @@ export interface AiState {
   // Follow-up detection
   followUpResult: AiFollowUpResult | null;
   followUpLoading: boolean;
+  followUpThreadId: string | null;
   // Category cache (threadId → category)
   categoryCache: Record<string, AiCategory>;
   // General
@@ -54,6 +56,7 @@ const initialState: AiState = {
   summaryRequestId: null,
   replySuggestions: [],
   replySuggestionsLoading: false,
+  replySuggestionsThreadId: null,
   composeResult: '',
   composeLoading: false,
   composeRequestId: null,
@@ -68,6 +71,7 @@ const initialState: AiState = {
   filterLoading: false,
   followUpResult: null,
   followUpLoading: false,
+  followUpThreadId: null,
   categoryCache: {},
   error: null,
   modelsLoading: false,
@@ -238,10 +242,11 @@ export const AiStore = signalStore(
       },
 
       /** Generate reply suggestions */
-      async generateReplies(threadContent: string): Promise<void> {
+      async generateReplies(threadContent: string, threadId?: string): Promise<void> {
         patchState(store, {
           replySuggestions: [],
           replySuggestionsLoading: true,
+          replySuggestionsThreadId: threadId ?? null,
           error: null,
         });
         const response = await electronService.aiGenerateReplies(threadContent);
@@ -254,6 +259,7 @@ export const AiStore = signalStore(
         } else {
           patchState(store, {
             replySuggestionsLoading: false,
+            replySuggestionsThreadId: null,
             error: response.error?.message || 'Failed to generate replies',
           });
         }
@@ -342,6 +348,7 @@ export const AiStore = signalStore(
         patchState(store, {
           replySuggestions: [],
           replySuggestionsLoading: false,
+          replySuggestionsThreadId: null,
         });
       },
 
@@ -442,8 +449,13 @@ export const AiStore = signalStore(
       },
 
       /** Detect follow-up need for a sent email */
-      async detectFollowUp(emailContent: string): Promise<AiFollowUpResult | null> {
-        patchState(store, { followUpLoading: true, followUpResult: null, error: null });
+      async detectFollowUp(emailContent: string, threadId?: string): Promise<AiFollowUpResult | null> {
+        patchState(store, {
+          followUpLoading: true,
+          followUpResult: null,
+          followUpThreadId: threadId ?? null,
+          error: null,
+        });
         const response = await electronService.aiDetectFollowUp(emailContent);
         if (response.success && response.data) {
           const data = response.data as AiFollowUpResult;
@@ -455,6 +467,7 @@ export const AiStore = signalStore(
         } else {
           patchState(store, {
             followUpLoading: false,
+            followUpThreadId: null,
             error: response.error?.message || 'Failed to detect follow-up',
           });
           return null;
@@ -463,7 +476,7 @@ export const AiStore = signalStore(
 
       /** Clear follow-up result */
       clearFollowUp(): void {
-        patchState(store, { followUpResult: null, followUpLoading: false });
+        patchState(store, { followUpResult: null, followUpLoading: false, followUpThreadId: null });
       },
 
       /** Clear search result */

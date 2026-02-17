@@ -230,7 +230,7 @@ export class OllamaService {
 
       const data = await response.json() as OllamaChatResponse;
       const content = data.message?.content || '';
-      log.info('[Ollama] chat response', { model, contentLen: content.length });
+      log.info('[Ollama] chat response', { model, contentLen: content.length, content });
       return content;
     } catch (err) {
       clearTimeout(timeout);
@@ -342,7 +342,7 @@ export class OllamaService {
         }
       }
 
-      log.info('[Ollama] chatStream complete', { model, fullTextLen: fullText.length });
+      log.info('[Ollama] chatStream complete', { model, fullTextLen: fullText.length, content: fullText });
       return fullText;
     } catch (err) {
       clearTimeout(timeout);
@@ -431,18 +431,24 @@ export class OllamaService {
 
     const result = await this.chat(messages, { format: 'json', temperature: 0.8 });
 
+    log.info('[Ollama] reply-suggestions raw response', { contentLen: result.length, content: result });
+
+    let stringResults: string[] = [];
     try {
       const parsed = JSON.parse(result);
-      const suggestions = Array.isArray(parsed) ? parsed : (parsed.suggestions || parsed.replies || []);
-      const stringResults = suggestions.slice(0, 3).map((s: unknown) => String(s));
-      this.setCachedResult('reply-suggestions', cacheKey, JSON.stringify(stringResults));
-      return stringResults;
-    } catch {
-      // If JSON parsing fails, try to extract suggestions from the text
-      const lines = result.split('\n').filter(l => l.trim().length > 10);
-      const fallback = lines.slice(0, 3);
-      return fallback.length > 0 ? fallback : [result.trim()];
+      if (Array.isArray(parsed?.suggestions)) {
+        stringResults = parsed.suggestions.slice(0, 3).map((s: unknown) => String(s));
+      } else {
+        log.error('[Ollama] reply-suggestions unexpected format', { parsed });
+      }
+    } catch (parseErr) {
+      log.error('[Ollama] reply-suggestions JSON parse failed', { error: parseErr, raw: result });
     }
+
+    if (stringResults.length > 0) {
+      this.setCachedResult('reply-suggestions', cacheKey, JSON.stringify(stringResults));
+    }
+    return stringResults;
   }
 
   /** AI compose: generate an email draft from a prompt */

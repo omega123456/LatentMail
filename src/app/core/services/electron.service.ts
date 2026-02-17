@@ -374,6 +374,9 @@ export class ElectronService {
         error: { code: 'NOT_ELECTRON', message: 'Not running in Electron environment' },
       };
     }
-    return fn();
+    const result = await fn();
+    return new Promise((resolve) => {
+      this.ngZone.run(() => resolve(result));
+    });
   }
 }
