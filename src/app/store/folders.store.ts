@@ -28,6 +28,26 @@ const FOLDER_ICON_MAP: Record<string, string> = {
   '[Gmail]/Important': 'label_important',
 };
 
+const SYSTEM_FOLDER_ORDER: Record<string, number> = {
+  'INBOX': 0,
+  '[Gmail]/Starred': 1,
+  '[Gmail]/Drafts': 2,
+  '[Gmail]/Sent Mail': 3,
+  '[Gmail]/Spam': 4,
+  '[Gmail]/Trash': 5,
+};
+
+function compareSystemFolders(a: Folder, b: Folder): number {
+  const orderA = SYSTEM_FOLDER_ORDER[a.gmailLabelId] ?? Number.MAX_SAFE_INTEGER;
+  const orderB = SYSTEM_FOLDER_ORDER[b.gmailLabelId] ?? Number.MAX_SAFE_INTEGER;
+
+  if (orderA !== orderB) {
+    return orderA - orderB;
+  }
+
+  return a.name.localeCompare(b.name);
+}
+
 function normalizeFolderId(folderId: string): string {
   const normalized = folderId.trim();
   if (normalized.toLowerCase() === 'inbox') {
@@ -46,7 +66,7 @@ export const FoldersStore = signalStore(
       return store.folders().find(f => f.gmailLabelId === id) ?? null;
     }),
     systemFolders: computed(() =>
-      store.folders().filter(f => f.type === 'system')
+      [...store.folders().filter(f => f.type === 'system')].sort(compareSystemFolders)
     ),
     userLabels: computed(() =>
       store.folders().filter(f => f.type === 'user')
