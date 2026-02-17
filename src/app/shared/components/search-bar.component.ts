@@ -1,4 +1,4 @@
-import { Component, inject, signal, output, OnInit, OnDestroy, ChangeDetectionStrategy } from '@angular/core';
+import { Component, effect, inject, signal, output, OnInit, OnDestroy, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AiStore } from '../../store/ai.store';
@@ -26,7 +26,16 @@ export class SearchBarComponent implements OnInit, OnDestroy {
 
   private keydownHandler?: (e: KeyboardEvent) => void;
 
+  constructor() {
+    // Default to AI search when Ollama is available; turn off when connection is down
+    effect(() => {
+      const available = this.aiStore.isAvailable();
+      this.aiMode.set(available);
+    });
+  }
+
   ngOnInit(): void {
+    this.aiStore.checkStatus();
     this.keydownHandler = (e: KeyboardEvent) => {
       // Ctrl+F or Cmd+F: focus search bar
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
