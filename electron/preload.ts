@@ -28,6 +28,8 @@ const electronAPI = {
       ipcRenderer.invoke('mail:delete', accountId, messageIds, folder) as Promise<IpcResponse>,
     search: (accountId: string, query: string) =>
       ipcRenderer.invoke('mail:search', accountId, query) as Promise<IpcResponse>,
+    searchImap: (accountId: string, query: string) =>
+      ipcRenderer.invoke('mail:search-imap', accountId, query) as Promise<IpcResponse>,
     syncAccount: (accountId: string) =>
       ipcRenderer.invoke('mail:sync-account', accountId) as Promise<IpcResponse>,
     getFolders: (accountId: string) =>
@@ -56,8 +58,8 @@ const electronAPI = {
       ipcRenderer.invoke('ai:compose', prompt, context, requestId) as Promise<IpcResponse>,
     categorize: (emailContent: string) =>
       ipcRenderer.invoke('ai:categorize', emailContent) as Promise<IpcResponse>,
-    search: (naturalQuery: string) =>
-      ipcRenderer.invoke('ai:search', naturalQuery) as Promise<IpcResponse>,
+    search: (accountId: string, naturalQuery: string) =>
+      ipcRenderer.invoke('ai:search', accountId, naturalQuery) as Promise<IpcResponse>,
     transform: (text: string, transformation: string, requestId?: string) =>
       ipcRenderer.invoke('ai:transform', text, transformation, requestId) as Promise<IpcResponse>,
     getModels: () =>

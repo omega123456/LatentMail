@@ -22,6 +22,7 @@
     <app-folder-list
       [collapsed]="uiStore.sidebarCollapsed()"
       (folderSelected)="onFolderSelected($event)"
+      (searchDismissed)="onSearchDismissed()"
     />
     <div class="sidebar-footer">
       <button class="footer-item" (click)="uiStore.toggleSidebar()">

@@ -47,7 +47,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private syncSub?: Subscription;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
-  private isSearchActive = false;
+  // Search active state is now managed by FoldersStore
   readonly activeCategoryFilter = signal<AiCategory | null>(null);
 
   @ViewChildren(EmailListComponent) emailLists!: QueryList<EmailListComponent>;
@@ -90,6 +90,13 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     const activeAccount = this.accountsStore.activeAccount();
     if (activeAccount) {
       const normalizedFolderId = this.foldersStore.normalizeFolderId(folderId);
+
+      // Deactivate search if active
+      if (this.foldersStore.searchActive()) {
+        this.foldersStore.deactivateSearch();
+        this.emailsStore.clearSearch();
+      }
+
       this.emailsStore.clearSelection();
       this.foldersStore.setActiveFolder(normalizedFolderId);
       this.emailsStore.loadThreads(activeAccount.id, normalizedFolderId);
@@ -287,21 +294,40 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  onSearch(query: string): void {
+  onSearch(event: { query: string; originalQuery: string }): void {
     const activeAccount = this.accountsStore.activeAccount();
-    if (!activeAccount) return;
-    this.isSearchActive = true;
-    this.emailsStore.searchEmails(activeAccount.id, query);
+    if (!activeAccount) {
+      return;
+    }
+
+    // Activate search mode in FoldersStore (saves previous folder, shows virtual folder)
+    this.foldersStore.activateSearch(event.originalQuery, event.query);
+
+    // Clear selection and start two-phase search
+    this.emailsStore.clearSelection();
+    this.emailsStore.searchEmails(activeAccount.id, event.query);
   }
 
   onSearchCleared(): void {
-    if (!this.isSearchActive) return;
-    this.isSearchActive = false;
+    if (!this.foldersStore.searchActive()) {
+      return;
+    }
+
+    // Deactivate search (restores previous folder)
+    const previousFolderId = this.foldersStore.previousFolderId();
+    this.foldersStore.deactivateSearch();
+    this.emailsStore.clearSearch();
+
+    // Reload threads for the restored folder
     const activeAccount = this.accountsStore.activeAccount();
-    const folderId = this.foldersStore.activeFolderId() || 'INBOX';
+    const folderId = previousFolderId || this.foldersStore.activeFolderId() || 'INBOX';
     if (activeAccount) {
       this.emailsStore.loadThreads(activeAccount.id, folderId);
     }
+  }
+
+  onSearchDismissed(): void {
+    this.onSearchCleared();
   }
 
   onCategoryFilterChanged(category: AiCategory | null): void {

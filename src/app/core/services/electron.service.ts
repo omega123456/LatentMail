@@ -26,6 +26,7 @@ interface ElectronAPI {
     flag: (accountId: string, messageIds: string[], flag: string, value: boolean) => Promise<IpcResponse>;
     delete: (accountId: string, messageIds: string[], folder: string) => Promise<IpcResponse>;
     search: (accountId: string, query: string) => Promise<IpcResponse>;
+    searchImap: (accountId: string, query: string) => Promise<IpcResponse>;
     syncAccount: (accountId: string) => Promise<IpcResponse>;
     getFolders: (accountId: string) => Promise<IpcResponse>;
     fetchOlderEmails: (accountId: string, folderId: string, beforeDate: string, limit: number) => Promise<IpcResponse>;
@@ -40,7 +41,7 @@ interface ElectronAPI {
     summarize: (threadContent: string, requestId?: string) => Promise<IpcResponse>;
     compose: (prompt: string, context?: string, requestId?: string) => Promise<IpcResponse>;
     categorize: (emailContent: string) => Promise<IpcResponse>;
-    search: (naturalQuery: string) => Promise<IpcResponse>;
+    search: (accountId: string, naturalQuery: string) => Promise<IpcResponse>;
     transform: (text: string, transformation: string, requestId?: string) => Promise<IpcResponse>;
     getModels: () => Promise<IpcResponse>;
     getStatus: () => Promise<IpcResponse>;
@@ -135,6 +136,10 @@ export class ElectronService {
     return this.invoke(() => this.api!.mail.search(accountId, query));
   }
 
+  async searchImapEmails(accountId: string, query: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.searchImap(accountId, query));
+  }
+
   async syncAccount(accountId: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.mail.syncAccount(accountId));
   }
@@ -179,8 +184,8 @@ export class ElectronService {
     return this.invoke(() => this.api!.ai.categorize(emailContent));
   }
 
-  async aiSearch(naturalQuery: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.ai.search(naturalQuery));
+  async aiSearch(accountId: string, naturalQuery: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.search(accountId, naturalQuery));
   }
 
   async aiTransform(text: string, transformation: string, requestId?: string): Promise<IpcResponse> {

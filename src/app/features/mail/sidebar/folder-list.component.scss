@@ -59,3 +59,121 @@
   color: var(--color-text-tertiary);
   letter-spacing: 0.5px;
 }
+
+// Search Results virtual folder
+.search-result-folder {
+  border-left: 3px solid var(--color-primary);
+  background-color: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  padding: 8px 12px 8px 13px; // 13px = 16px - 3px border
+  cursor: default;
+
+  &.collapsed {
+    border-left-width: 3px;
+    padding: 10px 0 10px 0;
+    justify-content: center;
+
+    .material-symbols-outlined {
+      color: var(--color-primary);
+    }
+  }
+
+  &.active {
+    background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  }
+
+  .search-folder-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .search-folder-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .search-icon {
+    font-size: 20px;
+    color: var(--color-primary);
+    flex-shrink: 0;
+  }
+
+  .folder-name {
+    font-weight: 600;
+    color: var(--color-primary);
+    font-size: 13px;
+  }
+
+  .search-result-count {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-accent);
+    white-space: nowrap;
+    margin-left: auto;
+  }
+
+  .search-spinner {
+    font-size: 16px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+  }
+
+  .search-warning {
+    font-size: 16px;
+    color: var(--color-warning, #f59e0b);
+    flex-shrink: 0;
+    cursor: help;
+  }
+
+  .dismiss-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 4px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    transition: background-color 120ms ease;
+
+    &:hover {
+      background-color: var(--color-surface-variant, rgba(0, 0, 0, 0.08));
+    }
+
+    .material-symbols-outlined {
+      font-size: 18px;
+    }
+  }
+
+  .search-folder-subtitle {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-left: 28px; // Align with text after icon
+  }
+}
+
+// Spinning animation for IMAP loading
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}

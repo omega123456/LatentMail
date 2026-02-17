@@ -928,23 +928,56 @@ export class DatabaseService {
     // Don't schedule save for search index — let the caller batch saves
   }
 
-  searchEmails(accountId: number, query: string, limit: number = 50): Array<Record<string, unknown>> {
+  /**
+   * Search emails across all folders using Gmail-style query operators.
+   * Returns thread-grouped results matching the same shape as getThreadsByFolder().
+   *
+   * Uses the gmail-query-parser to convert operator syntax to SQL WHERE clauses.
+   * Groups results by gmail_thread_id and computes thread metadata.
+   */
+  searchEmails(accountId: number, query: string, limit: number = 100): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
-    const likeQuery = `%${query}%`;
-    const result = this.db.exec(
-      `SELECT e.id, e.account_id, e.gmail_message_id, e.gmail_thread_id,
-        e.from_address, e.from_name, e.to_addresses, e.subject, e.snippet, e.date,
-        e.is_read, e.is_starred, e.is_important, e.size, e.has_attachments, e.labels
-       FROM emails e
-       WHERE e.account_id = :accountId AND (
-         e.subject LIKE :likeQuery OR e.from_address LIKE :likeQuery OR e.from_name LIKE :likeQuery
-         OR e.to_addresses LIKE :likeQuery OR e.text_body LIKE :likeQuery
-       )
-       ORDER BY e.date DESC LIMIT :limit`,
-      { ':accountId': accountId, ':likeQuery': likeQuery, ':limit': limit }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapEmailRow(row, result[0].columns));
+
+    // Lazy-import to avoid circular dependencies at module load time
+    const { parseGmailQuery } = require('../utils/gmail-query-parser');
+    const parsed = parseGmailQuery(query) as { whereClause: string; params: Record<string, unknown> };
+
+    // Build query: find matching emails, then group by thread
+    const params = {
+      ':accountId': accountId,
+      ':limit': limit,
+      ...parsed.params,
+    } as Record<string, number | string | null>;
+
+    const sql = `
+      SELECT
+        t.id,
+        t.account_id,
+        t.gmail_thread_id,
+        t.subject,
+        t.last_message_date,
+        t.participants,
+        t.message_count,
+        t.snippet,
+        'search' AS folder,
+        t.is_read,
+        t.is_starred
+      FROM threads t
+      WHERE t.account_id = :accountId
+        AND t.gmail_thread_id IN (
+          SELECT DISTINCT e.gmail_thread_id
+          FROM emails e
+          WHERE e.account_id = :accountId AND (${parsed.whereClause})
+        )
+      ORDER BY t.last_message_date DESC
+      LIMIT :limit
+    `;
+
+    const result = this.db.exec(sql, params);
+    if (result.length === 0) {
+      return [];
+    }
+    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
   // ---- Folder association management ----

@@ -482,6 +482,90 @@ export class ImapService {
   }
 
   /**
+   * Search emails on the IMAP server using Gmail's X-GM-RAW extension.
+   * Searches across [Gmail]/All Mail to cover all folders in one search.
+   * Returns metadata-only results (no bodies) for fast search listing.
+   *
+   * @param accountId - Account to search
+   * @param query - Gmail search query string (e.g., "from:james subject:project")
+   * @param limit - Maximum number of results (default 100)
+   * @returns Array of parsed email metadata
+   */
+  async searchEmails(
+    accountId: string,
+    query: string,
+    limit: number = 100
+  ): Promise<FetchedEmail[]> {
+    const client = await this.connect(accountId);
+    const folder = '[Gmail]/All Mail';
+    const lock = await client.getMailboxLock(folder);
+
+    try {
+      // Use X-GM-RAW for Gmail-specific full search syntax
+      const searchResult = await client.search(
+        { gmraw: query } as Record<string, unknown>,
+        { uid: true }
+      ) as number[] | false;
+
+      if (!searchResult || searchResult.length === 0) {
+        log.info(`[IMAP] searchEmails: no results for query "${query}" in account ${accountId}`);
+        return [];
+      }
+
+      const uids = Array.from(searchResult);
+      // Sort descending (newest first) and limit
+      uids.sort((a, b) => b - a);
+      const fetchUids = uids.slice(0, limit);
+
+      log.info(`[IMAP] searchEmails: found ${uids.length} UIDs, fetching top ${fetchUids.length} for account ${accountId}`);
+
+      if (fetchUids.length === 0) {
+        return [];
+      }
+
+      const emails: FetchedEmail[] = [];
+      const uidRange = fetchUids.join(',');
+
+      // 30-second timeout for the fetch operation
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+
+      try {
+        for await (const msg of client.fetch(uidRange, {
+          uid: true,
+          envelope: true,
+          flags: true,
+          bodyStructure: true,
+          headers: true,
+          source: false,
+          labels: true,
+          threadId: true,
+          size: true,
+        }, { uid: true })) {
+          if (controller.signal.aborted) {
+            log.warn(`[IMAP] searchEmails: fetch aborted due to timeout for account ${accountId}`);
+            break;
+          }
+          if (!msg) {
+            continue;
+          }
+          const email = this.parseMessage(msg as FetchMessageObject, folder);
+          if (email) {
+            emails.push(email);
+          }
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      log.info(`[IMAP] searchEmails: fetched ${emails.length} emails for account ${accountId}`);
+      return emails;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Set flags on messages.
    */
   async setFlags(

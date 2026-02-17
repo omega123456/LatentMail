@@ -8,6 +8,14 @@ interface FoldersState {
   activeFolderId: string | null;
   loading: boolean;
   error: string | null;
+  // Search state
+  searchActive: boolean;
+  searchQuery: string | null;
+  searchDisplayQuery: string | null;
+  searchResultCount: number;
+  searchingImap: boolean;
+  searchImapError: string | null;
+  previousFolderId: string | null;
 }
 
 const initialState: FoldersState = {
@@ -15,6 +23,14 @@ const initialState: FoldersState = {
   activeFolderId: null,
   loading: false,
   error: null,
+  // Search state defaults
+  searchActive: false,
+  searchQuery: null,
+  searchDisplayQuery: null,
+  searchResultCount: 0,
+  searchingImap: false,
+  searchImapError: null,
+  previousFolderId: null,
 };
 
 /** Map Gmail special-use paths to icons */
@@ -136,6 +152,53 @@ export const FoldersStore = signalStore(
 
       clearFolders(): void {
         patchState(store, { folders: [], activeFolderId: null });
+      },
+
+      /** Activate search mode — shows virtual Search Results folder */
+      activateSearch(displayQuery: string, effectiveQuery?: string): void {
+        const previousFolderId = store.searchActive()
+          ? store.previousFolderId()
+          : store.activeFolderId();
+        patchState(store, {
+          searchActive: true,
+          searchQuery: effectiveQuery || displayQuery,
+          searchDisplayQuery: displayQuery,
+          searchResultCount: 0,
+          searchingImap: false,
+          searchImapError: null,
+          previousFolderId,
+          activeFolderId: null, // No real folder is active during search
+        });
+      },
+
+      /** Deactivate search mode — restores previous folder */
+      deactivateSearch(): void {
+        const prevFolder = store.previousFolderId();
+        patchState(store, {
+          searchActive: false,
+          searchQuery: null,
+          searchDisplayQuery: null,
+          searchResultCount: 0,
+          searchingImap: false,
+          searchImapError: null,
+          previousFolderId: null,
+          activeFolderId: prevFolder || 'INBOX',
+        });
+      },
+
+      /** Update the search result count (called as results arrive) */
+      updateSearchResultCount(count: number): void {
+        patchState(store, { searchResultCount: count });
+      },
+
+      /** Set IMAP search loading state */
+      setSearchingImap(loading: boolean): void {
+        patchState(store, { searchingImap: loading });
+      },
+
+      /** Set IMAP search error */
+      setSearchImapError(error: string | null): void {
+        patchState(store, { searchImapError: error, searchingImap: false });
       },
     };
   })

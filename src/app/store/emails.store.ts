@@ -49,6 +49,11 @@ interface EmailsState {
   serverCursorDate: string | null;
   hasLoadedMore: boolean;
   preserveListPosition: boolean;
+  // Search state
+  searchActive: boolean;
+  searchQuery: string | null;
+  searchPhase: 'idle' | 'local' | 'imap' | 'done';
+  searchRequestId: string | null;
 }
 
 const initialState: EmailsState = {
@@ -69,6 +74,11 @@ const initialState: EmailsState = {
   serverCursorDate: null,
   hasLoadedMore: false,
   preserveListPosition: false,
+  // Search state defaults
+  searchActive: false,
+  searchQuery: null,
+  searchPhase: 'idle',
+  searchRequestId: null,
 };
 
 const PAGE_SIZE = 50;
@@ -392,14 +402,36 @@ export const EmailsStore = signalStore(
         }
       },
 
-      /** Search emails */
+      /**
+       * Two-phase progressive search:
+       * Phase 1: Local DB search (immediate results)
+       * Phase 2: IMAP search (background, merges progressively)
+       */
       async searchEmails(accountId: number, query: string): Promise<void> {
-        patchState(store, { loading: true, error: null });
+        const requestId = crypto.randomUUID();
+        patchState(store, {
+          loading: true,
+          error: null,
+          searchActive: true,
+          searchQuery: query,
+          searchPhase: 'local',
+          searchRequestId: requestId,
+          hasMore: false,
+          hasLoadedMore: false,
+          preserveListPosition: false,
+        });
+
+        // Phase 1: Local DB search
         try {
           const response = await electronService.searchEmails(String(accountId), query);
           if (response.success && response.data) {
             const results = response.data as Thread[];
-            patchState(store, { threads: results, loading: false, hasMore: false, hasLoadedMore: false, preserveListPosition: false });
+            patchState(store, {
+              threads: results,
+              loading: false,
+            });
+            // Update folder store with result count
+            foldersStore.updateSearchResultCount(results.length);
           } else {
             patchState(store, {
               loading: false,
@@ -412,6 +444,66 @@ export const EmailsStore = signalStore(
             error: err instanceof Error ? err.message : 'Search failed',
           });
         }
+
+        // Phase 2: IMAP search (background)
+        patchState(store, { searchPhase: 'imap' });
+        foldersStore.setSearchingImap(true);
+
+        try {
+          const imapResponse = await electronService.searchImapEmails(String(accountId), query);
+
+          // Check if this search is still active (user may have started a new one)
+          if (store.searchRequestId() !== requestId) {
+            return; // Stale result — discard
+          }
+
+          if (imapResponse.success && imapResponse.data) {
+            const imapData = imapResponse.data as { threads: Thread[]; resultCount: number };
+            const imapThreads = imapData.threads || [];
+
+            if (imapThreads.length > 0) {
+              // Deduplicate: build set of existing gmailThreadIds
+              const existingIds = new Set(store.threads().map(t => t.gmailThreadId));
+              const newThreads = imapThreads.filter(t => !existingIds.has(t.gmailThreadId));
+
+              if (newThreads.length > 0) {
+                // Merge and sort by date descending
+                const merged = [...store.threads(), ...newThreads].sort(
+                  (a, b) => new Date(b.lastMessageDate).getTime() - new Date(a.lastMessageDate).getTime()
+                );
+                patchState(store, { threads: merged });
+                foldersStore.updateSearchResultCount(merged.length);
+              }
+            }
+
+            foldersStore.setSearchingImap(false);
+          } else {
+            // IMAP response was unsuccessful — treat as error
+            const errorMessage = imapResponse.error?.message || 'IMAP search failed';
+            foldersStore.setSearchImapError(errorMessage);
+          }
+
+          patchState(store, { searchPhase: 'done' });
+        } catch (err: unknown) {
+          // Check if still active before updating state
+          if (store.searchRequestId() !== requestId) {
+            return;
+          }
+          const errorMessage = err instanceof Error ? err.message : 'IMAP search failed';
+          foldersStore.setSearchImapError(errorMessage);
+          patchState(store, { searchPhase: 'done' });
+          // Local results remain displayed — IMAP failure is non-fatal
+        }
+      },
+
+      /** Clear search state */
+      clearSearch(): void {
+        patchState(store, {
+          searchActive: false,
+          searchQuery: null,
+          searchPhase: 'idle',
+          searchRequestId: null,
+        });
       },
 
       /** Trigger sync for an account */

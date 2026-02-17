@@ -40,8 +40,7 @@ export interface AiStreamEvent {
 }
 
 export interface AiSearchResult {
-  structured?: Record<string, unknown>;
-  gmraw?: string;
+  query: string;
 }
 
 export interface AiCategorization {

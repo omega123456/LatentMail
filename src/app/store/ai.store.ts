@@ -29,7 +29,7 @@ export interface AiState {
   categorizeLoading: boolean;
   // Search
   searchLoading: boolean;
-  searchResult: { structured?: Record<string, unknown>; gmraw?: string } | null;
+  searchResult: { query: string } | null;
   // Filter generation
   filterSuggestion: AiFilterSuggestion | null;
   filterLoading: boolean;
@@ -396,12 +396,12 @@ export const AiStore = signalStore(
         patchState(store, { categoryCache: {} });
       },
 
-      /** AI search: convert natural language to structured search params */
-      async aiSearch(query: string): Promise<{ structured?: Record<string, unknown>; gmraw?: string } | null> {
+      /** AI search: convert natural language to Gmail search query */
+      async aiSearch(accountId: string, query: string): Promise<{ query: string } | null> {
         patchState(store, { searchLoading: true, searchResult: null, error: null });
-        const response = await electronService.aiSearch(query);
+        const response = await electronService.aiSearch(accountId, query);
         if (response.success && response.data) {
-          const data = response.data as { structured?: Record<string, unknown>; gmraw?: string };
+          const data = response.data as { query: string };
           patchState(store, {
             searchLoading: false,
             searchResult: data,

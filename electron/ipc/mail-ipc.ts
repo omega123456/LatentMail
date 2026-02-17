@@ -535,15 +535,201 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Search emails locally
+  // Search emails locally — returns thread-grouped results across all folders
   ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH, async (_event, accountId: string, query: string) => {
     try {
-      log.info(`Searching "${query}" for account ${accountId}`);
+      if (!accountId || !query || typeof query !== 'string') {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Account ID and query are required');
+      }
+      if (query.length > 2048) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Query too long (max 2048 characters)');
+      }
+      log.info(`[MAIL_SEARCH] Searching "${query}" for account ${accountId}`);
       const results = db.searchEmails(Number(accountId), query);
+      log.info(`[MAIL_SEARCH] Found ${results.length} threads for query "${query}"`);
       return ipcSuccess(results);
     } catch (err) {
-      log.error('Failed to search:', err);
+      log.error('[MAIL_SEARCH] Failed to search:', err);
       return ipcError('MAIL_SEARCH_FAILED', 'Failed to search emails');
+    }
+  });
+
+  // Search emails via IMAP using Gmail X-GM-RAW — upserts results to DB, returns thread-grouped results
+  ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH_IMAP, async (_event, accountId: string, query: string) => {
+    try {
+      if (!accountId || isNaN(Number(accountId))) {
+        return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Valid account ID is required');
+      }
+      if (!query || typeof query !== 'string') {
+        return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Search query is required');
+      }
+      if (query.length > 2048) {
+        return ipcError('MAIL_SEARCH_IMAP_INVALID_INPUT', 'Query too long (max 2048 characters)');
+      }
+
+      const numAccountId = Number(accountId);
+      const imapService = ImapService.getInstance();
+      const lockManager = FolderLockManager.getInstance();
+      const folder = '[Gmail]/All Mail';
+      const lockKey = `${accountId}:${folder}`;
+
+      log.info(`[MAIL_SEARCH_IMAP] Searching "${query}" via IMAP for account ${accountId}`);
+
+      // Acquire folder lock scoped to account + folder
+      let emails: Awaited<ReturnType<typeof imapService.searchEmails>>;
+      const release = await lockManager.acquire(lockKey);
+      try {
+        // Wrap IMAP search with a hard 30s timeout to prevent indefinite hangs
+        const searchPromise = imapService.searchEmails(accountId, query, 100);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('IMAP search timed out')), 30_000)
+        );
+        emails = await Promise.race([searchPromise, timeoutPromise]);
+      } finally {
+        release();
+      }
+
+      if (emails.length === 0) {
+        log.info(`[MAIL_SEARCH_IMAP] No IMAP results for query "${query}"`);
+        return ipcSuccess({ threads: [], resultCount: 0 });
+      }
+
+      // Group by thread for upsert
+      const threadMap = new Map<string, typeof emails>();
+      for (const email of emails) {
+        const threadId = email.gmailThreadId || email.gmailMessageId;
+        if (!threadMap.has(threadId)) {
+          threadMap.set(threadId, []);
+        }
+        threadMap.get(threadId)!.push(email);
+      }
+
+      // Upsert all data in a single transaction for atomicity
+      const rawDb = db.getDatabase();
+      rawDb.run('BEGIN');
+      try {
+        // Upsert emails with folder set to [Gmail]/All Mail
+        for (const email of emails) {
+          db.upsertEmail({
+            accountId: numAccountId,
+            gmailMessageId: email.gmailMessageId,
+            gmailThreadId: email.gmailThreadId,
+            folder: folder,
+            folderUid: email.uid,
+            fromAddress: email.fromAddress,
+            fromName: email.fromName,
+            toAddresses: email.toAddresses,
+            ccAddresses: email.ccAddresses,
+            bccAddresses: email.bccAddresses,
+            subject: email.subject,
+            textBody: email.textBody,
+            htmlBody: email.htmlBody,
+            date: email.date,
+            isRead: email.isRead,
+            isStarred: email.isStarred,
+            isImportant: email.isImportant,
+            snippet: email.snippet,
+            size: email.size,
+            hasAttachments: email.hasAttachments,
+            labels: email.labels,
+          });
+
+          // Upsert contacts
+          if (email.fromAddress) {
+            db.upsertContact(email.fromAddress, email.fromName);
+          }
+        }
+
+        // Upsert thread-folder associations and safe-merge thread metadata.
+        // Only update thread metadata if the existing thread has LESS data (avoid overwriting
+        // a complete local thread with partial IMAP search results).
+        for (const [threadId, threadEmails] of threadMap) {
+          const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+          const latest = uniqueEmails.reduce((a, b) =>
+            new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+          );
+          const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+          const allRead = uniqueEmails.every(e => e.isRead);
+          const anyStarred = uniqueEmails.some(e => e.isStarred);
+
+          // Check if thread already exists with better data
+          const existingThread = db.getThreadById(numAccountId, threadId);
+          const existingMessageCount = (existingThread?.['messageCount'] as number) || 0;
+
+          // Only upsert thread metadata when IMAP has equal or more messages,
+          // or the thread doesn't exist yet. This prevents partial search results
+          // from downgrading thread data.
+          if (!existingThread || uniqueEmails.length >= existingMessageCount) {
+            const dbThreadId = db.upsertThread({
+              accountId: numAccountId,
+              gmailThreadId: threadId,
+              subject: latest.subject,
+              lastMessageDate: latest.date,
+              participants,
+              messageCount: Math.max(uniqueEmails.length, existingMessageCount),
+              snippet: latest.snippet,
+              folder: folder,
+              isRead: allRead,
+              isStarred: anyStarred,
+            });
+            db.upsertThreadFolder(dbThreadId, numAccountId, folder);
+          } else {
+            // Thread exists with more data — just ensure folder association exists
+            const existingId = existingThread['id'] as number;
+            db.upsertThreadFolder(existingId, numAccountId, folder);
+          }
+        }
+
+        rawDb.run('COMMIT');
+      } catch (upsertErr) {
+        rawDb.run('ROLLBACK');
+        throw upsertErr;
+      }
+
+      // Build thread results directly from the IMAP result set (not re-querying with parser).
+      // This avoids feature mismatch: the IMAP query may use operators the local parser doesn't support.
+      const threads: Array<Record<string, unknown>> = [];
+      for (const [threadId, threadEmails] of threadMap) {
+        const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+        const latest = uniqueEmails.reduce((a, b) =>
+          new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+        );
+        const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+        const allRead = uniqueEmails.every(e => e.isRead);
+        const anyStarred = uniqueEmails.some(e => e.isStarred);
+
+        // Use existing thread metadata if it has more complete data
+        const existingThread = db.getThreadById(numAccountId, threadId);
+
+        threads.push({
+          id: existingThread?.['id'] || 0,
+          accountId: numAccountId,
+          gmailThreadId: threadId,
+          subject: (existingThread?.['subject'] as string) || latest.subject,
+          lastMessageDate: latest.date,
+          participants: (existingThread?.['participants'] as string) || participants,
+          messageCount: Math.max(uniqueEmails.length, (existingThread?.['messageCount'] as number) || 0),
+          snippet: latest.snippet,
+          folder: 'search',
+          isRead: allRead,
+          isStarred: anyStarred,
+        });
+      }
+
+      // Sort by date descending
+      threads.sort((a, b) =>
+        new Date(b['lastMessageDate'] as string).getTime() - new Date(a['lastMessageDate'] as string).getTime()
+      );
+
+      log.info(`[MAIL_SEARCH_IMAP] IMAP search found ${emails.length} emails, ${threadMap.size} threads, returning ${threads.length} thread results`);
+      return ipcSuccess({ threads, resultCount: threads.length });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'IMAP search failed';
+      log.error('[MAIL_SEARCH_IMAP] Failed:', err);
+      if (message.includes('timed out') || message.includes('abort')) {
+        return ipcError('MAIL_SEARCH_IMAP_TIMEOUT', 'IMAP search timed out');
+      }
+      return ipcError('MAIL_SEARCH_IMAP_FAILED', message);
     }
   });
 

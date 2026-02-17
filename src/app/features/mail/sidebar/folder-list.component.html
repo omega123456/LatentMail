@@ -1,8 +1,50 @@
 <nav class="folder-list">
+  <!-- Search Results virtual folder (shown only during active search) -->
+  @if (foldersStore.searchActive()) {
+    <div
+      class="folder-item search-result-folder active"
+      [class.collapsed]="collapsed()"
+      [title]="collapsed() ? 'Search: ' + foldersStore.searchDisplayQuery() : ''"
+      (click)="onSearchFolderClick()"
+      role="status"
+    >
+      @if (collapsed()) {
+        <span class="material-symbols-outlined">search</span>
+      } @else {
+        <div class="search-folder-content">
+          <div class="search-folder-top">
+            <span class="material-symbols-outlined search-icon">search</span>
+            <span class="folder-name">Search Results</span>
+            <span class="search-result-count" aria-live="polite">
+              {{ foldersStore.searchResultCount() }} results
+            </span>
+            @if (foldersStore.searchingImap()) {
+              <span class="material-symbols-outlined spinning search-spinner" title="Searching server...">sync</span>
+            }
+            @if (foldersStore.searchImapError()) {
+              <span class="material-symbols-outlined search-warning" [title]="'Server search failed: ' + foldersStore.searchImapError()">warning</span>
+            }
+            <button
+              class="dismiss-btn"
+              (click)="onDismissSearch($event)"
+              aria-label="Clear search"
+              title="Clear search"
+            >
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+          <div class="search-folder-subtitle" [title]="foldersStore.searchDisplayQuery()">
+            {{ foldersStore.searchDisplayQuery() }}
+          </div>
+        </div>
+      }
+    </div>
+  }
+
   @for (folder of foldersStore.systemFolders(); track folder.gmailLabelId) {
     <div
       class="folder-item"
-      [class.active]="folder.gmailLabelId === foldersStore.activeFolderId()"
+      [class.active]="!foldersStore.searchActive() && folder.gmailLabelId === foldersStore.activeFolderId()"
       [class.collapsed]="collapsed()"
       [title]="collapsed() ? folder.name : ''"
       (click)="onFolderClick(folder.gmailLabelId)"
@@ -22,7 +64,7 @@
     @for (label of foldersStore.userLabels(); track label.gmailLabelId) {
       <div
         class="folder-item"
-        [class.active]="label.gmailLabelId === foldersStore.activeFolderId()"
+        [class.active]="!foldersStore.searchActive() && label.gmailLabelId === foldersStore.activeFolderId()"
         (click)="onFolderClick(label.gmailLabelId)"
       >
         <span class="material-symbols-outlined">label</span>

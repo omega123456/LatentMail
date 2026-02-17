@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { OllamaService } from '../services/ollama-service';
+import { DatabaseService } from '../services/database-service';
 
 function isAllowedOllamaUrl(rawUrl: string): boolean {
   try {
@@ -84,16 +85,31 @@ export function registerAiIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (_event, naturalQuery: string) => {
+  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (_event, accountId: string, naturalQuery: string) => {
     try {
+      if (!accountId || isNaN(Number(accountId))) {
+        return ipcError('AI_INVALID_INPUT', 'Valid account ID is required');
+      }
       if (!naturalQuery || typeof naturalQuery !== 'string') {
         return ipcError('AI_INVALID_INPUT', 'Search query is required');
       }
-      const result = await ollama.naturalLanguageSearch(naturalQuery);
+      if (naturalQuery.length > 2048) {
+        return ipcError('AI_INVALID_INPUT', 'Query too long (max 2048 characters)');
+      }
+
+      // Retrieve user email from database for context
+      const db = DatabaseService.getInstance();
+      const account = db.getAccountById(Number(accountId));
+      const userEmail = account?.email || '';
+      const todayDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+      log.info('[AI] search request', { accountId, queryLen: naturalQuery.length, userEmail: userEmail ? '(set)' : '(empty)' });
+      const result = await ollama.naturalLanguageSearch(naturalQuery, userEmail, todayDate);
+      log.info('[AI] search success', { query: result.query });
       return ipcSuccess(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
-      log.error('Failed to AI search:', err);
+      log.error('[AI] search failed:', err);
       if (message.includes('No AI model selected')) {
         return ipcError('AI_NO_MODEL', message);
       }

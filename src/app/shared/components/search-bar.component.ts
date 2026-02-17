@@ -2,6 +2,7 @@ import { Component, inject, signal, output, OnInit, OnDestroy, ChangeDetectionSt
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AiStore } from '../../store/ai.store';
+import { AccountsStore } from '../../store/accounts.store';
 
 @Component({
   selector: 'app-search-bar',
@@ -13,7 +14,8 @@ import { AiStore } from '../../store/ai.store';
 })
 export class SearchBarComponent implements OnInit, OnDestroy {
   readonly aiStore = inject(AiStore);
-  readonly searchExecuted = output<string>();
+  readonly accountsStore = inject(AccountsStore);
+  readonly searchExecuted = output<{ query: string; originalQuery: string }>();
   readonly searchCleared = output<void>();
 
   readonly query = signal('');
@@ -52,58 +54,27 @@ export class SearchBarComponent implements OnInit, OnDestroy {
       return;
     }
 
+    const originalQuery = q;
+
     if (this.aiMode() && this.aiStore.isAvailable()) {
-      // Use AI to convert natural language to search params
-      const result = await this.aiStore.aiSearch(q);
-      if (result) {
-        // If AI returned a gmraw query, use it directly;
-        // otherwise convert structured params to Gmail-style query string
-        if (result.gmraw) {
-          this.searchExecuted.emit(result.gmraw);
-        } else if (result.structured) {
-          const searchQuery = this.structuredToGmraw(result.structured);
-          this.searchExecuted.emit(searchQuery);
-        } else {
-          // Fallback: use original query
-          this.searchExecuted.emit(q);
-        }
+      // Use AI to convert natural language to Gmail search query
+      const accountId = this.accountsStore.activeAccountId();
+      if (!accountId) {
+        // Fallback: use original query if no active account
+        this.searchExecuted.emit({ query: q, originalQuery });
+        return;
+      }
+      const result = await this.aiStore.aiSearch(String(accountId), q);
+      if (result && result.query) {
+        this.searchExecuted.emit({ query: result.query, originalQuery });
+      } else {
+        // Fallback: use original query
+        this.searchExecuted.emit({ query: q, originalQuery });
       }
     } else {
-      // Direct search
-      this.searchExecuted.emit(q);
+      // Direct search — query and originalQuery are the same
+      this.searchExecuted.emit({ query: q, originalQuery });
     }
-  }
-
-  /** Convert structured search params to a Gmail-style raw query string */
-  private structuredToGmraw(params: Record<string, unknown>): string {
-    const parts: string[] = [];
-    if (params['from'] && typeof params['from'] === 'string') {
-      parts.push(`from:${params['from']}`);
-    }
-    if (params['to'] && typeof params['to'] === 'string') {
-      parts.push(`to:${params['to']}`);
-    }
-    if (params['subject'] && typeof params['subject'] === 'string') {
-      parts.push(`subject:${params['subject']}`);
-    }
-    if (params['since'] && typeof params['since'] === 'string') {
-      parts.push(`after:${params['since']}`);
-    }
-    if (params['before'] && typeof params['before'] === 'string') {
-      parts.push(`before:${params['before']}`);
-    }
-    if (params['hasAttachment'] === true) {
-      parts.push('has:attachment');
-    }
-    if (params['isRead'] === true) {
-      parts.push('is:read');
-    } else if (params['isRead'] === false) {
-      parts.push('is:unread');
-    }
-    if (params['isStarred'] === true) {
-      parts.push('is:starred');
-    }
-    return parts.length > 0 ? parts.join(' ') : '';
   }
 
   onClear(): void {

@@ -606,26 +606,82 @@ Return ONLY the category name as a JSON object: {"category": "Primary"}`,
     }
   }
 
-  /** Natural language search: convert query to structured search params */
-  async naturalLanguageSearch(query: string): Promise<{
-    structured?: Record<string, unknown>;
-    gmraw?: string;
-  }> {
+  /**
+   * Natural language search: convert a natural language query into a Gmail search string.
+   *
+   * @param query - The user's natural language query
+   * @param userEmail - The user's email address (for self-reference: "emails I sent")
+   * @param todayDate - Today's date in YYYY-MM-DD format (for relative date computation)
+   * @returns An object with a single `query` field containing the Gmail search string
+   */
+  async naturalLanguageSearch(
+    query: string,
+    userEmail: string,
+    todayDate: string
+  ): Promise<{ query: string }> {
+    const cacheKey = this.getCacheKey('search', `${query}|${userEmail}|${todayDate}`);
+    const cached = this.getCachedResult('search', cacheKey);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as { query: string };
+        if (parsed.query && typeof parsed.query === 'string') {
+          return parsed;
+        }
+      } catch {
+        // Cache was invalid, regenerate
+      }
+    }
+
     const messages: OllamaChatMessage[] = [
       {
         role: 'system',
-        content: `You are a search assistant for an email client. Convert the user's natural language query into Gmail search parameters.
+        content: `You are a Gmail search query translator. Convert the user's natural language into a single Gmail search query string.
 
-You can return EITHER:
-1. A structured search object with fields: from, to, subject, since (YYYY-MM-DD), before (YYYY-MM-DD), hasAttachment (boolean), isRead (boolean), isStarred (boolean)
-2. A Gmail raw search string using gmraw syntax (e.g., "from:john after:2025/02/01 subject:project is:starred")
+## Your task
+Take the user's natural language description and produce a Gmail search query using the operators below. Return ONLY a JSON object with one field: "query".
 
-Return a JSON object in one of these formats:
-{"type": "structured", "params": {"from": "john@example.com", "subject": "meeting"}}
-{"type": "gmraw", "query": "from:john after:2025/02/01 has:attachment"}
+## Context
+- The user's email address is: ${userEmail}
+- Today's date is: ${todayDate}
 
-Choose whichever format best expresses the user's intent.
-Return ONLY the JSON, no other text.`,
+## Gmail search operators you can use (ONLY these — do not use any others)
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| from: | Sender name or partial address | from:james |
+| to: | Recipient | to:sarah |
+| subject: | Subject keywords | subject:meeting |
+| has:attachment | Has attachments | has:attachment |
+| is:unread | Unread messages | is:unread |
+| is:read | Read messages | is:read |
+| is:starred | Starred messages | is:starred |
+| is:important | Important messages | is:important |
+| after: | After date (YYYY/MM/DD) | after:2025/02/01 |
+| before: | Before date (YYYY/MM/DD) | before:2025/02/15 |
+| newer_than: | Relative recency | newer_than:7d |
+| older_than: | Relative age | older_than:3d |
+| "" | Exact phrase | "project deadline" |
+| - | Negation | -from:noreply |
+
+**Do NOT use** these operators: cc:, bcc:, filename:, larger:, smaller:, label:, in:, OR, parentheses (). They are not supported by this search system.
+
+## Critical rules
+1. **Never invent email addresses.** If the user says "from james", produce \`from:james\`, NOT \`from:james@example.com\`. Never append @example.com or any domain.
+2. **Simple name queries**: "james" → \`james\` (matches across all fields). Do NOT add operators unless the user's intent is specific.
+3. **Sender queries**: "from james" → \`from:james\`. "emails james sent me" → \`from:james\`.
+4. **Self-reference**: "emails I sent" or "my sent emails" → \`from:${userEmail}\`. "emails to me" → \`to:${userEmail}\`.
+5. **Date handling**:
+   - "last week" → \`newer_than:7d\`
+   - "yesterday" → \`newer_than:1d\`
+   - "this month" → compute \`after:YYYY/MM/01\` from today's date
+   - "in January" or "in January 2025" → \`after:2025/01/01 before:2025/02/01\`
+   - "last month" → compute the prior month's date range
+6. **Compound queries**: "unread emails from james about the project with attachments" → \`is:unread from:james subject:project has:attachment\`
+7. **Passthrough**: If the query already contains Gmail operators (from:, is:, etc.), pass it through with minimal cleanup.
+8. **Minimal transformation**: Don't over-engineer. If the user types a simple keyword, just return that keyword. Gmail will match it across all fields.
+
+## Output format
+Return ONLY a JSON object: {"query": "your gmail search string"}
+Do not include any explanation, markdown, or text outside the JSON.`,
       },
       {
         role: 'user',
@@ -634,16 +690,38 @@ Return ONLY the JSON, no other text.`,
     ];
 
     const result = await this.chat(messages, { format: 'json', temperature: 0.3 });
+
+    // Validate and parse AI output
+    let parsedQuery: string;
     try {
-      const parsed = JSON.parse(result) as { type: string; params?: Record<string, unknown>; query?: string };
-      if (parsed.type === 'gmraw' && parsed.query) {
-        return { gmraw: parsed.query };
+      const parsed = JSON.parse(result) as { query?: string };
+      if (parsed.query && typeof parsed.query === 'string' && parsed.query.trim().length > 0) {
+        parsedQuery = parsed.query.trim();
+      } else {
+        log.warn('[Ollama] naturalLanguageSearch: AI returned empty or invalid query field, falling back to raw input');
+        parsedQuery = query;
       }
-      return { structured: parsed.params || {} };
     } catch {
-      // Fallback: use the original query as gmraw
-      return { gmraw: query };
+      // Try regex extraction as fallback
+      const match = result.match(/"query"\s*:\s*"([^"]+)"/);
+      if (match && match[1]) {
+        parsedQuery = match[1].trim();
+        log.warn('[Ollama] naturalLanguageSearch: JSON parse failed but extracted query via regex');
+      } else {
+        log.warn('[Ollama] naturalLanguageSearch: All parsing failed, falling back to raw input');
+        parsedQuery = query;
+      }
     }
+
+    // Validate length
+    if (parsedQuery.length > 2048) {
+      log.warn('[Ollama] naturalLanguageSearch: Query exceeds 2048 chars, truncating');
+      parsedQuery = parsedQuery.substring(0, 2048);
+    }
+
+    const output = { query: parsedQuery };
+    this.setCachedResult('search', cacheKey, JSON.stringify(output));
+    return output;
   }
 
   /** AI-assisted filter creation: generate filter rules from natural language description */
