@@ -41,57 +41,7 @@
   overflow: hidden;
 }
 
-.message-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.toolbar-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border: none;
-  background: none;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  transition: background-color 120ms ease;
-
-  &:hover {
-    background-color: var(--color-surface-variant);
-    color: var(--color-text-primary);
-  }
-
-  &.edit-draft-btn {
-    color: var(--color-primary);
-    font-weight: 500;
-
-    &:hover {
-      background-color: var(--color-primary-light);
-    }
-  }
-
-  .material-symbols-outlined {
-    font-size: 18px;
-  }
-
-  .starred {
-    color: var(--color-accent);
-    font-variation-settings: 'FILL' 1;
-  }
-}
-
-.toolbar-separator {
-  width: 1px;
-  height: 24px;
-  background-color: var(--color-border);
-  margin: 0 4px;
-}
+// Toolbar styles are now in the shared EmailActionRibbonComponent
 
 .thread-subject {
   padding: 16px 24px 8px;
@@ -237,25 +187,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-// AI toolbar buttons
-.ai-btn {
-  color: var(--color-primary);
-
-  .material-symbols-outlined {
-    font-size: 18px;
-  }
-
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-
-    &:hover {
-      background: none;
-      color: var(--color-primary);
-    }
-  }
 }
 
 // AI Summary Panel

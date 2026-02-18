@@ -9,20 +9,25 @@ import { AiStreamEvent } from '../../../core/models/ai.model';
 import { ElectronService } from '../../../core/services/electron.service';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 import { EmailBodyFrameComponent } from './email-body-frame.component';
+import { EmailActionRibbonComponent } from '../../../shared/components/email-actions/email-action-ribbon.component';
+import { EmailActionContext, EmailActionEvent } from '../../../shared/components/email-actions/email-action.model';
 
 @Component({
   selector: 'app-reading-pane',
   standalone: true,
-  imports: [CommonModule, RelativeTimePipe, EmailBodyFrameComponent],
+  imports: [CommonModule, RelativeTimePipe, EmailBodyFrameComponent, EmailActionRibbonComponent],
   templateUrl: './reading-pane.component.html',
   styleUrl: './reading-pane.component.scss',
 })
 export class ReadingPaneComponent implements OnInit, OnDestroy {
   readonly emailsStore = inject(EmailsStore);
-  private readonly foldersStore = inject(FoldersStore);
+  readonly foldersStore = inject(FoldersStore);
   readonly aiStore = inject(AiStore);
   private readonly electronService = inject(ElectronService);
-  readonly actionClicked = output<string>();
+
+  /** Emits EmailActionEvent to the parent (mail-shell). */
+  readonly actionClicked = output<EmailActionEvent>();
+
   readonly expandedMessages = new Set<string>();
   private aiStreamSub?: Subscription;
 
@@ -58,13 +63,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     this.aiStreamSub?.unsubscribe();
   }
 
-  /** Whether the current folder is the Gmail Drafts folder. */
-  isDraftsFolder(): boolean {
-    const folder = this.foldersStore.activeFolderId();
-    return folder === '[Gmail]/Drafts';
-  }
-
-  /** Whether this message is a draft (appears in [Gmail]/Drafts). Used to show Draft badge in thread. */
+  /** Whether this message is a draft (appears in [Gmail]/Drafts). */
   isDraftMessage(message: Email): boolean {
     const folders = message.folders;
     if (!folders || folders.length === 0) {
@@ -102,35 +101,102 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     }
   }
 
-  toggleStar(): void {
+  /**
+   * Build the EmailActionContext for the thread-level toolbar.
+   * Message is null because this is thread-level (no specific message).
+   */
+  threadActionContext(): EmailActionContext {
     const thread = this.emailsStore.selectedThread();
     if (!thread) {
-      return;
+      // Should not happen since this is only rendered when thread exists,
+      // but return a safe default
+      return this.buildDefaultContext();
     }
-    const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
-    this.emailsStore.flagEmails(
-      thread.accountId,
-      messageIds.length > 0 ? messageIds : [thread.gmailThreadId],
-      'starred',
-      !thread.isStarred,
-      thread.gmailThreadId
-    );
+    return {
+      message: null,
+      thread,
+      activeFolderId: this.foldersStore.activeFolderId(),
+      aiConnected: this.aiStore.connected(),
+      isStarred: thread.isStarred,
+      isRead: thread.isRead,
+      isDraft: this.foldersStore.activeFolderId() === '[Gmail]/Drafts',
+      summaryLoading: this.aiStore.summaryLoading(),
+      replyLoading: this.aiStore.replySuggestionsLoading(),
+      followUpLoading: this.aiStore.followUpLoading(),
+    };
   }
 
-  toggleRead(): void {
+  /**
+   * Build the EmailActionContext for a per-message ribbon.
+   */
+  messageActionContext(message: Email): EmailActionContext {
     const thread = this.emailsStore.selectedThread();
     if (!thread) {
-      return;
+      return this.buildDefaultContext();
     }
-    const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
-    this.emailsStore.flagEmails(
-      thread.accountId,
-      messageIds.length > 0 ? messageIds : [thread.gmailThreadId],
-      'read',
-      !thread.isRead,
-      thread.gmailThreadId
-    );
+    return {
+      message,
+      thread,
+      activeFolderId: this.foldersStore.activeFolderId(),
+      aiConnected: this.aiStore.connected(),
+      isStarred: thread.isStarred,
+      isRead: thread.isRead,
+      isDraft: this.isDraftMessage(message),
+      summaryLoading: this.aiStore.summaryLoading(),
+      replyLoading: this.aiStore.replySuggestionsLoading(),
+      followUpLoading: this.aiStore.followUpLoading(),
+    };
   }
+
+  /**
+   * Handle ribbon action events.
+   * AI actions are handled locally; all others are forwarded to mail-shell.
+   */
+  onRibbonAction(event: EmailActionEvent): void {
+    switch (event.action) {
+      case 'summarize':
+        this.summarize();
+        break;
+      case 'smart-reply':
+        this.generateReplies();
+        break;
+      case 'follow-up':
+        this.detectFollowUp();
+        break;
+      default:
+        // Forward all other actions to the parent (mail-shell)
+        this.actionClicked.emit(event);
+        break;
+    }
+  }
+
+  /** Use a reply suggestion (emit it to the parent to open compose) */
+  useReplySuggestion(suggestion: string): void {
+    this.actionClicked.emit({ action: `reply-with:${suggestion}` });
+  }
+
+  /** Close the AI summary panel */
+  closeSummary(): void {
+    this.aiStore.clearSummary();
+  }
+
+  /** Close reply suggestions */
+  closeReplies(): void {
+    this.aiStore.clearReplies();
+  }
+
+  /** Close follow-up panel */
+  closeFollowUp(): void {
+    this.aiStore.clearFollowUp();
+  }
+
+  /** Whether the current folder is the Gmail Sent folder */
+  isSentFolder(): boolean {
+    const folder = this.foldersStore.activeFolderId();
+    return folder === '[Gmail]/Sent Mail' || folder === 'Sent' || folder === '[Gmail]/Sent';
+  }
+
+  // ─── Private AI methods ───
 
   /** Build thread content string for AI operations */
   private getThreadContent(): string {
@@ -149,7 +215,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   }
 
   /** Summarize the current thread */
-  async summarize(): Promise<void> {
+  private async summarize(): Promise<void> {
     const thread = this.emailsStore.selectedThread();
     if (!thread) {
       return;
@@ -162,7 +228,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   }
 
   /** Generate smart reply suggestions */
-  async generateReplies(): Promise<void> {
+  private async generateReplies(): Promise<void> {
     const thread = this.emailsStore.selectedThread();
     const content = this.getThreadContent();
     if (!content) {
@@ -171,23 +237,8 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     await this.aiStore.generateReplies(content, thread?.gmailThreadId);
   }
 
-  /** Use a reply suggestion (emit it to the parent to open compose) */
-  useReplySuggestion(suggestion: string): void {
-    this.actionClicked.emit(`reply-with:${suggestion}`);
-  }
-
-  /** Close the AI summary panel */
-  closeSummary(): void {
-    this.aiStore.clearSummary();
-  }
-
-  /** Close reply suggestions */
-  closeReplies(): void {
-    this.aiStore.clearReplies();
-  }
-
   /** Detect if the current email needs follow-up */
-  async detectFollowUp(): Promise<void> {
+  private async detectFollowUp(): Promise<void> {
     const thread = this.emailsStore.selectedThread();
     const content = this.getThreadContent();
     if (!content) {
@@ -196,14 +247,19 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     await this.aiStore.detectFollowUp(content, thread?.gmailThreadId);
   }
 
-  /** Close follow-up panel */
-  closeFollowUp(): void {
-    this.aiStore.clearFollowUp();
-  }
-
-  /** Whether the current folder is the Gmail Sent folder */
-  isSentFolder(): boolean {
-    const folder = this.foldersStore.activeFolderId();
-    return folder === '[Gmail]/Sent Mail' || folder === 'Sent' || folder === '[Gmail]/Sent';
+  /** Safe default context for when no thread is selected. */
+  private buildDefaultContext(): EmailActionContext {
+    return {
+      message: null,
+      thread: { id: 0, accountId: 0, gmailThreadId: '', lastMessageDate: '', messageCount: 0, folder: '', isRead: false, isStarred: false },
+      activeFolderId: null,
+      aiConnected: false,
+      isStarred: false,
+      isRead: false,
+      isDraft: false,
+      summaryLoading: false,
+      replyLoading: false,
+      followUpLoading: false,
+    };
   }
 }

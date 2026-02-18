@@ -1,0 +1,108 @@
+:host {
+  display: block;
+}
+
+.ribbon-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ribbon-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+    color: var(--color-text-primary);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+
+    &:hover {
+      background: none;
+      color: var(--color-text-secondary);
+    }
+  }
+
+  .starred {
+    color: var(--color-accent);
+    font-variation-settings: 'FILL' 1;
+  }
+}
+
+.action-draft {
+  color: var(--color-primary);
+  font-weight: 500;
+
+  &:hover {
+    background-color: var(--color-primary-light);
+  }
+}
+
+.action-ai {
+  color: var(--color-primary);
+
+  &:disabled {
+    &:hover {
+      color: var(--color-primary);
+    }
+  }
+}
+
+.ribbon-separator {
+  width: 1px;
+  background-color: var(--color-border);
+}
+
+// ─── Standard variant (thread-level toolbar) ───
+:host.ribbon-standard {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--color-border);
+
+  .ribbon-btn,
+  :host ::ng-deep .move-to-trigger {
+    padding: 6px 10px;
+    font-size: 13px;
+
+    .material-symbols-outlined {
+      font-size: 18px;
+    }
+  }
+
+  .ribbon-separator {
+    height: 24px;
+    margin: 0 4px;
+  }
+}
+
+// ─── Compact variant (per-message ribbon) ───
+:host.ribbon-compact {
+  padding: 6px 16px 6px 64px;
+  border-top: 1px solid var(--color-border);
+
+  .ribbon-btn,
+  :host ::ng-deep .move-to-trigger {
+    padding: 4px 8px;
+    font-size: 12px;
+
+    .material-symbols-outlined {
+      font-size: 16px;
+    }
+  }
+
+  .ribbon-separator {
+    height: 20px;
+    margin: 0 2px;
+  }
+}

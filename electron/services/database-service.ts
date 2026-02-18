@@ -761,6 +761,17 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
+  /** Delete all email records for a thread (cascades to email_folders, attachments, etc.).
+   *  Used to invalidate cached thread data so the next fetchThread re-pulls from IMAP. */
+  deleteEmailsByThreadId(accountId: number, gmailThreadId: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'DELETE FROM emails WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
+      { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+    );
+    this.scheduleSave();
+  }
+
   // ---- Thread operations ----
 
   upsertThread(thread: {
@@ -865,6 +876,37 @@ export class DatabaseService {
     );
     if (result.length === 0 || result[0].values.length === 0) return null;
     return this.mapThreadRow(result[0].values[0], result[0].columns);
+  }
+
+  /** Update flag columns on the threads table (is_read, is_starred). */
+  updateThreadFlags(
+    accountId: number,
+    gmailThreadId: string,
+    flags: { isRead?: boolean; isStarred?: boolean }
+  ): void {
+    if (!this.db) throw new Error('Database not initialized');
+    const updates: string[] = [];
+    const params: Record<string, string | number> = {
+      ':accountId': accountId,
+      ':gmailThreadId': gmailThreadId,
+    };
+
+    if (flags.isRead !== undefined) {
+      updates.push('is_read = :isRead');
+      params[':isRead'] = flags.isRead ? 1 : 0;
+    }
+    if (flags.isStarred !== undefined) {
+      updates.push('is_starred = :isStarred');
+      params[':isStarred'] = flags.isStarred ? 1 : 0;
+    }
+
+    if (updates.length === 0) return;
+
+    this.db.run(
+      `UPDATE threads SET ${updates.join(', ')} WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
+      params
+    );
+    this.scheduleSave();
   }
 
   // ---- Label/Folder operations ----

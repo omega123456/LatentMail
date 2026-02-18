@@ -1,0 +1,42 @@
+<div class="ribbon-actions">
+  @for (action of visibleActions(); track action.id; let i = $index) {
+    <!-- Separator between groups -->
+    @if (shouldShowSeparator(i)) {
+      <div class="ribbon-separator"></div>
+    }
+
+    <!-- Move To: renders a child MoveToMenuComponent instead of a plain button -->
+    @if (action.id === 'move-to' && isEnabled(action)) {
+      <app-move-to-menu
+        [class]="getActionClass(action)"
+        [folders]="folders()"
+        [activeFolderId]="context().activeFolderId"
+        (folderSelected)="onMoveToFolderSelected($event)"
+      />
+    } @else if (action.id === 'move-to' && !isEnabled(action)) {
+      <!-- Move To rendered as disabled button when not enabled -->
+      <button
+        [class]="getActionClass(action)"
+        [disabled]="true"
+        [title]="getTooltip(action)"
+      >
+        <span class="material-symbols-outlined">{{ getIcon(action) }}</span>
+        <span>{{ getLabel(action) }}</span>
+      </button>
+    } @else {
+      <!-- Regular action button -->
+      <button
+        [class]="getActionClass(action)"
+        [disabled]="!isEnabled(action)"
+        [title]="getTooltip(action)"
+        (click)="onActionClick(action)"
+      >
+        <span
+          class="material-symbols-outlined"
+          [class.starred]="action.id === 'star' && action.isActive?.(context())"
+        >{{ getIcon(action) }}</span>
+        <span>{{ getLabel(action) }}</span>
+      </button>
+    }
+  }
+</div>

@@ -1,0 +1,87 @@
+<div class="move-to-menu">
+  <!-- Trigger button -->
+  <button
+    class="move-to-trigger"
+    (click)="toggle(); $event.stopPropagation()"
+    [attr.aria-haspopup]="true"
+    [attr.aria-expanded]="isOpen()"
+    title="Move to folder"
+  >
+    <span class="material-symbols-outlined">drive_file_move</span>
+    <span class="trigger-label">Move to</span>
+  </button>
+
+  <!-- Dropdown popover -->
+  @if (isOpen()) {
+    <div
+      class="move-to-dropdown"
+      role="menu"
+      aria-label="Move to folder"
+      tabindex="-1"
+      (keydown)="onMenuKeydown($event)"
+      (click)="$event.stopPropagation()"
+    >
+      <!-- Search input (only shown when 10+ folders) -->
+      @if (showSearch()) {
+        <div class="move-to-search">
+          <span class="material-symbols-outlined search-icon">search</span>
+          <input
+            type="text"
+            class="search-input"
+            placeholder="Find folder..."
+            aria-label="Filter folders"
+            [ngModel]="searchText()"
+            (ngModelChange)="searchText.set($event); focusedIndex.set(-1)"
+            (keydown)="onMenuKeydown($event)"
+            (click)="$event.stopPropagation()"
+          />
+        </div>
+      }
+
+      <div class="move-to-list">
+        <!-- System folders -->
+        @for (folder of filteredSystemFolders(); track folder.gmailLabelId; let i = $index) {
+          <button
+            class="folder-item"
+            role="menuitem"
+            [class.focused]="focusedIndex() === i"
+            (click)="selectFolder(folder)"
+            (mouseenter)="focusedIndex.set(i)"
+          >
+            <span class="material-symbols-outlined folder-icon">{{ getFolderIcon(folder) }}</span>
+            <span class="folder-name">{{ folder.name }}</span>
+          </button>
+        }
+
+        <!-- Separator + Labels header (only if we have user labels) -->
+        @if (filteredUserLabels().length > 0) {
+          @if (filteredSystemFolders().length > 0) {
+            <div class="folder-divider"></div>
+          }
+          <div class="labels-header">Labels</div>
+          @for (folder of filteredUserLabels(); track folder.gmailLabelId; let j = $index) {
+            <button
+              class="folder-item"
+              role="menuitem"
+              [class.focused]="focusedIndex() === filteredSystemFolders().length + j"
+              (click)="selectFolder(folder)"
+              (mouseenter)="focusedIndex.set(filteredSystemFolders().length + j)"
+            >
+              <span
+                class="label-color-dot"
+                [style.background-color]="folder.color || 'var(--color-text-tertiary)'"
+              ></span>
+              <span class="material-symbols-outlined folder-icon">label</span>
+              <span class="folder-name">{{ folder.name }}</span>
+            </button>
+          }
+        }
+
+        <!-- Empty state -->
+        @if (flatItems().length === 0) {
+          <div class="folder-empty">No matching folders</div>
+        }
+      </div>
+    </div>
+  }
+</div>

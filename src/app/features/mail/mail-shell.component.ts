@@ -17,9 +17,10 @@ import { EmailsStore } from '../../store/emails.store';
 import { ComposeStore } from '../../store/compose.store';
 import { UiStore } from '../../store/ui.store';
 import { ElectronService } from '../../core/services/electron.service';
-import { Thread, ComposeMode, Draft } from '../../core/models/email.model';
+import { Thread, ComposeMode, Draft, Email } from '../../core/models/email.model';
 import { AiStore } from '../../store/ai.store';
 import { AiCategory } from '../../core/models/ai.model';
+import { EmailActionEvent } from '../../shared/components/email-actions/email-action.model';
 
 @Component({
   selector: 'app-mail-shell',
@@ -127,38 +128,67 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  onAction(action: string): void {
+  onAction(event: EmailActionEvent): void {
     const thread = this.emailsStore.selectedThread();
     const activeAccount = this.accountsStore.activeAccount();
-    if (!thread || !activeAccount) return;
-    const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
-    const targetIds = messageIds.length > 0 ? messageIds : [thread.gmailThreadId];
+    if (!thread || !activeAccount) {
+      return;
+    }
 
     const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
 
     // Handle AI reply suggestions with prefix "reply-with:..."
-    if (action.startsWith('reply-with:')) {
-      const suggestionText = action.substring('reply-with:'.length);
-      this.openComposeForAction('reply', suggestionText);
+    if (event.action.startsWith('reply-with:')) {
+      const suggestionText = event.action.substring('reply-with:'.length);
+      this.openComposeForAction('reply', undefined, suggestionText);
       return;
     }
 
-    switch (action) {
-      case 'archive':
-        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/All Mail', thread.gmailThreadId, currentFolder);
-        this.emailsStore.clearSelection();
+    switch (event.action) {
+      case 'delete': {
+        // Per-message delete when event.message is set, otherwise whole thread via threadId
+        const deleteIds = event.message
+          ? [event.message.gmailMessageId]
+          : [thread.gmailThreadId];
+        const deletePerMsg = event.message?.gmailMessageId;
+        this.emailsStore.moveEmails(activeAccount.id, deleteIds, '[Gmail]/Trash', thread.gmailThreadId, currentFolder, deletePerMsg);
+        if (!deletePerMsg) {
+          this.emailsStore.clearSelection();
+        }
         break;
-      case 'delete':
-        this.emailsStore.moveEmails(activeAccount.id, targetIds, '[Gmail]/Trash', thread.gmailThreadId, currentFolder);
-        this.emailsStore.clearSelection();
+      }
+      case 'move-to': {
+        if (!event.targetFolder) {
+          break;
+        }
+        // Per-message move when event.message is set, otherwise whole thread via threadId
+        const moveIds = event.message
+          ? [event.message.gmailMessageId]
+          : [thread.gmailThreadId];
+        const movePerMsg = event.message?.gmailMessageId;
+        this.emailsStore.moveEmails(activeAccount.id, moveIds, event.targetFolder, thread.gmailThreadId, currentFolder, movePerMsg);
+        if (!movePerMsg) {
+          this.emailsStore.clearSelection();
+        }
         break;
+      }
+      case 'star': {
+        // Always thread-level — use threadId to flag all messages in thread
+        this.emailsStore.flagEmails(activeAccount.id, [thread.gmailThreadId], 'starred', !thread.isStarred, thread.gmailThreadId);
+        break;
+      }
+      case 'mark-read-unread': {
+        // Always thread-level — use threadId to flag all messages in thread
+        this.emailsStore.flagEmails(activeAccount.id, [thread.gmailThreadId], 'read', !thread.isRead, thread.gmailThreadId);
+        break;
+      }
       case 'edit-draft':
-        this.openDraftForEditing();
+        this.openDraftForEditing(event.message);
         break;
       case 'reply':
       case 'reply-all':
       case 'forward':
-        this.openComposeForAction(action as ComposeMode);
+        this.openComposeForAction(event.action as ComposeMode, event.message);
         break;
     }
   }
@@ -327,14 +357,19 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     this.emailLists?.forEach(list => list.setCategoryFilter(category));
   }
 
-  private openComposeForAction(mode: ComposeMode, prefillBody?: string): void {
+  private openComposeForAction(mode: ComposeMode, specificMessage?: Email, prefillBody?: string): void {
     const activeAccount = this.accountsStore.activeAccount();
     const thread = this.emailsStore.selectedThread();
-    if (!activeAccount || !thread) return;
+    if (!activeAccount || !thread) {
+      return;
+    }
 
-    // Use the last message in the thread for reply/forward context
-    const messages = this.emailsStore.selectedMessages();
-    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+    // Use specificMessage if provided (per-message ribbon), otherwise last message in thread
+    let originalMessage: Email | undefined = specificMessage;
+    if (!originalMessage) {
+      const messages = this.emailsStore.selectedMessages();
+      originalMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
+    }
 
     this.composeStore.openCompose({
       mode,
@@ -342,7 +377,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       accountEmail: activeAccount.email,
       accountDisplayName: activeAccount.displayName,
       originalThread: thread,
-      originalMessage: lastMessage || undefined,
+      originalMessage,
       prefillBody,
     });
   }
@@ -352,15 +387,29 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
    * Maps the selected email message to a Draft shape and passes its gmailMessageId
    * so that on send/discard, the backend can resolve the UID and remove the old draft from Gmail.
    */
-  private openDraftForEditing(): void {
+  private openDraftForEditing(specificMessage?: Email): void {
     const activeAccount = this.accountsStore.activeAccount();
     const thread = this.emailsStore.selectedThread();
-    if (!activeAccount || !thread) return;
+    if (!activeAccount || !thread) {
+      return;
+    }
 
-    const messages = this.emailsStore.selectedMessages();
-    // Use the most recent message (or only message) in the draft thread
-    const msg = messages.length > 0 ? messages[messages.length - 1] : null;
-    if (!msg) return;
+    // Use specificMessage if provided (per-message ribbon), otherwise find a draft message in thread
+    let msg: Email | null = specificMessage ?? null;
+    if (!msg) {
+      const messages = this.emailsStore.selectedMessages();
+      // Find the last draft message (prefer actual draft over arbitrary last message)
+      msg = [...messages].reverse().find(m =>
+        m.folders?.includes('[Gmail]/Drafts')
+      ) ?? null;
+      // Fallback to last message if no draft found (legacy behavior)
+      if (!msg && messages.length > 0) {
+        msg = messages[messages.length - 1];
+      }
+    }
+    if (!msg) {
+      return;
+    }
 
     // Map Email to Draft shape
     const draft: Draft = {

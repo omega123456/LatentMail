@@ -309,13 +309,17 @@ export const EmailsStore = signalStore(
         value: boolean,
         threadId?: string
       ): Promise<void> {
-        // Optimistic update
+        // Optimistic update — patch both `threads` list AND `selectedThread`
         const targetThreadId = threadId || store.selectedThreadId() || null;
+        const selectedThread = store.selectedThread();
+        const selectedMatches = selectedThread && selectedThread.gmailThreadId === targetThreadId;
+
         if (flag === 'read') {
           patchState(store, {
             threads: store.threads().map(t =>
               t.gmailThreadId === targetThreadId ? { ...t, isRead: value } : t
             ),
+            ...(selectedMatches ? { selectedThread: { ...selectedThread, isRead: value } } : {}),
           });
         } else if (flag === 'starred') {
           const activeFolderId = foldersStore.activeFolderId();
@@ -329,6 +333,7 @@ export const EmailsStore = signalStore(
               threads: store.threads().map(t =>
                 t.gmailThreadId === targetThreadId ? { ...t, isStarred: value } : t
               ),
+              ...(selectedMatches ? { selectedThread: { ...selectedThread, isStarred: value } } : {}),
             });
           }
         }
@@ -347,19 +352,52 @@ export const EmailsStore = signalStore(
         }
       },
 
-      /** Move emails to a folder */
+      /** Move emails to a folder.
+       *  When `perMessageGmailId` is provided, only that message is removed from
+       *  the selected thread's message list (per-message move/delete).
+       *  Otherwise the entire thread is removed from the threads list (thread-level). */
       async moveEmails(
         accountId: number,
         messageIds: string[],
         targetFolder: string,
         threadId?: string,
-        sourceFolder?: string
+        sourceFolder?: string,
+        perMessageGmailId?: string
       ): Promise<void> {
-        // Optimistic remove from list
         const targetThreadId = threadId || store.selectedThreadId() || null;
-        patchState(store, {
-          threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
-        });
+
+        if (perMessageGmailId) {
+          // Per-message move: remove the specific message from the selected thread
+          const selectedThread = store.selectedThread();
+          if (selectedThread && selectedThread.gmailThreadId === targetThreadId && selectedThread.messages) {
+            const updatedMessages = selectedThread.messages.filter(
+              m => m.gmailMessageId !== perMessageGmailId
+            );
+            if (updatedMessages.length === 0) {
+              // Last message in thread — remove thread from list and clear selection
+              patchState(store, {
+                threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+                selectedThread: null,
+                selectedThreadId: null,
+              });
+            } else {
+              patchState(store, {
+                selectedThread: {
+                  ...selectedThread,
+                  messages: updatedMessages,
+                  messageCount: updatedMessages.length,
+                },
+              });
+            }
+          }
+        } else {
+          // Thread-level move: remove the entire thread from the list
+          patchState(store, {
+            threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+            selectedThread: null,
+            selectedThreadId: null,
+          });
+        }
 
         try {
           const response = await electronService.moveEmails(String(accountId), messageIds, targetFolder, sourceFolder);

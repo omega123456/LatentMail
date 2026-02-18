@@ -5,76 +5,13 @@
   </div>
 } @else if (emailsStore.selectedThread(); as thread) {
   <div class="reading-pane-content">
-    <!-- Toolbar -->
-    <div class="message-toolbar">
-      @if (isDraftsFolder()) {
-        <button class="toolbar-btn edit-draft-btn" (click)="actionClicked.emit('edit-draft')">
-          <span class="material-symbols-outlined">edit</span>
-          <span>Edit Draft</span>
-        </button>
-        <div class="toolbar-separator"></div>
-      }
-      <button class="toolbar-btn" (click)="actionClicked.emit('reply')">
-        <span class="material-symbols-outlined">reply</span>
-        <span>Reply</span>
-      </button>
-      <button class="toolbar-btn" (click)="actionClicked.emit('reply-all')">
-        <span class="material-symbols-outlined">reply_all</span>
-        <span>Reply All</span>
-      </button>
-      <button class="toolbar-btn" (click)="actionClicked.emit('forward')">
-        <span class="material-symbols-outlined">forward</span>
-        <span>Forward</span>
-      </button>
-      <div class="toolbar-separator"></div>
-      <button class="toolbar-btn" (click)="actionClicked.emit('archive')">
-        <span class="material-symbols-outlined">archive</span>
-      </button>
-      <button class="toolbar-btn" (click)="actionClicked.emit('delete')">
-        <span class="material-symbols-outlined">delete</span>
-      </button>
-      <button class="toolbar-btn" (click)="toggleStar()">
-        <span class="material-symbols-outlined" [class.starred]="thread.isStarred">
-          {{ thread.isStarred ? 'star' : 'star_border' }}
-        </span>
-      </button>
-      <button class="toolbar-btn" (click)="toggleRead()">
-        <span class="material-symbols-outlined">
-          {{ thread.isRead ? 'mark_email_unread' : 'mark_email_read' }}
-        </span>
-      </button>
-      <div class="toolbar-separator"></div>
-      <!-- AI Actions -->
-      <button
-        class="toolbar-btn ai-btn"
-        (click)="summarize()"
-        [disabled]="!aiStore.connected() || aiStore.summaryLoading()"
-        [title]="aiStore.connected() ? 'AI Summarize' : 'Ollama not connected'"
-      >
-        <span class="material-symbols-outlined">auto_awesome</span>
-        <span>Summarize</span>
-      </button>
-      <button
-        class="toolbar-btn ai-btn"
-        (click)="generateReplies()"
-        [disabled]="!aiStore.connected() || aiStore.replySuggestionsLoading()"
-        [title]="aiStore.connected() ? 'Smart Reply' : 'Ollama not connected'"
-      >
-        <span class="material-symbols-outlined">quickreply</span>
-        <span>Smart Reply</span>
-      </button>
-      @if (isSentFolder()) {
-        <button
-          class="toolbar-btn ai-btn"
-          (click)="detectFollowUp()"
-          [disabled]="!aiStore.connected() || aiStore.followUpLoading()"
-          [title]="aiStore.connected() ? 'Check Follow-up' : 'Ollama not connected'"
-        >
-          <span class="material-symbols-outlined">{{ aiStore.followUpLoading() ? 'sync' : 'notifications_active' }}</span>
-          <span>Follow-up</span>
-        </button>
-      }
-    </div>
+    <!-- Top-level thread toolbar (standard variant) -->
+    <app-email-action-ribbon
+      [context]="threadActionContext()"
+      [variant]="'standard'"
+      [folders]="foldersStore.folders()"
+      (actionTriggered)="onRibbonAction($event)"
+    />
 
     <!-- AI Summary Panel (shown below toolbar when active) -->
     @if (aiStore.summaryText() || aiStore.summaryLoading()) {
@@ -95,7 +32,7 @@
           } @else {
             <div class="ai-summary-text">{{ aiStore.summaryText() }}</div>
             @if (aiStore.summaryLoading()) {
-              <span class="ai-typing-indicator">●●●</span>
+              <span class="ai-typing-indicator">...</span>
             }
           }
         </div>
@@ -200,7 +137,7 @@
             </div>
           </div>
 
-          <!-- Message body (shown when expanded) -->
+          <!-- Message body + per-message ribbon (shown when expanded) -->
           @if (last || expandedMessages.has(message.gmailMessageId)) {
             <div class="message-body">
               @if (message.htmlBody) {
@@ -211,6 +148,14 @@
                 <p class="no-body">No content available</p>
               }
             </div>
+
+            <!-- Per-message action ribbon (compact variant) -->
+            <app-email-action-ribbon
+              [context]="messageActionContext(message)"
+              [variant]="'compact'"
+              [folders]="foldersStore.folders()"
+              (actionTriggered)="onRibbonAction($event)"
+            />
           } @else {
             <div class="message-snippet">{{ message.snippet || getSnippet(message) }}</div>
           }

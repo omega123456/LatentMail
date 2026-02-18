@@ -256,7 +256,8 @@ export function registerMailIpcHandlers(): void {
       let messages = db.getEmailsByThreadId(numAccountId, threadId);
       log.info(`FETCH_THREAD: ${messages.length} messages from DB for thread ${threadId}`);
 
-      // Fetch from IMAP when any messages are missing bodies (e.g. after partial sync).
+      // Fetch from IMAP when messages are missing bodies OR when the local cache
+      // has been invalidated (0 messages, e.g. after a move/delete action).
       // Guard: only attempt once per thread per process to avoid infinite re-fetch for
       // orphans that IMAP's thread search doesn't return.
       const missingBodies = messages.filter(
@@ -264,7 +265,7 @@ export function registerMailIpcHandlers(): void {
       );
       const fetchKey = `${accountId}:${threadId}`;
       const shouldFetch =
-        missingBodies.length > 0 && !threadBodyFetchAttempted.has(fetchKey);
+        (messages.length === 0 || missingBodies.length > 0) && !threadBodyFetchAttempted.has(fetchKey);
       if (shouldFetch) {
         threadBodyFetchAttempted.add(fetchKey);
         log.info(`FETCH_THREAD: ${missingBodies.length}/${messages.length} messages missing bodies — fetching from IMAP`);
@@ -471,6 +472,15 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
+      // Invalidate cached thread data: delete email rows so the next fetchThread
+      // re-pulls from IMAP and gets the current server state.
+      const firstEmail = deduped.values().next().value;
+      const affectedThreadId = firstEmail ? String(firstEmail['gmailThreadId'] || '') : '';
+      if (affectedThreadId) {
+        db.deleteEmailsByThreadId(numAccountId, affectedThreadId);
+        threadBodyFetchAttempted.delete(`${accountId}:${affectedThreadId}`);
+      }
+
       const description = `Move ${messageIds.length} email(s) to ${targetFolder}`;
       const queueId = queueService.enqueue(
         numAccountId,
@@ -539,6 +549,20 @@ export function registerMailIpcHandlers(): void {
       if (dbFlags) {
         for (const email of deduped.values()) {
           db.updateEmailFlags(numAccountId, String(email['gmailMessageId']), dbFlags);
+        }
+      }
+
+      // Also update the threads table so that fetchThread returns correct flag state
+      const threadFlagMap: Record<string, { isRead?: boolean; isStarred?: boolean }> = {
+        read: { isRead: value },
+        starred: { isStarred: value },
+      };
+      const threadFlags = threadFlagMap[flag];
+      if (threadFlags) {
+        const firstEmail = deduped.values().next().value;
+        const flagThreadId = firstEmail ? String(firstEmail['gmailThreadId'] || '') : '';
+        if (flagThreadId) {
+          db.updateThreadFlags(numAccountId, flagThreadId, threadFlags);
         }
       }
 
@@ -625,6 +649,14 @@ export function registerMailIpcHandlers(): void {
             }
           }
         }
+      }
+
+      // Invalidate cached thread data so the next fetchThread re-pulls from IMAP.
+      const firstDelEmail = deduped.values().next().value;
+      const delThreadId = firstDelEmail ? String(firstDelEmail['gmailThreadId'] || '') : '';
+      if (delThreadId) {
+        db.deleteEmailsByThreadId(numAccountId, delThreadId);
+        threadBodyFetchAttempted.delete(`${accountId}:${delThreadId}`);
       }
 
       const description = `Delete ${messageIds.length} email(s) from ${folder}`;
