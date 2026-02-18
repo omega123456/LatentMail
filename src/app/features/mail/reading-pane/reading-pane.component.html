@@ -124,7 +124,7 @@
               <div class="header-top">
                 <span class="sender-name">{{ message.fromName || message.fromAddress }}</span>
                 @if (foldersStore.activeFolderId() !== '[Gmail]/Trash') {
-                  @if (isDraftMessage(message)) {
+                  @if (message.isDraft) {
                   <span class="message-badge message-badge--draft" title="Draft">
                     <span class="material-symbols-outlined message-badge-icon">edit_note</span>
                     <span class="message-badge-text">Draft</span>

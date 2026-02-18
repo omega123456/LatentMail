@@ -19,12 +19,10 @@ export function getDefaultEmailActions(): EmailAction[] {
       group: 'draft',
       cssClass: 'action-draft',
       isVisible: (ctx: EmailActionContext) => {
-        // Per-message: check if message is a draft
-        if (ctx.message) {
-          return ctx.isDraft;
-        }
-        // Thread-level: show when active folder is Drafts
-        return ctx.activeFolderId === '[Gmail]/Drafts';
+        // Both per-message and thread-level: show when isDraft is true.
+        // For thread-level, isDraft reflects thread.hasDraft (any email in thread is a draft).
+        // For per-message, isDraft reflects message.isDraft directly.
+        return ctx.isDraft;
       },
       isEnabled: () => true,
     },

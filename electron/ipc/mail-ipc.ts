@@ -106,6 +106,45 @@ export function registerMailIpcHandlers(): void {
     });
   };
 
+  /**
+   * Enrich threads with hasDraft status.
+   * For each thread, checks if any constituent email has is_draft=1.
+   * Follows the same pattern as attachThreadFolders/attachThreadLabels.
+   */
+  const attachThreadDraftStatus = (threads: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+    const threadIds = threads
+      .map((thread) => {
+        const rawId = thread['id'];
+        if (typeof rawId === 'number') {
+          return rawId;
+        }
+        if (typeof rawId === 'string') {
+          const parsed = Number(rawId);
+          return Number.isFinite(parsed) ? parsed : null;
+        }
+        return null;
+      })
+      .filter((threadId): threadId is number => threadId != null && threadId > 0);
+
+    if (threadIds.length === 0) {
+      return threads;
+    }
+
+    const draftThreadIds = db.getThreadIdsWithDrafts(threadIds);
+    if (draftThreadIds.size === 0) {
+      return threads;
+    }
+
+    return threads.map((thread) => {
+      const rawId = thread['id'];
+      const threadId = typeof rawId === 'number' ? rawId : Number(rawId);
+      if (Number.isFinite(threadId) && draftThreadIds.has(threadId)) {
+        return { ...thread, hasDraft: true };
+      }
+      return thread;
+    });
+  };
+
   // Fetch emails/threads for a folder (local-first from DB)
   ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_EMAILS, async (_event, accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => {
     try {
@@ -123,6 +162,7 @@ export function registerMailIpcHandlers(): void {
         let threads = db.getThreadsByUserLabel(numAccountId, labelId, limit, offset);
         threads = attachThreadFolders(threads);
         threads = attachThreadLabels(threads);
+        threads = attachThreadDraftStatus(threads);
         return ipcSuccess(threads);
       }
 
@@ -178,6 +218,7 @@ export function registerMailIpcHandlers(): void {
                 isRead: email.isRead,
                 isStarred: email.isStarred,
                 isImportant: email.isImportant,
+                isDraft: email.isDraft,
                 snippet: email.snippet,
                 size: email.size,
                 hasAttachments: email.hasAttachments,
@@ -236,7 +277,9 @@ export function registerMailIpcHandlers(): void {
       // Enrich threads with folders (from thread_folders) so list can show e.g. Draft/Sent/Deleted in Trash
       threads = attachThreadFolders(threads);
       // Enrich threads with label info
-      const enrichedThreads = attachThreadLabels(threads);
+      threads = attachThreadLabels(threads);
+      // Enrich threads with draft status
+      const enrichedThreads = attachThreadDraftStatus(threads);
       return ipcSuccess(enrichedThreads);
     } catch (err) {
       log.error('Failed to fetch emails:', err);
@@ -319,6 +362,7 @@ export function registerMailIpcHandlers(): void {
                   isRead: fetched.isRead,
                   isStarred: fetched.isStarred,
                   isImportant: fetched.isImportant,
+                  isDraft: fetched.isDraft,
                   snippet: fetched.snippet,
                   size: fetched.size,
                   hasAttachments: fetched.hasAttachments,
@@ -794,7 +838,8 @@ export function registerMailIpcHandlers(): void {
       const rawResults = queries.length === 1
         ? db.searchEmails(numAccountId, queries[0])
         : db.searchEmailsMulti(numAccountId, queries);
-      const results = attachThreadFolders(rawResults);
+      let results = attachThreadFolders(rawResults);
+      results = attachThreadDraftStatus(results);
 
       log.info(`[MAIL_SEARCH] Found ${results.length} merged thread result(s) for account ${accountId}`);
       return ipcSuccess(results);
@@ -881,6 +926,7 @@ export function registerMailIpcHandlers(): void {
             isRead: email.isRead,
             isStarred: email.isStarred,
             isImportant: email.isImportant,
+            isDraft: email.isDraft,
             snippet: email.snippet,
             size: email.size,
             hasAttachments: email.hasAttachments,
@@ -961,7 +1007,8 @@ export function registerMailIpcHandlers(): void {
         new Date(b['lastMessageDate'] as string).getTime() - new Date(a['lastMessageDate'] as string).getTime()
       );
 
-      const threadsWithFolders = attachThreadFolders(threads);
+      let threadsWithFolders = attachThreadFolders(threads);
+      threadsWithFolders = attachThreadDraftStatus(threadsWithFolders);
       log.info(
         `[MAIL_SEARCH_IMAP] IMAP search found ${emails.length} emails, ${threadMap.size} threads, returning ${threadsWithFolders.length} thread results`
       );
@@ -1010,6 +1057,7 @@ export function registerMailIpcHandlers(): void {
         let threads = db.getThreadsByUserLabelBeforeDate(numAccountId, labelId, beforeDate, sanitizedLabelLimit);
         threads = attachThreadFolders(threads);
         threads = attachThreadLabels(threads);
+        threads = attachThreadDraftStatus(threads);
         return ipcSuccess({ threads, hasMore: threads.length === sanitizedLabelLimit });
       }
 
@@ -1065,6 +1113,7 @@ export function registerMailIpcHandlers(): void {
           isRead: email.isRead,
           isStarred: email.isStarred,
           isImportant: email.isImportant,
+          isDraft: email.isDraft,
           snippet: email.snippet,
           size: email.size,
           hasAttachments: email.hasAttachments,
@@ -1104,12 +1153,13 @@ export function registerMailIpcHandlers(): void {
       }
 
       // Query DB directly for threads before the requested date (proper SQL pagination)
-      const threads = db.getThreadsByFolderBeforeDate(
+      let threads = db.getThreadsByFolderBeforeDate(
         numAccountId,
         folderId,
         beforeDate,
         sanitizedLimit
       );
+      threads = attachThreadDraftStatus(threads);
 
       // Cursor for the next older-page fetch should be based on fetched email dates,
       // not returned thread dates. A fetch can return zero "older threads" when all

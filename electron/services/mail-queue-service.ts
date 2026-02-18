@@ -563,6 +563,7 @@ export class MailQueueService {
         isRead: true,
         isStarred: false,
         isImportant: false,
+        isDraft: fetched?.isDraft ?? true,
         snippet: (payload.textBody || '').substring(0, 100),
         hasAttachments: (payload.attachments?.length ?? 0) > 0,
       });
@@ -747,6 +748,7 @@ export class MailQueueService {
         isRead: true,
         isStarred: false,
         isImportant: false,
+        isDraft: fetched?.isDraft ?? true,
         snippet: (payload.textBody || '').substring(0, 100),
         hasAttachments: (payload.attachments?.length ?? 0) > 0,
       });
@@ -1350,6 +1352,7 @@ export class MailQueueService {
       isRead: boolean;
       isStarred: boolean;
       isImportant: boolean;
+      isDraft: boolean;
       snippet: string;
       size: number;
       hasAttachments: boolean;
@@ -1388,6 +1391,7 @@ export class MailQueueService {
         isRead: email.isRead,
         isStarred: email.isStarred,
         isImportant: email.isImportant,
+        isDraft: email.isDraft,
         snippet: email.snippet,
         size: email.size,
         hasAttachments: email.hasAttachments,

@@ -128,6 +128,10 @@ export class DatabaseService {
       this.migrateV5toV6();
     }
 
+    if (currentVersion < 7) {
+      this.migrateV6toV7();
+    }
+
     // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
     this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
     this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
@@ -448,6 +452,32 @@ export class DatabaseService {
     log.info('Migration v5 → v6 complete');
   }
 
+  /**
+   * Migrate from schema v6 to v7: add is_draft column to emails table.
+   * Backfills existing drafts from [Gmail]/Drafts folder membership.
+   */
+  private migrateV6toV7(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    log.info('Running migration v6 → v7: add is_draft column to emails');
+
+    // Add is_draft column (idempotent)
+    const emailCols = this.db.exec("PRAGMA table_info(emails)");
+    const hasIsDraft = emailCols.length > 0 && emailCols[0].values.some(
+      (row) => (row[1] as string) === 'is_draft'
+    );
+    if (!hasIsDraft) {
+      this.db.run('ALTER TABLE emails ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0');
+      // Backfill: mark emails in [Gmail]/Drafts folder as drafts
+      this.db.run(
+        `UPDATE emails SET is_draft = 1 WHERE id IN (
+          SELECT email_id FROM email_folders WHERE folder = '[Gmail]/Drafts'
+        )`
+      );
+    }
+
+    log.info('Migration v6 → v7 complete');
+  }
+
   /** Persist the in-memory database to disk */
   saveToDisk(): void {
     if (!this.db) return;
@@ -595,6 +625,7 @@ export class DatabaseService {
     isRead: boolean;
     isStarred: boolean;
     isImportant: boolean;
+    isDraft?: boolean;
     snippet?: string;
     size?: number;
     hasAttachments: boolean;
@@ -606,10 +637,10 @@ export class DatabaseService {
     this.db.run(
       `INSERT INTO emails (account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
-        is_read, is_starred, is_important, snippet, size, has_attachments, labels)
+        is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels)
        VALUES (:accountId, :gmailMessageId, :gmailThreadId, :fromAddress, :fromName,
         :toAddresses, :ccAddresses, :bccAddresses, :subject, :textBody, :htmlBody, :date,
-        :isRead, :isStarred, :isImportant, :snippet, :size, :hasAttachments, :labels)
+        :isRead, :isStarred, :isImportant, :isDraft, :snippet, :size, :hasAttachments, :labels)
        ON CONFLICT(account_id, gmail_message_id) DO UPDATE SET
         from_address = excluded.from_address, from_name = excluded.from_name,
         to_addresses = excluded.to_addresses, cc_addresses = excluded.cc_addresses, bcc_addresses = excluded.bcc_addresses,
@@ -618,6 +649,7 @@ export class DatabaseService {
         html_body = COALESCE(NULLIF(excluded.html_body, ''), html_body),
         date = excluded.date,
         is_read = excluded.is_read, is_starred = excluded.is_starred, is_important = excluded.is_important,
+        is_draft = excluded.is_draft,
         snippet = excluded.snippet, size = excluded.size, has_attachments = excluded.has_attachments,
         labels = excluded.labels`,
       {
@@ -636,6 +668,7 @@ export class DatabaseService {
         ':isRead': email.isRead ? 1 : 0,
         ':isStarred': email.isStarred ? 1 : 0,
         ':isImportant': email.isImportant ? 1 : 0,
+        ':isDraft': email.isDraft ? 1 : 0,
         ':snippet': email.snippet || '',
         ':size': email.size || 0,
         ':hasAttachments': email.hasAttachments ? 1 : 0,
@@ -673,7 +706,7 @@ export class DatabaseService {
     const result = this.db.exec(
       `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
-        is_read, is_starred, is_important, size, has_attachments, labels
+        is_read, is_starred, is_important, is_draft, size, has_attachments, labels
        FROM emails WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId
        ORDER BY date ASC`,
       { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
@@ -687,7 +720,7 @@ export class DatabaseService {
     const result = this.db.exec(
       `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
-        is_read, is_starred, is_important, size, has_attachments, labels
+        is_read, is_starred, is_important, is_draft, size, has_attachments, labels
        FROM emails WHERE id = :id`,
       { ':id': id }
     );
@@ -700,7 +733,7 @@ export class DatabaseService {
     const result = this.db.exec(
       `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
-        is_read, is_starred, is_important, size, has_attachments, labels
+        is_read, is_starred, is_important, is_draft, size, has_attachments, labels
        FROM emails WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId LIMIT 1`,
       { ':accountId': accountId, ':gmailMessageId': gmailMessageId }
     );
@@ -1192,6 +1225,45 @@ export class DatabaseService {
     }
 
     return map;
+  }
+
+  /**
+   * Given an array of thread internal IDs, return the set of those that contain
+   * at least one email with is_draft=1.
+   * Uses the existing idx_emails_account_thread index for performance.
+   */
+  getThreadIdsWithDrafts(threadIds: number[]): Set<number> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = new Set<number>();
+    const uniqueThreadIds = Array.from(new Set(threadIds.filter((id) => Number.isFinite(id))));
+    if (uniqueThreadIds.length === 0) {
+      return result;
+    }
+
+    const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
+    const params: Record<string, number> = {};
+    for (let index = 0; index < uniqueThreadIds.length; index++) {
+      params[`:threadId${index}`] = uniqueThreadIds[index];
+    }
+
+    const queryResult = this.db.exec(
+      `SELECT DISTINCT t.id
+       FROM threads t
+       INNER JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       WHERE t.id IN (${placeholders.join(', ')}) AND e.is_draft = 1`,
+      params
+    );
+
+    if (queryResult.length > 0) {
+      for (const row of queryResult[0].values) {
+        result.add(row[0] as number);
+      }
+    }
+
+    return result;
   }
 
   private getThreadsByGmailThreadIds(accountId: number, gmailThreadIds: string[], limit: number): Array<Record<string, unknown>> {
@@ -1834,7 +1906,7 @@ export class DatabaseService {
       const val = row[i];
       // Convert snake_case to camelCase and handle booleans
       const key = col.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-      if (col === 'is_read' || col === 'is_starred' || col === 'is_important' || col === 'has_attachments') {
+      if (col === 'is_read' || col === 'is_starred' || col === 'is_important' || col === 'is_draft' || col === 'has_attachments') {
         obj[key] = val === 1;
       } else {
         obj[key] = val;

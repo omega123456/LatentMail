@@ -63,15 +63,6 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     this.aiStreamSub?.unsubscribe();
   }
 
-  /** Whether this message is a draft (appears in [Gmail]/Drafts). */
-  isDraftMessage(message: Email): boolean {
-    const folders = message.folders;
-    if (!folders || folders.length === 0) {
-      return false;
-    }
-    return folders.includes('[Gmail]/Drafts');
-  }
-
   /** Whether this message is in [Gmail]/Sent Mail. */
   isSentMessage(message: Email): boolean {
     const folders = message.folders;
@@ -137,7 +128,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       aiConnected: this.aiStore.connected(),
       isStarred: thread.isStarred,
       isRead: thread.isRead,
-      isDraft: this.foldersStore.activeFolderId() === '[Gmail]/Drafts',
+      isDraft: !!thread.hasDraft,
       summaryLoading: this.aiStore.summaryLoading(),
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
@@ -159,7 +150,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       aiConnected: this.aiStore.connected(),
       isStarred: thread.isStarred,
       isRead: thread.isRead,
-      isDraft: this.isDraftMessage(message),
+      isDraft: message.isDraft,
       summaryLoading: this.aiStore.summaryLoading(),
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),

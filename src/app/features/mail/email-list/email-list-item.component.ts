@@ -100,25 +100,21 @@ export class EmailListItemComponent {
     };
   });
 
-  /** When viewing Trash, show only the Draft badge for threads that are also in Drafts. */
-  readonly trashFolderBadges = computed<FolderBadgeInfo[]>(() => {
-    if (this.activeFolderId() !== '[Gmail]/Trash') {
-      return [];
+  /**
+   * Show a Draft badge when the thread contains a draft message (hasDraft),
+   * in all folders EXCEPT [Gmail]/Drafts itself (where it would be redundant).
+   */
+  readonly draftBadge = computed<FolderBadgeInfo | null>(() => {
+    if (!this.thread().hasDraft) {
+      return null;
     }
-    const folders = this.thread().folders;
-    if (!folders || folders.length === 0) {
-      return [];
-    }
-    if (!this.hasFolder(folders, '[Gmail]/Drafts')) {
-      return [];
+    const activeFolder = this.activeFolderId();
+    if (activeFolder && activeFolder.toLowerCase() === '[gmail]/drafts') {
+      return null;
     }
     const b = FOLDER_BADGE_META['[gmail]/drafts'];
-    return [{ ...b, title: b.displayName }];
+    return { ...b, title: b.displayName };
   });
-
-  private hasFolder(folders: string[], target: string): boolean {
-    return this.findFolderCaseInsensitive(folders, target) !== null;
-  }
 
   getSenderName(): string {
     const participants = this.thread().participants;

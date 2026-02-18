@@ -399,9 +399,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     if (!msg) {
       const messages = this.emailsStore.selectedMessages();
       // Find the last draft message (prefer actual draft over arbitrary last message)
-      msg = [...messages].reverse().find(m =>
-        m.folders?.includes('[Gmail]/Drafts')
-      ) ?? null;
+      msg = [...messages].reverse().find(m => m.isDraft) ?? null;
       // Fallback to last message if no draft found (legacy behavior)
       if (!msg && messages.length > 0) {
         msg = messages[messages.length - 1];

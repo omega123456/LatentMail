@@ -16,6 +16,7 @@ export interface Email {
   isRead: boolean;
   isStarred: boolean;
   isImportant: boolean;
+  isDraft: boolean;
   snippet?: string;
   size?: number;
   hasAttachments: boolean;
@@ -37,6 +38,7 @@ export interface Thread {
   isRead: boolean;
   isStarred: boolean;
   folders?: string[];
+  hasDraft?: boolean;
   messages?: Email[];
   label?: { id: number; name: string; color?: string };
 }

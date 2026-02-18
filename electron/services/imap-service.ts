@@ -21,6 +21,7 @@ interface FetchedEmail {
   isRead: boolean;
   isStarred: boolean;
   isImportant: boolean;
+  isDraft: boolean;
   snippet: string;
   size: number;
   hasAttachments: boolean;
@@ -884,6 +885,7 @@ export class ImapService {
         isRead: flags.includes('\\Seen'),
         isStarred: flags.includes('\\Flagged'),
         isImportant: labels.includes('\\Important'),
+        isDraft: flags.includes('\\Draft'),
         snippet,
         size: msg.size || 0,
         hasAttachments,
