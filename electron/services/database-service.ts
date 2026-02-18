@@ -1581,6 +1581,209 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
+  // ---- Orphan cleanup & thread metadata recomputation ----
+
+  /**
+   * Remove emails that have zero email_folders associations for the given account.
+   * Returns the list of removed { gmailMessageId, gmailThreadId } pairs so the caller
+   * can determine which threads need metadata recomputation.
+   *
+   * Called after reconciliation removes stale email_folders rows.
+   */
+  removeOrphanedEmails(accountId: number): Array<{ gmailMessageId: string; gmailThreadId: string }> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    // SELECT and DELETE run in the same transaction for a consistent snapshot.
+    // This prevents a race where another operation re-associates an email between
+    // the SELECT and DELETE, which would incorrectly delete a non-orphan email.
+    const removed: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+
+    this.db.run('BEGIN');
+    try {
+      const selectResult = this.db.exec(
+        `SELECT gmail_message_id, gmail_thread_id FROM emails
+         WHERE account_id = :accountId
+           AND id NOT IN (SELECT email_id FROM email_folders WHERE account_id = :accountId)`,
+        { ':accountId': accountId }
+      );
+
+      if (selectResult.length > 0) {
+        for (const row of selectResult[0].values) {
+          removed.push({
+            gmailMessageId: row[0] as string,
+            gmailThreadId: row[1] as string,
+          });
+        }
+      }
+
+      if (removed.length > 0) {
+        this.db.run(
+          `DELETE FROM emails
+           WHERE account_id = :accountId
+             AND id NOT IN (SELECT email_id FROM email_folders WHERE account_id = :accountId)`,
+          { ':accountId': accountId }
+        );
+      }
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+
+    if (removed.length > 0) {
+      this.scheduleSave();
+    }
+    return removed;
+  }
+
+  /**
+   * Given a list of gmailMessageIds, return the distinct gmailThreadIds they belong to.
+   * Used after orphan email removal to find which threads need metadata recomputation.
+   */
+  getAffectedThreadIds(accountId: number, gmailMessageIds: string[]): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    if (gmailMessageIds.length === 0) {
+      return [];
+    }
+
+    // Build an inline values list for the IN clause using named params
+    // sql.js doesn't support array binding, so we build the clause manually
+    // with parameterized placeholders to stay safe.
+    const placeholders = gmailMessageIds.map((_, i) => `:id${i}`).join(', ');
+    const params: Record<string, string | number> = { ':accountId': accountId };
+    for (let i = 0; i < gmailMessageIds.length; i++) {
+      params[`:id${i}`] = gmailMessageIds[i];
+    }
+
+    const result = this.db.exec(
+      `SELECT DISTINCT gmail_thread_id FROM emails
+       WHERE account_id = :accountId AND gmail_message_id IN (${placeholders})`,
+      params
+    );
+
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
+  }
+
+  /**
+   * Recompute the thread row's metadata from the actual emails still in the DB for that thread.
+   *
+   * Computed fields: message_count, last_message_date, snippet (from latest email),
+   * participants (distinct from_address values), is_read (ALL read), is_starred (ANY starred).
+   *
+   * If zero emails remain: deletes the threads row and all thread_folders entries.
+   * Wrapped in a transaction for consistency.
+   */
+  recomputeThreadMetadata(accountId: number, gmailThreadId: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+
+    this.db.run('BEGIN');
+    try {
+      // Count remaining emails for this thread
+      const countResult = this.db.exec(
+        `SELECT COUNT(*) FROM emails
+         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
+        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      );
+      const emailCount = (countResult.length > 0 && countResult[0].values.length > 0)
+        ? countResult[0].values[0][0] as number
+        : 0;
+
+      const threadResult = this.db.exec(
+        'SELECT id FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
+        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      );
+      if (threadResult.length === 0 || threadResult[0].values.length === 0) {
+        // No thread row exists at all — nothing to recompute
+        this.db.run('COMMIT');
+        return;
+      }
+      const threadId = threadResult[0].values[0][0] as number;
+
+      if (emailCount === 0) {
+        // No emails left — delete thread and all folder associations
+        this.db.run('DELETE FROM thread_folders WHERE thread_id = :threadId', { ':threadId': threadId });
+        this.db.run('DELETE FROM threads WHERE id = :threadId', { ':threadId': threadId });
+        this.db.run('COMMIT');
+        this.scheduleSave();
+        return;
+      }
+
+      // Compute aggregates from remaining emails
+      const aggResult = this.db.exec(
+        `SELECT
+           COUNT(*) AS message_count,
+           MAX(date) AS last_message_date,
+           MIN(CASE WHEN is_read = 0 THEN 0 ELSE 1 END) AS all_read,
+           MAX(is_starred) AS any_starred
+         FROM emails
+         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
+        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      );
+
+      if (aggResult.length === 0 || aggResult[0].values.length === 0) {
+        this.db.run('COMMIT');
+        return;
+      }
+
+      const agg = aggResult[0].values[0];
+      const messageCount = agg[0] as number;
+      const lastMessageDate = agg[1] as string;
+      const isRead = (agg[2] as number) === 1;
+      const isStarred = (agg[3] as number) === 1;
+
+      // Get snippet from the most recent email
+      const snippetResult = this.db.exec(
+        `SELECT snippet FROM emails
+         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId
+         ORDER BY date DESC LIMIT 1`,
+        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      );
+      const snippet = (snippetResult.length > 0 && snippetResult[0].values.length > 0)
+        ? snippetResult[0].values[0][0] as string
+        : '';
+
+      // Get distinct participants (from_address values)
+      const participantsResult = this.db.exec(
+        `SELECT DISTINCT from_address FROM emails
+         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
+        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      );
+      const participants = participantsResult.length > 0 && participantsResult[0].values.length > 0
+        ? participantsResult[0].values.map((row) => row[0] as string).join(', ')
+        : '';
+
+      // Update the thread row
+      this.db.run(
+        `UPDATE threads SET
+           message_count = :messageCount,
+           last_message_date = :lastMessageDate,
+           snippet = :snippet,
+           participants = :participants,
+           is_read = :isRead,
+           is_starred = :isStarred,
+           updated_at = datetime('now')
+         WHERE id = :threadId`,
+        {
+          ':messageCount': messageCount,
+          ':lastMessageDate': lastMessageDate,
+          ':snippet': snippet || '',
+          ':participants': participants,
+          ':isRead': isRead ? 1 : 0,
+          ':isStarred': isStarred ? 1 : 0,
+          ':threadId': threadId,
+        }
+      );
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
   // ---- Contact search (for autocomplete) ----
 
   searchContacts(query: string, limit: number = 10): Array<Record<string, unknown>> {

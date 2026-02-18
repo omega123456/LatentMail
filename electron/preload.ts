@@ -152,6 +152,7 @@ const electronAPI = {
       'mail:data-changed',
       'mail:new-email',
       'mail:notification-click',
+      'mail:thread-refresh',
       'system:notification',
       'system:tray-action',
     ];

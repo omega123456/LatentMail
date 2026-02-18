@@ -347,8 +347,11 @@ export class ImapService {
   }
 
   /**
-   * Fetch all messages in a Gmail thread from the thread's known folders (no All Mail in normal path).
-   * If the thread only exists in All Mail (e.g. after archive), falls back to All Mail for that fetch.
+   * Fetch all messages in a Gmail thread.
+   * Always searches the thread's known folders first (to pick up drafts and folder-specific UIDs),
+   * then searches [Gmail]/All Mail as an authoritative baseline to catch messages that may have
+   * been moved out of their original folder.
+   * Results are deduplicated by gmailMessageId.
    */
   async fetchThread(
     accountId: string,
@@ -356,12 +359,19 @@ export class ImapService {
   ): Promise<FetchedEmail[]> {
     const db = DatabaseService.getInstance();
     const numAccountId = Number(accountId);
-    let folders = db.getFoldersForThread(numAccountId, gmailThreadId);
     const ALL_MAIL_PATH = '[Gmail]/All Mail';
-    folders = folders.filter((f) => f !== ALL_MAIL_PATH);
-    if (folders.length === 0) {
-      folders = [ALL_MAIL_PATH]; // Fallback so archived-only threads still load
-    }
+
+    // Known folders from DB (excludes All Mail; will be added explicitly below)
+    const knownFolders = db.getFoldersForThread(numAccountId, gmailThreadId).filter(
+      (f) => f !== ALL_MAIL_PATH
+    );
+
+    // Always append All Mail as an authoritative baseline — finds messages that
+    // were moved to a folder we don't have in thread_folders, or archived threads.
+    // De-duplication by gmailMessageId prevents double-counting.
+    const folders = knownFolders.length > 0
+      ? [...knownFolders, ALL_MAIL_PATH]
+      : [ALL_MAIL_PATH];
 
     const client = await this.connect(accountId);
     const byMessageId = new Map<string, FetchedEmail>();

@@ -31,6 +31,12 @@ interface MailNotificationClickPayload {
   folder: string;
 }
 
+interface MailThreadRefreshPayload {
+  accountId: number;
+  gmailThreadId: string;
+  action: 'move' | 'delete';
+}
+
 interface EmailsState {
   threads: Thread[];
   selectedThreadId: string | null;
@@ -736,6 +742,21 @@ export const EmailsStore = signalStore(
           event.folder === activeFolderId
         ) {
           store.refreshThreads();
+        }
+      });
+
+      // Subscribe to mail:thread-refresh events from the queue worker.
+      // After a move/delete is confirmed server-side, re-load the selected thread
+      // if it matches the event's gmailThreadId so the UI reflects the clean DB state.
+      electronService.onEvent<MailThreadRefreshPayload>('mail:thread-refresh').subscribe(async (event) => {
+        const activeAccountId = accountsStore.activeAccountId();
+        if (activeAccountId == null || event.accountId !== activeAccountId) {
+          return;
+        }
+        const selectedThreadId = store.selectedThreadId();
+        if (selectedThreadId === event.gmailThreadId) {
+          // Re-load thread from the now-clean DB (pending ops cleared, metadata recomputed)
+          await store.loadThread(event.accountId, event.gmailThreadId);
         }
       });
 

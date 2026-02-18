@@ -79,6 +79,7 @@ export const IPC_EVENTS = {
   MAIL_DATA_CHANGED: 'mail:data-changed',
   MAIL_NEW_EMAIL: 'mail:new-email',
   MAIL_NOTIFICATION_CLICK: 'mail:notification-click',
+  MAIL_THREAD_REFRESH: 'mail:thread-refresh',
   SYSTEM_NOTIFICATION: 'system:notification',
   SYSTEM_TRAY_ACTION: 'system:tray-action',
 } as const;

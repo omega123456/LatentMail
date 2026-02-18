@@ -6,6 +6,8 @@ import { ImapService } from './imap-service';
 import { SmtpService } from './smtp-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
+import { PendingOpService } from './pending-op-service';
+import { SyncService } from './sync-service';
 import { buildDraftMime } from './draft-mime';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
@@ -422,6 +424,53 @@ export class MailQueueService {
       item.completedAt = new Date().toISOString();
       this.emitUpdate(item);
       log.error(`[MailQueue] Permanently failed ${item.type} (${item.queueId}) after ${item.retryCount} retries: ${errMsg}`);
+
+      // On permanent failure for move/delete: still clear pending ops and
+      // threadBodyFetchAttempted so the thread can be re-fetched from IMAP.
+      // The server-side op failed, so the messages still exist — they will
+      // reappear correctly when the thread is next opened.
+      if (item.type === 'move' || item.type === 'delete') {
+        this.clearPendingOpsOnFailure(item);
+      }
+    }
+  }
+
+  /**
+   * Clear pending ops and threadBodyFetchAttempted for a failed move/delete operation.
+   * This unblocks future IMAP re-fetch so messages reappear correctly.
+   * If resolvedEmails is unavailable, logs a warning — the next sync reconciliation
+   * will correct any remaining inconsistencies.
+   */
+  private clearPendingOpsOnFailure(item: QueueItem): void {
+    try {
+      const pendingOpService = PendingOpService.getInstance();
+      const payload = item.payload as MovePayload | DeletePayload;
+      const resolvedEmails = payload.resolvedEmails ?? [];
+
+      if (resolvedEmails.length === 0) {
+        // No metadata available to target specific threads — pending ops will remain
+        // until the next sync reconciliation or app restart clears them.
+        log.warn(`[MailQueue] clearPendingOpsOnFailure (${item.queueId}): resolvedEmails is empty — pending ops not cleared; next sync will reconcile`);
+        return;
+      }
+
+      const byThread = new Map<string, string[]>();
+      for (const { gmailMessageId, gmailThreadId } of resolvedEmails) {
+        if (!gmailThreadId) {
+          continue;
+        }
+        if (!byThread.has(gmailThreadId)) {
+          byThread.set(gmailThreadId, []);
+        }
+        byThread.get(gmailThreadId)!.push(gmailMessageId);
+      }
+
+      for (const [gmailThreadId, messageIds] of byThread) {
+        pendingOpService.clear(item.accountId, gmailThreadId, messageIds);
+        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${gmailThreadId}`);
+      }
+    } catch (err) {
+      log.warn(`[MailQueue] clearPendingOpsOnFailure failed for ${item.queueId}:`, err);
     }
   }
 
@@ -1040,6 +1089,7 @@ export class MailQueueService {
    * Post-op fetch for move:
    * 1. Re-fetch resolved UIDs from source folders to confirm removal (UID-not-found is expected)
    * 2. Fetch latest N from target folder to pick up newly-moved messages (UIDs change after MOVE)
+   * 3. Clear PendingOpService entries, recompute thread metadata, emit thread-refresh
    */
   private async postOpFetchMove(item: QueueItem): Promise<void> {
     const payload = item.payload as MovePayload;
@@ -1056,12 +1106,51 @@ export class MailQueueService {
     // Fetch latest N from target folder to pick up newly-moved messages
     await this.fetchLatestAndUpsert(item.accountId, payload.targetFolder);
 
+    // --- Post-confirmation cleanup ---
+    const pendingOpService = PendingOpService.getInstance();
+    const db = DatabaseService.getInstance();
+    const affectedThreadIds = new Set<string>();
+
+    if (payload.resolvedEmails && payload.resolvedEmails.length > 0) {
+      // Group by thread so we clear pending ops and recompute per-thread
+      const byThread = new Map<string, string[]>();
+      for (const { gmailMessageId, gmailThreadId } of payload.resolvedEmails) {
+        if (!gmailThreadId) {
+          continue;
+        }
+        if (!byThread.has(gmailThreadId)) {
+          byThread.set(gmailThreadId, []);
+        }
+        byThread.get(gmailThreadId)!.push(gmailMessageId);
+        affectedThreadIds.add(gmailThreadId);
+      }
+
+      for (const [gmailThreadId, messageIds] of byThread) {
+        // 1. Clear pending ops for these messages
+        pendingOpService.clear(item.accountId, gmailThreadId, messageIds);
+
+        // 2. Clear threadBodyFetchAttempted so next open re-fetches from IMAP if needed
+        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${gmailThreadId}`);
+
+        // 3. Recompute thread metadata from actual DB state
+        try {
+          db.recomputeThreadMetadata(item.accountId, gmailThreadId);
+        } catch (recomputeErr) {
+          log.warn(`[MailQueue] postOpFetchMove: recomputeThreadMetadata failed for thread ${gmailThreadId}:`, recomputeErr);
+        }
+
+        // 4. Emit thread-refresh so renderer re-loads if this thread is selected
+        this.emitThreadRefresh(item.accountId, gmailThreadId, 'move');
+      }
+    }
+
     this.emitDataChanged(item.accountId, allFolders, 'move');
   }
 
   /**
    * Post-op fetch for delete: for soft-delete, fetch latest N from Trash.
    * For permanent delete, skip fetch (message is gone); emit event for source folder.
+   * Also clears PendingOpService entries and recomputes thread metadata.
    */
   private async postOpFetchDelete(item: QueueItem): Promise<void> {
     const payload = item.payload as DeletePayload;
@@ -1074,6 +1163,41 @@ export class MailQueueService {
       // Soft delete — fetch latest N from Trash to pick up newly-trashed messages
       await this.fetchLatestAndUpsert(item.accountId, GMAIL_TRASH_FOLDER);
       this.emitDataChanged(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete');
+    }
+
+    // --- Post-confirmation cleanup (for soft-delete only; permanent delete already wiped DB rows) ---
+    if (!isPermanent && payload.resolvedEmails && payload.resolvedEmails.length > 0) {
+      const pendingOpService = PendingOpService.getInstance();
+      const db = DatabaseService.getInstance();
+
+      const byThread = new Map<string, string[]>();
+      for (const { gmailMessageId, gmailThreadId } of payload.resolvedEmails) {
+        if (!gmailThreadId) {
+          continue;
+        }
+        if (!byThread.has(gmailThreadId)) {
+          byThread.set(gmailThreadId, []);
+        }
+        byThread.get(gmailThreadId)!.push(gmailMessageId);
+      }
+
+      for (const [gmailThreadId, messageIds] of byThread) {
+        // 1. Clear pending ops for these messages
+        pendingOpService.clear(item.accountId, gmailThreadId, messageIds);
+
+        // 2. Clear threadBodyFetchAttempted so next open re-fetches from IMAP if needed
+        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${gmailThreadId}`);
+
+        // 3. Recompute thread metadata from actual DB state
+        try {
+          db.recomputeThreadMetadata(item.accountId, gmailThreadId);
+        } catch (recomputeErr) {
+          log.warn(`[MailQueue] postOpFetchDelete: recomputeThreadMetadata failed for thread ${gmailThreadId}:`, recomputeErr);
+        }
+
+        // 4. Emit thread-refresh so renderer re-loads if this thread is selected
+        this.emitThreadRefresh(item.accountId, gmailThreadId, 'delete');
+      }
     }
   }
 
@@ -1195,66 +1319,12 @@ export class MailQueueService {
    * server's complete UID set and remove stale associations. Used after unstar to
    * clean [Gmail]/Starred promptly without waiting for a full account sync.
    *
-   * This mirrors the reconciliation logic in SyncService.syncAccount() but is
-   * scoped to a single folder.
+   * Delegates to SyncService.reconcileFolder() for a consistent, enhanced reconciliation
+   * that also removes orphan emails, recomputes thread metadata, and removes orphan threads.
    */
   private async reconcileFolder(accountId: number, folder: string): Promise<void> {
-    const imapService = ImapService.getInstance();
-    const lockManager = FolderLockManager.getInstance();
-    const db = DatabaseService.getInstance();
-
-    // Fetch the complete UID set from the server (lightweight SEARCH ALL)
-    let serverUids: number[];
-    const release = await lockManager.acquire(folder);
-    try {
-      serverUids = await imapService.fetchFolderUids(String(accountId), folder);
-    } finally {
-      release();
-    }
-
-    const serverUidSet = new Set(serverUids);
-
-    // Query local DB for all (emailId, uid) pairs associated with this folder
-    const localFolderUids = db.getEmailFolderUids(accountId, folder);
-
-    // Find stale local entries: present locally but not on server
-    const staleEntries = localFolderUids.filter(entry => !serverUidSet.has(entry.uid));
-
-    if (staleEntries.length === 0) return;
-
-    log.info(`[MailQueue] reconcileFolder: removing ${staleEntries.length} stale associations from ${folder} for account ${accountId}`);
-
-    const rawDb = db.getDatabase();
-    rawDb.run('BEGIN');
-    try {
-      for (const stale of staleEntries) {
-        // Remove email-folder association
-        db.removeEmailFolderAssociation(accountId, stale.gmailMessageId, folder);
-
-        // Check if the email's thread still has emails in this folder
-        const email = db.getEmailByGmailMessageId(accountId, stale.gmailMessageId);
-        if (email) {
-          const threadId = String(email['gmailThreadId'] || '');
-          if (threadId && !db.threadHasEmailsInFolder(accountId, threadId, folder)) {
-            const internalThreadId = db.getThreadInternalId(accountId, threadId);
-            if (internalThreadId != null) {
-              db.removeThreadFolderAssociation(internalThreadId, folder);
-              log.info(`[MailQueue] reconcileFolder: removed thread-folder for thread ${threadId} from ${folder}`);
-            }
-          }
-        }
-      }
-      rawDb.run('COMMIT');
-    } catch (err) {
-      rawDb.run('ROLLBACK');
-      throw err;
-    }
-
-    // Remove orphaned threads (threads with zero folder associations)
-    const orphansRemoved = db.removeOrphanedThreads(accountId);
-    if (orphansRemoved > 0) {
-      log.info(`[MailQueue] reconcileFolder: removed ${orphansRemoved} orphaned threads for account ${accountId}`);
-    }
+    const syncService = SyncService.getInstance();
+    await syncService.reconcileFolder(String(accountId), folder);
   }
 
   /**
@@ -1367,6 +1437,28 @@ export class MailQueueService {
       for (const win of windows) {
         if (!win.isDestroyed()) {
           win.webContents.send(IPC_EVENTS.MAIL_DATA_CHANGED, payload);
+        }
+      }
+    } catch {
+      // Window may not exist yet during startup
+    }
+  }
+
+  /**
+   * Emit mail:thread-refresh event to all renderer windows.
+   * Signals the renderer to re-load the specified thread from the now-clean DB.
+   */
+  private emitThreadRefresh(
+    accountId: number,
+    gmailThreadId: string,
+    action: 'move' | 'delete',
+  ): void {
+    const payload = { accountId, gmailThreadId, action };
+    try {
+      const windows = BrowserWindow.getAllWindows();
+      for (const win of windows) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC_EVENTS.MAIL_THREAD_REFRESH, payload);
         }
       }
     } catch {

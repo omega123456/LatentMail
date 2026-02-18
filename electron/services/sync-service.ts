@@ -5,6 +5,7 @@ import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { OAuthService } from './oauth-service';
 import { FilterService } from './filter-service';
+import { PendingOpService } from './pending-op-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 /** Gmail special-use folder mappings (All Mail excluded — not shown or synced) */
@@ -56,6 +57,11 @@ export class SyncService {
   private idleReconnectDelay: Map<string, number> = new Map();
   /** Accounts where IDLE stop/reconnect was intentional — suppress auto-reconnect */
   private idleSuppressReconnect: Set<string> = new Set();
+  /**
+   * Timestamps of the last reconciliation run per "accountId:folder" key.
+   * Used for debouncing IDLE-triggered reconciliation (30-second minimum interval).
+   */
+  private lastReconciliation: Map<string, number> = new Map();
 
   private constructor() {}
 
@@ -139,25 +145,45 @@ export class SyncService {
           continue;
         }
 
+        // Pre-declare outside try/finally so reconciliation below can access it.
+        let serverUidsForReconcile: number[] = [];
+
         try {
           const fetchLimit = isInitialSync ? 100 : 200;
+          // Fetch server UIDs for reconciliation while we already hold the folder lock.
+          // We capture them here and use them below (after lock release) to avoid deadlock.
+          try {
+            serverUidsForReconcile = await imapService.fetchFolderUids(accountId, folder);
+          } catch (uidErr) {
+            log.warn(`Sync: failed to fetch UIDs for ${folder} (reconciliation will be skipped):`, uidErr);
+          }
+
           const emails = await imapService.fetchEmails(accountId, folder, {
             limit: fetchLimit,
             since: sinceDate,
           });
 
-          // Group emails by thread
+          // Group emails by thread, excluding those with pending queue operations.
+          // Pending emails are skipped entirely — re-upserting them would undo the
+          // optimistic folder association update made by the IPC handler.
+          const pendingOpService = PendingOpService.getInstance();
           const threadMap = new Map<string, typeof emails>();
           for (const email of emails) {
             const threadId = email.gmailThreadId || email.gmailMessageId;
+            const pendingForThread = pendingOpService.getPendingForThread(numAccountId, threadId);
+            if (pendingForThread.has(email.gmailMessageId)) {
+              log.debug(`Sync: skipping pending message ${email.gmailMessageId} in ${folder}`);
+              continue; // Skip pending emails entirely
+            }
             if (!threadMap.has(threadId)) {
               threadMap.set(threadId, []);
             }
             threadMap.get(threadId)!.push(email);
           }
 
-          // Store emails and build threads
-          for (const email of emails) {
+          // Store emails and build threads (pending emails already excluded from threadMap above).
+          for (const email of [...threadMap.values()].flat()) {
+
             db.upsertEmail({
               accountId: numAccountId,
               gmailMessageId: email.gmailMessageId,
@@ -221,60 +247,7 @@ export class SyncService {
           totalNewCount += emails.length;
           log.info(`Synced ${emails.length} emails from ${folder} for account ${accountId}`);
 
-          // --- Folder reconciliation ---
-          // Server is the source of truth for folder membership. For this folder,
-          // remove any local email-folder UID association missing on the server;
-          // this is association-only cleanup (emails/threads may still exist elsewhere).
-          try {
-            // Fetch the complete UID set from the server (lightweight SEARCH ALL)
-            const serverUids = await imapService.fetchFolderUids(accountId, folder);
-            const serverUidSet = new Set(serverUids);
-
-            // Query local DB for all (emailId, uid) pairs associated with this folder
-            const localFolderUids = db.getEmailFolderUids(numAccountId, folder);
-
-            // Find stale local entries: present locally but not on server
-            const staleEntries = localFolderUids.filter(entry => !serverUidSet.has(entry.uid));
-
-            if (staleEntries.length > 0) {
-              log.info(`Reconciliation: removing ${staleEntries.length} stale email-folder associations from ${folder} for account ${accountId}`);
-
-              db.getDatabase().run('BEGIN');
-              try {
-                for (const stale of staleEntries) {
-                  // Remove email-folder association
-                  db.removeEmailFolderAssociation(numAccountId, stale.gmailMessageId, folder);
-
-                  // Check if the email's thread still has emails in this folder
-                  const email = db.getEmailByGmailMessageId(numAccountId, stale.gmailMessageId);
-                  if (email) {
-                    const threadId = String(email['gmailThreadId'] || '');
-                    if (threadId && !db.threadHasEmailsInFolder(numAccountId, threadId, folder)) {
-                      const internalThreadId = db.getThreadInternalId(numAccountId, threadId);
-                      if (internalThreadId != null) {
-                        db.removeThreadFolderAssociation(internalThreadId, folder);
-                        log.info(`Reconciliation: removed thread-folder association for thread ${threadId} from ${folder}`);
-                      }
-                    }
-                  }
-                }
-                db.getDatabase().run('COMMIT');
-              } catch (reconcileErr) {
-                db.getDatabase().run('ROLLBACK');
-                throw reconcileErr;
-              }
-
-              // Remove orphaned threads (threads with zero folder associations)
-              const orphansRemoved = db.removeOrphanedThreads(numAccountId);
-              if (orphansRemoved > 0) {
-                log.info(`Reconciliation: removed ${orphansRemoved} orphaned threads for account ${accountId}`);
-              }
-            }
-          } catch (reconcileErr) {
-            log.warn(`Reconciliation failed for folder ${folder} account ${accountId} (continuing):`, reconcileErr);
-          }
-
-          // Run filter evaluation on newly synced INBOX emails
+          // Run filter evaluation on newly synced INBOX emails (still inside lock)
           if (folder === 'INBOX') {
             try {
               log.debug(`[SyncService] Triggering filter processing for account ${accountId} after INBOX sync`);
@@ -289,7 +262,20 @@ export class SyncService {
           log.warn(`Failed to sync folder ${folder} for account ${accountId}:`, err);
           // Continue with other folders
         } finally {
+          // Release the folder lock BEFORE reconciliation so reconcileFolder doesn't deadlock.
           if (releaseLock) releaseLock();
+        }
+
+        // --- Folder reconciliation (outside lock) ---
+        // Uses UIDs fetched while lock was held above. Full sync always reconciles.
+        if (serverUidsForReconcile.length > 0) {
+          try {
+            await this.reconcileFolderWithServerUids(accountId, folder, serverUidsForReconcile);
+            // Mark reconciliation time so IDLE skips it within the next 30s
+            this.lastReconciliation.set(`${accountId}:${folder}`, Date.now());
+          } catch (reconcileErr) {
+            log.warn(`Reconciliation failed for folder ${folder} account ${accountId} (continuing):`, reconcileErr);
+          }
         }
       }
 
@@ -304,6 +290,138 @@ export class SyncService {
       this.emitProgress({ accountId, folder: '', progress: 0, newCount: 0, status: 'error', error: errorMessage });
     } finally {
       this.syncInProgress.delete(accountId);
+    }
+  }
+
+  /**
+   * Shared folder reconciliation — compares local email_folders UIDs against the
+   * server's complete UID set for the given folder.
+   *
+   * Acquires the folder lock itself to fetch server UIDs, then runs DB cleanup
+   * (no lock needed for DB work). Callers that already hold the folder lock must
+   * use reconcileFolderWithServerUids() directly to avoid a deadlock.
+   *
+   * Called by: incrementalFetchFolder (debounced, 30s/folder after releasing lock),
+   * and MailQueueService post-flag reconciliation (unstar).
+   */
+  async reconcileFolder(accountId: string, folder: string): Promise<void> {
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+
+    // Fetch the complete UID set from the server (lightweight SEARCH ALL).
+    // Acquire lock here since callers of this public method don't hold it.
+    let serverUids: number[];
+    const release = await lockManager.acquire(folder);
+    try {
+      serverUids = await imapService.fetchFolderUids(accountId, folder);
+    } finally {
+      release();
+    }
+
+    await this.reconcileFolderWithServerUids(accountId, folder, serverUids);
+  }
+
+  /**
+   * DB-only reconciliation given a pre-fetched set of server UIDs.
+   * Does NOT acquire the folder lock — caller must have already fetched UIDs
+   * (and may still hold the lock or have released it; the DB work is lock-free).
+   *
+   * Called by syncAccount after it has already fetched emails with the folder lock.
+   */
+  async reconcileFolderWithServerUids(
+    accountId: string,
+    folder: string,
+    serverUids: number[],
+  ): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const numAccountId = Number(accountId);
+
+    const serverUidSet = new Set(serverUids);
+
+    // Query local DB for all (emailId, uid) pairs associated with this folder
+    const localFolderUids = db.getEmailFolderUids(numAccountId, folder);
+
+    // Find stale local entries: present locally but not on server
+    const staleEntries = localFolderUids.filter(entry => !serverUidSet.has(entry.uid));
+
+    if (staleEntries.length === 0) {
+      return; // Nothing to reconcile
+    }
+
+    log.info(`[SyncService] reconcileFolder: removing ${staleEntries.length} stale email-folder associations from ${folder} for account ${accountId}`);
+
+    // Collect affected thread IDs before modifying associations
+    const affectedGmailThreadIds = new Set<string>();
+    for (const stale of staleEntries) {
+      const email = db.getEmailByGmailMessageId(numAccountId, stale.gmailMessageId);
+      if (email) {
+        const threadId = String(email['gmailThreadId'] || '');
+        if (threadId) {
+          affectedGmailThreadIds.add(threadId);
+        }
+      }
+    }
+
+    // Remove stale associations in a transaction
+    db.getDatabase().run('BEGIN');
+    try {
+      for (const stale of staleEntries) {
+        // Remove email-folder association
+        db.removeEmailFolderAssociation(numAccountId, stale.gmailMessageId, folder);
+
+        // Check if the email's thread still has emails in this folder
+        const email = db.getEmailByGmailMessageId(numAccountId, stale.gmailMessageId);
+        if (email) {
+          const threadId = String(email['gmailThreadId'] || '');
+          if (threadId && !db.threadHasEmailsInFolder(numAccountId, threadId, folder)) {
+            const internalThreadId = db.getThreadInternalId(numAccountId, threadId);
+            if (internalThreadId != null) {
+              db.removeThreadFolderAssociation(internalThreadId, folder);
+              log.debug(`[SyncService] reconcileFolder: removed thread-folder for thread ${threadId} from ${folder}`);
+            }
+          }
+        }
+      }
+      db.getDatabase().run('COMMIT');
+    } catch (err) {
+      db.getDatabase().run('ROLLBACK');
+      throw err;
+    }
+
+    // Remove orphan emails (emails with zero email_folders associations)
+    let orphanEmails: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+    try {
+      orphanEmails = db.removeOrphanedEmails(numAccountId);
+      if (orphanEmails.length > 0) {
+        log.info(`[SyncService] reconcileFolder: removed ${orphanEmails.length} orphan email(s) for account ${accountId}`);
+        // Add their thread IDs to the affected set
+        for (const orphan of orphanEmails) {
+          if (orphan.gmailThreadId) {
+            affectedGmailThreadIds.add(orphan.gmailThreadId);
+          }
+        }
+      }
+    } catch (orphanErr) {
+      log.warn(`[SyncService] reconcileFolder: removeOrphanedEmails failed (continuing):`, orphanErr);
+    }
+
+    // Recompute thread metadata for all affected threads
+    for (const gmailThreadId of affectedGmailThreadIds) {
+      try {
+        db.recomputeThreadMetadata(numAccountId, gmailThreadId);
+      } catch (recomputeErr) {
+        log.warn(`[SyncService] reconcileFolder: recomputeThreadMetadata failed for thread ${gmailThreadId}:`, recomputeErr);
+      }
+    }
+
+    // Remove orphaned threads (threads with zero thread_folders associations)
+    try {
+      const orphansRemoved = db.removeOrphanedThreads(numAccountId);
+      if (orphansRemoved > 0) {
+        log.info(`[SyncService] reconcileFolder: removed ${orphansRemoved} orphaned thread(s) for account ${accountId}`);
+      }
+    } catch (orphanThreadErr) {
+      log.warn(`[SyncService] reconcileFolder: removeOrphanedThreads failed (continuing):`, orphanThreadErr);
     }
   }
 
@@ -491,16 +609,23 @@ export class SyncService {
       // Track which emails are newly arrived (uid > baseline) for notification only
       const newEmails: NewEmailInfo[] = [];
 
+      // Skip emails with pending queue operations so we don't undo optimistic DB updates.
+      const pendingOpService = PendingOpService.getInstance();
       const threadMap = new Map<string, typeof emails>();
       for (const email of emails) {
         const threadId = email.gmailThreadId || email.gmailMessageId;
+        const pendingForThread = pendingOpService.getPendingForThread(numAccountId, threadId);
+        if (pendingForThread.has(email.gmailMessageId)) {
+          log.debug(`[IDLE] Skipping pending message ${email.gmailMessageId} in ${folder}`);
+          continue;
+        }
         if (!threadMap.has(threadId)) {
           threadMap.set(threadId, []);
         }
         threadMap.get(threadId)!.push(email);
       }
 
-      for (const email of emails) {
+      for (const email of [...threadMap.values()].flat()) {
         db.upsertEmail({
           accountId: numAccountId,
           gmailMessageId: email.gmailMessageId,
@@ -541,7 +666,7 @@ export class SyncService {
         }
       }
 
-      // Upsert threads
+      // Upsert threads (pending emails already excluded from threadMap)
       for (const [threadId, threadEmails] of threadMap) {
         const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
         const latest = uniqueEmails.reduce((a, b) =>
@@ -582,6 +707,23 @@ export class SyncService {
       if (newEmails.length > 0) {
         log.info(`[IDLE] Incremental fetch: ${newEmails.length} new email(s) in ${folder} for account ${accountId}`);
         this.accumulateNotification(accountId, folder, newEmails);
+      }
+
+      // Schedule debounced reconciliation AFTER the lock is released.
+      // We use setImmediate so the finally block runs (releasing the lock) before
+      // reconcileFolder tries to acquire it. Only schedule on success paths.
+      const IDLE_RECONCILE_INTERVAL_MS = 30_000;
+      const reconcileKey = `${accountId}:${folder}`;
+      const lastRun = this.lastReconciliation.get(reconcileKey) ?? 0;
+      if (Date.now() - lastRun >= IDLE_RECONCILE_INTERVAL_MS) {
+        this.lastReconciliation.set(reconcileKey, Date.now());
+        setImmediate(() => {
+          this.reconcileFolder(accountId, folder).catch((reconcileErr) => {
+            log.warn(`[IDLE] Debounced reconciliation failed for ${folder} account ${accountId}:`, reconcileErr);
+          });
+        });
+      } else {
+        log.debug(`[IDLE] Skipping reconciliation for ${folder} (last ran ${Math.round((Date.now() - lastRun) / 1000)}s ago)`);
       }
 
       return newEmails;
