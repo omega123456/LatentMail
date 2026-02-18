@@ -27,8 +27,8 @@ interface ParsedFilter {
 
 interface EmailData {
   id: number;
-  gmailMessageId: string;
-  gmailThreadId: string;
+  xGmMsgId: string;
+  xGmThrid: string;
   fromAddress: string;
   fromName: string;
   toAddresses: string;
@@ -190,10 +190,10 @@ export class FilterService {
       db.markEmailsAsFiltered(emails.map(e => e.id));
       log.debug(`[FilterService] Marked ${emails.length} email(s) as filtered for account ${accountId}`);
 
-      // Emit data-changed event if any actions were dispatched
+      // Emit folder-updated event if any actions were dispatched
       if (result.actionsDispatched > 0) {
-        log.debug(`[FilterService] Emitting data-changed event for folders: ${Array.from(affectedFolders).join(', ')}`);
-        this.emitDataChanged(accountId, Array.from(affectedFolders));
+        log.debug(`[FilterService] Emitting folder-updated event for folders: ${Array.from(affectedFolders).join(', ')}`);
+        this.emitFolderUpdated(accountId, Array.from(affectedFolders));
       }
 
       log.info(
@@ -372,57 +372,43 @@ export class FilterService {
       }
 
       case 'mark-read': {
-        // Resolve UID before optimistic update to avoid local-server inconsistency
-        const readUid = db.getInboxUidForEmail(email.id);
-        if (readUid === null) {
-          log.warn(`[FilterService] No INBOX UID for email ${email.id} (subject: "${email.subject}") — skipping mark-read from filter "${filterName}"`);
-          return null;
-        }
-
-        // Optimistic DB update (UID confirmed available)
-        db.updateEmailFlags(accountId, email.gmailMessageId, { isRead: true });
-        this.updateThreadReadStatus(accountId, email.gmailThreadId);
+        // Optimistic DB update
+        db.updateEmailFlags(accountId, email.xGmMsgId, { isRead: true });
+        this.updateThreadReadStatus(accountId, email.xGmThrid);
 
         const queueService = MailQueueService.getInstance();
         queueService.enqueue(
           accountId,
           'flag',
           {
-            messageIds: [email.gmailMessageId],
+            xGmMsgIds: [email.xGmMsgId],
             flag: 'read',
             value: true,
-            resolvedUids: { 'INBOX': [readUid] },
+            folder: 'INBOX',
           },
           `${descriptionPrefix} Mark as read`,
         );
-        log.info(`[FilterService] Enqueued mark-read action for email ${email.id} (UID ${readUid}) via filter "${filterName}"`);
+        log.info(`[FilterService] Enqueued mark-read action for email ${email.id} via filter "${filterName}"`);
         return null;
       }
 
       case 'star': {
-        // Resolve UID before optimistic update to avoid local-server inconsistency
-        const starUid = db.getInboxUidForEmail(email.id);
-        if (starUid === null) {
-          log.warn(`[FilterService] No INBOX UID for email ${email.id} (subject: "${email.subject}") — skipping star from filter "${filterName}"`);
-          return null;
-        }
-
-        // Optimistic DB update (UID confirmed available)
-        db.updateEmailFlags(accountId, email.gmailMessageId, { isStarred: true });
+        // Optimistic DB update
+        db.updateEmailFlags(accountId, email.xGmMsgId, { isStarred: true });
 
         const queueService = MailQueueService.getInstance();
         queueService.enqueue(
           accountId,
           'flag',
           {
-            messageIds: [email.gmailMessageId],
+            xGmMsgIds: [email.xGmMsgId],
             flag: 'starred',
             value: true,
-            resolvedUids: { 'INBOX': [starUid] },
+            folder: 'INBOX',
           },
           `${descriptionPrefix} Star`,
         );
-        log.info(`[FilterService] Enqueued star action for email ${email.id} (UID ${starUid}) via filter "${filterName}"`);
+        log.info(`[FilterService] Enqueued star action for email ${email.id} via filter "${filterName}"`);
         return '[Gmail]/Starred';
       }
 
@@ -465,22 +451,15 @@ export class FilterService {
     descriptionSuffix: string
   ): string | null {
     const db = DatabaseService.getInstance();
-    const uid = db.getInboxUidForEmail(email.id);
-    if (uid === null) {
-      log.warn(`[FilterService] No INBOX UID for email ${email.id} (subject: "${email.subject}") — skipping move to ${targetFolder}`);
-      return null;
-    }
-
-    log.debug(`[FilterService] Enqueuing move operation: email ${email.id} (UID ${uid}) from ${sourceFolder} to ${targetFolder}`);
+    log.debug(`[FilterService] Enqueuing move operation: email ${email.id} from ${sourceFolder} to ${targetFolder}`);
 
     // Optimistic DB update: move email and thread folder associations
-    db.moveEmailFolder(accountId, email.gmailMessageId, sourceFolder, targetFolder, null);
-    const internalThreadId = db.getThreadInternalId(accountId, email.gmailThreadId);
-    if (internalThreadId != null) {
-      if (!db.threadHasEmailsInFolder(accountId, email.gmailThreadId, sourceFolder)) {
-        db.moveThreadFolder(internalThreadId, accountId, sourceFolder, targetFolder);
+    db.moveEmailFolder(accountId, email.xGmMsgId, sourceFolder, targetFolder, null);
+    if (email.xGmThrid) {
+      if (!db.threadHasEmailsInFolder(accountId, email.xGmThrid, sourceFolder)) {
+        db.moveThreadFolder(accountId, email.xGmThrid, sourceFolder, targetFolder);
       } else {
-        db.upsertThreadFolder(internalThreadId, accountId, targetFolder);
+        db.upsertThreadFolder(accountId, email.xGmThrid, targetFolder);
       }
     }
 
@@ -490,11 +469,10 @@ export class FilterService {
       accountId,
       'move',
       {
-        messageIds: [email.gmailMessageId],
+        xGmMsgIds: [email.xGmMsgId],
         sourceFolder,
         targetFolder,
-        resolvedUids: { [sourceFolder]: [uid] },
-        resolvedEmails: [{ gmailMessageId: email.gmailMessageId, gmailThreadId: email.gmailThreadId }],
+        emailMeta: [{ xGmMsgId: email.xGmMsgId, xGmThrid: email.xGmThrid }],
       },
       `${descriptionPrefix} ${descriptionSuffix}`,
     );
@@ -506,11 +484,11 @@ export class FilterService {
   /**
    * Update thread read status based on all emails in the thread.
    */
-  private updateThreadReadStatus(accountId: number, gmailThreadId: string): void {
+  private updateThreadReadStatus(accountId: number, xGmThrid: string): void {
     const db = DatabaseService.getInstance();
-    const emails = db.getEmailsByThreadId(accountId, gmailThreadId);
+    const emails = db.getEmailsByThreadId(accountId, xGmThrid);
     const allRead = emails.every(e => !!(e['isRead']));
-    const internalId = db.getThreadInternalId(accountId, gmailThreadId);
+    const internalId = db.getThreadInternalId(accountId, xGmThrid);
     if (internalId != null) {
       const rawDb = db.getDatabase();
       rawDb.run(
@@ -520,15 +498,20 @@ export class FilterService {
     }
   }
 
-  // ---- Data Change Notification ----
+  // ---- Folder Updated Notification ----
 
-  private emitDataChanged(accountId: number, folders: string[]): void {
-    const payload = { accountId, folders, reason: 'filter' };
+  private emitFolderUpdated(accountId: number, folders: string[]): void {
+    const payload = {
+      accountId,
+      folders,
+      reason: 'filter',
+      changeType: 'mixed',
+    };
     try {
       const windows = BrowserWindow.getAllWindows();
       for (const win of windows) {
         if (!win.isDestroyed()) {
-          win.webContents.send(IPC_EVENTS.MAIL_DATA_CHANGED, payload);
+          win.webContents.send(IPC_EVENTS.MAIL_FOLDER_UPDATED, payload);
         }
       }
     } catch {

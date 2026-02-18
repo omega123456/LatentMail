@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { app } from 'electron';
 import log from 'electron-log/main';
 import { CREATE_TABLES_SQL, SCHEMA_VERSION } from '../database/schema';
+import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord } from '../database/models';
 
 export class DatabaseService {
   private static instance: DatabaseService;
@@ -52,10 +53,65 @@ export class DatabaseService {
     });
 
     // Load existing database or create new one
+    let isLegacyDb = false;
     if (fs.existsSync(this.dbPath)) {
       const fileBuffer = fs.readFileSync(this.dbPath);
       this.db = new SQL.Database(fileBuffer);
       log.info('Loaded existing database');
+
+      // Check for legacy schema (old era: version > 1 and <= 7)
+      let currentVersion = 0;
+      try {
+        const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
+        if (result.length > 0 && result[0].values.length > 0) {
+          currentVersion = (result[0].values[0][0] as number) || 0;
+        }
+      } catch {
+        // schema_version table may not exist
+        currentVersion = 0;
+      }
+
+      // Detect old-era schema: version > 1 (new-era is 1) and <= 7 (old-era max)
+      // OR version 0 with old-style columns (gmail_message_id in emails table)
+      if (currentVersion > SCHEMA_VERSION && currentVersion <= 7) {
+        isLegacyDb = true;
+      } else if (currentVersion === 0) {
+        // Check if it has old-style columns
+        try {
+          const colCheck = this.db.exec("PRAGMA table_info(emails)");
+          const hasGmailMessageId = colCheck.length > 0 && colCheck[0].values.some(
+            (row) => (row[1] as string) === 'gmail_message_id'
+          );
+          if (hasGmailMessageId) {
+            isLegacyDb = true;
+          }
+        } catch {
+          // If we can't check, assume fresh DB
+        }
+      } else if (currentVersion === SCHEMA_VERSION) {
+        // Current era, check that schema is actually correct
+        try {
+          const colCheck = this.db.exec("PRAGMA table_info(emails)");
+          const hasXGmMsgId = colCheck.length > 0 && colCheck[0].values.some(
+            (row) => (row[1] as string) === 'x_gm_msgid'
+          );
+          if (!hasXGmMsgId) {
+            // Version says 1 but columns are wrong — legacy DB
+            isLegacyDb = true;
+          }
+        } catch {
+          isLegacyDb = true;
+        }
+      }
+
+      if (isLegacyDb) {
+        log.info(`Database reset: detected legacy schema (v${currentVersion}), deleting and recreating with new schema v${SCHEMA_VERSION}`);
+        this.db.close();
+        this.db = null;
+        fs.unlinkSync(this.dbPath);
+        this.db = new SQL.Database();
+        log.info('Created fresh database after legacy cleanup');
+      }
     } else {
       this.db = new SQL.Database();
       log.info('Created new database');
@@ -67,75 +123,6 @@ export class DatabaseService {
     // Run schema creation (creates tables if they don't exist)
     this.db.run(CREATE_TABLES_SQL);
 
-    // Determine current schema version (handles legacy DBs missing schema_version rows)
-    let currentVersion = 0;
-    try {
-      const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
-      if (result.length > 0 && result[0].values.length > 0) {
-        currentVersion = (result[0].values[0][0] as number) || 0;
-      }
-    } catch {
-      // schema_version table may not exist in very old DBs — CREATE_TABLES_SQL just created it
-      currentVersion = 0;
-    }
-
-    if (currentVersion === 0) {
-      // Fresh DB or legacy DB that never had a version row.
-      // Check if the old emails schema (with folder column) exists and needs migration.
-      const colCheck = this.db.exec("PRAGMA table_info(emails)");
-      const hasFolder = colCheck.length > 0 && colCheck[0].values.some(
-        (row) => (row[1] as string) === 'folder'
-      );
-
-      if (hasFolder) {
-        // Legacy DB with old schema — treat as version 1 so migration runs
-        currentVersion = 1;
-      } else {
-        // Truly fresh DB — schema is already v2 from CREATE_TABLES_SQL
-        currentVersion = SCHEMA_VERSION;
-      }
-    }
-
-    // Run migrations
-    if (currentVersion < 2) {
-      this.migrateV1toV2();
-    } else {
-      // Safety: if version claims v2 but the emails table still has a folder column
-      // (e.g. a previous migration attempt failed or was incomplete), re-run.
-      const colCheck = this.db.exec("PRAGMA table_info(emails)");
-      const hasFolder = colCheck.length > 0 && colCheck[0].values.some(
-        (row) => (row[1] as string) === 'folder'
-      );
-      if (hasFolder) {
-        log.warn('Schema version is 2 but emails table still has folder column — re-running migration');
-        this.migrateV1toV2();
-      }
-    }
-
-    if (currentVersion < 3) {
-      this.migrateV2toV3();
-    }
-
-    if (currentVersion < 4) {
-      this.migrateV3toV4();
-    }
-
-    if (currentVersion < 5) {
-      this.migrateV4toV5();
-    }
-
-    if (currentVersion < 6) {
-      this.migrateV5toV6();
-    }
-
-    if (currentVersion < 7) {
-      this.migrateV6toV7();
-    }
-
-    // Normalize legacy empty-string bodies to NULL so COALESCE works correctly
-    this.db.run("UPDATE emails SET text_body = NULL WHERE text_body = ''");
-    this.db.run("UPDATE emails SET html_body = NULL WHERE html_body = ''");
-
     // Ensure version row exists and is up to date
     this.db.run('DELETE FROM schema_version');
     this.db.run('INSERT INTO schema_version (version) VALUES (:version)', { ':version': SCHEMA_VERSION });
@@ -145,337 +132,6 @@ export class DatabaseService {
     this.saveToDisk();
 
     log.info('Database schema initialized');
-  }
-
-  /**
-   * Migrate from schema v1 (emails has folder column, duplicated rows) to v2
-   * (one row per message, email_folders link table).
-   */
-  private migrateV1toV2(): void {
-    if (!this.db) throw new Error('Database not initialized');
-    log.info('Running migration v1 → v2: email_folders link table');
-
-    // Disable foreign keys during migration so DROP TABLE doesn't CASCADE-delete
-    // rows in email_folders that we just populated.
-    this.db.run('PRAGMA foreign_keys = OFF');
-
-    // 1. Drop email_folders if it was created by CREATE_TABLES_SQL before migration
-    //    (it would reference the old emails table and would be empty anyway).
-    this.db.run('DROP TABLE IF EXISTS email_folders');
-
-    // 2. Create emails_new with the v2 schema (no folder, unique on account+message)
-    this.db.run('DROP TABLE IF EXISTS emails_new');
-    this.db.run(`
-      CREATE TABLE emails_new (
-        id INTEGER PRIMARY KEY,
-        account_id INTEGER NOT NULL,
-        gmail_message_id TEXT NOT NULL,
-        gmail_thread_id TEXT NOT NULL,
-        from_address TEXT NOT NULL,
-        from_name TEXT,
-        to_addresses TEXT NOT NULL,
-        cc_addresses TEXT,
-        bcc_addresses TEXT,
-        subject TEXT,
-        text_body TEXT,
-        html_body TEXT,
-        date TEXT NOT NULL,
-        is_read INTEGER NOT NULL DEFAULT 0,
-        is_starred INTEGER NOT NULL DEFAULT 0,
-        is_important INTEGER NOT NULL DEFAULT 0,
-        snippet TEXT,
-        size INTEGER,
-        has_attachments INTEGER NOT NULL DEFAULT 0,
-        labels TEXT,
-        raw_headers TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, gmail_message_id)
-      )
-    `);
-
-    // 3. Create email_folders fresh (will reference emails_new after rename)
-    this.db.run(`
-      CREATE TABLE email_folders (
-        id INTEGER PRIMARY KEY,
-        email_id INTEGER NOT NULL,
-        account_id INTEGER NOT NULL,
-        folder TEXT NOT NULL,
-        UNIQUE(email_id, folder)
-      )
-    `);
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_email_folders_account_folder ON email_folders(account_id, folder)');
-
-    // 4. For each group of duplicate rows, pick the canonical one (prefer body present)
-    //    and insert into emails_new, keeping the original id.
-    //    Use char(31) (unit separator) for folders so folder names containing commas are not split.
-    const groups = this.db.exec(`
-      SELECT account_id, gmail_message_id,
-        GROUP_CONCAT(id) AS ids,
-        GROUP_CONCAT(folder, char(31)) AS folders
-      FROM emails
-      GROUP BY account_id, gmail_message_id
-    `);
-
-    const FOLDER_SEP = '\u001F'; // must match char(31) used in GROUP_CONCAT
-    if (groups.length > 0) {
-      for (const row of groups[0].values) {
-        const accountId = row[0] as number;
-        const gmailMessageId = row[1] as string;
-        const ids = (row[2] as string).split(',').map(Number);
-        const folders = (row[3] as string).split(FOLDER_SEP);
-
-        // Pick canonical: prefer a row that has body content
-        const candidates = this.db.exec(`
-          SELECT id FROM emails
-          WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId
-          ORDER BY (CASE WHEN COALESCE(html_body, '') != '' OR COALESCE(text_body, '') != '' THEN 0 ELSE 1 END), id ASC
-          LIMIT 1
-        `, { ':accountId': accountId, ':gmailMessageId': gmailMessageId });
-
-        const canonicalId = candidates[0].values[0][0] as number;
-
-        // Insert canonical row into emails_new (keeping its id)
-        this.db.run(`
-          INSERT OR IGNORE INTO emails_new (id, account_id, gmail_message_id, gmail_thread_id,
-            from_address, from_name, to_addresses, cc_addresses, bcc_addresses,
-            subject, text_body, html_body, date, is_read, is_starred, is_important,
-            snippet, size, has_attachments, labels, raw_headers, created_at)
-          SELECT id, account_id, gmail_message_id, gmail_thread_id,
-            from_address, from_name, to_addresses, cc_addresses, bcc_addresses,
-            subject, text_body, html_body, date, is_read, is_starred, is_important,
-            snippet, size, has_attachments, labels, raw_headers, created_at
-          FROM emails WHERE id = :canonicalId
-        `, { ':canonicalId': canonicalId });
-
-        // Insert folder links for all folders this message appeared in
-        for (const folder of folders) {
-          this.db.run(
-            'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (:emailId, :accountId, :folder)',
-            { ':emailId': canonicalId, ':accountId': accountId, ':folder': folder.trim() }
-          );
-        }
-
-        // Reassign attachments and search_index from non-canonical rows to canonical
-        for (const oldId of ids) {
-          if (oldId !== canonicalId) {
-            this.db.run('UPDATE attachments SET email_id = :newId WHERE email_id = :oldId', { ':newId': canonicalId, ':oldId': oldId });
-            this.db.run('UPDATE search_index SET email_id = :newId WHERE email_id = :oldId', { ':newId': canonicalId, ':oldId': oldId });
-          }
-        }
-      }
-    }
-
-    // 5. Swap tables
-    this.db.run('DROP TABLE emails');
-    this.db.run('ALTER TABLE emails_new RENAME TO emails');
-
-    // 6. Recreate indexes on the new emails table
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, gmail_thread_id)');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC)');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address)');
-
-    // 7. Now add the FK constraint to email_folders by recreating it properly
-    //    (SQLite doesn't support ALTER TABLE ADD CONSTRAINT, but we just created
-    //    email_folders without the FK to avoid CASCADE issues during migration.
-    //    Recreate it with the FK now that emails points to the correct table.)
-    this.db.run(`
-      CREATE TABLE email_folders_new (
-        id INTEGER PRIMARY KEY,
-        email_id INTEGER NOT NULL,
-        account_id INTEGER NOT NULL,
-        folder TEXT NOT NULL,
-        FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-        UNIQUE(email_id, folder)
-      )
-    `);
-    this.db.run('INSERT INTO email_folders_new SELECT * FROM email_folders');
-    this.db.run('DROP TABLE email_folders');
-    this.db.run('ALTER TABLE email_folders_new RENAME TO email_folders');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_email_folders_account_folder ON email_folders(account_id, folder)');
-
-    // Re-enable foreign keys
-    this.db.run('PRAGMA foreign_keys = ON');
-
-    log.info('Migration v1 → v2 complete');
-  }
-
-  /**
-   * Migrate from schema v2 to v3: add imap_uid and imap_uid_validity to drafts table.
-   */
-  private migrateV2toV3(): void {
-    if (!this.db) throw new Error('Database not initialized');
-    log.info('Running migration v2 → v3: add IMAP UID columns to drafts');
-
-    // Check if columns already exist (idempotent)
-    const colCheck = this.db.exec("PRAGMA table_info(drafts)");
-    const hasImapUid = colCheck.length > 0 && colCheck[0].values.some(
-      (row) => (row[1] as string) === 'imap_uid'
-    );
-
-    if (!hasImapUid) {
-      this.db.run('ALTER TABLE drafts ADD COLUMN imap_uid INTEGER');
-      this.db.run('ALTER TABLE drafts ADD COLUMN imap_uid_validity INTEGER');
-    }
-
-    log.info('Migration v2 → v3 complete');
-  }
-
-  /**
-   * Migrate from schema v3 to v4: add uid column to email_folders and backfill
-   * from emails.gmail_message_id where it is numeric (legacy UID-based identifiers).
-   */
-  private migrateV3toV4(): void {
-    if (!this.db) throw new Error('Database not initialized');
-    log.info('Running migration v3 → v4: add uid to email_folders, Message-ID based dedup');
-
-    // Check if column already exists (idempotent)
-    const colCheck = this.db.exec("PRAGMA table_info(email_folders)");
-    const hasUid = colCheck.length > 0 && colCheck[0].values.some(
-      (row) => (row[1] as string) === 'uid'
-    );
-
-    if (!hasUid) {
-      this.db.run('ALTER TABLE email_folders ADD COLUMN uid INTEGER');
-    }
-
-    // Backfill uid from emails.gmail_message_id where it is purely numeric (legacy rows
-    // where gmail_message_id was set to the IMAP UID string).
-    // GLOB '[0-9]*' ensures it starts with a digit; the NOT GLOB '*[^0-9]*' ensures
-    // it contains only digits (no letters or special chars).
-    this.db.run(`
-      UPDATE email_folders SET uid = CAST(e.gmail_message_id AS INTEGER)
-      FROM emails e
-      WHERE email_folders.email_id = e.id
-        AND email_folders.uid IS NULL
-        AND e.gmail_message_id GLOB '[0-9]*'
-        AND e.gmail_message_id NOT GLOB '*[^0-9]*'
-        AND CAST(e.gmail_message_id AS INTEGER) > 0
-    `);
-
-    log.info('Migration v3 → v4 complete');
-  }
-
-  /**
-   * Migrate from schema v4 to v5: drop the drafts table.
-   * Draft content now lives in the compose store (renderer memory) until server confirms.
-   * After confirmation, drafts exist as regular emails in the emails table.
-   */
-  private migrateV4toV5(): void {
-    if (!this.db) throw new Error('Database not initialized');
-    log.info('Running migration v4 → v5: remove drafts table (queue-based draft system)');
-
-    // Check if drafts table exists before trying to drop
-    const tableCheck = this.db.exec(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='drafts'"
-    );
-
-    if (tableCheck.length > 0 && tableCheck[0].values.length > 0) {
-      // Log warning about data loss
-      const draftCount = this.db.exec('SELECT COUNT(*) FROM drafts');
-      const count = (draftCount.length > 0 && draftCount[0].values.length > 0)
-        ? draftCount[0].values[0][0] as number : 0;
-
-      if (count > 0) {
-        log.warn(
-          `Dropping drafts table with ${count} local draft(s). ` +
-          'Server-backed drafts will reappear on next sync. ' +
-          'Local-only drafts (no IMAP UID) are lost.'
-        );
-      }
-
-      this.db.run('DROP TABLE IF EXISTS drafts');
-      this.db.run('DROP INDEX IF EXISTS idx_drafts_account');
-    }
-
-    log.info('Migration v4 → v5 complete');
-  }
-
-  /**
-   * Migrate from schema v5 to v6: add filter execution support.
-   * - New tables: user_labels, email_labels
-   * - New column: emails.is_filtered
-   * - New column: filters.sort_order (backfilled from id)
-   */
-  private migrateV5toV6(): void {
-    if (!this.db) throw new Error('Database not initialized');
-    log.info('Running migration v5 → v6: filter execution engine tables');
-
-    // Add is_filtered column to emails (idempotent)
-    const emailCols = this.db.exec("PRAGMA table_info(emails)");
-    const hasIsFiltered = emailCols.length > 0 && emailCols[0].values.some(
-      (row) => (row[1] as string) === 'is_filtered'
-    );
-    if (!hasIsFiltered) {
-      this.db.run('ALTER TABLE emails ADD COLUMN is_filtered INTEGER NOT NULL DEFAULT 0');
-    }
-
-    // Add sort_order column to filters (idempotent)
-    const filterCols = this.db.exec("PRAGMA table_info(filters)");
-    const hasSortOrder = filterCols.length > 0 && filterCols[0].values.some(
-      (row) => (row[1] as string) === 'sort_order'
-    );
-    if (!hasSortOrder) {
-      this.db.run('ALTER TABLE filters ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
-      // Backfill: set sort_order = id to preserve creation-order as initial priority
-      this.db.run('UPDATE filters SET sort_order = id');
-    }
-
-    // Create user_labels table (idempotent via IF NOT EXISTS)
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS user_labels (
-        id INTEGER PRIMARY KEY,
-        account_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        color TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-        UNIQUE(account_id, name)
-      )
-    `);
-
-    // Create email_labels table (idempotent via IF NOT EXISTS)
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS email_labels (
-        id INTEGER PRIMARY KEY,
-        email_id INTEGER NOT NULL,
-        label_id INTEGER NOT NULL,
-        account_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-        FOREIGN KEY (label_id) REFERENCES user_labels(id) ON DELETE CASCADE,
-        UNIQUE(email_id)
-      )
-    `);
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_email_labels_account_label ON email_labels(account_id, label_id)');
-
-    log.info('Migration v5 → v6 complete');
-  }
-
-  /**
-   * Migrate from schema v6 to v7: add is_draft column to emails table.
-   * Backfills existing drafts from [Gmail]/Drafts folder membership.
-   */
-  private migrateV6toV7(): void {
-    if (!this.db) throw new Error('Database not initialized');
-    log.info('Running migration v6 → v7: add is_draft column to emails');
-
-    // Add is_draft column (idempotent)
-    const emailCols = this.db.exec("PRAGMA table_info(emails)");
-    const hasIsDraft = emailCols.length > 0 && emailCols[0].values.some(
-      (row) => (row[1] as string) === 'is_draft'
-    );
-    if (!hasIsDraft) {
-      this.db.run('ALTER TABLE emails ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0');
-      // Backfill: mark emails in [Gmail]/Drafts folder as drafts
-      this.db.run(
-        `UPDATE emails SET is_draft = 1 WHERE id IN (
-          SELECT email_id FROM email_folders WHERE folder = '[Gmail]/Drafts'
-        )`
-      );
-    }
-
-    log.info('Migration v6 → v7 complete');
   }
 
   /** Persist the in-memory database to disk */
@@ -501,7 +157,8 @@ export class DatabaseService {
     return this.db;
   }
 
-  // Settings operations
+  // ---- Settings operations ----
+
   getSetting(key: string): string | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec('SELECT value FROM settings WHERE key = :key', { ':key': key });
@@ -532,7 +189,8 @@ export class DatabaseService {
     return settings;
   }
 
-  // Account operations
+  // ---- Account operations ----
+
   getAccounts(): Array<{ id: number; email: string; display_name: string; avatar_url: string | null; is_active: number; needs_reauth: number }> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE is_active = 1');
@@ -568,7 +226,6 @@ export class DatabaseService {
       'INSERT INTO accounts (email, display_name, avatar_url, is_active) VALUES (:email, :displayName, :avatarUrl, 1)',
       { ':email': email, ':displayName': displayName, ':avatarUrl': avatarUrl }
     );
-    // Get the last inserted rowid
     const result = this.db.exec('SELECT last_insert_rowid()');
     const id = result[0].values[0][0] as number;
     this.scheduleSave();
@@ -586,7 +243,6 @@ export class DatabaseService {
 
   deleteAccount(id: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    // CASCADE will handle emails, threads, labels, filters
     this.db.run('DELETE FROM accounts WHERE id = :id', { ':id': id });
     this.scheduleSave();
     log.info(`Deleted account ${id} and all related data`);
@@ -605,43 +261,22 @@ export class DatabaseService {
     return result[0].values[0][0] as number;
   }
 
-  // ---- Email operations ----
+  // ---- Email operations (keyed by X-GM-MSGID) ----
 
-  upsertEmail(email: {
-    accountId: number;
-    gmailMessageId: string;
-    gmailThreadId: string;
-    folder: string;
-    folderUid?: number;
-    fromAddress: string;
-    fromName?: string;
-    toAddresses: string;
-    ccAddresses?: string;
-    bccAddresses?: string;
-    subject?: string;
-    textBody?: string;
-    htmlBody?: string;
-    date: string;
-    isRead: boolean;
-    isStarred: boolean;
-    isImportant: boolean;
-    isDraft?: boolean;
-    snippet?: string;
-    size?: number;
-    hasAttachments: boolean;
-    labels?: string;
-  }): number {
+  upsertEmail(email: UpsertEmailInput): number {
     if (!this.db) throw new Error('Database not initialized');
-    // Upsert the single email row (no folder in the emails table).
+    // Upsert the single email row.
     // Pass NULL (not '') for empty bodies so COALESCE preserves existing body on update.
     this.db.run(
-      `INSERT INTO emails (account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
+      `INSERT INTO emails (account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
         is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels)
-       VALUES (:accountId, :gmailMessageId, :gmailThreadId, :fromAddress, :fromName,
+       VALUES (:accountId, :xGmMsgId, :xGmThrid, :messageId, :fromAddress, :fromName,
         :toAddresses, :ccAddresses, :bccAddresses, :subject, :textBody, :htmlBody, :date,
         :isRead, :isStarred, :isImportant, :isDraft, :snippet, :size, :hasAttachments, :labels)
-       ON CONFLICT(account_id, gmail_message_id) DO UPDATE SET
+       ON CONFLICT(account_id, x_gm_msgid) DO UPDATE SET
+        x_gm_thrid = excluded.x_gm_thrid,
+        message_id = COALESCE(NULLIF(excluded.message_id, ''), message_id),
         from_address = excluded.from_address, from_name = excluded.from_name,
         to_addresses = excluded.to_addresses, cc_addresses = excluded.cc_addresses, bcc_addresses = excluded.bcc_addresses,
         subject = excluded.subject,
@@ -654,8 +289,9 @@ export class DatabaseService {
         labels = excluded.labels`,
       {
         ':accountId': email.accountId,
-        ':gmailMessageId': email.gmailMessageId,
-        ':gmailThreadId': email.gmailThreadId,
+        ':xGmMsgId': email.xGmMsgId,
+        ':xGmThrid': email.xGmThrid,
+        ':messageId': email.messageId || null,
         ':fromAddress': email.fromAddress,
         ':fromName': email.fromName || '',
         ':toAddresses': email.toAddresses,
@@ -678,22 +314,22 @@ export class DatabaseService {
 
     // Retrieve the actual id (last_insert_rowid is unreliable after ON CONFLICT)
     const result = this.db.exec(
-      'SELECT id FROM emails WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId',
-      { ':accountId': email.accountId, ':gmailMessageId': email.gmailMessageId }
+      'SELECT id FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId }
     );
     const id = result[0].values[0][0] as number;
 
-    // Record folder association in the link table (with per-folder UID if available)
+    // Record folder association in the link table (keyed by x_gm_msgid, not email_id)
     if (email.folderUid != null) {
       this.db.run(
-        `INSERT INTO email_folders (email_id, account_id, folder, uid) VALUES (:emailId, :accountId, :folder, :folderUid)
-         ON CONFLICT(email_id, folder) DO UPDATE SET uid = excluded.uid`,
-        { ':emailId': id, ':accountId': email.accountId, ':folder': email.folder, ':folderUid': email.folderUid }
+        `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :folderUid)
+         ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`,
+        { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder, ':folderUid': email.folderUid }
       );
     } else {
       this.db.run(
-        'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (:emailId, :accountId, :folder)',
-        { ':emailId': id, ':accountId': email.accountId, ':folder': email.folder }
+        'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
+        { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder }
       );
     }
 
@@ -701,15 +337,15 @@ export class DatabaseService {
     return id;
   }
 
-  getEmailsByThreadId(accountId: number, gmailThreadId: string): Array<Record<string, unknown>> {
+  getEmailsByThreadId(accountId: number, xGmThrid: string): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
+      `SELECT id, account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, is_draft, size, has_attachments, labels
-       FROM emails WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId
+       FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
        ORDER BY date ASC`,
-      { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      { ':accountId': accountId, ':xGmThrid': xGmThrid }
     );
     if (result.length === 0) return [];
     return result[0].values.map((row) => this.mapEmailRow(row, result[0].columns));
@@ -718,7 +354,7 @@ export class DatabaseService {
   getEmailById(id: number): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
+      `SELECT id, account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, is_draft, size, has_attachments, labels
        FROM emails WHERE id = :id`,
@@ -728,42 +364,59 @@ export class DatabaseService {
     return this.mapEmailRow(result[0].values[0], result[0].columns);
   }
 
-  getEmailByGmailMessageId(accountId: number, gmailMessageId: string): Record<string, unknown> | null {
+  getEmailByXGmMsgId(accountId: number, xGmMsgId: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_message_id, gmail_thread_id, from_address, from_name,
+      `SELECT id, account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, is_draft, size, has_attachments, labels
-       FROM emails WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId LIMIT 1`,
-      { ':accountId': accountId, ':gmailMessageId': gmailMessageId }
+       FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId LIMIT 1`,
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
     );
     if (result.length === 0 || result[0].values.length === 0) return null;
     return this.mapEmailRow(result[0].values[0], result[0].columns);
   }
 
   /** Get all folders an email appears in (via the email_folders link table). */
-  getFoldersForEmail(accountId: number, gmailMessageId: string): string[] {
+  getFoldersForEmail(accountId: number, xGmMsgId: string): string[] {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT ef.folder FROM email_folders ef
-       JOIN emails e ON e.id = ef.email_id
-       WHERE e.account_id = :accountId AND e.gmail_message_id = :gmailMessageId`,
-      { ':accountId': accountId, ':gmailMessageId': gmailMessageId }
+      `SELECT folder FROM email_folders
+       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
     );
     if (result.length === 0) return [];
     return result[0].values.map((row) => row[0] as string);
   }
 
+  /**
+   * Get all (folder, uid) pairs for an email.
+   * UID is returned only where present (non-null).
+   */
+  getFolderUidsForEmail(accountId: number, xGmMsgId: string): Array<{ folder: string; uid: number }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT folder, uid FROM email_folders
+       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND uid IS NOT NULL`,
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => ({
+      folder: row[0] as string,
+      uid: row[1] as number,
+    }));
+  }
+
   updateEmailFlags(
     accountId: number,
-    gmailMessageId: string,
+    xGmMsgId: string,
     flags: { isRead?: boolean; isStarred?: boolean; isImportant?: boolean }
   ): void {
     if (!this.db) throw new Error('Database not initialized');
     const updates: string[] = [];
     const params: Record<string, string | number> = {
       ':accountId': accountId,
-      ':gmailMessageId': gmailMessageId,
+      ':xGmMsgId': xGmMsgId,
     };
 
     if (flags.isRead !== undefined) {
@@ -782,7 +435,7 @@ export class DatabaseService {
     if (updates.length === 0) return;
 
     this.db.run(
-      `UPDATE emails SET ${updates.join(', ')} WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId`,
+      `UPDATE emails SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
       params
     );
     this.scheduleSave();
@@ -794,61 +447,45 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
-  /** Delete all email records for a thread (cascades to email_folders, attachments, etc.).
-   *  Used to invalidate cached thread data so the next fetchThread re-pulls from IMAP. */
-  deleteEmailsByThreadId(accountId: number, gmailThreadId: string): void {
+  deleteEmailsByThreadId(accountId: number, xGmThrid: string): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      'DELETE FROM emails WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-      { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      'DELETE FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+      { ':accountId': accountId, ':xGmThrid': xGmThrid }
     );
     this.scheduleSave();
   }
 
-  // ---- Thread operations ----
+  // ---- Thread operations (keyed by X-GM-THRID) ----
 
-  upsertThread(thread: {
-    accountId: number;
-    gmailThreadId: string;
-    subject?: string;
-    lastMessageDate: string;
-    participants?: string;
-    messageCount: number;
-    snippet?: string;
-    folder: string;
-    isRead: boolean;
-    isStarred: boolean;
-  }): number {
+  upsertThread(thread: UpsertThreadInput): number {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      `INSERT INTO threads (account_id, gmail_thread_id, subject, last_message_date, participants,
-        message_count, snippet, folder, is_read, is_starred, updated_at)
-       VALUES (:accountId, :gmailThreadId, :subject, :lastMessageDate, :participants,
-        :messageCount, :snippet, :folder, :isRead, :isStarred, datetime('now'))
-       ON CONFLICT(account_id, gmail_thread_id) DO UPDATE SET
+      `INSERT INTO threads (account_id, x_gm_thrid, subject, last_message_date, participants,
+        message_count, snippet, is_read, is_starred, updated_at)
+       VALUES (:accountId, :xGmThrid, :subject, :lastMessageDate, :participants,
+        :messageCount, :snippet, :isRead, :isStarred, datetime('now'))
+       ON CONFLICT(account_id, x_gm_thrid) DO UPDATE SET
         subject = excluded.subject, last_message_date = excluded.last_message_date,
         participants = excluded.participants, message_count = excluded.message_count,
-        snippet = excluded.snippet, folder = excluded.folder,
+        snippet = excluded.snippet,
         is_read = excluded.is_read, is_starred = excluded.is_starred,
         updated_at = datetime('now')`,
       {
         ':accountId': thread.accountId,
-        ':gmailThreadId': thread.gmailThreadId,
+        ':xGmThrid': thread.xGmThrid,
         ':subject': thread.subject || '',
         ':lastMessageDate': thread.lastMessageDate,
         ':participants': thread.participants || '',
         ':messageCount': thread.messageCount,
         ':snippet': thread.snippet || '',
-        ':folder': thread.folder,
         ':isRead': thread.isRead ? 1 : 0,
         ':isStarred': thread.isStarred ? 1 : 0,
       }
     );
-    // last_insert_rowid() is only reliable for INSERT, not ON CONFLICT UPDATE.
-    // Query the actual ID to handle both cases.
     const result = this.db.exec(
-      'SELECT id FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-      { ':accountId': thread.accountId, ':gmailThreadId': thread.gmailThreadId }
+      'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+      { ':accountId': thread.accountId, ':xGmThrid': thread.xGmThrid }
     );
     const id = result[0].values[0][0] as number;
     this.scheduleSave();
@@ -863,10 +500,10 @@ export class DatabaseService {
   ): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date, t.participants,
+      `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date, t.participants,
         t.message_count, t.snippet, tf.folder, t.is_read, t.is_starred
        FROM threads t
-       INNER JOIN thread_folders tf ON t.id = tf.thread_id
+       INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid
        WHERE t.account_id = :accountId AND tf.folder = :folder
        ORDER BY t.last_message_date DESC LIMIT :limit OFFSET :offset`,
       { ':accountId': accountId, ':folder': folder, ':limit': limit, ':offset': offset }
@@ -875,10 +512,6 @@ export class DatabaseService {
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
-  /**
-   * Get threads in a folder older than the given date, ordered newest-first.
-   * Used by MAIL_FETCH_OLDER to return only the older threads after upserting.
-   */
   getThreadsByFolderBeforeDate(
     accountId: number,
     folder: string,
@@ -887,10 +520,10 @@ export class DatabaseService {
   ): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date, t.participants,
+      `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date, t.participants,
         t.message_count, t.snippet, tf.folder, t.is_read, t.is_starred
        FROM threads t
-       INNER JOIN thread_folders tf ON t.id = tf.thread_id
+       INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid
        WHERE t.account_id = :accountId AND tf.folder = :folder AND t.last_message_date < :beforeDate
        ORDER BY t.last_message_date DESC LIMIT :limit`,
       { ':accountId': accountId, ':folder': folder, ':beforeDate': beforeDate, ':limit': limit }
@@ -899,29 +532,28 @@ export class DatabaseService {
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
-  getThreadById(accountId: number, gmailThreadId: string): Record<string, unknown> | null {
+  getThreadById(accountId: number, xGmThrid: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_thread_id, subject, last_message_date, participants,
-        message_count, snippet, folder, is_read, is_starred
-       FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
-      { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
+      `SELECT id, account_id, x_gm_thrid, subject, last_message_date, participants,
+        message_count, snippet, is_read, is_starred
+       FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
+      { ':accountId': accountId, ':xGmThrid': xGmThrid }
     );
     if (result.length === 0 || result[0].values.length === 0) return null;
     return this.mapThreadRow(result[0].values[0], result[0].columns);
   }
 
-  /** Update flag columns on the threads table (is_read, is_starred). */
   updateThreadFlags(
     accountId: number,
-    gmailThreadId: string,
+    xGmThrid: string,
     flags: { isRead?: boolean; isStarred?: boolean }
   ): void {
     if (!this.db) throw new Error('Database not initialized');
     const updates: string[] = [];
     const params: Record<string, string | number> = {
       ':accountId': accountId,
-      ':gmailThreadId': gmailThreadId,
+      ':xGmThrid': xGmThrid,
     };
 
     if (flags.isRead !== undefined) {
@@ -936,24 +568,571 @@ export class DatabaseService {
     if (updates.length === 0) return;
 
     this.db.run(
-      `UPDATE threads SET ${updates.join(', ')} WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
+      `UPDATE threads SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
       params
     );
     this.scheduleSave();
   }
 
-  // ---- Label/Folder operations ----
+  // ---- Thread-Folder operations (keyed by X-GM-THRID) ----
 
-  /** Associate a thread with a folder (many-to-many). */
-  upsertThreadFolder(threadId: number, accountId: number, folder: string): void {
+  upsertThreadFolder(accountId: number, xGmThrid: string, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      `INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder)
-       VALUES (:threadId, :accountId, :folder)`,
-      { ':threadId': threadId, ':accountId': accountId, ':folder': folder }
+      `INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder)
+       VALUES (:accountId, :xGmThrid, :folder)`,
+      { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
     );
-    // No scheduleSave here — the caller (SyncService) batches saves via upsertThread.
   }
+
+  removeThreadFolderAssociation(accountId: number, xGmThrid: string, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
+      { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+    );
+    this.scheduleSave();
+  }
+
+  getFoldersForThread(accountId: number, xGmThrid: string): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      'SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+      { ':accountId': accountId, ':xGmThrid': xGmThrid }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
+  }
+
+  getThreadInternalId(accountId: number, xGmThrid: string): number | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+      { ':accountId': accountId, ':xGmThrid': xGmThrid }
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    return result[0].values[0][0] as number;
+  }
+
+  // ---- Email-Folder association management (keyed by X-GM-MSGID) ----
+
+  removeEmailFolderAssociation(accountId: number, xGmMsgId: string, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
+    );
+    this.scheduleSave();
+  }
+
+  moveEmailFolder(accountId: number, xGmMsgId: string, sourceFolder: string, targetFolder: string, targetUid?: number | null): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      // Remove source folder association
+      this.db.run(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
+        { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': sourceFolder }
+      );
+      // Add target folder association (with uid if available)
+      if (targetUid != null) {
+        this.db.run(
+          `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :uid)
+           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`,
+          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': targetFolder, ':uid': targetUid }
+        );
+      } else {
+        this.db.run(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
+          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': targetFolder }
+        );
+      }
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  moveThreadFolder(accountId: number, xGmThrid: string, sourceFolder: string, targetFolder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      this.db.run(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
+        { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': sourceFolder }
+      );
+      this.db.run(
+        'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)',
+        { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': targetFolder }
+      );
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  threadHasEmailsInFolder(accountId: number, xGmThrid: string, folder: string): boolean {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT COUNT(*) FROM email_folders ef
+       JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+       WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
+      { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+    );
+    if (result.length === 0 || result[0].values.length === 0) return false;
+    return (result[0].values[0][0] as number) > 0;
+  }
+
+  /** Get all x_gm_msgid values that have a folder association for a given account + folder. */
+  getEmailXGmMsgIdsByFolder(accountId: number, folder: string): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT x_gm_msgid FROM email_folders
+       WHERE account_id = :accountId AND folder = :folder`,
+      { ':accountId': accountId, ':folder': folder }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
+  }
+
+  /** Get all (x_gm_msgid, uid) pairs from email_folders for a given account + folder. */
+  getEmailFolderUids(accountId: number, folder: string): Array<{ xGmMsgId: string; uid: number }> {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT x_gm_msgid, uid FROM email_folders
+       WHERE account_id = :accountId AND folder = :folder AND uid IS NOT NULL`,
+      { ':accountId': accountId, ':folder': folder }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => ({
+      xGmMsgId: row[0] as string,
+      uid: row[1] as number,
+    }));
+  }
+
+  // ---- Email removal and orphan cleanup ----
+
+  removeEmailAndAssociations(accountId: number, xGmMsgId: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      const emailResult = this.db.exec(
+        'SELECT id, x_gm_thrid FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+        { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
+      );
+      if (emailResult.length === 0 || emailResult[0].values.length === 0) {
+        this.db.run('COMMIT');
+        return;
+      }
+      const emailId = emailResult[0].values[0][0] as number;
+      const xGmThrid = emailResult[0].values[0][1] as string;
+
+      // Remove all folder associations for this email
+      this.db.run('DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+        { ':accountId': accountId, ':xGmMsgId': xGmMsgId });
+
+      // Remove the email row itself (CASCADE handles attachments, search_index, email_labels)
+      this.db.run('DELETE FROM emails WHERE id = :emailId', { ':emailId': emailId });
+
+      // Clean up orphaned thread
+      if (xGmThrid) {
+        const remainingResult = this.db.exec(
+          'SELECT COUNT(*) FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+          { ':accountId': accountId, ':xGmThrid': xGmThrid }
+        );
+        const remaining = (remainingResult.length > 0 && remainingResult[0].values.length > 0)
+          ? remainingResult[0].values[0][0] as number : 0;
+
+        if (remaining === 0) {
+          this.db.run(
+            'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+            { ':accountId': accountId, ':xGmThrid': xGmThrid }
+          );
+          this.db.run(
+            'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+            { ':accountId': accountId, ':xGmThrid': xGmThrid }
+          );
+        } else {
+          // Thread still has emails — remove thread_folders for folders with no remaining emails
+          const tfResult = this.db.exec(
+            'SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+            { ':accountId': accountId, ':xGmThrid': xGmThrid }
+          );
+          if (tfResult.length > 0) {
+            for (const row of tfResult[0].values) {
+              const folder = row[0] as string;
+              const countResult = this.db.exec(
+                `SELECT COUNT(*) FROM email_folders ef
+                 JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+                 WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
+                { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+              );
+              const count = (countResult.length > 0 && countResult[0].values.length > 0)
+                ? countResult[0].values[0][0] as number : 0;
+              if (count === 0) {
+                this.db.run(
+                  'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
+                  { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+                );
+              }
+            }
+          }
+        }
+      }
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  removeOrphanedEmails(accountId: number): Array<{ xGmMsgId: string; xGmThrid: string }> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const removed: Array<{ xGmMsgId: string; xGmThrid: string }> = [];
+
+    this.db.run('BEGIN');
+    try {
+      const selectResult = this.db.exec(
+        `SELECT x_gm_msgid, x_gm_thrid FROM emails
+         WHERE account_id = :accountId
+           AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)`,
+        { ':accountId': accountId }
+      );
+
+      if (selectResult.length > 0) {
+        for (const row of selectResult[0].values) {
+          removed.push({
+            xGmMsgId: row[0] as string,
+            xGmThrid: row[1] as string,
+          });
+        }
+      }
+
+      if (removed.length > 0) {
+        this.db.run(
+          `DELETE FROM emails
+           WHERE account_id = :accountId
+             AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)`,
+          { ':accountId': accountId }
+        );
+      }
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+
+    if (removed.length > 0) {
+      this.scheduleSave();
+    }
+    return removed;
+  }
+
+  removeOrphanedThreads(accountId: number): number {
+    if (!this.db) throw new Error('Database not initialized');
+    const countResult = this.db.exec(
+      `SELECT COUNT(*) FROM threads t WHERE t.account_id = :accountId
+       AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = t.account_id AND tf.x_gm_thrid = t.x_gm_thrid)`,
+      { ':accountId': accountId }
+    );
+    const count = (countResult.length > 0 && countResult[0].values.length > 0)
+      ? countResult[0].values[0][0] as number : 0;
+
+    if (count > 0) {
+      this.db.run(
+        `DELETE FROM threads WHERE account_id = :accountId
+         AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = threads.account_id AND tf.x_gm_thrid = threads.x_gm_thrid)`,
+        { ':accountId': accountId }
+      );
+      this.scheduleSave();
+    }
+    return count;
+  }
+
+  getAffectedThreadIds(accountId: number, xGmMsgIds: string[]): string[] {
+    if (!this.db) throw new Error('Database not initialized');
+    if (xGmMsgIds.length === 0) return [];
+
+    const placeholders = xGmMsgIds.map((_, i) => `:id${i}`).join(', ');
+    const params: Record<string, string | number> = { ':accountId': accountId };
+    for (let i = 0; i < xGmMsgIds.length; i++) {
+      params[`:id${i}`] = xGmMsgIds[i];
+    }
+
+    const result = this.db.exec(
+      `SELECT DISTINCT x_gm_thrid FROM emails
+       WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
+      params
+    );
+
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => row[0] as string);
+  }
+
+  recomputeThreadMetadata(accountId: number, xGmThrid: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+
+    this.db.run('BEGIN');
+    try {
+      const countResult = this.db.exec(
+        `SELECT COUNT(*) FROM emails
+         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      const emailCount = (countResult.length > 0 && countResult[0].values.length > 0)
+        ? countResult[0].values[0][0] as number : 0;
+
+      const threadResult = this.db.exec(
+        'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      if (threadResult.length === 0 || threadResult[0].values.length === 0) {
+        this.db.run('COMMIT');
+        return;
+      }
+      const threadId = threadResult[0].values[0][0] as number;
+
+      if (emailCount === 0) {
+        this.db.run('DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+          { ':accountId': accountId, ':xGmThrid': xGmThrid });
+        this.db.run('DELETE FROM threads WHERE id = :threadId', { ':threadId': threadId });
+        this.db.run('COMMIT');
+        this.scheduleSave();
+        return;
+      }
+
+      const aggResult = this.db.exec(
+        `SELECT
+           COUNT(*) AS message_count,
+           MAX(date) AS last_message_date,
+           MIN(CASE WHEN is_read = 0 THEN 0 ELSE 1 END) AS all_read,
+           MAX(is_starred) AS any_starred
+         FROM emails
+         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+
+      if (aggResult.length === 0 || aggResult[0].values.length === 0) {
+        this.db.run('COMMIT');
+        return;
+      }
+
+      const agg = aggResult[0].values[0];
+      const messageCount = agg[0] as number;
+      const lastMessageDate = agg[1] as string;
+      const isRead = (agg[2] as number) === 1;
+      const isStarred = (agg[3] as number) === 1;
+
+      const snippetResult = this.db.exec(
+        `SELECT snippet FROM emails
+         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
+         ORDER BY date DESC LIMIT 1`,
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      const snippet = (snippetResult.length > 0 && snippetResult[0].values.length > 0)
+        ? snippetResult[0].values[0][0] as string : '';
+
+      const participantsResult = this.db.exec(
+        `SELECT DISTINCT from_address FROM emails
+         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      const participants = participantsResult.length > 0 && participantsResult[0].values.length > 0
+        ? participantsResult[0].values.map((row) => row[0] as string).join(', ') : '';
+
+      this.db.run(
+        `UPDATE threads SET
+           message_count = :messageCount,
+           last_message_date = :lastMessageDate,
+           snippet = :snippet,
+           participants = :participants,
+           is_read = :isRead,
+           is_starred = :isStarred,
+           updated_at = datetime('now')
+         WHERE id = :threadId`,
+        {
+          ':messageCount': messageCount,
+          ':lastMessageDate': lastMessageDate,
+          ':snippet': snippet || '',
+          ':participants': participants,
+          ':isRead': isRead ? 1 : 0,
+          ':isStarred': isStarred ? 1 : 0,
+          ':threadId': threadId,
+        }
+      );
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  // ---- Folder State operations (CONDSTORE) ----
+
+  upsertFolderState(input: UpsertFolderStateInput): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT INTO folder_state (account_id, folder, uid_validity, highest_modseq, condstore_supported, last_reconciled_at, updated_at)
+       VALUES (:accountId, :folder, :uidValidity, :highestModseq, :condstoreSupported, :lastReconciledAt, datetime('now'))
+       ON CONFLICT(account_id, folder) DO UPDATE SET
+        uid_validity = excluded.uid_validity,
+        highest_modseq = excluded.highest_modseq,
+        condstore_supported = excluded.condstore_supported,
+        last_reconciled_at = COALESCE(excluded.last_reconciled_at, folder_state.last_reconciled_at),
+        updated_at = datetime('now')`,
+      {
+        ':accountId': input.accountId,
+        ':folder': input.folder,
+        ':uidValidity': input.uidValidity,
+        ':highestModseq': input.highestModseq ?? null,
+        ':condstoreSupported': (input.condstoreSupported ?? true) ? 1 : 0,
+        ':lastReconciledAt': input.lastReconciledAt ?? null,
+      }
+    );
+    this.scheduleSave();
+  }
+
+  getFolderState(accountId: number, folder: string): FolderStateRecord | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, folder, uid_validity, highest_modseq, condstore_supported, last_reconciled_at, updated_at
+       FROM folder_state WHERE account_id = :accountId AND folder = :folder`,
+      { ':accountId': accountId, ':folder': folder }
+    );
+    if (result.length === 0 || result[0].values.length === 0) return null;
+    const row = result[0].values[0];
+    return {
+      id: row[0] as number,
+      accountId: row[1] as number,
+      folder: row[2] as string,
+      uidValidity: row[3] as string,
+      highestModseq: row[4] as string | null,
+      condstoreSupported: (row[5] as number) === 1,
+      lastReconciledAt: row[6] as string | null,
+      updatedAt: row[7] as string,
+    };
+  }
+
+  getAllFolderStates(accountId: number): FolderStateRecord[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, folder, uid_validity, highest_modseq, condstore_supported, last_reconciled_at, updated_at
+       FROM folder_state WHERE account_id = :accountId`,
+      { ':accountId': accountId }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => ({
+      id: row[0] as number,
+      accountId: row[1] as number,
+      folder: row[2] as string,
+      uidValidity: row[3] as string,
+      highestModseq: row[4] as string | null,
+      condstoreSupported: (row[5] as number) === 1,
+      lastReconciledAt: row[6] as string | null,
+      updatedAt: row[7] as string,
+    }));
+  }
+
+  deleteFolderState(accountId: number, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'DELETE FROM folder_state WHERE account_id = :accountId AND folder = :folder',
+      { ':accountId': accountId, ':folder': folder }
+    );
+    this.scheduleSave();
+  }
+
+  updateFolderStateReconciliation(accountId: number, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `UPDATE folder_state SET last_reconciled_at = datetime('now'), updated_at = datetime('now')
+       WHERE account_id = :accountId AND folder = :folder`,
+      { ':accountId': accountId, ':folder': folder }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Wipe all folder data for a UIDVALIDITY reset.
+   * Removes email_folders, thread_folders for the folder, cleans orphans.
+   */
+  wipeFolderData(accountId: number, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const affectedThreadIds = new Set<string>();
+    const affectedResult = this.db.exec(
+      `SELECT DISTINCT e.x_gm_thrid
+       FROM emails e
+       INNER JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
+       WHERE ef.account_id = :accountId AND ef.folder = :folder`,
+      { ':accountId': accountId, ':folder': folder }
+    );
+    if (affectedResult.length > 0) {
+      for (const row of affectedResult[0].values) {
+        const xGmThrid = row[0] as string;
+        if (xGmThrid) {
+          affectedThreadIds.add(xGmThrid);
+        }
+      }
+    }
+
+    this.db.run('BEGIN');
+    try {
+      // Remove all email_folders for this folder
+      this.db.run(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND folder = :folder',
+        { ':accountId': accountId, ':folder': folder }
+      );
+      // Remove all thread_folders for this folder
+      this.db.run(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND folder = :folder',
+        { ':accountId': accountId, ':folder': folder }
+      );
+      // Remove folder state
+      this.db.run(
+        'DELETE FROM folder_state WHERE account_id = :accountId AND folder = :folder',
+        { ':accountId': accountId, ':folder': folder }
+      );
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+
+    // Remove newly orphaned emails and track their affected threads
+    const orphanedEmails = this.removeOrphanedEmails(accountId);
+    for (const orphan of orphanedEmails) {
+      if (orphan.xGmThrid) {
+        affectedThreadIds.add(orphan.xGmThrid);
+      }
+    }
+
+    // Recompute metadata for all affected threads
+    for (const xGmThrid of affectedThreadIds) {
+      try {
+        this.recomputeThreadMetadata(accountId, xGmThrid);
+      } catch (err) {
+        log.warn(`[DatabaseService] wipeFolderData: recomputeThreadMetadata failed for thread ${xGmThrid}:`, err);
+      }
+    }
+
+    // Remove threads that no longer belong to any folder
+    this.removeOrphanedThreads(accountId);
+
+    this.scheduleSave();
+  }
+
+  // ---- Label/Folder operations ----
 
   upsertLabel(label: {
     accountId: number;
@@ -984,16 +1163,12 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
-  /**
-   * Unread count per folder as unread *threads* (conversations), to match Gmail's sidebar.
-   * Gmail shows unread conversation count, not unread message count.
-   */
   getUnreadThreadCountsByFolder(accountId: number): Record<string, number> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT tf.folder, COUNT(DISTINCT t.id) AS cnt
        FROM thread_folders tf
-       INNER JOIN threads t ON t.id = tf.thread_id
+       INNER JOIN threads t ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid
        WHERE tf.account_id = :accountId AND t.is_read = 0
        GROUP BY tf.folder`,
       { ':accountId': accountId }
@@ -1053,6 +1228,19 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
+  searchContacts(query: string, limit: number = 10): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
+    const likeQuery = `%${query}%`;
+    const result = this.db.exec(
+      `SELECT id, email, display_name, frequency, last_contacted_at
+       FROM contacts WHERE email LIKE :likeQuery OR display_name LIKE :likeQuery
+       ORDER BY frequency DESC LIMIT :limit`,
+      { ':likeQuery': likeQuery, ':limit': limit }
+    );
+    if (result.length === 0) return [];
+    return result[0].values.map((row) => this.mapGenericRow(row, result[0].columns));
+  }
+
   // ---- Search operations ----
 
   upsertSearchIndex(emailId: number, subject: string, body: string, fromName: string, fromAddress: string): void {
@@ -1065,26 +1253,14 @@ export class DatabaseService {
         from_name = excluded.from_name, from_address = excluded.from_address`,
       { ':emailId': emailId, ':subject': subject, ':body': body, ':fromName': fromName, ':fromAddress': fromAddress }
     );
-    // Don't schedule save for search index — let the caller batch saves
   }
 
-  /**
-   * Search emails across all folders using Gmail-style query operators.
-   * Returns thread-grouped results matching the same shape as getThreadsByFolder().
-   *
-   * Uses the gmail-query-parser to convert operator syntax to SQL WHERE clauses.
-   * Groups results by gmail_thread_id and computes thread metadata.
-   */
   searchEmails(accountId: number, query: string, limit: number = 100): Array<Record<string, unknown>> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
+    if (!this.db) throw new Error('Database not initialized');
 
-    // Lazy-import to avoid circular dependencies at module load time
     const { parseGmailQuery } = require('../utils/gmail-query-parser');
     const parsed = parseGmailQuery(query, { accountId }) as { whereClause: string; params: Record<string, unknown> };
 
-    // Build query: find matching emails, then group by thread
     const params = {
       ':accountId': accountId,
       ':limit': limit,
@@ -1095,7 +1271,7 @@ export class DatabaseService {
       SELECT
         t.id,
         t.account_id,
-        t.gmail_thread_id,
+        t.x_gm_thrid,
         t.subject,
         t.last_message_date,
         t.participants,
@@ -1106,8 +1282,8 @@ export class DatabaseService {
         t.is_starred
       FROM threads t
       WHERE t.account_id = :accountId
-        AND t.gmail_thread_id IN (
-          SELECT DISTINCT e.gmail_thread_id
+        AND t.x_gm_thrid IN (
+          SELECT DISTINCT e.x_gm_thrid
           FROM emails e
           WHERE e.account_id = :accountId AND (${parsed.whereClause})
         )
@@ -1116,29 +1292,18 @@ export class DatabaseService {
     `;
 
     const result = this.db.exec(sql, params);
-    if (result.length === 0) {
-      return [];
-    }
+    if (result.length === 0) return [];
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
-  /**
-   * Search with multiple Gmail queries. Each query is parsed and executed independently,
-   * then matching gmail_thread_id values are unioned in JavaScript and fetched in one pass.
-   */
   searchEmailsMulti(accountId: number, queries: string[], limit: number = 100): Array<Record<string, unknown>> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
+    if (!this.db) throw new Error('Database not initialized');
 
     const normalizedQueries = queries
       .map((query) => query.trim())
       .filter((query) => query.length > 0);
-    if (normalizedQueries.length === 0) {
-      return [];
-    }
+    if (normalizedQueries.length === 0) return [];
 
-    // Lazy-import to avoid circular dependencies at module load time
     const { parseGmailQuery } = require('../utils/gmail-query-parser');
 
     const threadIdSet = new Set<string>();
@@ -1157,7 +1322,7 @@ export class DatabaseService {
       } as Record<string, number | string | null>;
 
       const result = this.db.exec(
-        `SELECT DISTINCT e.gmail_thread_id
+        `SELECT DISTINCT e.x_gm_thrid
          FROM emails e
          WHERE e.account_id = :accountId AND (${parsed.whereClause})
          ORDER BY e.date DESC
@@ -1165,9 +1330,7 @@ export class DatabaseService {
         params
       );
 
-      if (result.length === 0) {
-        continue;
-      }
+      if (result.length === 0) continue;
       for (const row of result[0].values) {
         const threadId = row[0] as string | null;
         if (threadId) {
@@ -1176,105 +1339,16 @@ export class DatabaseService {
       }
     }
 
-    if (threadIdSet.size === 0) {
-      return [];
-    }
+    if (threadIdSet.size === 0) return [];
 
-    return this.getThreadsByGmailThreadIds(accountId, Array.from(threadIdSet), limit);
+    return this.getThreadsByXGmThrids(accountId, Array.from(threadIdSet), limit);
   }
 
-  /**
-   * Fetch folder associations for many thread internal IDs in one query.
-   */
-  getFoldersForThreadBatch(threadIds: number[]): Map<number, string[]> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
+  private getThreadsByXGmThrids(accountId: number, xGmThrids: string[], limit: number): Array<Record<string, unknown>> {
+    if (!this.db) throw new Error('Database not initialized');
 
-    const map = new Map<number, string[]>();
-    const uniqueThreadIds = Array.from(new Set(threadIds.filter((threadId) => Number.isFinite(threadId))));
-    if (uniqueThreadIds.length === 0) {
-      return map;
-    }
-
-    const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
-    const params: Record<string, number> = {};
-    for (let index = 0; index < uniqueThreadIds.length; index++) {
-      params[`:threadId${index}`] = uniqueThreadIds[index];
-    }
-
-    const result = this.db.exec(
-      `SELECT thread_id, folder
-       FROM thread_folders
-       WHERE thread_id IN (${placeholders.join(', ')})
-       ORDER BY thread_id ASC, folder ASC`,
-      params
-    );
-
-    if (result.length === 0) {
-      return map;
-    }
-
-    for (const row of result[0].values) {
-      const threadId = row[0] as number;
-      const folder = row[1] as string;
-      if (!map.has(threadId)) {
-        map.set(threadId, []);
-      }
-      map.get(threadId)!.push(folder);
-    }
-
-    return map;
-  }
-
-  /**
-   * Given an array of thread internal IDs, return the set of those that contain
-   * at least one email with is_draft=1.
-   * Uses the existing idx_emails_account_thread index for performance.
-   */
-  getThreadIdsWithDrafts(threadIds: number[]): Set<number> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-
-    const result = new Set<number>();
-    const uniqueThreadIds = Array.from(new Set(threadIds.filter((id) => Number.isFinite(id))));
-    if (uniqueThreadIds.length === 0) {
-      return result;
-    }
-
-    const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
-    const params: Record<string, number> = {};
-    for (let index = 0; index < uniqueThreadIds.length; index++) {
-      params[`:threadId${index}`] = uniqueThreadIds[index];
-    }
-
-    const queryResult = this.db.exec(
-      `SELECT DISTINCT t.id
-       FROM threads t
-       INNER JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
-       WHERE t.id IN (${placeholders.join(', ')}) AND e.is_draft = 1`,
-      params
-    );
-
-    if (queryResult.length > 0) {
-      for (const row of queryResult[0].values) {
-        result.add(row[0] as number);
-      }
-    }
-
-    return result;
-  }
-
-  private getThreadsByGmailThreadIds(accountId: number, gmailThreadIds: string[], limit: number): Array<Record<string, unknown>> {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-
-    const uniqueIds = Array.from(new Set(gmailThreadIds.filter((threadId) => threadId.trim().length > 0)));
-    if (uniqueIds.length === 0) {
-      return [];
-    }
+    const uniqueIds = Array.from(new Set(xGmThrids.filter((id) => id.trim().length > 0)));
+    if (uniqueIds.length === 0) return [];
 
     const placeholders = uniqueIds.map((_, index) => `:threadId${index}`);
     const params: Record<string, number | string> = {
@@ -1289,7 +1363,7 @@ export class DatabaseService {
       `SELECT
          t.id,
          t.account_id,
-         t.gmail_thread_id,
+         t.x_gm_thrid,
          t.subject,
          t.last_message_date,
          t.participants,
@@ -1300,575 +1374,84 @@ export class DatabaseService {
          t.is_starred
        FROM threads t
        WHERE t.account_id = :accountId
-         AND t.gmail_thread_id IN (${placeholders.join(', ')})
+         AND t.x_gm_thrid IN (${placeholders.join(', ')})
        ORDER BY t.last_message_date DESC
        LIMIT :limit`,
       params
     );
 
-    if (result.length === 0) {
-      return [];
-    }
-
+    if (result.length === 0) return [];
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
-  // ---- Folder association management ----
+  // ---- Batch operations for thread enrichment ----
 
-  /** Remove an email's association with a specific folder. */
-  removeEmailFolderAssociation(accountId: number, gmailMessageId: string, folder: string): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      `DELETE FROM email_folders WHERE folder = :folder AND email_id IN (
-        SELECT id FROM emails WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId
-      )`,
-      { ':folder': folder, ':accountId': accountId, ':gmailMessageId': gmailMessageId }
-    );
-    this.scheduleSave();
-  }
-
-  /** Remove a thread's association with a specific folder. */
-  removeThreadFolderAssociation(threadId: number, folder: string): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'DELETE FROM thread_folders WHERE thread_id = :threadId AND folder = :folder',
-      { ':threadId': threadId, ':folder': folder }
-    );
-    this.scheduleSave();
-  }
-
-  /** Get all gmail_message_ids that have a folder association for a given account + folder. */
-  getEmailGmailMessageIdsByFolder(accountId: number, folder: string): string[] {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT e.gmail_message_id FROM emails e
-       JOIN email_folders ef ON e.id = ef.email_id
-       WHERE e.account_id = :accountId AND ef.folder = :folder`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
-  }
-
-  /**
-   * Get all (emailId, uid) pairs from email_folders for a given account + folder.
-   * Used for reconciliation: compare local UIDs against server UIDs.
-   */
-  getEmailFolderUids(accountId: number, folder: string): Array<{ emailId: number; uid: number; gmailMessageId: string }> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT ef.email_id, ef.uid, e.gmail_message_id FROM email_folders ef
-       JOIN emails e ON e.id = ef.email_id
-       WHERE e.account_id = :accountId AND ef.folder = :folder AND ef.uid IS NOT NULL`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => ({
-      emailId: row[0] as number,
-      uid: row[1] as number,
-      gmailMessageId: row[2] as string,
-    }));
-  }
-
-  /**
-   * Get the maximum UID stored for an account+folder (for notification baseline).
-   * Returns null if no UIDs are stored for that folder.
-   */
-  getMaxFolderUid(accountId: number, folder: string): number | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT MAX(ef.uid) FROM email_folders ef
-       JOIN emails e ON e.id = ef.email_id
-       WHERE e.account_id = :accountId AND ef.folder = :folder AND ef.uid IS NOT NULL`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    const val = result[0].values[0][0];
-    if (val == null) return null;
-    return val as number;
-  }
-
-  /**
-   * Get folder UIDs for a given email (by gmail_message_id).
-   * Returns one entry per folder the email appears in, with the IMAP UID for that folder.
-   * Used by flag and move handlers to resolve (account, email) → [(folder, uid)].
-   */
-  getFolderUidsForEmail(accountId: number, gmailMessageId: string): Array<{ folder: string; uid: number }> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT ef.folder, ef.uid FROM email_folders ef
-       JOIN emails e ON e.id = ef.email_id
-       WHERE e.account_id = :accountId AND e.gmail_message_id = :gmailMessageId AND ef.uid IS NOT NULL`,
-      { ':accountId': accountId, ':gmailMessageId': gmailMessageId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => ({
-      folder: row[0] as string,
-      uid: row[1] as number,
-    }));
-  }
-
-  /**
-   * Move an email from one folder to another atomically.
-   * Removes the source folder association and adds the target folder association.
-   * If targetUid is provided, stores it as the UID for the new folder association.
-   */
-  moveEmailFolder(accountId: number, gmailMessageId: string, sourceFolder: string, targetFolder: string, targetUid?: number | null): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
-      // Get the email's internal ID
-      const result = this.db.exec(
-        'SELECT id FROM emails WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId',
-        { ':accountId': accountId, ':gmailMessageId': gmailMessageId }
-      );
-      if (result.length > 0 && result[0].values.length > 0) {
-        const emailId = result[0].values[0][0] as number;
-        // Remove source folder association
-        this.db.run(
-          'DELETE FROM email_folders WHERE email_id = :emailId AND folder = :folder',
-          { ':emailId': emailId, ':folder': sourceFolder }
-        );
-        // Add target folder association (with uid if available)
-        if (targetUid != null) {
-          this.db.run(
-            `INSERT INTO email_folders (email_id, account_id, folder, uid) VALUES (:emailId, :accountId, :folder, :uid)
-             ON CONFLICT(email_id, folder) DO UPDATE SET uid = excluded.uid`,
-            { ':emailId': emailId, ':accountId': accountId, ':folder': targetFolder, ':uid': targetUid }
-          );
-        } else {
-          this.db.run(
-            'INSERT OR IGNORE INTO email_folders (email_id, account_id, folder) VALUES (:emailId, :accountId, :folder)',
-            { ':emailId': emailId, ':accountId': accountId, ':folder': targetFolder }
-          );
-        }
-      }
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
-  }
-
-  /**
-   * Move a thread from one folder to another atomically.
-   * Removes the source folder association and adds the target folder association.
-   */
-  moveThreadFolder(threadId: number, accountId: number, sourceFolder: string, targetFolder: string): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
-      // Remove source folder association
-      this.db.run(
-        'DELETE FROM thread_folders WHERE thread_id = :threadId AND folder = :folder',
-        { ':threadId': threadId, ':folder': sourceFolder }
-      );
-      // Add target folder association
-      this.db.run(
-        'INSERT OR IGNORE INTO thread_folders (thread_id, account_id, folder) VALUES (:threadId, :accountId, :folder)',
-        { ':threadId': threadId, ':accountId': accountId, ':folder': targetFolder }
-      );
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
-  }
-
-  /**
-   * Remove orphaned threads — threads with no remaining folder associations.
-   */
-  removeOrphanedThreads(accountId: number): number {
-    if (!this.db) throw new Error('Database not initialized');
-    // Count before deleting for logging
-    const countResult = this.db.exec(
-      `SELECT COUNT(*) FROM threads t WHERE t.account_id = :accountId
-       AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.thread_id = t.id)`,
-      { ':accountId': accountId }
-    );
-    const count = (countResult.length > 0 && countResult[0].values.length > 0)
-      ? countResult[0].values[0][0] as number : 0;
-
-    if (count > 0) {
-      this.db.run(
-        `DELETE FROM threads WHERE account_id = :accountId
-         AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.thread_id = threads.id)`,
-        { ':accountId': accountId }
-      );
-      this.scheduleSave();
-    }
-    return count;
-  }
-
-  /**
-   * Get the internal thread ID for a given gmail_thread_id.
-   */
-  getThreadInternalId(accountId: number, gmailThreadId: string): number | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      'SELECT id FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-      { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return result[0].values[0][0] as number;
-  }
-
-  /**
-   * Get folder paths for a thread (from thread_folders). Used by fetchThread to fetch from each folder instead of All Mail.
-   */
-  getFoldersForThread(accountId: number, gmailThreadId: string): string[] {
-    if (!this.db) throw new Error('Database not initialized');
-    const threadId = this.getThreadInternalId(accountId, gmailThreadId);
-    if (threadId == null) return [];
-    const result = this.db.exec(
-      'SELECT DISTINCT folder FROM thread_folders WHERE thread_id = :threadId AND account_id = :accountId',
-      { ':threadId': threadId, ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
-  }
-
-  /**
-   * Get all thread IDs (internal) that have emails in a given folder.
-   * Used for reconciliation to find threads that should be disassociated from a folder.
-   */
-  getThreadIdsByFolder(accountId: number, folder: string): number[] {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      'SELECT DISTINCT thread_id FROM thread_folders WHERE account_id = :accountId AND folder = :folder',
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as number);
-  }
-
-  /**
-   * Check if a thread still has any emails in a given folder.
-   * Used during reconciliation to decide whether to keep the thread-folder association.
-   */
-  threadHasEmailsInFolder(accountId: number, gmailThreadId: string, folder: string): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT COUNT(*) FROM emails e
-       JOIN email_folders ef ON e.id = ef.email_id
-       WHERE e.account_id = :accountId AND e.gmail_thread_id = :gmailThreadId AND ef.folder = :folder`,
-      { ':accountId': accountId, ':gmailThreadId': gmailThreadId, ':folder': folder }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return false;
-    return (result[0].values[0][0] as number) > 0;
-  }
-
-  /**
-   * Remove an email and all its folder associations.
-   * Also cleans up orphaned threads (threads with no remaining emails).
-   * Used by the queue delete worker after successful IMAP deletion.
-   */
-  removeEmailAndAssociations(accountId: number, gmailMessageId: string): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
-      // Get the email row
-      const emailResult = this.db.exec(
-        'SELECT id, gmail_thread_id FROM emails WHERE account_id = :accountId AND gmail_message_id = :gmailMessageId',
-        { ':accountId': accountId, ':gmailMessageId': gmailMessageId }
-      );
-      if (emailResult.length === 0 || emailResult[0].values.length === 0) {
-        this.db.run('COMMIT');
-        return;
-      }
-      const emailId = emailResult[0].values[0][0] as number;
-      const gmailThreadId = emailResult[0].values[0][1] as string;
-
-      // Remove all folder associations for this email
-      this.db.run('DELETE FROM email_folders WHERE email_id = :emailId', { ':emailId': emailId });
-
-      // Remove the email row itself
-      this.db.run('DELETE FROM emails WHERE id = :emailId', { ':emailId': emailId });
-
-      // Clean up orphaned thread: if no more emails reference this thread, remove thread + thread_folders
-      if (gmailThreadId) {
-        const remainingResult = this.db.exec(
-          'SELECT COUNT(*) FROM emails WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-          { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-        );
-        const remaining = (remainingResult.length > 0 && remainingResult[0].values.length > 0)
-          ? remainingResult[0].values[0][0] as number : 0;
-
-        if (remaining === 0) {
-          // No emails left — remove thread and all its folder associations
-          const threadIdResult = this.db.exec(
-            'SELECT id FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-            { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-          );
-          if (threadIdResult.length > 0 && threadIdResult[0].values.length > 0) {
-            const threadId = threadIdResult[0].values[0][0] as number;
-            this.db.run('DELETE FROM thread_folders WHERE thread_id = :threadId', { ':threadId': threadId });
-            this.db.run('DELETE FROM threads WHERE id = :threadId', { ':threadId': threadId });
-          }
-        } else {
-          // Thread still has emails — update thread_folders to remove associations
-          // for folders that no longer have any emails from this thread
-          const threadIdResult = this.db.exec(
-            'SELECT id FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-            { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-          );
-          if (threadIdResult.length > 0 && threadIdResult[0].values.length > 0) {
-            const threadId = threadIdResult[0].values[0][0] as number;
-            // Get all folders this thread is associated with
-            const tfResult = this.db.exec(
-              'SELECT DISTINCT folder FROM thread_folders WHERE thread_id = :threadId',
-              { ':threadId': threadId }
-            );
-            if (tfResult.length > 0) {
-              for (const row of tfResult[0].values) {
-                const folder = row[0] as string;
-                // Check if thread still has emails in this folder
-                const countResult = this.db.exec(
-                  `SELECT COUNT(*) FROM emails e
-                   JOIN email_folders ef ON e.id = ef.email_id
-                   WHERE e.account_id = :accountId AND e.gmail_thread_id = :gmailThreadId AND ef.folder = :folder`,
-                  { ':accountId': accountId, ':gmailThreadId': gmailThreadId, ':folder': folder }
-                );
-                const count = (countResult.length > 0 && countResult[0].values.length > 0)
-                  ? countResult[0].values[0][0] as number : 0;
-                if (count === 0) {
-                  this.db.run(
-                    'DELETE FROM thread_folders WHERE thread_id = :threadId AND folder = :folder',
-                    { ':threadId': threadId, ':folder': folder }
-                  );
-                }
-              }
-            }
-          }
-        }
-      }
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
-  }
-
-  // ---- Orphan cleanup & thread metadata recomputation ----
-
-  /**
-   * Remove emails that have zero email_folders associations for the given account.
-   * Returns the list of removed { gmailMessageId, gmailThreadId } pairs so the caller
-   * can determine which threads need metadata recomputation.
-   *
-   * Called after reconciliation removes stale email_folders rows.
-   */
-  removeOrphanedEmails(accountId: number): Array<{ gmailMessageId: string; gmailThreadId: string }> {
+  getFoldersForThreadBatch(threadIds: number[]): Map<number, string[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    // SELECT and DELETE run in the same transaction for a consistent snapshot.
-    // This prevents a race where another operation re-associates an email between
-    // the SELECT and DELETE, which would incorrectly delete a non-orphan email.
-    const removed: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+    const map = new Map<number, string[]>();
+    const uniqueThreadIds = Array.from(new Set(threadIds.filter((id) => Number.isFinite(id))));
+    if (uniqueThreadIds.length === 0) return map;
 
-    this.db.run('BEGIN');
-    try {
-      const selectResult = this.db.exec(
-        `SELECT gmail_message_id, gmail_thread_id FROM emails
-         WHERE account_id = :accountId
-           AND id NOT IN (SELECT email_id FROM email_folders WHERE account_id = :accountId)`,
-        { ':accountId': accountId }
-      );
-
-      if (selectResult.length > 0) {
-        for (const row of selectResult[0].values) {
-          removed.push({
-            gmailMessageId: row[0] as string,
-            gmailThreadId: row[1] as string,
-          });
-        }
-      }
-
-      if (removed.length > 0) {
-        this.db.run(
-          `DELETE FROM emails
-           WHERE account_id = :accountId
-             AND id NOT IN (SELECT email_id FROM email_folders WHERE account_id = :accountId)`,
-          { ':accountId': accountId }
-        );
-      }
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-
-    if (removed.length > 0) {
-      this.scheduleSave();
-    }
-    return removed;
-  }
-
-  /**
-   * Given a list of gmailMessageIds, return the distinct gmailThreadIds they belong to.
-   * Used after orphan email removal to find which threads need metadata recomputation.
-   */
-  getAffectedThreadIds(accountId: number, gmailMessageIds: string[]): string[] {
-    if (!this.db) throw new Error('Database not initialized');
-    if (gmailMessageIds.length === 0) {
-      return [];
-    }
-
-    // Build an inline values list for the IN clause using named params
-    // sql.js doesn't support array binding, so we build the clause manually
-    // with parameterized placeholders to stay safe.
-    const placeholders = gmailMessageIds.map((_, i) => `:id${i}`).join(', ');
-    const params: Record<string, string | number> = { ':accountId': accountId };
-    for (let i = 0; i < gmailMessageIds.length; i++) {
-      params[`:id${i}`] = gmailMessageIds[i];
+    // We need to join threads → thread_folders via (account_id, x_gm_thrid) since
+    // thread_folders no longer has thread_id FK.
+    const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
+    const params: Record<string, number> = {};
+    for (let index = 0; index < uniqueThreadIds.length; index++) {
+      params[`:threadId${index}`] = uniqueThreadIds[index];
     }
 
     const result = this.db.exec(
-      `SELECT DISTINCT gmail_thread_id FROM emails
-       WHERE account_id = :accountId AND gmail_message_id IN (${placeholders})`,
+      `SELECT t.id, tf.folder
+       FROM threads t
+       INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid
+       WHERE t.id IN (${placeholders.join(', ')})
+       ORDER BY t.id ASC, tf.folder ASC`,
       params
     );
 
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
-  }
+    if (result.length === 0) return map;
 
-  /**
-   * Recompute the thread row's metadata from the actual emails still in the DB for that thread.
-   *
-   * Computed fields: message_count, last_message_date, snippet (from latest email),
-   * participants (distinct from_address values), is_read (ALL read), is_starred (ANY starred).
-   *
-   * If zero emails remain: deletes the threads row and all thread_folders entries.
-   * Wrapped in a transaction for consistency.
-   */
-  recomputeThreadMetadata(accountId: number, gmailThreadId: string): void {
-    if (!this.db) throw new Error('Database not initialized');
-
-    this.db.run('BEGIN');
-    try {
-      // Count remaining emails for this thread
-      const countResult = this.db.exec(
-        `SELECT COUNT(*) FROM emails
-         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
-        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-      );
-      const emailCount = (countResult.length > 0 && countResult[0].values.length > 0)
-        ? countResult[0].values[0][0] as number
-        : 0;
-
-      const threadResult = this.db.exec(
-        'SELECT id FROM threads WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId',
-        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-      );
-      if (threadResult.length === 0 || threadResult[0].values.length === 0) {
-        // No thread row exists at all — nothing to recompute
-        this.db.run('COMMIT');
-        return;
+    for (const row of result[0].values) {
+      const threadId = row[0] as number;
+      const folder = row[1] as string;
+      if (!map.has(threadId)) {
+        map.set(threadId, []);
       }
-      const threadId = threadResult[0].values[0][0] as number;
-
-      if (emailCount === 0) {
-        // No emails left — delete thread and all folder associations
-        this.db.run('DELETE FROM thread_folders WHERE thread_id = :threadId', { ':threadId': threadId });
-        this.db.run('DELETE FROM threads WHERE id = :threadId', { ':threadId': threadId });
-        this.db.run('COMMIT');
-        this.scheduleSave();
-        return;
-      }
-
-      // Compute aggregates from remaining emails
-      const aggResult = this.db.exec(
-        `SELECT
-           COUNT(*) AS message_count,
-           MAX(date) AS last_message_date,
-           MIN(CASE WHEN is_read = 0 THEN 0 ELSE 1 END) AS all_read,
-           MAX(is_starred) AS any_starred
-         FROM emails
-         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
-        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-      );
-
-      if (aggResult.length === 0 || aggResult[0].values.length === 0) {
-        this.db.run('COMMIT');
-        return;
-      }
-
-      const agg = aggResult[0].values[0];
-      const messageCount = agg[0] as number;
-      const lastMessageDate = agg[1] as string;
-      const isRead = (agg[2] as number) === 1;
-      const isStarred = (agg[3] as number) === 1;
-
-      // Get snippet from the most recent email
-      const snippetResult = this.db.exec(
-        `SELECT snippet FROM emails
-         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId
-         ORDER BY date DESC LIMIT 1`,
-        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-      );
-      const snippet = (snippetResult.length > 0 && snippetResult[0].values.length > 0)
-        ? snippetResult[0].values[0][0] as string
-        : '';
-
-      // Get distinct participants (from_address values)
-      const participantsResult = this.db.exec(
-        `SELECT DISTINCT from_address FROM emails
-         WHERE account_id = :accountId AND gmail_thread_id = :gmailThreadId`,
-        { ':accountId': accountId, ':gmailThreadId': gmailThreadId }
-      );
-      const participants = participantsResult.length > 0 && participantsResult[0].values.length > 0
-        ? participantsResult[0].values.map((row) => row[0] as string).join(', ')
-        : '';
-
-      // Update the thread row
-      this.db.run(
-        `UPDATE threads SET
-           message_count = :messageCount,
-           last_message_date = :lastMessageDate,
-           snippet = :snippet,
-           participants = :participants,
-           is_read = :isRead,
-           is_starred = :isStarred,
-           updated_at = datetime('now')
-         WHERE id = :threadId`,
-        {
-          ':messageCount': messageCount,
-          ':lastMessageDate': lastMessageDate,
-          ':snippet': snippet || '',
-          ':participants': participants,
-          ':isRead': isRead ? 1 : 0,
-          ':isStarred': isStarred ? 1 : 0,
-          ':threadId': threadId,
-        }
-      );
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
+      map.get(threadId)!.push(folder);
     }
-    this.scheduleSave();
+
+    return map;
   }
 
-  // ---- Contact search (for autocomplete) ----
-
-  searchContacts(query: string, limit: number = 10): Array<Record<string, unknown>> {
+  getThreadIdsWithDrafts(threadIds: number[]): Set<number> {
     if (!this.db) throw new Error('Database not initialized');
-    const likeQuery = `%${query}%`;
-    const result = this.db.exec(
-      `SELECT id, email, display_name, frequency, last_contacted_at
-       FROM contacts WHERE email LIKE :likeQuery OR display_name LIKE :likeQuery
-       ORDER BY frequency DESC LIMIT :limit`,
-      { ':likeQuery': likeQuery, ':limit': limit }
+
+    const result = new Set<number>();
+    const uniqueThreadIds = Array.from(new Set(threadIds.filter((id) => Number.isFinite(id))));
+    if (uniqueThreadIds.length === 0) return result;
+
+    const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
+    const params: Record<string, number> = {};
+    for (let index = 0; index < uniqueThreadIds.length; index++) {
+      params[`:threadId${index}`] = uniqueThreadIds[index];
+    }
+
+    const queryResult = this.db.exec(
+      `SELECT DISTINCT t.id
+       FROM threads t
+       INNER JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
+       WHERE t.id IN (${placeholders.join(', ')}) AND e.is_draft = 1`,
+      params
     );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapGenericRow(row, result[0].columns));
+
+    if (queryResult.length > 0) {
+      for (const row of queryResult[0].values) {
+        result.add(row[0] as number);
+      }
+    }
+
+    return result;
   }
 
   // ---- Account sync state ----
@@ -1899,13 +1482,22 @@ export class DatabaseService {
 
   // ---- Row mapping helpers ----
 
+  private toCamelKey(column: string): string {
+    if (column === 'x_gm_msgid') {
+      return 'xGmMsgId';
+    }
+    if (column === 'x_gm_thrid') {
+      return 'xGmThrid';
+    }
+    return column.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+  }
+
   private mapEmailRow(row: (string | number | Uint8Array | null)[], columns: string[]): Record<string, unknown> {
     const obj: Record<string, unknown> = {};
     for (let i = 0; i < columns.length; i++) {
       const col = columns[i];
       const val = row[i];
-      // Convert snake_case to camelCase and handle booleans
-      const key = col.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      const key = this.toCamelKey(col);
       if (col === 'is_read' || col === 'is_starred' || col === 'is_important' || col === 'is_draft' || col === 'has_attachments') {
         obj[key] = val === 1;
       } else {
@@ -1920,7 +1512,7 @@ export class DatabaseService {
     for (let i = 0; i < columns.length; i++) {
       const col = columns[i];
       const val = row[i];
-      const key = col.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      const key = this.toCamelKey(col);
       if (col === 'is_read' || col === 'is_starred') {
         obj[key] = val === 1;
       } else {
@@ -1935,7 +1527,7 @@ export class DatabaseService {
     for (let i = 0; i < columns.length; i++) {
       const col = columns[i];
       const val = row[i];
-      const key = col.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      const key = this.toCamelKey(col);
       obj[key] = val;
     }
     return obj;
@@ -1943,10 +1535,6 @@ export class DatabaseService {
 
   // ---- AI Cache operations ----
 
-  /**
-   * Get a cached AI result by operation type, input hash, and model.
-   * Returns null if not found or expired.
-   */
   getAiCacheResult(operation: string, inputHash: string, model: string): string | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
@@ -1961,17 +1549,7 @@ export class DatabaseService {
     return null;
   }
 
-  /**
-   * Store an AI result in the cache.
-   * @param expiresInDays - Number of days until expiry. Null for no expiry.
-   */
-  setAiCacheResult(
-    operation: string,
-    inputHash: string,
-    model: string,
-    resultText: string,
-    expiresInDays: number | null
-  ): void {
+  setAiCacheResult(operation: string, inputHash: string, model: string, resultText: string, expiresInDays: number | null): void {
     if (!this.db) throw new Error('Database not initialized');
     const expiresAt = expiresInDays != null
       ? new Date(Date.now() + (Math.floor(expiresInDays) * 24 * 60 * 60 * 1000)).toISOString()
@@ -1982,63 +1560,33 @@ export class DatabaseService {
        VALUES (:operation, :inputHash, :model, :result, :expiresAt)
        ON CONFLICT(operation_type, input_hash, model) DO UPDATE SET
          result = excluded.result, created_at = datetime('now'), expires_at = excluded.expires_at`,
-      {
-        ':operation': operation,
-        ':inputHash': inputHash,
-        ':model': model,
-        ':result': resultText,
-        ':expiresAt': expiresAt,
-      }
+      { ':operation': operation, ':inputHash': inputHash, ':model': model, ':result': resultText, ':expiresAt': expiresAt }
     );
-
     this.scheduleSave();
   }
 
-  /**
-   * Clear expired AI cache entries.
-   */
   clearExpiredAiCache(): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run("DELETE FROM ai_cache WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')");
     this.scheduleSave();
   }
 
-  /**
-   * Clear AI cache entries for a specific operation type and input hash.
-   * Used to invalidate cache when underlying data changes (e.g., thread gets new messages).
-   */
   invalidateAiCache(operation: string, inputHash?: string): void {
     if (!this.db) throw new Error('Database not initialized');
     if (inputHash) {
-      this.db.run(
-        'DELETE FROM ai_cache WHERE operation_type = :operation AND input_hash = :inputHash',
-        { ':operation': operation, ':inputHash': inputHash }
-      );
+      this.db.run('DELETE FROM ai_cache WHERE operation_type = :operation AND input_hash = :inputHash',
+        { ':operation': operation, ':inputHash': inputHash });
     } else {
-      this.db.run(
-        'DELETE FROM ai_cache WHERE operation_type = :operation',
-        { ':operation': operation }
-      );
+      this.db.run('DELETE FROM ai_cache WHERE operation_type = :operation', { ':operation': operation });
     }
     this.scheduleSave();
   }
 
   // ---- Filter CRUD operations ----
 
-  /**
-   * Get all filters for an account.
-   */
   getFilters(accountId: number): Array<{
-    id: number;
-    accountId: number;
-    name: string;
-    conditions: string;
-    actions: string;
-    isEnabled: boolean;
-    isAiGenerated: boolean;
-    sortOrder: number;
-    createdAt: string;
-    updatedAt: string;
+    id: number; accountId: number; name: string; conditions: string; actions: string;
+    isEnabled: boolean; isAiGenerated: boolean; sortOrder: number; createdAt: string; updatedAt: string;
   }> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
@@ -2048,33 +1596,18 @@ export class DatabaseService {
     );
     if (result.length === 0) return [];
     return result[0].values.map(row => ({
-      id: row[0] as number,
-      accountId: row[1] as number,
-      name: row[2] as string,
-      conditions: row[3] as string,
-      actions: row[4] as string,
-      isEnabled: !!(row[5] as number),
-      isAiGenerated: !!(row[6] as number),
-      sortOrder: (row[7] as number) || 0,
-      createdAt: row[8] as string,
-      updatedAt: row[9] as string,
+      id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
+      conditions: row[3] as string, actions: row[4] as string,
+      isEnabled: !!(row[5] as number), isAiGenerated: !!(row[6] as number),
+      sortOrder: (row[7] as number) || 0, createdAt: row[8] as string, updatedAt: row[9] as string,
     }));
   }
 
-  /**
-   * Save a new filter.
-   */
   saveFilter(filter: {
-    accountId: number;
-    name: string;
-    conditions: string;
-    actions: string;
-    isEnabled: boolean;
-    isAiGenerated: boolean;
-    sortOrder?: number;
+    accountId: number; name: string; conditions: string; actions: string;
+    isEnabled: boolean; isAiGenerated: boolean; sortOrder?: number;
   }): number {
     if (!this.db) throw new Error('Database not initialized');
-    // If no sort_order provided, place at end (max + 1)
     let sortOrder = filter.sortOrder;
     if (sortOrder == null) {
       const maxResult = this.db.exec(
@@ -2087,13 +1620,9 @@ export class DatabaseService {
       `INSERT INTO filters (account_id, name, conditions, actions, is_enabled, is_ai_generated, sort_order)
        VALUES (:accountId, :name, :conditions, :actions, :isEnabled, :isAiGenerated, :sortOrder)`,
       {
-        ':accountId': filter.accountId,
-        ':name': filter.name,
-        ':conditions': filter.conditions,
-        ':actions': filter.actions,
-        ':isEnabled': filter.isEnabled ? 1 : 0,
-        ':isAiGenerated': filter.isAiGenerated ? 1 : 0,
-        ':sortOrder': sortOrder,
+        ':accountId': filter.accountId, ':name': filter.name, ':conditions': filter.conditions,
+        ':actions': filter.actions, ':isEnabled': filter.isEnabled ? 1 : 0,
+        ':isAiGenerated': filter.isAiGenerated ? 1 : 0, ':sortOrder': sortOrder,
       }
     );
     const idResult = this.db.exec('SELECT last_insert_rowid()');
@@ -2102,55 +1631,27 @@ export class DatabaseService {
     return id;
   }
 
-  /**
-   * Update an existing filter.
-   */
-  updateFilter(filter: {
-    id: number;
-    name: string;
-    conditions: string;
-    actions: string;
-    isEnabled: boolean;
-    sortOrder?: number;
-  }): void {
+  updateFilter(filter: { id: number; name: string; conditions: string; actions: string; isEnabled: boolean; sortOrder?: number }): void {
     if (!this.db) throw new Error('Database not initialized');
-    const updates = [
-      'name = :name',
-      'conditions = :conditions',
-      'actions = :actions',
-      'is_enabled = :isEnabled',
-      "updated_at = datetime('now')",
-    ];
+    const updates = ['name = :name', 'conditions = :conditions', 'actions = :actions', 'is_enabled = :isEnabled', "updated_at = datetime('now')"];
     const params: Record<string, string | number> = {
-      ':id': filter.id,
-      ':name': filter.name,
-      ':conditions': filter.conditions,
-      ':actions': filter.actions,
-      ':isEnabled': filter.isEnabled ? 1 : 0,
+      ':id': filter.id, ':name': filter.name, ':conditions': filter.conditions,
+      ':actions': filter.actions, ':isEnabled': filter.isEnabled ? 1 : 0,
     };
     if (filter.sortOrder != null) {
       updates.push('sort_order = :sortOrder');
       params[':sortOrder'] = filter.sortOrder;
     }
-    this.db.run(
-      `UPDATE filters SET ${updates.join(', ')} WHERE id = :id`,
-      params
-    );
+    this.db.run(`UPDATE filters SET ${updates.join(', ')} WHERE id = :id`, params);
     this.scheduleSave();
   }
 
-  /**
-   * Delete a filter by ID.
-   */
   deleteFilter(id: number): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run('DELETE FROM filters WHERE id = :id', { ':id': id });
     this.scheduleSave();
   }
 
-  /**
-   * Toggle filter enabled/disabled state.
-   */
   toggleFilter(id: number, isEnabled: boolean): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
@@ -2160,19 +1661,13 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
-  // ---- User Label operations (filter execution) ----
+  // ---- User Label operations ----
 
-  /**
-   * Upsert a user label by name for an account. Returns the label ID.
-   * Creates if not exists, returns existing ID if it does.
-   */
   upsertUserLabel(accountId: number, name: string, color?: string | null): number {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      `INSERT INTO user_labels (account_id, name, color)
-       VALUES (:accountId, :name, :color)
-       ON CONFLICT(account_id, name) DO UPDATE SET
-        color = COALESCE(excluded.color, user_labels.color)`,
+      `INSERT INTO user_labels (account_id, name, color) VALUES (:accountId, :name, :color)
+       ON CONFLICT(account_id, name) DO UPDATE SET color = COALESCE(excluded.color, user_labels.color)`,
       { ':accountId': accountId, ':name': name, ':color': color || null }
     );
     const result = this.db.exec(
@@ -2184,95 +1679,55 @@ export class DatabaseService {
     return id;
   }
 
-  /**
-   * Get all user labels for an account with unread thread counts.
-   */
-  getUserLabels(accountId: number): Array<{
-    id: number;
-    accountId: number;
-    name: string;
-    color: string | null;
-    unreadCount: number;
-  }> {
+  getUserLabels(accountId: number): Array<{ id: number; accountId: number; name: string; color: string | null; unreadCount: number }> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT ul.id, ul.account_id, ul.name, ul.color,
         (SELECT COUNT(DISTINCT t.id)
          FROM email_labels el2
          JOIN emails e2 ON e2.id = el2.email_id
-         JOIN threads t ON t.account_id = e2.account_id AND t.gmail_thread_id = e2.gmail_thread_id
+         JOIN threads t ON t.account_id = e2.account_id AND t.x_gm_thrid = e2.x_gm_thrid
          WHERE el2.label_id = ul.id AND t.is_read = 0
         ) AS unread_count
-       FROM user_labels ul
-       WHERE ul.account_id = :accountId
-       ORDER BY ul.name ASC`,
+       FROM user_labels ul WHERE ul.account_id = :accountId ORDER BY ul.name ASC`,
       { ':accountId': accountId }
     );
     if (result.length === 0) return [];
     return result[0].values.map(row => ({
-      id: row[0] as number,
-      accountId: row[1] as number,
-      name: row[2] as string,
-      color: row[3] as string | null,
-      unreadCount: (row[4] as number) || 0,
+      id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
+      color: row[3] as string | null, unreadCount: (row[4] as number) || 0,
     }));
   }
 
-  /**
-   * Assign a label to an email. Enforces one-label-per-email via UNIQUE constraint.
-   * Uses INSERT OR IGNORE to skip if email already has a label.
-   */
   assignEmailLabel(emailId: number, labelId: number, accountId: number): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      `INSERT OR IGNORE INTO email_labels (email_id, label_id, account_id)
-       VALUES (:emailId, :labelId, :accountId)`,
+      'INSERT OR IGNORE INTO email_labels (email_id, label_id, account_id) VALUES (:emailId, :labelId, :accountId)',
       { ':emailId': emailId, ':labelId': labelId, ':accountId': accountId }
     );
     this.scheduleSave();
   }
 
-  /**
-   * Remove a label assignment from an email.
-   */
   removeEmailLabel(emailId: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'DELETE FROM email_labels WHERE email_id = :emailId',
-      { ':emailId': emailId }
-    );
+    this.db.run('DELETE FROM email_labels WHERE email_id = :emailId', { ':emailId': emailId });
     this.scheduleSave();
   }
 
-  /**
-   * Check if an email already has a label assigned.
-   */
   emailHasLabel(emailId: number): boolean {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      'SELECT 1 FROM email_labels WHERE email_id = :emailId LIMIT 1',
-      { ':emailId': emailId }
-    );
+    const result = this.db.exec('SELECT 1 FROM email_labels WHERE email_id = :emailId LIMIT 1', { ':emailId': emailId });
     return result.length > 0 && result[0].values.length > 0;
   }
 
-  /**
-   * Get threads by user label (for virtual label folder browsing).
-   * Returns the same column shape as getThreadsByFolder.
-   */
-  getThreadsByUserLabel(
-    accountId: number,
-    labelId: number,
-    limit: number = 50,
-    offset: number = 0
-  ): Array<Record<string, unknown>> {
+  getThreadsByUserLabel(accountId: number, labelId: number, limit: number = 50, offset: number = 0): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT DISTINCT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date,
+      `SELECT DISTINCT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date,
         t.participants, t.message_count, t.snippet, 'label::' || :labelId AS folder,
         t.is_read, t.is_starred
        FROM threads t
-       JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
        JOIN email_labels el ON el.email_id = e.id
        WHERE el.label_id = :labelId AND el.account_id = :accountId
        ORDER BY t.last_message_date DESC LIMIT :limit OFFSET :offset`,
@@ -2282,22 +1737,14 @@ export class DatabaseService {
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
-  /**
-   * Get threads by user label before a given date (for pagination in virtual label folders).
-   */
-  getThreadsByUserLabelBeforeDate(
-    accountId: number,
-    labelId: number,
-    beforeDate: string,
-    limit: number = 50
-  ): Array<Record<string, unknown>> {
+  getThreadsByUserLabelBeforeDate(accountId: number, labelId: number, beforeDate: string, limit: number = 50): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT DISTINCT t.id, t.account_id, t.gmail_thread_id, t.subject, t.last_message_date,
+      `SELECT DISTINCT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date,
         t.participants, t.message_count, t.snippet, 'label::' || :labelId AS folder,
         t.is_read, t.is_starred
        FROM threads t
-       JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
        JOIN email_labels el ON el.email_id = e.id
        WHERE el.label_id = :labelId AND el.account_id = :accountId AND t.last_message_date < :beforeDate
        ORDER BY t.last_message_date DESC LIMIT :limit`,
@@ -2307,10 +1754,6 @@ export class DatabaseService {
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
   }
 
-  /**
-   * Get label info for a batch of thread IDs. Returns a map of threadId → label info.
-   * Uses the most recent labeled email per thread (by email date descending).
-   */
   getLabelsForThreadBatch(threadIds: number[]): Map<number, { labelId: number; labelName: string; labelColor: string | null }> {
     if (!this.db) throw new Error('Database not initialized');
     const map = new Map<number, { labelId: number; labelName: string; labelColor: string | null }>();
@@ -2323,11 +1766,10 @@ export class DatabaseService {
       params[`:tid${i}`] = uniqueIds[i];
     }
 
-    // For each thread, get the label from the most recent labeled email
     const result = this.db.exec(
       `SELECT t.id AS thread_id, ul.id AS label_id, ul.name AS label_name, ul.color AS label_color
        FROM threads t
-       JOIN emails e ON e.account_id = t.account_id AND e.gmail_thread_id = t.gmail_thread_id
+       JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
        JOIN email_labels el ON el.email_id = e.id
        JOIN user_labels ul ON ul.id = el.label_id
        WHERE t.id IN (${placeholders.join(', ')})
@@ -2337,7 +1779,6 @@ export class DatabaseService {
 
     if (result.length === 0) return map;
 
-    // First occurrence per thread_id wins (most recent by ORDER BY e.date DESC)
     for (const row of result[0].values) {
       const threadId = row[0] as number;
       if (!map.has(threadId)) {
@@ -2348,13 +1789,9 @@ export class DatabaseService {
         });
       }
     }
-
     return map;
   }
 
-  /**
-   * Delete a user label by ID. CASCADE removes all email_labels entries.
-   */
   deleteUserLabel(labelId: number): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run('DELETE FROM user_labels WHERE id = :labelId', { ':labelId': labelId });
@@ -2363,56 +1800,35 @@ export class DatabaseService {
 
   // ---- Filter execution support ----
 
-  /**
-   * Get unfiltered INBOX emails for an account.
-   * Returns full email data needed for condition matching.
-   */
   getUnfilteredInboxEmails(accountId: number): Array<{
-    id: number;
-    gmailMessageId: string;
-    gmailThreadId: string;
-    fromAddress: string;
-    fromName: string;
-    toAddresses: string;
-    subject: string;
-    textBody: string | null;
-    htmlBody: string | null;
-    hasAttachments: boolean;
+    id: number; xGmMsgId: string; xGmThrid: string; fromAddress: string; fromName: string;
+    toAddresses: string; subject: string; textBody: string | null; htmlBody: string | null; hasAttachments: boolean;
   }> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT e.id, e.gmail_message_id, e.gmail_thread_id, e.from_address, e.from_name,
+      `SELECT e.id, e.x_gm_msgid, e.x_gm_thrid, e.from_address, e.from_name,
         e.to_addresses, e.subject, e.text_body, e.html_body, e.has_attachments
        FROM emails e
-       JOIN email_folders ef ON ef.email_id = e.id
+       JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
        WHERE e.account_id = :accountId AND ef.folder = 'INBOX' AND e.is_filtered = 0`,
       { ':accountId': accountId }
     );
     if (result.length === 0) return [];
     return result[0].values.map(row => ({
-      id: row[0] as number,
-      gmailMessageId: row[1] as string,
-      gmailThreadId: row[2] as string,
-      fromAddress: row[3] as string,
-      fromName: (row[4] as string) || '',
-      toAddresses: (row[5] as string) || '',
-      subject: (row[6] as string) || '',
-      textBody: row[7] as string | null,
-      htmlBody: row[8] as string | null,
+      id: row[0] as number, xGmMsgId: row[1] as string, xGmThrid: row[2] as string,
+      fromAddress: row[3] as string, fromName: (row[4] as string) || '',
+      toAddresses: (row[5] as string) || '', subject: (row[6] as string) || '',
+      textBody: row[7] as string | null, htmlBody: row[8] as string | null,
       hasAttachments: !!(row[9] as number),
     }));
   }
 
-  /**
-   * Mark emails as filtered (batch update). Wrapped in transaction.
-   */
   markEmailsAsFiltered(emailIds: number[]): void {
     if (!this.db) throw new Error('Database not initialized');
     if (emailIds.length === 0) return;
 
     this.db.run('BEGIN');
     try {
-      // Batch in groups to stay within SQLite variable limits
       const batchSize = 500;
       for (let i = 0; i < emailIds.length; i += batchSize) {
         const batch = emailIds.slice(i, i + batchSize);
@@ -2434,49 +1850,24 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
-  /**
-   * Get enabled filters for an account, ordered by sort_order ascending then id ascending.
-   */
   getEnabledFiltersOrdered(accountId: number): Array<{
-    id: number;
-    accountId: number;
-    name: string;
-    conditions: string;
-    actions: string;
-    sortOrder: number;
+    id: number; accountId: number; name: string; conditions: string; actions: string; sortOrder: number;
   }> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT id, account_id, name, conditions, actions, sort_order
-       FROM filters
-       WHERE account_id = :accountId AND is_enabled = 1
+       FROM filters WHERE account_id = :accountId AND is_enabled = 1
        ORDER BY sort_order ASC, id ASC`,
       { ':accountId': accountId }
     );
     if (result.length === 0) return [];
     return result[0].values.map(row => ({
-      id: row[0] as number,
-      accountId: row[1] as number,
-      name: row[2] as string,
-      conditions: row[3] as string,
-      actions: row[4] as string,
-      sortOrder: (row[5] as number) || 0,
+      id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
+      conditions: row[3] as string, actions: row[4] as string, sortOrder: (row[5] as number) || 0,
     }));
   }
 
-  /**
-   * Get the INBOX UID for an email (by internal email ID).
-   * Returns null if the email is not in INBOX or has no UID.
-   */
-  getInboxUidForEmail(emailId: number): number | null {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT uid FROM email_folders WHERE email_id = :emailId AND folder = 'INBOX' AND uid IS NOT NULL`,
-      { ':emailId': emailId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return result[0].values[0][0] as number;
-  }
+  // ---- Close ----
 
   close(): void {
     if (this.db) {

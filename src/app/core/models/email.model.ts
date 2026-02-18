@@ -1,8 +1,10 @@
 export interface Email {
   id: number;
   accountId: number;
-  gmailMessageId: string;
-  gmailThreadId: string;
+  xGmMsgId: string;
+  xGmThrid: string;
+  /** RFC 5322 Message-ID, used for In-Reply-To/References. */
+  messageId?: string;
   folder: string;
   fromAddress: string;
   fromName?: string;
@@ -28,7 +30,7 @@ export interface Email {
 export interface Thread {
   id: number;
   accountId: number;
-  gmailThreadId: string;
+  xGmThrid: string;
   subject?: string;
   lastMessageDate: string;
   participants?: string;
@@ -66,7 +68,7 @@ export type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward';
 export interface Draft {
   id?: number;
   accountId: number;
-  gmailThreadId?: string;
+  xGmThrid?: string;
   subject: string;
   to: string;
   cc: string;
@@ -98,8 +100,8 @@ export interface ComposeContext {
   draft?: Draft;
   originalThread?: Thread;
   originalMessage?: Email;
-  /** gmailMessageId of a server draft opened from [Gmail]/Drafts for edit (backend resolves UID) */
-  serverDraftGmailMessageId?: string;
+  /** xGmMsgId of a server draft opened from [Gmail]/Drafts for edit (backend resolves UID) */
+  serverDraftXGmMsgId?: string;
   /** Pre-fill the compose body with this text (e.g. AI smart reply suggestion) */
   prefillBody?: string;
 }

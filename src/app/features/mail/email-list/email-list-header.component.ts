@@ -102,7 +102,7 @@ export class EmailListHeaderComponent implements OnInit, OnDestroy {
     }
 
     const threadData = threads.slice(0, 20).map(t => ({
-      threadId: t.gmailThreadId,
+      threadId: t.xGmThrid,
       content: `From: ${t.participants || 'Unknown'}\nSubject: ${t.subject || '(no subject)'}\n\n${t.snippet || ''}`,
     }));
 

@@ -149,7 +149,7 @@ const electronAPI = {
       'ai:status',
       'ai:stream',
       'queue:update',
-      'mail:data-changed',
+      'mail:folder-updated',
       'mail:new-email',
       'mail:notification-click',
       'mail:thread-refresh',

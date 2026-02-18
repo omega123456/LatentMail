@@ -1,23 +1,26 @@
 import { computed, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { signalStore, withState, withMethods, withComputed, patchState, withHooks } from '@ngrx/signals';
+import { debounceTime } from 'rxjs';
 import { ElectronService } from '../core/services/electron.service';
 import { Thread, Email } from '../core/models/email.model';
 import { AccountsStore } from './accounts.store';
 import { FoldersStore } from './folders.store';
 
-interface MailDataChangedPayload {
+interface MailFolderUpdatedPayload {
   accountId: number;
   folders: string[];
-  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter';
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync';
+  changeType?: 'new_messages' | 'flag_changes' | 'deletions' | 'mixed';
+  count?: number;
 }
 
 interface MailNewEmailPayload {
   accountId: number;
   folder: string;
   newEmails: Array<{
-    gmailMessageId: string;
-    gmailThreadId: string;
+    xGmMsgId: string;
+    xGmThrid: string;
     sender: string;
     subject: string;
     snippet: string;
@@ -27,13 +30,13 @@ interface MailNewEmailPayload {
 
 interface MailNotificationClickPayload {
   accountId: number;
-  gmailThreadId: string;
+  xGmThrid: string;
   folder: string;
 }
 
 interface MailThreadRefreshPayload {
   accountId: number;
-  gmailThreadId: string;
+  xGmThrid: string;
   action: 'move' | 'delete';
 }
 
@@ -166,8 +169,8 @@ export const EmailsStore = signalStore(
 
         if (response.success && response.data) {
           const result = response.data as { threads: Thread[]; hasMore: boolean; nextBeforeDate?: string };
-          const existingIds = new Set(store.threads().map(t => t.gmailThreadId));
-          const newThreads = result.threads.filter(t => !existingIds.has(t.gmailThreadId));
+          const existingIds = new Set(store.threads().map(t => t.xGmThrid));
+          const newThreads = result.threads.filter(t => !existingIds.has(t.xGmThrid));
           const nextCursorDate = result.nextBeforeDate || getOldestThreadDate(result.threads) || beforeDate;
           const cursorAdvanced = isOlderDate(nextCursorDate, beforeDate);
           // Never continue auto-pagination when neither visible data nor cursor advances.
@@ -338,12 +341,12 @@ export const EmailsStore = signalStore(
         // Optimistic update — patch both `threads` list AND `selectedThread`
         const targetThreadId = threadId || store.selectedThreadId() || null;
         const selectedThread = store.selectedThread();
-        const selectedMatches = selectedThread && selectedThread.gmailThreadId === targetThreadId;
+        const selectedMatches = selectedThread && selectedThread.xGmThrid === targetThreadId;
 
         if (flag === 'read') {
           patchState(store, {
             threads: store.threads().map(t =>
-              t.gmailThreadId === targetThreadId ? { ...t, isRead: value } : t
+              t.xGmThrid === targetThreadId ? { ...t, isRead: value } : t
             ),
             ...(selectedMatches ? { selectedThread: { ...selectedThread, isRead: value } } : {}),
           });
@@ -352,12 +355,12 @@ export const EmailsStore = signalStore(
           if (!value && activeFolderId === '[Gmail]/Starred') {
             // Unstarring while viewing Starred → optimistically remove thread from list
             patchState(store, {
-              threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+              threads: store.threads().filter(t => t.xGmThrid !== targetThreadId),
             });
           } else {
             patchState(store, {
               threads: store.threads().map(t =>
-                t.gmailThreadId === targetThreadId ? { ...t, isStarred: value } : t
+                t.xGmThrid === targetThreadId ? { ...t, isStarred: value } : t
               ),
               ...(selectedMatches ? { selectedThread: { ...selectedThread, isStarred: value } } : {}),
             });
@@ -395,14 +398,14 @@ export const EmailsStore = signalStore(
         if (perMessageGmailId) {
           // Per-message move: remove the specific message from the selected thread
           const selectedThread = store.selectedThread();
-          if (selectedThread && selectedThread.gmailThreadId === targetThreadId && selectedThread.messages) {
+          if (selectedThread && selectedThread.xGmThrid === targetThreadId && selectedThread.messages) {
             const updatedMessages = selectedThread.messages.filter(
-              m => m.gmailMessageId !== perMessageGmailId
+              m => m.xGmMsgId !== perMessageGmailId
             );
             if (updatedMessages.length === 0) {
               // Last message in thread — remove thread from list and clear selection
               patchState(store, {
-                threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+                threads: store.threads().filter(t => t.xGmThrid !== targetThreadId),
                 selectedThread: null,
                 selectedThreadId: null,
               });
@@ -419,7 +422,7 @@ export const EmailsStore = signalStore(
         } else {
           // Thread-level move: remove the entire thread from the list
           patchState(store, {
-            threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+            threads: store.threads().filter(t => t.xGmThrid !== targetThreadId),
             selectedThread: null,
             selectedThreadId: null,
           });
@@ -449,7 +452,7 @@ export const EmailsStore = signalStore(
         // Optimistic remove from list
         const targetThreadId = threadId || store.selectedThreadId() || null;
         patchState(store, {
-          threads: store.threads().filter(t => t.gmailThreadId !== targetThreadId),
+          threads: store.threads().filter(t => t.xGmThrid !== targetThreadId),
         });
 
         try {
@@ -526,9 +529,9 @@ export const EmailsStore = signalStore(
             const imapThreads = imapData.threads || [];
 
             if (imapThreads.length > 0) {
-              // Deduplicate: build set of existing gmailThreadIds
-              const existingIds = new Set(store.threads().map(t => t.gmailThreadId));
-              const newThreads = imapThreads.filter(t => !existingIds.has(t.gmailThreadId));
+              // Deduplicate: build set of existing xGmThrids
+              const existingIds = new Set(store.threads().map(t => t.xGmThrid));
+              const newThreads = imapThreads.filter(t => !existingIds.has(t.xGmThrid));
 
               if (newThreads.length > 0) {
                 // Merge and sort by date descending
@@ -657,10 +660,10 @@ export const EmailsStore = signalStore(
               const existingThreads = store.threads();
 
               // Build a lookup for fresh data to update flags (read/starred) on existing threads
-              const freshMap = new Map(freshThreads.map(t => [t.gmailThreadId, t]));
+              const freshMap = new Map(freshThreads.map(t => [t.xGmThrid, t]));
 
               const updatedExisting = existingThreads.map(t => {
-                const fresh = freshMap.get(t.gmailThreadId);
+                const fresh = freshMap.get(t.xGmThrid);
                 return fresh ? { ...t, isRead: fresh.isRead, isStarred: fresh.isStarred, snippet: fresh.snippet, messageCount: fresh.messageCount } : t;
               });
 
@@ -668,7 +671,7 @@ export const EmailsStore = signalStore(
             } else {
               // User on first page — replace normally
               const selectedStillExists = currentSelectedId
-                ? freshThreads.some(t => t.gmailThreadId === currentSelectedId)
+                ? freshThreads.some(t => t.xGmThrid === currentSelectedId)
                 : false;
 
               patchState(store, {
@@ -702,9 +705,12 @@ export const EmailsStore = signalStore(
       const foldersStore = inject(FoldersStore);
       const router = inject(Router);
 
-      // Subscribe to mail:data-changed events from the main process.
+      // Subscribe to mail:folder-updated events from the main process.
       // Refresh folder counts (so sidebar unread matches Gmail) and threads when the active folder's data has changed.
-      electronService.onEvent<MailDataChangedPayload>('mail:data-changed').subscribe((event) => {
+      electronService
+        .onEvent<MailFolderUpdatedPayload>('mail:folder-updated')
+        .pipe(debounceTime(500))
+        .subscribe((event) => {
         const activeAccountId = accountsStore.activeAccountId();
         const activeFolderId = foldersStore.activeFolderId();
 
@@ -741,7 +747,7 @@ export const EmailsStore = signalStore(
         ) {
           store.refreshThreads();
         }
-      });
+        });
 
       // Subscribe to mail:new-email events (IDLE push notifications).
       // Refresh threads if active folder matches; always refresh folder unread counts.
@@ -767,16 +773,16 @@ export const EmailsStore = signalStore(
 
       // Subscribe to mail:thread-refresh events from the queue worker.
       // After a move/delete is confirmed server-side, re-load the selected thread
-      // if it matches the event's gmailThreadId so the UI reflects the clean DB state.
+      // if it matches the event's xGmThrid so the UI reflects the clean DB state.
       electronService.onEvent<MailThreadRefreshPayload>('mail:thread-refresh').subscribe(async (event) => {
         const activeAccountId = accountsStore.activeAccountId();
         if (activeAccountId == null || event.accountId !== activeAccountId) {
           return;
         }
         const selectedThreadId = store.selectedThreadId();
-        if (selectedThreadId === event.gmailThreadId) {
+        if (selectedThreadId === event.xGmThrid) {
           // Re-load thread from the now-clean DB (pending ops cleared, metadata recomputed)
-          await store.loadThread(event.accountId, event.gmailThreadId);
+          await store.loadThread(event.accountId, event.xGmThrid);
         }
       });
 
@@ -800,8 +806,8 @@ export const EmailsStore = signalStore(
           await store.loadThreads(event.accountId, event.folder);
 
           // 6. Load the specific thread if provided
-          if (event.gmailThreadId) {
-            await store.loadThread(event.accountId, event.gmailThreadId);
+          if (event.xGmThrid) {
+            await store.loadThread(event.accountId, event.xGmThrid);
           }
 
           // 7. Cross-view navigation: only navigate if not already on the mail view

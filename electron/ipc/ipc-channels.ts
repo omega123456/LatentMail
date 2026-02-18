@@ -76,7 +76,7 @@ export const IPC_EVENTS = {
   AI_STATUS: 'ai:status',
   AI_STREAM: 'ai:stream',
   QUEUE_UPDATE: 'queue:update',
-  MAIL_DATA_CHANGED: 'mail:data-changed',
+  MAIL_FOLDER_UPDATED: 'mail:folder-updated',
   MAIL_NEW_EMAIL: 'mail:new-email',
   MAIL_NOTIFICATION_CLICK: 'mail:notification-click',
   MAIL_THREAD_REFRESH: 'mail:thread-refresh',

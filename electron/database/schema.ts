@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
-// All tables use INTEGER PRIMARY KEY for autoincrement via SQLite's rowid
+// New-era schema (v1): X-GM-MSGID as primary identifier, CONDSTORE folder state
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 1;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table
@@ -18,12 +18,13 @@ export const CREATE_TABLES_SQL = `
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  -- Emails table (one row per message, no folder column)
+  -- Emails table (one row per message, keyed by X-GM-MSGID)
   CREATE TABLE IF NOT EXISTS emails (
     id INTEGER PRIMARY KEY,
     account_id INTEGER NOT NULL,
-    gmail_message_id TEXT NOT NULL,
-    gmail_thread_id TEXT NOT NULL,
+    x_gm_msgid TEXT NOT NULL,
+    x_gm_thrid TEXT NOT NULL,
+    message_id TEXT,
     from_address TEXT NOT NULL,
     from_name TEXT,
     to_addresses TEXT NOT NULL,
@@ -36,70 +37,82 @@ export const CREATE_TABLES_SQL = `
     is_read INTEGER NOT NULL DEFAULT 0,
     is_starred INTEGER NOT NULL DEFAULT 0,
     is_important INTEGER NOT NULL DEFAULT 0,
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    is_filtered INTEGER NOT NULL DEFAULT 0,
     snippet TEXT,
     size INTEGER,
     has_attachments INTEGER NOT NULL DEFAULT 0,
-    is_filtered INTEGER NOT NULL DEFAULT 0,
-    is_draft INTEGER NOT NULL DEFAULT 0,
     labels TEXT,
-    raw_headers TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-    UNIQUE(account_id, gmail_message_id)
+    UNIQUE(account_id, x_gm_msgid)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, gmail_thread_id);
+  CREATE INDEX IF NOT EXISTS idx_emails_account_thread ON emails(account_id, x_gm_thrid);
   CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date DESC);
   CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address);
 
   -- Email-folder association table (emails can appear in multiple folders)
   CREATE TABLE IF NOT EXISTS email_folders (
     id INTEGER PRIMARY KEY,
-    email_id INTEGER NOT NULL,
     account_id INTEGER NOT NULL,
+    x_gm_msgid TEXT NOT NULL,
     folder TEXT NOT NULL,
     uid INTEGER,
-    FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-    UNIQUE(email_id, folder)
+    UNIQUE(account_id, x_gm_msgid, folder)
   );
 
   CREATE INDEX IF NOT EXISTS idx_email_folders_account_folder ON email_folders(account_id, folder);
+  CREATE INDEX IF NOT EXISTS idx_email_folders_msgid ON email_folders(account_id, x_gm_msgid);
 
-  -- Threads table
+  -- Threads table (keyed by X-GM-THRID)
   CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY,
     account_id INTEGER NOT NULL,
-    gmail_thread_id TEXT NOT NULL,
+    x_gm_thrid TEXT NOT NULL,
     subject TEXT,
     last_message_date TEXT NOT NULL,
     participants TEXT,
     message_count INTEGER NOT NULL DEFAULT 1,
     snippet TEXT,
-    folder TEXT NOT NULL,
     is_read INTEGER NOT NULL DEFAULT 0,
     is_starred INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-    UNIQUE(account_id, gmail_thread_id)
+    UNIQUE(account_id, x_gm_thrid)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_threads_account_folder ON threads(account_id, folder);
   CREATE INDEX IF NOT EXISTS idx_threads_last_date ON threads(last_message_date DESC);
 
   -- Thread-folder association table (threads can appear in multiple folders)
   CREATE TABLE IF NOT EXISTS thread_folders (
     id INTEGER PRIMARY KEY,
-    thread_id INTEGER NOT NULL,
     account_id INTEGER NOT NULL,
+    x_gm_thrid TEXT NOT NULL,
     folder TEXT NOT NULL,
-    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
-    UNIQUE(thread_id, folder)
+    UNIQUE(account_id, x_gm_thrid, folder)
   );
 
   CREATE INDEX IF NOT EXISTS idx_thread_folders_account_folder ON thread_folders(account_id, folder);
 
-  -- Attachments table
+  -- Folder state for CONDSTORE incremental sync
+  CREATE TABLE IF NOT EXISTS folder_state (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    folder TEXT NOT NULL,
+    uid_validity TEXT NOT NULL,
+    highest_modseq TEXT,
+    condstore_supported INTEGER NOT NULL DEFAULT 1,
+    last_reconciled_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    UNIQUE(account_id, folder)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_folder_state_account ON folder_state(account_id);
+
+  -- Attachments table (references emails.id for compact FK)
   CREATE TABLE IF NOT EXISTS attachments (
     id INTEGER PRIMARY KEY,
     email_id INTEGER NOT NULL,
@@ -174,9 +187,7 @@ export const CREATE_TABLES_SQL = `
     UNIQUE(operation_type, input_hash, model)
   );
 
-  -- Search index table (LIKE-based search; FTS5 unavailable in sql.js WASM build)
-  -- Full-text search will use LIKE queries on the emails table directly,
-  -- with this table serving as an optional denormalized search cache.
+  -- Search index table (LIKE-based search)
   CREATE TABLE IF NOT EXISTS search_index (
     id INTEGER PRIMARY KEY,
     email_id INTEGER NOT NULL,

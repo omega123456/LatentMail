@@ -53,9 +53,12 @@
             @if (item.status === 'failed' && item.error) {
               <div class="item-error">{{ item.error }}</div>
             }
+            @if (item.status === 'completed' && item.error) {
+              <div class="item-error">{{ item.error }}</div>
+            }
           </div>
           <span class="status-badge" [class]="'badge-' + item.status">
-            {{ statusLabel(item.status) }}
+            {{ itemStatusLabel(item) }}
           </span>
           <span class="item-time">{{ relativeTime(item.createdAt) }}</span>
           @if (item.status === 'failed') {

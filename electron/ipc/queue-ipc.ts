@@ -33,21 +33,21 @@ export function registerQueueIpcHandlers(): void {
         return ipcError('QUEUE_INVALID_ACCOUNT', 'accountId must be a positive number');
       }
 
-      // Validate draft-update has originalQueueId OR serverDraftGmailMessageId
+      // Validate draft-update has originalQueueId OR serverDraftXGmMsgId
       if (operation.type === 'draft-update') {
         const payload = operation.payload as unknown as Record<string, unknown>;
         const hasOriginalQueueId = payload.originalQueueId && typeof payload.originalQueueId === 'string';
-        const hasServerDraftId = payload.serverDraftGmailMessageId && typeof payload.serverDraftGmailMessageId === 'string';
+        const hasServerDraftId = payload.serverDraftXGmMsgId && typeof payload.serverDraftXGmMsgId === 'string';
         if (!hasOriginalQueueId && !hasServerDraftId) {
-          return ipcError('QUEUE_INVALID_PAYLOAD', 'draft-update requires originalQueueId or serverDraftGmailMessageId in payload');
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'draft-update requires originalQueueId or serverDraftXGmMsgId in payload');
         }
       }
 
       // Validate move payload
       if (operation.type === 'move') {
         const payload = operation.payload as unknown as Record<string, unknown>;
-        if (!Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
-          return ipcError('QUEUE_INVALID_PAYLOAD', 'move requires non-empty messageIds array in payload');
+        if (!Array.isArray(payload.xGmMsgIds) || payload.xGmMsgIds.length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'move requires non-empty xGmMsgIds array in payload');
         }
         if (!payload.targetFolder || typeof payload.targetFolder !== 'string') {
           return ipcError('QUEUE_INVALID_PAYLOAD', 'move requires targetFolder string in payload');
@@ -57,8 +57,8 @@ export function registerQueueIpcHandlers(): void {
       // Validate flag payload
       if (operation.type === 'flag') {
         const payload = operation.payload as unknown as Record<string, unknown>;
-        if (!Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
-          return ipcError('QUEUE_INVALID_PAYLOAD', 'flag requires non-empty messageIds array in payload');
+        if (!Array.isArray(payload.xGmMsgIds) || payload.xGmMsgIds.length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'flag requires non-empty xGmMsgIds array in payload');
         }
         if (!payload.flag || typeof payload.flag !== 'string') {
           return ipcError('QUEUE_INVALID_PAYLOAD', 'flag requires flag string in payload');
@@ -82,8 +82,8 @@ export function registerQueueIpcHandlers(): void {
       // Validate delete payload
       if (operation.type === 'delete') {
         const payload = operation.payload as unknown as Record<string, unknown>;
-        if (!Array.isArray(payload.messageIds) || payload.messageIds.length === 0) {
-          return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires non-empty messageIds array in payload');
+        if (!Array.isArray(payload.xGmMsgIds) || payload.xGmMsgIds.length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires non-empty xGmMsgIds array in payload');
         }
         if (!payload.folder || typeof payload.folder !== 'string') {
           return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires folder string in payload');

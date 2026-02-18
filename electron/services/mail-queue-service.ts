@@ -40,8 +40,8 @@ export interface DraftPayload {
 export interface DraftUpdatePayload extends DraftPayload {
   /** queueId of the original draft-create operation (used to resolve server IDs). */
   originalQueueId?: string;
-  /** Server draft's gmail_message_id (alternative to originalQueueId for drafts opened from folder). */
-  serverDraftGmailMessageId?: string;
+  /** Server draft's X-GM-MSGID (alternative to originalQueueId for drafts opened from folder). */
+  serverDraftXGmMsgId?: string;
 }
 
 export interface SendPayload {
@@ -56,37 +56,40 @@ export interface SendPayload {
   attachments?: Array<{ filename: string; content: string; contentType: string }>;
   /** queueId of the draft being sent (optional; for draft cleanup via in-memory mapping). */
   originalQueueId?: string;
-  /** Server draft's gmail_message_id (optional; for draft cleanup when queueId mapping unavailable). */
-  serverDraftGmailMessageId?: string;
+  /** Server draft's X-GM-MSGID (optional; for draft cleanup when queueId mapping unavailable). */
+  serverDraftXGmMsgId?: string;
 }
 
 export interface MovePayload {
-  messageIds: string[];
+  xGmMsgIds: string[];
   sourceFolder?: string;
+  sourceFolders?: string[];
   targetFolder: string;
-  /** Pre-resolved UIDs grouped by source folder (snapshotted at enqueue time). */
-  resolvedUids?: Record<string, number[]>;
-  /** Pre-resolved email metadata for DB update (snapshotted at enqueue time). */
-  resolvedEmails?: Array<{ gmailMessageId: string; gmailThreadId: string }>;
+  /** Metadata for DB/pending-op cleanup and renderer refresh. */
+  emailMeta?: Array<{ xGmMsgId: string; xGmThrid: string }>;
+  /** Runtime-only UID map built at execution time (not persisted). */
+  runtimeResolvedByFolder?: Record<string, number[]>;
 }
 
 export interface FlagPayload {
-  messageIds: string[];
+  xGmMsgIds: string[];
   flag: string;
   value: boolean;
-  /** Pre-resolved UIDs grouped by folder (snapshotted at enqueue time). */
-  resolvedUids?: Record<string, number[]>;
+  /** Preferred source folder context (optional). */
+  folder?: string;
+  /** Runtime-only UID map built at execution time (not persisted). */
+  runtimeResolvedByFolder?: Record<string, number[]>;
 }
 
 export interface DeletePayload {
-  messageIds: string[];
+  xGmMsgIds: string[];
   folder: string;
-  /** Pre-resolved UIDs in the target folder (snapshotted at enqueue time). */
-  resolvedUids?: number[];
-  /** Pre-resolved email metadata for DB cleanup (snapshotted at enqueue time). */
-  resolvedEmails?: Array<{ gmailMessageId: string; gmailThreadId: string }>;
+  /** Metadata for DB/pending-op cleanup and renderer refresh. */
+  emailMeta?: Array<{ xGmMsgId: string; xGmThrid: string }>;
   /** Whether this is a permanent delete (from Trash). */
   permanent?: boolean;
+  /** Runtime-only resolved UID list built at execution time (not persisted). */
+  runtimeResolvedUids?: number[];
 }
 
 export type QueuePayload =
@@ -98,8 +101,8 @@ export type QueuePayload =
   | DeletePayload;
 
 export interface ServerIds {
-  gmailMessageId: string;
-  gmailThreadId: string;
+  xGmMsgId: string;
+  xGmThrid: string;
   imapUid: number;
   imapUidValidity: number;
 }
@@ -121,11 +124,13 @@ export interface QueueItem {
 /** Serialisable snapshot of a QueueItem sent to the renderer. */
 export type QueueItemSnapshot = Omit<QueueItem, 'payload'>;
 
-/** Payload for the mail:data-changed push event. */
-export interface MailDataChangedPayload {
+/** Payload for the mail:folder-updated push event. */
+export interface MailFolderUpdatedPayload {
   accountId: number;
   folders: string[];
-  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter';
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync';
+  changeType?: 'new_messages' | 'flag_changes' | 'deletions' | 'mixed';
+  count?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +324,32 @@ export class MailQueueService {
     return count;
   }
 
+  /**
+   * Fail queued operations that target a folder after UIDVALIDITY reset.
+   * Returns the number of items marked as failed.
+   */
+  failOperationsForFolder(accountId: number, folder: string, reason: string): number {
+    let failed = 0;
+    for (const item of this.items.values()) {
+      if (item.accountId !== accountId) {
+        continue;
+      }
+      if (item.status !== 'pending') {
+        continue;
+      }
+      if (!this.operationTouchesFolder(item, folder)) {
+        continue;
+      }
+
+      item.status = 'failed';
+      item.error = reason;
+      item.completedAt = new Date().toISOString();
+      this.emitUpdate(item);
+      failed++;
+    }
+    return failed;
+  }
+
   // -----------------------------------------------------------------------
   // Queue creation & worker
   // -----------------------------------------------------------------------
@@ -391,17 +422,24 @@ export class MailQueueService {
 
       log.warn(`[MailQueue] Failed ${item.type} (${item.queueId}): [${category}] ${errMsg}`);
 
-      // Send operations are NOT idempotent — if SMTP accepted the message but the
-      // connection dropped before we received the response, retrying would send a
-      // duplicate. Treat ALL send failures as permanent (including auth errors);
-      // the user can manually retry from the queue settings page after confirming
-      // the email wasn't actually sent.
-      if (item.type === 'send') {
+      // Fail immediately with no auto-retry: send (not idempotent) or delete/move/flag
+      // when no messages found on server (retrying would never succeed). Same UX: mark
+      // failed, show error toast, user can retry from queue settings if desired.
+      const noMessagesFound = errMsg.includes('No messages found on server');
+      const failImmediately =
+        item.type === 'send' ||
+        ((item.type === 'delete' || item.type === 'move' || item.type === 'flag') && noMessagesFound);
+
+      if (failImmediately) {
         item.status = 'failed';
         item.error = errMsg;
         item.completedAt = new Date().toISOString();
         this.emitUpdate(item);
-        log.error(`[MailQueue] Send failed (${item.queueId}), no auto-retry (not idempotent): ${errMsg}`);
+        if (item.type === 'move' || item.type === 'delete') {
+          this.clearPendingOpsOnFailure(item);
+        }
+        const reason = item.type === 'send' ? 'not idempotent' : 'no messages found';
+        log.error(`[MailQueue] ${item.type} failed (${item.queueId}), no auto-retry (${reason}): ${errMsg}`);
         return;
       }
 
@@ -438,36 +476,36 @@ export class MailQueueService {
   /**
    * Clear pending ops and threadBodyFetchAttempted for a failed move/delete operation.
    * This unblocks future IMAP re-fetch so messages reappear correctly.
-   * If resolvedEmails is unavailable, logs a warning — the next sync reconciliation
+   * If emailMeta is unavailable, logs a warning — the next sync reconciliation
    * will correct any remaining inconsistencies.
    */
   private clearPendingOpsOnFailure(item: QueueItem): void {
     try {
       const pendingOpService = PendingOpService.getInstance();
       const payload = item.payload as MovePayload | DeletePayload;
-      const resolvedEmails = payload.resolvedEmails ?? [];
+      const emailMeta = payload.emailMeta ?? [];
 
-      if (resolvedEmails.length === 0) {
+      if (emailMeta.length === 0) {
         // No metadata available to target specific threads — pending ops will remain
         // until the next sync reconciliation or app restart clears them.
-        log.warn(`[MailQueue] clearPendingOpsOnFailure (${item.queueId}): resolvedEmails is empty — pending ops not cleared; next sync will reconcile`);
+        log.warn(`[MailQueue] clearPendingOpsOnFailure (${item.queueId}): emailMeta is empty — pending ops not cleared; next sync will reconcile`);
         return;
       }
 
       const byThread = new Map<string, string[]>();
-      for (const { gmailMessageId, gmailThreadId } of resolvedEmails) {
-        if (!gmailThreadId) {
+      for (const { xGmMsgId, xGmThrid } of emailMeta) {
+        if (!xGmThrid) {
           continue;
         }
-        if (!byThread.has(gmailThreadId)) {
-          byThread.set(gmailThreadId, []);
+        if (!byThread.has(xGmThrid)) {
+          byThread.set(xGmThrid, []);
         }
-        byThread.get(gmailThreadId)!.push(gmailMessageId);
+        byThread.get(xGmThrid)!.push(xGmMsgId);
       }
 
-      for (const [gmailThreadId, messageIds] of byThread) {
-        pendingOpService.clear(item.accountId, gmailThreadId, messageIds);
-        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${gmailThreadId}`);
+      for (const [xGmThrid, messageIds] of byThread) {
+        pendingOpService.clear(item.accountId, xGmThrid, messageIds);
+        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${xGmThrid}`);
       }
     } catch (err) {
       log.warn(`[MailQueue] clearPendingOpsOnFailure failed for ${item.queueId}:`, err);
@@ -523,7 +561,7 @@ export class MailQueueService {
     // Acquire folder lock to coordinate with SyncService, then perform IMAP operations.
     // Lock ordering: FolderLockManager (app-level) → ImapFlow mailbox lock (protocol-level).
     // Both queue workers and SyncService follow this same order — no inversion deadlock risk.
-    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER);
+    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER, item.accountId);
     try {
       // APPEND to Gmail Drafts
       const appendResult = await imapService.appendDraft(String(item.accountId), mimeBuffer);
@@ -541,14 +579,14 @@ export class MailQueueService {
       const fetched = await imapService.fetchMessageByUid(String(item.accountId), GMAIL_DRAFTS_FOLDER, imapUid);
 
       // Determine server IDs
-      const gmailMessageId = fetched?.gmailMessageId || draftMessageId;
-      const gmailThreadId = fetched?.gmailThreadId || draftMessageId;
+      const xGmMsgId = fetched?.xGmMsgId || draftMessageId;
+      const xGmThrid = fetched?.xGmThrid || draftMessageId;
 
       // Insert server-confirmed data into local DB
       db.upsertEmail({
         accountId: item.accountId,
-        gmailMessageId,
-        gmailThreadId,
+        xGmMsgId,
+        xGmThrid,
         folder: GMAIL_DRAFTS_FOLDER,
         folderUid: imapUid,
         fromAddress: account.email,
@@ -569,32 +607,28 @@ export class MailQueueService {
       });
 
       // Upsert thread
-      const existingThread = db.getThreadById(item.accountId, gmailThreadId);
-      let dbThreadId: number;
-      if (existingThread) {
-        dbThreadId = existingThread['id'] as number;
-      } else {
-        dbThreadId = db.upsertThread({
+      const existingThread = db.getThreadById(item.accountId, xGmThrid);
+      if (!existingThread) {
+        db.upsertThread({
           accountId: item.accountId,
-          gmailThreadId,
+          xGmThrid,
           subject: payload.subject || '',
           lastMessageDate: new Date().toISOString(),
           participants: account.email,
           messageCount: 1,
           snippet: (payload.textBody || '').substring(0, 100),
-          folder: GMAIL_DRAFTS_FOLDER,
           isRead: true,
           isStarred: false,
         });
       }
-      db.upsertThreadFolder(dbThreadId, item.accountId, GMAIL_DRAFTS_FOLDER);
+      db.upsertThreadFolder(item.accountId, xGmThrid, GMAIL_DRAFTS_FOLDER);
 
       // Store server ID mapping
-      const serverIds: ServerIds = { gmailMessageId, gmailThreadId, imapUid, imapUidValidity };
+      const serverIds: ServerIds = { xGmMsgId, xGmThrid, imapUid, imapUidValidity };
       this.queueIdToServerIds.set(item.queueId, serverIds);
       item.result = serverIds;
 
-      log.info(`[MailQueue] draft-create (${item.queueId}): uid=${imapUid}, msgId=${gmailMessageId}`);
+      log.info(`[MailQueue] draft-create (${item.queueId}): uid=${imapUid}, msgId=${xGmMsgId}`);
     } finally {
       release();
     }
@@ -612,7 +646,7 @@ export class MailQueueService {
 
     // Resolve the server IDs via two paths:
     //   1. In-memory mapping (draft created this session)
-    //   2. Local DB lookup by gmailMessageId (draft opened from server)
+    //   2. Local DB lookup by xGmMsgId (draft opened from server)
     let oldServerIds: ServerIds | undefined;
 
     // Path 1: Resolve via in-memory mapping (draft created in this session)
@@ -621,16 +655,16 @@ export class MailQueueService {
     }
 
     // Path 2: Resolve via DB lookup (draft opened from server, or mapping lost after restart)
-    if (!oldServerIds && payload.serverDraftGmailMessageId) {
-      const folderUids = db.getFolderUidsForEmail(item.accountId, payload.serverDraftGmailMessageId);
+    if (!oldServerIds && payload.serverDraftXGmMsgId) {
+      const folderUids = db.getFolderUidsForEmail(item.accountId, payload.serverDraftXGmMsgId);
       const draftsEntry = folderUids.find(fu => fu.folder === GMAIL_DRAFTS_FOLDER);
       if (draftsEntry) {
-        const oldEmail = db.getEmailByGmailMessageId(item.accountId, payload.serverDraftGmailMessageId);
-        const gmailThreadId = oldEmail ? String(oldEmail['gmailThreadId'] || '') : '';
+        const oldEmail = db.getEmailByXGmMsgId(item.accountId, payload.serverDraftXGmMsgId);
+        const xGmThrid = oldEmail ? String(oldEmail['xGmThrid'] || '') : '';
         // Construct ServerIds from DB data (no UIDVALIDITY stored; pass 0)
         oldServerIds = {
-          gmailMessageId: payload.serverDraftGmailMessageId,
-          gmailThreadId,
+          xGmMsgId: payload.serverDraftXGmMsgId,
+          xGmThrid,
           imapUid: draftsEntry.uid,
           imapUidValidity: 0,
         };
@@ -639,7 +673,7 @@ export class MailQueueService {
 
     if (!oldServerIds) {
       // Fallback: treat as draft-create (mapping lost, e.g. after app restart)
-      log.warn(`[MailQueue] draft-update (${item.queueId}): no server IDs for originalQueueId=${payload.originalQueueId} or serverDraftGmailMessageId=${payload.serverDraftGmailMessageId}, falling back to draft-create`);
+      log.warn(`[MailQueue] draft-update (${item.queueId}): no server IDs for originalQueueId=${payload.originalQueueId} or serverDraftXGmMsgId=${payload.serverDraftXGmMsgId}, falling back to draft-create`);
       item.type = 'draft-create';
       await this.processDraftCreate(item);
       return;
@@ -681,7 +715,7 @@ export class MailQueueService {
       attachments: attachments.length > 0 ? attachments : undefined,
     });
 
-    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER);
+    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER, item.accountId);
     try {
       // APPEND new version first (safe — no data loss if this fails)
       const appendResult = await imapService.appendDraft(String(item.accountId), mimeBuffer);
@@ -698,15 +732,12 @@ export class MailQueueService {
         );
 
         // Clean up old email/thread associations from local DB
-        db.removeEmailFolderAssociation(item.accountId, oldServerIds.gmailMessageId, GMAIL_DRAFTS_FOLDER);
-        const oldEmail = db.getEmailByGmailMessageId(item.accountId, oldServerIds.gmailMessageId);
+        db.removeEmailFolderAssociation(item.accountId, oldServerIds.xGmMsgId, GMAIL_DRAFTS_FOLDER);
+        const oldEmail = db.getEmailByXGmMsgId(item.accountId, oldServerIds.xGmMsgId);
         if (oldEmail) {
-          const oldThreadId = String(oldEmail['gmailThreadId'] || '');
+          const oldThreadId = String(oldEmail['xGmThrid'] || '');
           if (oldThreadId && !db.threadHasEmailsInFolder(item.accountId, oldThreadId, GMAIL_DRAFTS_FOLDER)) {
-            const oldInternalThreadId = db.getThreadInternalId(item.accountId, oldThreadId);
-            if (oldInternalThreadId != null) {
-              db.removeThreadFolderAssociation(oldInternalThreadId, GMAIL_DRAFTS_FOLDER);
-            }
+            db.removeThreadFolderAssociation(item.accountId, oldThreadId, GMAIL_DRAFTS_FOLDER);
           }
         }
       } catch (delErr) {
@@ -725,15 +756,15 @@ export class MailQueueService {
 
       // Fetch the new message from server
       const fetched = await imapService.fetchMessageByUid(String(item.accountId), GMAIL_DRAFTS_FOLDER, newUid);
-      const gmailMessageId = fetched?.gmailMessageId || newMessageId;
+      const xGmMsgId = fetched?.xGmMsgId || newMessageId;
       // Preserve the original thread ID to avoid creating a new thread (dedupe)
-      const gmailThreadId = fetched?.gmailThreadId || oldServerIds.gmailThreadId;
+      const xGmThrid = fetched?.xGmThrid || oldServerIds.xGmThrid;
 
       // Insert new server-confirmed data into local DB
       db.upsertEmail({
         accountId: item.accountId,
-        gmailMessageId,
-        gmailThreadId,
+        xGmMsgId,
+        xGmThrid,
         folder: GMAIL_DRAFTS_FOLDER,
         folderUid: newUid,
         fromAddress: account.email,
@@ -754,29 +785,25 @@ export class MailQueueService {
       });
 
       // Upsert thread
-      const existingThread = db.getThreadById(item.accountId, gmailThreadId);
-      let dbThreadId: number;
-      if (existingThread) {
-        dbThreadId = existingThread['id'] as number;
-      } else {
-        dbThreadId = db.upsertThread({
+      const existingThread = db.getThreadById(item.accountId, xGmThrid);
+      if (!existingThread) {
+        db.upsertThread({
           accountId: item.accountId,
-          gmailThreadId,
+          xGmThrid,
           subject: payload.subject || '',
           lastMessageDate: new Date().toISOString(),
           participants: account.email,
           messageCount: 1,
           snippet: (payload.textBody || '').substring(0, 100),
-          folder: GMAIL_DRAFTS_FOLDER,
           isRead: true,
           isStarred: false,
         });
       }
-      db.upsertThreadFolder(dbThreadId, item.accountId, GMAIL_DRAFTS_FOLDER);
+      db.upsertThreadFolder(item.accountId, xGmThrid, GMAIL_DRAFTS_FOLDER);
 
       // Update server ID mapping (point the ORIGINAL queueId to the new server IDs)
       // Only update if originalQueueId was provided (draft created this session)
-      const serverIds: ServerIds = { gmailMessageId, gmailThreadId, imapUid: newUid, imapUidValidity: newUidValidity };
+      const serverIds: ServerIds = { xGmMsgId, xGmThrid, imapUid: newUid, imapUidValidity: newUidValidity };
       if (payload.originalQueueId) {
         this.queueIdToServerIds.set(payload.originalQueueId, serverIds);
       }
@@ -797,35 +824,48 @@ export class MailQueueService {
     const imapService = ImapService.getInstance();
     const lockManager = FolderLockManager.getInstance();
 
-    // Use pre-resolved UIDs from the payload (snapshotted at enqueue time).
-    // This avoids re-querying the DB after the optimistic update has already
-    // moved/removed the source folder associations.
-    const byFolder = payload.resolvedUids;
+    const sourceFolders = this.resolveSourceFoldersForMove(payload);
+    const runtimeResolvedByFolder: Record<string, number[]> = {};
 
-    if (!byFolder || Object.keys(byFolder).length === 0) {
-      log.warn(`[MailQueue] move (${item.queueId}): No resolved UIDs in payload — skipping IMAP move`);
-      return;
-    }
+    const resolvedAny = new Set<string>();
+    let movedCount = 0;
 
-    // Perform IMAP MOVE for each source folder (acquire folder lock first)
-    for (const [folder, uids] of Object.entries(byFolder)) {
-      if (!uids || uids.length === 0) continue;
+    for (const folder of sourceFolders) {
+      const resolved = await imapService.resolveUidsByXGmMsgId(String(item.accountId), folder, payload.xGmMsgIds);
+      const resolvedUids = Array.from(resolved.values());
+      runtimeResolvedByFolder[folder] = resolvedUids;
 
-      const release = await lockManager.acquire(folder);
+      for (const xGmMsgId of resolved.keys()) {
+        resolvedAny.add(xGmMsgId);
+      }
+
+      if (resolvedUids.length === 0) {
+        continue;
+      }
+
+      const release = await lockManager.acquire(folder, item.accountId);
       try {
-        await imapService.moveMessages(String(item.accountId), folder, uids, payload.targetFolder);
+        await imapService.moveMessages(String(item.accountId), folder, resolvedUids, payload.targetFolder);
       } finally {
         release();
       }
+      movedCount += resolvedUids.length;
     }
 
-    // DB was already updated optimistically by the IPC handler.
-    // No further DB updates needed here — the optimistic update is canonical.
-    // If the IMAP operation fails (throws), the retry mechanism will re-attempt,
-    // and the next sync will reconcile any inconsistency.
+    payload.runtimeResolvedByFolder = runtimeResolvedByFolder;
+    const unresolvedCount = payload.xGmMsgIds.filter((id) => !resolvedAny.has(id)).length;
+    const requestedCount = payload.xGmMsgIds.length;
 
-    const emailCount = payload.resolvedEmails?.length ?? payload.messageIds.length;
-    log.info(`[MailQueue] move (${item.queueId}): ${emailCount} emails moved to ${payload.targetFolder}`);
+    if (movedCount === 0 && requestedCount > 0) {
+      const errMsg = 'No messages found on server — they may have been deleted or moved';
+      log.warn(`[MailQueue] move (${item.queueId}): no resolvable UIDs in source folder(s)`);
+      throw new Error(errMsg);
+    }
+
+    this.applyResolutionWarning(item, unresolvedCount, requestedCount);
+
+    const emailCount = payload.emailMeta?.length ?? payload.xGmMsgIds.length;
+    log.info(`[MailQueue] move (${item.queueId}): requested=${requestedCount}, moved=${movedCount}, emails=${emailCount}, target=${payload.targetFolder}`);
   }
 
   // -----------------------------------------------------------------------
@@ -834,6 +874,7 @@ export class MailQueueService {
 
   private async processFlag(item: QueueItem): Promise<void> {
     const payload = item.payload as FlagPayload;
+    const db = DatabaseService.getInstance();
     const imapService = ImapService.getInstance();
     const lockManager = FolderLockManager.getInstance();
 
@@ -842,37 +883,65 @@ export class MailQueueService {
     if (payload.flag === 'read') imapFlags.read = payload.value;
     if (payload.flag === 'starred') imapFlags.starred = payload.value;
 
-    // Perform IMAP flag update if applicable (read/starred map to IMAP flags)
-    if (Object.keys(imapFlags).length > 0) {
-      // Use pre-resolved UIDs from the payload (snapshotted at enqueue time).
-      // This avoids races with optimistic move updates that may have already
-      // changed folder associations in the DB.
-      const byFolder = payload.resolvedUids;
+    if (Object.keys(imapFlags).length === 0) {
+      log.info(`[MailQueue] flag (${item.queueId}): ${payload.flag} has no IMAP mapping; local optimistic state retained`);
+      return;
+    }
 
-      if (!byFolder || Object.keys(byFolder).length === 0) {
-        log.warn(`[MailQueue] flag (${item.queueId}): No resolved UIDs — skipping IMAP flag update`);
-      } else {
-        // Acquire folder locks in lexicographic order to prevent deadlocks
-        const folders = Object.keys(byFolder).sort();
-        for (const folder of folders) {
-          const uids = byFolder[folder];
-          if (uids && uids.length > 0) {
-            const release = await lockManager.acquire(folder);
-            try {
-              await imapService.setFlags(String(item.accountId), folder, uids, imapFlags);
-            } finally {
-              release();
-            }
-          }
+    const byFolder = new Map<string, Set<string>>();
+    for (const xGmMsgId of payload.xGmMsgIds) {
+      const folders = payload.folder ? [payload.folder] : db.getFoldersForEmail(item.accountId, xGmMsgId);
+      for (const folder of folders) {
+        if (!byFolder.has(folder)) {
+          byFolder.set(folder, new Set<string>());
         }
+        byFolder.get(folder)!.add(xGmMsgId);
       }
     }
 
-    // DB was already updated optimistically by the IPC handler.
-    // For 'important' flag: no IMAP equivalent (Gmail labels, not IMAP flags),
-    // so only the local DB update matters.
+    const runtimeResolvedByFolder: Record<string, number[]> = {};
+    const resolvedAny = new Set<string>();
 
-    log.info(`[MailQueue] flag (${item.queueId}): ${payload.flag}=${payload.value} on ${payload.messageIds.length} emails`);
+    const folders = Array.from(byFolder.keys()).sort();
+    for (const folder of folders) {
+      const ids = Array.from(byFolder.get(folder) ?? []);
+      if (ids.length === 0) {
+        continue;
+      }
+
+      const resolved = await imapService.resolveUidsByXGmMsgId(String(item.accountId), folder, ids);
+      const uids = Array.from(resolved.values());
+      runtimeResolvedByFolder[folder] = uids;
+
+      for (const id of resolved.keys()) {
+        resolvedAny.add(id);
+      }
+
+      if (uids.length === 0) {
+        continue;
+      }
+
+      const release = await lockManager.acquire(folder, item.accountId);
+      try {
+        await imapService.setFlags(String(item.accountId), folder, uids, imapFlags);
+      } finally {
+        release();
+      }
+    }
+
+    payload.runtimeResolvedByFolder = runtimeResolvedByFolder;
+    const unresolvedCount = payload.xGmMsgIds.filter((id) => !resolvedAny.has(id)).length;
+    const totalCount = payload.xGmMsgIds.length;
+
+    if (totalCount > 0 && unresolvedCount >= totalCount) {
+      const errMsg = 'No messages found on server — they may have been deleted or moved';
+      log.warn(`[MailQueue] flag (${item.queueId}): no resolvable UIDs for ${payload.flag}`);
+      throw new Error(errMsg);
+    }
+
+    this.applyResolutionWarning(item, unresolvedCount, totalCount);
+
+    log.info(`[MailQueue] flag (${item.queueId}): ${payload.flag}=${payload.value} on ${payload.xGmMsgIds.length} emails`);
   }
 
   // -----------------------------------------------------------------------
@@ -887,16 +956,27 @@ export class MailQueueService {
     const folder = payload.folder;
     const isPermanent = payload.permanent ?? (folder === '[Gmail]/Trash');
 
-    // Use pre-resolved UIDs from the payload (snapshotted at enqueue time).
-    const uids = payload.resolvedUids;
+    const resolved = await imapService.resolveUidsByXGmMsgId(
+      String(item.accountId),
+      folder,
+      payload.xGmMsgIds,
+    );
+    const uids = Array.from(resolved.values());
+    payload.runtimeResolvedUids = uids;
 
-    if (!uids || uids.length === 0) {
-      log.warn(`[MailQueue] delete (${item.queueId}): No resolved UIDs in payload — skipping IMAP delete`);
-      return;
+    const unresolvedCount = payload.xGmMsgIds.length - uids.length;
+    const totalCount = payload.xGmMsgIds.length;
+
+    if (uids.length === 0) {
+      const errMsg = 'No messages found on server — they may have been deleted or moved';
+      log.warn(`[MailQueue] delete (${item.queueId}): no resolvable UIDs in ${folder}`);
+      throw new Error(errMsg);
     }
 
+    this.applyResolutionWarning(item, unresolvedCount, totalCount);
+
     // Perform IMAP delete (with folder lock)
-    const release = await lockManager.acquire(folder);
+    const release = await lockManager.acquire(folder, item.accountId);
     try {
       await imapService.deleteMessages(String(item.accountId), folder, uids, isPermanent);
     } finally {
@@ -906,8 +986,65 @@ export class MailQueueService {
     // DB was already updated optimistically by the IPC handler.
     // No further DB updates needed here.
 
-    const emailCount = payload.resolvedEmails?.length ?? payload.messageIds.length;
+    const emailCount = payload.emailMeta?.length ?? payload.xGmMsgIds.length;
     log.info(`[MailQueue] delete (${item.queueId}): ${emailCount} emails deleted from ${folder} (permanent=${isPermanent})`);
+  }
+
+  private resolveSourceFoldersForMove(
+    payload: MovePayload,
+  ): string[] {
+    if (payload.sourceFolder) {
+      return [payload.sourceFolder];
+    }
+    if (payload.sourceFolders && payload.sourceFolders.length > 0) {
+      return payload.sourceFolders;
+    }
+    return [];
+  }
+
+  private applyResolutionWarning(item: QueueItem, unresolvedCount: number, totalCount: number): void {
+    if (totalCount <= 0) {
+      item.error = 'Completed with warnings: No messages found on server — they may have been deleted or moved';
+      return;
+    }
+
+    if (unresolvedCount <= 0) {
+      item.error = undefined;
+      return;
+    }
+
+    if (unresolvedCount >= totalCount) {
+      item.error = 'Completed with warnings: No messages found on server — they may have been deleted or moved';
+      return;
+    }
+
+    item.error = `Completed with warnings: ${unresolvedCount} of ${totalCount} messages not found on server`;
+  }
+
+  private operationTouchesFolder(item: QueueItem, folder: string): boolean {
+    if (item.type === 'move') {
+      const payload = item.payload as MovePayload;
+      if (payload.sourceFolder) {
+        return payload.sourceFolder === folder;
+      }
+      return (payload.sourceFolders ?? []).includes(folder);
+    }
+    if (item.type === 'delete') {
+      const payload = item.payload as DeletePayload;
+      return payload.folder === folder;
+    }
+    if (item.type === 'flag') {
+      const payload = item.payload as FlagPayload;
+      if (payload.folder) {
+        return payload.folder === folder;
+      }
+      const runtimeFolders = payload.runtimeResolvedByFolder ? Object.keys(payload.runtimeResolvedByFolder) : [];
+      if (runtimeFolders.length === 0) {
+        return true;
+      }
+      return runtimeFolders.includes(folder);
+    }
+    return false;
   }
 
   // -----------------------------------------------------------------------
@@ -954,7 +1091,7 @@ export class MailQueueService {
     // After successful SMTP send, delete the server draft if one exists.
     // Two resolution paths:
     //   1. originalQueueId → in-memory queueIdToServerIds mapping (draft created this session)
-    //   2. serverDraftGmailMessageId → resolve UID from local DB (draft opened from server)
+    //   2. serverDraftXGmMsgId → resolve UID from local DB (draft opened from server)
     await this.cleanupDraftAfterSend(item, payload);
 
     // Sent message appears in Sent folder on next sync — no local DB insert needed.
@@ -965,7 +1102,7 @@ export class MailQueueService {
    * Best-effort draft cleanup after a successful send.
    * Resolves the draft's server UID via:
    *   1. In-memory queueIdToServerIds mapping (draft created this session)
-   *   2. Local DB lookup by gmailMessageId (draft opened from server / mapping lost)
+   *   2. Local DB lookup by xGmMsgId (draft opened from server / mapping lost)
    * Then deletes from IMAP and cleans up local DB associations.
    */
   private async cleanupDraftAfterSend(item: QueueItem, payload: SendPayload): Promise<void> {
@@ -974,23 +1111,23 @@ export class MailQueueService {
     const lockManager = FolderLockManager.getInstance();
 
     // Path 1: Resolve via in-memory mapping (draft created in this session)
-    let draftGmailMessageId: string | undefined;
+    let draftXGmMsgId: string | undefined;
     let draftImapUid: number | undefined;
     let draftUidValidity: number | undefined;
 
     if (payload.originalQueueId) {
       const serverIds = this.queueIdToServerIds.get(payload.originalQueueId);
       if (serverIds) {
-        draftGmailMessageId = serverIds.gmailMessageId;
+        draftXGmMsgId = serverIds.xGmMsgId;
         draftImapUid = serverIds.imapUid;
         draftUidValidity = serverIds.imapUidValidity;
       }
     }
 
     // Path 2: Resolve via DB lookup (draft opened from server, or mapping lost after restart)
-    if (!draftImapUid && payload.serverDraftGmailMessageId) {
-      draftGmailMessageId = payload.serverDraftGmailMessageId;
-      const folderUids = db.getFolderUidsForEmail(item.accountId, payload.serverDraftGmailMessageId);
+    if (!draftImapUid && payload.serverDraftXGmMsgId) {
+      draftXGmMsgId = payload.serverDraftXGmMsgId;
+      const folderUids = db.getFolderUidsForEmail(item.accountId, payload.serverDraftXGmMsgId);
       const draftsEntry = folderUids.find(fu => fu.folder === GMAIL_DRAFTS_FOLDER);
       if (draftsEntry) {
         draftImapUid = draftsEntry.uid;
@@ -999,8 +1136,8 @@ export class MailQueueService {
       }
     }
 
-    if (!draftImapUid || !draftGmailMessageId) {
-      if (payload.originalQueueId || payload.serverDraftGmailMessageId) {
+    if (!draftImapUid || !draftXGmMsgId) {
+      if (payload.originalQueueId || payload.serverDraftXGmMsgId) {
         log.info(`[MailQueue] send (${item.queueId}): Could not resolve draft UID for cleanup — draft may persist until next sync`);
       }
       // Clean up mapping even if we couldn't delete
@@ -1010,7 +1147,7 @@ export class MailQueueService {
       return;
     }
 
-    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER);
+    const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER, item.accountId);
     try {
       // Delete the draft from the server via IMAP
       try {
@@ -1028,16 +1165,13 @@ export class MailQueueService {
 
       // Remove draft from local DB
       try {
-        db.removeEmailFolderAssociation(item.accountId, draftGmailMessageId, GMAIL_DRAFTS_FOLDER);
+        db.removeEmailFolderAssociation(item.accountId, draftXGmMsgId, GMAIL_DRAFTS_FOLDER);
 
-        const draftEmail = db.getEmailByGmailMessageId(item.accountId, draftGmailMessageId);
+        const draftEmail = db.getEmailByXGmMsgId(item.accountId, draftXGmMsgId);
         if (draftEmail) {
-          const threadId = String(draftEmail['gmailThreadId'] || '');
+          const threadId = String(draftEmail['xGmThrid'] || '');
           if (threadId && !db.threadHasEmailsInFolder(item.accountId, threadId, GMAIL_DRAFTS_FOLDER)) {
-            const internalThreadId = db.getThreadInternalId(item.accountId, threadId);
-            if (internalThreadId != null) {
-              db.removeThreadFolderAssociation(internalThreadId, GMAIL_DRAFTS_FOLDER);
-            }
+            db.removeThreadFolderAssociation(item.accountId, threadId, GMAIL_DRAFTS_FOLDER);
           }
         }
       } catch (dbErr) {
@@ -1077,12 +1211,12 @@ export class MailQueueService {
         await this.postOpFetchSend(item);
         break;
       case 'draft-create':
-        // draft-create already fetches + upserts inline; just emit data-changed
-        this.emitDataChanged(item.accountId, [GMAIL_DRAFTS_FOLDER], 'draft-create');
+        // draft-create already fetches + upserts inline; just emit folder-updated
+        this.emitFolderUpdated(item.accountId, [GMAIL_DRAFTS_FOLDER], 'draft-create', 'mixed');
         break;
       case 'draft-update':
-        // draft-update already fetches + upserts inline; just emit data-changed
-        this.emitDataChanged(item.accountId, [GMAIL_DRAFTS_FOLDER], 'draft-update');
+        // draft-update already fetches + upserts inline; just emit folder-updated
+        this.emitFolderUpdated(item.accountId, [GMAIL_DRAFTS_FOLDER], 'draft-update', 'mixed');
         break;
     }
   }
@@ -1095,14 +1229,14 @@ export class MailQueueService {
    */
   private async postOpFetchMove(item: QueueItem): Promise<void> {
     const payload = item.payload as MovePayload;
-    const sourceFolders = payload.resolvedUids ? Object.keys(payload.resolvedUids) : [];
+    const sourceFolders = payload.runtimeResolvedByFolder ? Object.keys(payload.runtimeResolvedByFolder) : [];
     const allFolders = [...new Set([...sourceFolders, payload.targetFolder])];
 
     // Re-fetch resolved UIDs from source folders to confirm removal.
     // UID-not-found is expected (confirms the move succeeded); any still-present
     // UIDs get upserted to keep local DB in sync.
-    if (payload.resolvedUids && Object.keys(payload.resolvedUids).length > 0) {
-      await this.fetchUidsAndUpsert(item.accountId, payload.resolvedUids);
+    if (payload.runtimeResolvedByFolder && Object.keys(payload.runtimeResolvedByFolder).length > 0) {
+      await this.fetchUidsAndUpsert(item.accountId, payload.runtimeResolvedByFolder);
     }
 
     // Fetch latest N from target folder to pick up newly-moved messages
@@ -1113,40 +1247,41 @@ export class MailQueueService {
     const db = DatabaseService.getInstance();
     const affectedThreadIds = new Set<string>();
 
-    if (payload.resolvedEmails && payload.resolvedEmails.length > 0) {
+    if (payload.emailMeta && payload.emailMeta.length > 0) {
       // Group by thread so we clear pending ops and recompute per-thread
       const byThread = new Map<string, string[]>();
-      for (const { gmailMessageId, gmailThreadId } of payload.resolvedEmails) {
-        if (!gmailThreadId) {
+      for (const { xGmMsgId, xGmThrid } of payload.emailMeta) {
+        if (!xGmThrid) {
           continue;
         }
-        if (!byThread.has(gmailThreadId)) {
-          byThread.set(gmailThreadId, []);
+        if (!byThread.has(xGmThrid)) {
+          byThread.set(xGmThrid, []);
         }
-        byThread.get(gmailThreadId)!.push(gmailMessageId);
-        affectedThreadIds.add(gmailThreadId);
+        byThread.get(xGmThrid)!.push(xGmMsgId);
+        affectedThreadIds.add(xGmThrid);
       }
 
-      for (const [gmailThreadId, messageIds] of byThread) {
+      for (const [xGmThrid, messageIds] of byThread) {
         // 1. Clear pending ops for these messages
-        pendingOpService.clear(item.accountId, gmailThreadId, messageIds);
+        pendingOpService.clear(item.accountId, xGmThrid, messageIds);
 
         // 2. Clear threadBodyFetchAttempted so next open re-fetches from IMAP if needed
-        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${gmailThreadId}`);
+        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${xGmThrid}`);
 
         // 3. Recompute thread metadata from actual DB state
         try {
-          db.recomputeThreadMetadata(item.accountId, gmailThreadId);
+          db.recomputeThreadMetadata(item.accountId, xGmThrid);
         } catch (recomputeErr) {
-          log.warn(`[MailQueue] postOpFetchMove: recomputeThreadMetadata failed for thread ${gmailThreadId}:`, recomputeErr);
+          log.warn(`[MailQueue] postOpFetchMove: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
         }
 
         // 4. Emit thread-refresh so renderer re-loads if this thread is selected
-        this.emitThreadRefresh(item.accountId, gmailThreadId, 'move');
+        this.emitThreadRefresh(item.accountId, xGmThrid, 'move');
       }
     }
 
-    this.emitDataChanged(item.accountId, allFolders, 'move');
+    await this.updateFolderStateForFolders(item.accountId, allFolders);
+    this.emitFolderUpdated(item.accountId, allFolders, 'move', 'mixed');
   }
 
   /**
@@ -1160,45 +1295,46 @@ export class MailQueueService {
 
     if (isPermanent) {
       // Permanent delete — nothing to fetch; just notify UI
-      this.emitDataChanged(item.accountId, [payload.folder], 'delete');
+      this.emitFolderUpdated(item.accountId, [payload.folder], 'delete', 'deletions');
     } else {
       // Soft delete — fetch latest N from Trash to pick up newly-trashed messages
       await this.fetchLatestAndUpsert(item.accountId, GMAIL_TRASH_FOLDER);
-      this.emitDataChanged(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete');
+      await this.updateFolderStateForFolders(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER]);
+      this.emitFolderUpdated(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete', 'deletions');
     }
 
     // --- Post-confirmation cleanup (for soft-delete only; permanent delete already wiped DB rows) ---
-    if (!isPermanent && payload.resolvedEmails && payload.resolvedEmails.length > 0) {
+    if (!isPermanent && payload.emailMeta && payload.emailMeta.length > 0) {
       const pendingOpService = PendingOpService.getInstance();
       const db = DatabaseService.getInstance();
 
       const byThread = new Map<string, string[]>();
-      for (const { gmailMessageId, gmailThreadId } of payload.resolvedEmails) {
-        if (!gmailThreadId) {
+      for (const { xGmMsgId, xGmThrid } of payload.emailMeta) {
+        if (!xGmThrid) {
           continue;
         }
-        if (!byThread.has(gmailThreadId)) {
-          byThread.set(gmailThreadId, []);
+        if (!byThread.has(xGmThrid)) {
+          byThread.set(xGmThrid, []);
         }
-        byThread.get(gmailThreadId)!.push(gmailMessageId);
+        byThread.get(xGmThrid)!.push(xGmMsgId);
       }
 
-      for (const [gmailThreadId, messageIds] of byThread) {
+      for (const [xGmThrid, messageIds] of byThread) {
         // 1. Clear pending ops for these messages
-        pendingOpService.clear(item.accountId, gmailThreadId, messageIds);
+        pendingOpService.clear(item.accountId, xGmThrid, messageIds);
 
         // 2. Clear threadBodyFetchAttempted so next open re-fetches from IMAP if needed
-        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${gmailThreadId}`);
+        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${xGmThrid}`);
 
         // 3. Recompute thread metadata from actual DB state
         try {
-          db.recomputeThreadMetadata(item.accountId, gmailThreadId);
+          db.recomputeThreadMetadata(item.accountId, xGmThrid);
         } catch (recomputeErr) {
-          log.warn(`[MailQueue] postOpFetchDelete: recomputeThreadMetadata failed for thread ${gmailThreadId}:`, recomputeErr);
+          log.warn(`[MailQueue] postOpFetchDelete: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
         }
 
         // 4. Emit thread-refresh so renderer re-loads if this thread is selected
-        this.emitThreadRefresh(item.accountId, gmailThreadId, 'delete');
+        this.emitThreadRefresh(item.accountId, xGmThrid, 'delete');
       }
     }
   }
@@ -1210,7 +1346,7 @@ export class MailQueueService {
    */
   private async postOpFetchFlag(item: QueueItem): Promise<void> {
     const payload = item.payload as FlagPayload;
-    const byFolder = payload.resolvedUids;
+    const byFolder = payload.runtimeResolvedByFolder;
     if (!byFolder || Object.keys(byFolder).length === 0) return;
 
     const folders = Object.keys(byFolder);
@@ -1237,7 +1373,8 @@ export class MailQueueService {
       }
     }
 
-    this.emitDataChanged(item.accountId, folders, 'flag');
+    await this.updateFolderStateForFolders(item.accountId, folders);
+    this.emitFolderUpdated(item.accountId, folders, 'flag', 'flag_changes');
   }
 
   /**
@@ -1245,9 +1382,10 @@ export class MailQueueService {
    */
   private async postOpFetchSend(item: QueueItem): Promise<void> {
     await this.fetchLatestAndUpsert(item.accountId, GMAIL_SENT_FOLDER);
+    await this.updateFolderStateForFolders(item.accountId, [GMAIL_SENT_FOLDER, GMAIL_DRAFTS_FOLDER]);
 
     // Also emit for Drafts in case a draft was cleaned up
-    this.emitDataChanged(item.accountId, [GMAIL_SENT_FOLDER, GMAIL_DRAFTS_FOLDER], 'send');
+    this.emitFolderUpdated(item.accountId, [GMAIL_SENT_FOLDER, GMAIL_DRAFTS_FOLDER], 'send', 'mixed');
   }
 
   /**
@@ -1261,7 +1399,7 @@ export class MailQueueService {
     let emails: Awaited<ReturnType<typeof imapService.fetchEmails>>;
 
     // Acquire folder lock only for the IMAP fetch, release before DB upsert
-    const release = await lockManager.acquire(folder);
+    const release = await lockManager.acquire(folder, accountId);
     try {
       emails = await imapService.fetchEmails(String(accountId), folder, { limit: POST_OP_FETCH_LIMIT });
     } finally {
@@ -1291,7 +1429,7 @@ export class MailQueueService {
 
       const fetchedEmails: Array<Awaited<ReturnType<typeof imapService.fetchMessageByUid>>> = [];
 
-      const release = await lockManager.acquire(folder);
+      const release = await lockManager.acquire(folder, accountId);
       try {
         for (const uid of uids) {
           try {
@@ -1338,8 +1476,8 @@ export class MailQueueService {
     folder: string,
     emails: Array<{
       uid: number;
-      gmailMessageId: string;
-      gmailThreadId: string;
+      xGmMsgId: string;
+      xGmThrid: string;
       fromAddress: string;
       fromName: string;
       toAddresses: string;
@@ -1364,7 +1502,7 @@ export class MailQueueService {
     // Group emails by thread
     const threadMap = new Map<string, typeof emails>();
     for (const email of emails) {
-      const threadId = email.gmailThreadId || email.gmailMessageId;
+      const threadId = email.xGmThrid || email.xGmMsgId;
       if (!threadMap.has(threadId)) {
         threadMap.set(threadId, []);
       }
@@ -1375,8 +1513,8 @@ export class MailQueueService {
     for (const email of emails) {
       db.upsertEmail({
         accountId,
-        gmailMessageId: email.gmailMessageId,
-        gmailThreadId: email.gmailThreadId,
+        xGmMsgId: email.xGmMsgId,
+        xGmThrid: email.xGmThrid,
         folder,
         folderUid: email.uid,
         fromAddress: email.fromAddress,
@@ -1399,9 +1537,9 @@ export class MailQueueService {
       });
     }
 
-    // Upsert threads (dedupe emails by gmailMessageId)
+    // Upsert threads (dedupe emails by xGmMsgId)
     for (const [threadId, threadEmails] of threadMap) {
-      const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+      const uniqueEmails = [...new Map(threadEmails.map(e => [e.xGmMsgId, e])).values()];
 
       const latest = uniqueEmails.reduce((a, b) =>
         new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
@@ -1410,37 +1548,59 @@ export class MailQueueService {
       const allRead = uniqueEmails.every(e => e.isRead);
       const anyStarred = uniqueEmails.some(e => e.isStarred);
 
-      const dbThreadId = db.upsertThread({
+      db.upsertThread({
         accountId,
-        gmailThreadId: threadId,
+        xGmThrid: threadId,
         subject: latest.subject,
         lastMessageDate: latest.date,
         participants,
         messageCount: uniqueEmails.length,
         snippet: latest.snippet,
-        folder,
         isRead: allRead,
         isStarred: anyStarred,
       });
 
-      db.upsertThreadFolder(dbThreadId, accountId, folder);
+      db.upsertThreadFolder(accountId, threadId, folder);
+    }
+  }
+
+  private async updateFolderStateForFolders(accountId: number, folders: string[]): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const imapService = ImapService.getInstance();
+
+    const uniqueFolders = Array.from(new Set(folders));
+    for (const folder of uniqueFolders) {
+      try {
+        const status = await imapService.getMailboxStatus(String(accountId), folder);
+        db.upsertFolderState({
+          accountId,
+          folder,
+          uidValidity: status.uidValidity,
+          highestModseq: status.highestModseq,
+          condstoreSupported: status.condstoreSupported,
+        });
+      } catch (err) {
+        log.warn(`[MailQueue] Failed to update folder_state for ${folder} (account ${accountId}):`, err);
+      }
     }
   }
 
   /**
-   * Emit mail:data-changed event to all renderer windows.
+   * Emit mail:folder-updated event to all renderer windows.
    */
-  private emitDataChanged(
+  private emitFolderUpdated(
     accountId: number,
     folders: string[],
-    reason: MailDataChangedPayload['reason'],
+    reason: MailFolderUpdatedPayload['reason'],
+    changeType: MailFolderUpdatedPayload['changeType'] = 'mixed',
+    count?: number,
   ): void {
-    const payload: MailDataChangedPayload = { accountId, folders, reason };
+    const payload: MailFolderUpdatedPayload = { accountId, folders, reason, changeType, count };
     try {
       const windows = BrowserWindow.getAllWindows();
       for (const win of windows) {
         if (!win.isDestroyed()) {
-          win.webContents.send(IPC_EVENTS.MAIL_DATA_CHANGED, payload);
+          win.webContents.send(IPC_EVENTS.MAIL_FOLDER_UPDATED, payload);
         }
       }
     } catch {
@@ -1454,10 +1614,10 @@ export class MailQueueService {
    */
   private emitThreadRefresh(
     accountId: number,
-    gmailThreadId: string,
+    xGmThrid: string,
     action: 'move' | 'delete',
   ): void {
-    const payload = { accountId, gmailThreadId, action };
+    const payload = { accountId, xGmThrid, action };
     try {
       const windows = BrowserWindow.getAllWindows();
       for (const win of windows) {

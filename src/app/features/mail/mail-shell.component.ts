@@ -113,16 +113,16 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   async onThreadSelected(thread: Thread): Promise<void> {
     const activeAccount = this.accountsStore.activeAccount();
     if (activeAccount) {
-      await this.emailsStore.loadThread(activeAccount.id, thread.gmailThreadId);
+      await this.emailsStore.loadThread(activeAccount.id, thread.xGmThrid);
 
       if (!thread.isRead) {
-        const messageIds = this.emailsStore.selectedMessages().map(m => m.gmailMessageId);
+        const messageIds = this.emailsStore.selectedMessages().map(m => m.xGmMsgId);
         this.emailsStore.flagEmails(
           activeAccount.id,
-          messageIds.length > 0 ? messageIds : [thread.gmailThreadId],
+          messageIds.length > 0 ? messageIds : [thread.xGmThrid],
           'read',
           true,
-          thread.gmailThreadId
+          thread.xGmThrid
         );
       }
     }
@@ -148,10 +148,10 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       case 'delete': {
         // Per-message delete when event.message is set, otherwise whole thread via threadId
         const deleteIds = event.message
-          ? [event.message.gmailMessageId]
-          : [thread.gmailThreadId];
-        const deletePerMsg = event.message?.gmailMessageId;
-        this.emailsStore.moveEmails(activeAccount.id, deleteIds, '[Gmail]/Trash', thread.gmailThreadId, currentFolder, deletePerMsg);
+          ? [event.message.xGmMsgId]
+          : [thread.xGmThrid];
+        const deletePerMsg = event.message?.xGmMsgId;
+        this.emailsStore.moveEmails(activeAccount.id, deleteIds, '[Gmail]/Trash', thread.xGmThrid, currentFolder, deletePerMsg);
         if (!deletePerMsg) {
           this.emailsStore.clearSelection();
         }
@@ -163,10 +163,10 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         }
         // Per-message move when event.message is set, otherwise whole thread via threadId
         const moveIds = event.message
-          ? [event.message.gmailMessageId]
-          : [thread.gmailThreadId];
-        const movePerMsg = event.message?.gmailMessageId;
-        this.emailsStore.moveEmails(activeAccount.id, moveIds, event.targetFolder, thread.gmailThreadId, currentFolder, movePerMsg);
+          ? [event.message.xGmMsgId]
+          : [thread.xGmThrid];
+        const movePerMsg = event.message?.xGmMsgId;
+        this.emailsStore.moveEmails(activeAccount.id, moveIds, event.targetFolder, thread.xGmThrid, currentFolder, movePerMsg);
         if (!movePerMsg) {
           this.emailsStore.clearSelection();
         }
@@ -174,12 +174,12 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       }
       case 'star': {
         // Always thread-level — use threadId to flag all messages in thread
-        this.emailsStore.flagEmails(activeAccount.id, [thread.gmailThreadId], 'starred', !thread.isStarred, thread.gmailThreadId);
+        this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'starred', !thread.isStarred, thread.xGmThrid);
         break;
       }
       case 'mark-read-unread': {
         // Always thread-level — use threadId to flag all messages in thread
-        this.emailsStore.flagEmails(activeAccount.id, [thread.gmailThreadId], 'read', !thread.isRead, thread.gmailThreadId);
+        this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'read', !thread.isRead, thread.xGmThrid);
         break;
       }
       case 'edit-draft':
@@ -384,7 +384,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
   /**
    * Open a draft from the Drafts folder for editing in compose.
-   * Maps the selected email message to a Draft shape and passes its gmailMessageId
+   * Maps the selected email message to a Draft shape and passes its xGmMsgId
    * so that on send/discard, the backend can resolve the UID and remove the old draft from Gmail.
    */
   private openDraftForEditing(specificMessage?: Email): void {
@@ -412,7 +412,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     // Map Email to Draft shape
     const draft: Draft = {
       accountId: activeAccount.id,
-      gmailThreadId: msg.gmailThreadId || '',
+      xGmThrid: msg.xGmThrid || '',
       subject: (msg.subject || '').replace(/^(Draft|Re:|Fwd:)\s*/i, '').trim() || msg.subject || '',
       to: msg.toAddresses || '',
       cc: msg.ccAddresses || '',
@@ -425,8 +425,8 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     // Preserve original subject (keep Re:/Fwd: prefixes if present)
     draft.subject = msg.subject || '';
 
-    // Pass the gmailMessageId so the backend can resolve the IMAP UID from email_folders
-    const serverDraftGmailMessageId = msg.gmailMessageId;
+    // Pass the xGmMsgId so the backend can resolve the IMAP UID from email_folders
+    const serverDraftXGmMsgId = msg.xGmMsgId;
 
     this.composeStore.openCompose({
       mode: 'new',
@@ -434,7 +434,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       accountEmail: activeAccount.email,
       accountDisplayName: activeAccount.displayName,
       draft,
-      serverDraftGmailMessageId,
+      serverDraftXGmMsgId,
     });
   }
 }

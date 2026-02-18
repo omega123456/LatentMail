@@ -112,12 +112,12 @@
 
     <!-- Messages -->
     <div class="messages-list">
-      @for (message of emailsStore.selectedMessages(); track message.gmailMessageId; let i = $index; let last = $last) {
-        <div class="message-card" [class.collapsed]="!last && !expandedMessages.has(message.gmailMessageId)">
+      @for (message of emailsStore.selectedMessages(); track message.xGmMsgId; let i = $index; let last = $last) {
+        <div class="message-card" [class.collapsed]="!last && !expandedMessages.has(message.xGmMsgId)">
           <!-- Message header (always visible) -->
           <div
             class="message-header"
-            (click)="toggleExpand(message.gmailMessageId)"
+            (click)="toggleExpand(message.xGmMsgId)"
           >
             <div class="sender-avatar">{{ getInitial(message) }}</div>
             <div class="header-content">
@@ -152,7 +152,7 @@
           </div>
 
           <!-- Message body + per-message ribbon (shown when expanded) -->
-          @if (last || expandedMessages.has(message.gmailMessageId)) {
+          @if (last || expandedMessages.has(message.xGmMsgId)) {
             <div class="message-body">
               @if (message.htmlBody) {
                 <app-email-body-frame [htmlBody]="message.htmlBody" />

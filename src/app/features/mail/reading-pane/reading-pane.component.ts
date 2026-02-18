@@ -233,7 +233,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     if (!content) {
       return;
     }
-    await this.aiStore.summarize(thread.gmailThreadId, content);
+    await this.aiStore.summarize(thread.xGmThrid, content);
   }
 
   /** Generate smart reply suggestions */
@@ -243,7 +243,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     if (!content) {
       return;
     }
-    await this.aiStore.generateReplies(content, thread?.gmailThreadId);
+    await this.aiStore.generateReplies(content, thread?.xGmThrid);
   }
 
   /** Detect if the current email needs follow-up */
@@ -253,14 +253,14 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     if (!content) {
       return;
     }
-    await this.aiStore.detectFollowUp(content, thread?.gmailThreadId);
+    await this.aiStore.detectFollowUp(content, thread?.xGmThrid);
   }
 
   /** Safe default context for when no thread is selected. */
   private buildDefaultContext(): EmailActionContext {
     return {
       message: null,
-      thread: { id: 0, accountId: 0, gmailThreadId: '', lastMessageDate: '', messageCount: 0, folder: '', isRead: false, isStarred: false },
+      thread: { id: 0, accountId: 0, xGmThrid: '', lastMessageDate: '', messageCount: 0, folder: '', isRead: false, isStarred: false },
       activeFolderId: null,
       aiConnected: false,
       isStarred: false,

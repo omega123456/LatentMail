@@ -39,7 +39,7 @@ export class EmailListComponent {
       return threads;
     }
     const cache = this.aiStore.categoryCache();
-    return threads.filter(t => cache[t.gmailThreadId] === filter);
+    return threads.filter(t => cache[t.xGmThrid] === filter);
   });
 
   constructor() {
@@ -54,7 +54,7 @@ export class EmailListComponent {
   }
 
   trackByThreadId(_index: number, thread: Thread): string {
-    return thread.gmailThreadId;
+    return thread.xGmThrid;
   }
 
   onThreadClick(thread: Thread): void {
@@ -65,10 +65,10 @@ export class EmailListComponent {
     const accountId = thread.accountId;
     this.emailsStore.flagEmails(
       accountId,
-      [thread.gmailThreadId],
+      [thread.xGmThrid],
       'starred',
       !thread.isStarred,
-      thread.gmailThreadId
+      thread.xGmThrid
     );
   }
 

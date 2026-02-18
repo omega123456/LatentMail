@@ -46,6 +46,13 @@ export class QueueSettingsComponent {
     return labels[status] || status;
   }
 
+  itemStatusLabel(item: QueueItemSnapshot): string {
+    if (item.status === 'completed' && item.error) {
+      return 'Done (warnings)';
+    }
+    return this.statusLabel(item.status);
+  }
+
   relativeTime(isoDate: string): string {
     const diff = Date.now() - new Date(isoDate).getTime();
     const seconds = Math.floor(diff / 1000);

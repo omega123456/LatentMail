@@ -180,7 +180,7 @@ export function registerMailIpcHandlers(): void {
           const lockManager = FolderLockManager.getInstance();
 
           let emails: Awaited<ReturnType<typeof imapService.fetchEmails>>;
-          const release = await lockManager.acquire(folderId);
+          const release = await lockManager.acquire(folderId, accountId);
           try {
             emails = await imapService.fetchEmails(accountId, folderId, { limit: 100 });
           } finally {
@@ -191,7 +191,7 @@ export function registerMailIpcHandlers(): void {
             // Group by thread for upsert
             const threadMap = new Map<string, typeof emails>();
             for (const email of emails) {
-              const threadId = email.gmailThreadId || email.gmailMessageId;
+              const threadId = email.xGmThrid || email.xGmMsgId;
               if (!threadMap.has(threadId)) {
                 threadMap.set(threadId, []);
               }
@@ -202,8 +202,8 @@ export function registerMailIpcHandlers(): void {
             for (const email of emails) {
               db.upsertEmail({
                 accountId: numAccountId,
-                gmailMessageId: email.gmailMessageId,
-                gmailThreadId: email.gmailThreadId,
+                xGmMsgId: email.xGmMsgId,
+                xGmThrid: email.xGmThrid,
                 folder: folderId,
                 folderUid: email.uid,
                 fromAddress: email.fromAddress,
@@ -232,7 +232,7 @@ export function registerMailIpcHandlers(): void {
 
             // Upsert threads
             for (const [threadId, threadEmails] of threadMap) {
-              const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+              const uniqueEmails = [...new Map(threadEmails.map(e => [e.xGmMsgId, e])).values()];
               const latest = uniqueEmails.reduce((a, b) =>
                 new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
               );
@@ -240,20 +240,19 @@ export function registerMailIpcHandlers(): void {
               const allRead = uniqueEmails.every(e => e.isRead);
               const anyStarred = uniqueEmails.some(e => e.isStarred);
 
-              const dbThreadId = db.upsertThread({
+              db.upsertThread({
                 accountId: numAccountId,
-                gmailThreadId: threadId,
+                xGmThrid: threadId,
                 subject: latest.subject,
                 lastMessageDate: latest.date,
                 participants,
                 messageCount: uniqueEmails.length,
                 snippet: latest.snippet,
-                folder: folderId,
                 isRead: allRead,
                 isStarred: anyStarred,
               });
 
-              db.upsertThreadFolder(dbThreadId, numAccountId, folderId);
+              db.upsertThreadFolder(numAccountId, threadId, folderId);
             }
 
             log.info(`MAIL_FETCH_EMAILS: Starred IMAP fallback fetched ${emails.length} emails, ${threadMap.size} threads`);
@@ -309,7 +308,7 @@ export function registerMailIpcHandlers(): void {
       // state, so these messages should not appear in the response.
       const pendingIds = pendingOpService.getPendingForThread(numAccountId, threadId);
       if (pendingIds.size > 0) {
-        messages = messages.filter((m) => !pendingIds.has(String(m['gmailMessageId'] ?? '')));
+        messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
         log.info(`FETCH_THREAD: filtered ${pendingIds.size} pending message(s), ${messages.length} remaining for thread ${threadId}`);
       }
 
@@ -346,8 +345,8 @@ export function registerMailIpcHandlers(): void {
               if (fetched.htmlBody || fetched.textBody) {
                 db.upsertEmail({
                   accountId: numAccountId,
-                  gmailMessageId: fetched.gmailMessageId,
-                  gmailThreadId: fetched.gmailThreadId,
+                  xGmMsgId: fetched.xGmMsgId,
+                  xGmThrid: fetched.xGmThrid,
                   folder: fetched.folder,
                   folderUid: fetched.uid,
                   fromAddress: fetched.fromAddress,
@@ -374,7 +373,7 @@ export function registerMailIpcHandlers(): void {
             // Re-fetch messages from DB with bodies (re-apply pending filter)
             messages = db.getEmailsByThreadId(numAccountId, threadId);
             if (pendingIds.size > 0) {
-              messages = messages.filter((m) => !pendingIds.has(String(m['gmailMessageId'] ?? '')));
+              messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
             }
           } catch (err) {
             log.warn(`Failed to fetch thread bodies from IMAP for ${threadId}:`, err);
@@ -385,8 +384,8 @@ export function registerMailIpcHandlers(): void {
 
       // Enrich each message with folders so the UI can show e.g. a Draft badge
       const messagesWithFolders: Array<Record<string, unknown>> = messages.map((m) => {
-        const gmailMessageId = String(m['gmailMessageId'] ?? '');
-        const folders = gmailMessageId ? db.getFoldersForEmail(numAccountId, gmailMessageId) : [];
+        const xGmMsgId = String(m['xGmMsgId'] ?? '');
+        const folders = xGmMsgId ? db.getFoldersForEmail(numAccountId, xGmMsgId) : [];
         return { ...m, folders };
       });
 
@@ -452,7 +451,7 @@ export function registerMailIpcHandlers(): void {
     references?: string;
     attachments?: Array<{ filename: string; content: string; contentType: string }>;
     originalQueueId?: string;
-    serverDraftGmailMessageId?: string;
+    serverDraftXGmMsgId?: string;
   }) => {
     try {
       log.info(`Enqueuing send for account ${accountId}`);
@@ -473,7 +472,7 @@ export function registerMailIpcHandlers(): void {
           references: message.references,
           attachments: message.attachments,
           originalQueueId: message.originalQueueId,
-          serverDraftGmailMessageId: message.serverDraftGmailMessageId,
+          serverDraftXGmMsgId: message.serverDraftXGmMsgId,
         },
         description,
       );
@@ -496,7 +495,7 @@ export function registerMailIpcHandlers(): void {
       const resolvedEmails: Array<Record<string, unknown>> = [];
 
       for (const id of messageIds) {
-        const byMessageId = db.getEmailByGmailMessageId(numAccountId, id);
+        const byMessageId = db.getEmailByXGmMsgId(numAccountId, id);
         if (byMessageId) {
           resolvedEmails.push(byMessageId);
           continue;
@@ -506,22 +505,22 @@ export function registerMailIpcHandlers(): void {
 
       const deduped = new Map<string, Record<string, unknown>>();
       for (const email of resolvedEmails) {
-        const gmailMessageId = String(email['gmailMessageId'] || '');
-        if (gmailMessageId) {
-          deduped.set(gmailMessageId, email);
+        const xGmMsgId = String(email['xGmMsgId'] || '');
+        if (xGmMsgId) {
+          deduped.set(xGmMsgId, email);
         }
       }
 
       // Handle orphan threads (zero emails) — clean up immediately
       if (deduped.size === 0 && messageIds.length === 1 && sourceFolder) {
         const orphanThreadId = messageIds[0];
-        const asEmail = db.getEmailByGmailMessageId(numAccountId, orphanThreadId);
+        const asEmail = db.getEmailByXGmMsgId(numAccountId, orphanThreadId);
         if (!asEmail) {
           const threadEmails = db.getEmailsByThreadId(numAccountId, orphanThreadId);
           if (threadEmails.length === 0) {
             const internalThreadId = db.getThreadInternalId(numAccountId, orphanThreadId);
             if (internalThreadId != null) {
-              db.removeThreadFolderAssociation(internalThreadId, sourceFolder);
+              db.removeThreadFolderAssociation(numAccountId, orphanThreadId, sourceFolder);
               log.info(`MAIL_MOVE: Removed orphan thread ${orphanThreadId} from ${sourceFolder}`);
             }
             return ipcSuccess(null);
@@ -529,57 +528,52 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // CRITICAL: Snapshot UIDs BEFORE optimistic DB update.
-      // The queue worker uses these pre-resolved UIDs for the IMAP operation.
-      const resolvedUids: Record<string, number[]> = {};
-      const resolvedEmailsMeta: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+      const resolvedEmailsMeta: Array<{ xGmMsgId: string; xGmThrid: string }> = [];
+      const sourceFolderSet = new Set<string>();
 
       for (const email of deduped.values()) {
-        const gmailMessageId = String(email['gmailMessageId'] || '');
-        const gmailThreadId = String(email['gmailThreadId'] || '');
-        const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
+        const xGmMsgId = String(email['xGmMsgId'] || '');
+        const xGmThrid = String(email['xGmThrid'] || '');
+        const folders = db.getFoldersForEmail(numAccountId, xGmMsgId);
 
-        resolvedEmailsMeta.push({ gmailMessageId, gmailThreadId });
+        resolvedEmailsMeta.push({ xGmMsgId, xGmThrid });
 
         if (sourceFolder) {
-          const entry = folderUids.find(fu => fu.folder === sourceFolder);
-          if (entry) {
-            if (!resolvedUids[sourceFolder]) resolvedUids[sourceFolder] = [];
-            resolvedUids[sourceFolder].push(entry.uid);
+          if (folders.includes(sourceFolder)) {
+            sourceFolderSet.add(sourceFolder);
           }
         } else {
-          for (const { folder, uid } of folderUids) {
-            if (!resolvedUids[folder]) resolvedUids[folder] = [];
-            resolvedUids[folder].push(uid);
+          for (const existingFolder of folders) {
+            if (existingFolder !== targetFolder) {
+              sourceFolderSet.add(existingFolder);
+            }
           }
         }
       }
 
-      // Optimistic local DB update for folder associations (after UID snapshot).
-      // Iterate all resolved source folders (handles both explicit sourceFolder and auto-resolved).
-      const sourceFolders = Object.keys(resolvedUids);
+      // Optimistic local DB update for folder associations.
+      const sourceFolders = Array.from(sourceFolderSet);
       for (const srcFolder of sourceFolders) {
         if (srcFolder === targetFolder) continue;
 
         for (const email of deduped.values()) {
-          const gmailMessageId = String(email['gmailMessageId'] || '');
-          const gmailThreadId = String(email['gmailThreadId'] || '');
-          if (!gmailMessageId) continue;
+          const xGmMsgId = String(email['xGmMsgId'] || '');
+          const xGmThrid = String(email['xGmThrid'] || '');
+          if (!xGmMsgId) continue;
 
           // Check if this email is actually in this source folder
-          const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
-          const inFolder = folderUids.some(fu => fu.folder === srcFolder);
+          const inFolder = db.getFoldersForEmail(numAccountId, xGmMsgId).includes(srcFolder);
           if (!inFolder) continue;
 
-          db.moveEmailFolder(numAccountId, gmailMessageId, srcFolder, targetFolder, null);
+          db.moveEmailFolder(numAccountId, xGmMsgId, srcFolder, targetFolder, null);
 
-          if (gmailThreadId) {
-            const internalThreadId = db.getThreadInternalId(numAccountId, gmailThreadId);
+          if (xGmThrid) {
+            const internalThreadId = db.getThreadInternalId(numAccountId, xGmThrid);
             if (internalThreadId != null) {
-              if (!db.threadHasEmailsInFolder(numAccountId, gmailThreadId, srcFolder)) {
-                db.moveThreadFolder(internalThreadId, numAccountId, srcFolder, targetFolder);
+              if (!db.threadHasEmailsInFolder(numAccountId, xGmThrid, srcFolder)) {
+                db.moveThreadFolder(numAccountId, xGmThrid, srcFolder, targetFolder);
               } else {
-                db.upsertThreadFolder(internalThreadId, numAccountId, targetFolder);
+                db.upsertThreadFolder(numAccountId, xGmThrid, targetFolder);
               }
             }
           }
@@ -591,11 +585,11 @@ export function registerMailIpcHandlers(): void {
         numAccountId,
         'move',
         {
-          messageIds,
+          xGmMsgIds: Array.from(deduped.keys()),
           sourceFolder,
+          sourceFolders,
           targetFolder,
-          resolvedUids,
-          resolvedEmails: resolvedEmailsMeta,
+          emailMeta: resolvedEmailsMeta,
         },
         description,
       );
@@ -604,17 +598,17 @@ export function registerMailIpcHandlers(): void {
       // queue worker confirms the server-side move. Group by thread.
       const pendingOpService = PendingOpService.getInstance();
       const byThread = new Map<string, string[]>();
-      for (const { gmailMessageId, gmailThreadId } of resolvedEmailsMeta) {
-        if (!gmailThreadId) {
+      for (const { xGmMsgId, xGmThrid } of resolvedEmailsMeta) {
+        if (!xGmThrid) {
           continue;
         }
-        if (!byThread.has(gmailThreadId)) {
-          byThread.set(gmailThreadId, []);
+        if (!byThread.has(xGmThrid)) {
+          byThread.set(xGmThrid, []);
         }
-        byThread.get(gmailThreadId)!.push(gmailMessageId);
+        byThread.get(xGmThrid)!.push(xGmMsgId);
       }
-      for (const [gmailThreadId, messageIdList] of byThread) {
-        pendingOpService.register(numAccountId, gmailThreadId, messageIdList);
+      for (const [xGmThrid, messageIdList] of byThread) {
+        pendingOpService.register(numAccountId, xGmThrid, messageIdList);
       }
 
       return ipcSuccess({ queueId });
@@ -631,7 +625,7 @@ export function registerMailIpcHandlers(): void {
       const numAccountId = Number(accountId);
       const queueService = MailQueueService.getInstance();
 
-      // Resolve emails and snapshot UIDs BEFORE optimistic DB update
+      // Resolve emails for optimistic DB update and queue payload
       const flagMap: Record<string, { isRead?: boolean; isStarred?: boolean; isImportant?: boolean }> = {
         read: { isRead: value },
         starred: { isStarred: value },
@@ -639,7 +633,7 @@ export function registerMailIpcHandlers(): void {
       };
       const resolvedEmails: Array<Record<string, unknown>> = [];
       for (const id of messageIds) {
-        const byMessageId = db.getEmailByGmailMessageId(numAccountId, id);
+        const byMessageId = db.getEmailByXGmMsgId(numAccountId, id);
         if (byMessageId) {
           resolvedEmails.push(byMessageId);
           continue;
@@ -649,20 +643,9 @@ export function registerMailIpcHandlers(): void {
 
       const deduped = new Map<string, Record<string, unknown>>();
       for (const email of resolvedEmails) {
-        const gmailMessageId = String(email['gmailMessageId'] || '');
-        if (gmailMessageId) {
-          deduped.set(gmailMessageId, email);
-        }
-      }
-
-      // Snapshot UIDs BEFORE optimistic update (prevents race with optimistic move updates)
-      const resolvedUids: Record<string, number[]> = {};
-      for (const email of deduped.values()) {
-        const gmailMessageId = String(email['gmailMessageId'] || '');
-        const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
-        for (const { folder, uid } of folderUids) {
-          if (!resolvedUids[folder]) resolvedUids[folder] = [];
-          resolvedUids[folder].push(uid);
+        const xGmMsgId = String(email['xGmMsgId'] || '');
+        if (xGmMsgId) {
+          deduped.set(xGmMsgId, email);
         }
       }
 
@@ -670,7 +653,7 @@ export function registerMailIpcHandlers(): void {
       const dbFlags = flagMap[flag];
       if (dbFlags) {
         for (const email of deduped.values()) {
-          db.updateEmailFlags(numAccountId, String(email['gmailMessageId']), dbFlags);
+          db.updateEmailFlags(numAccountId, String(email['xGmMsgId']), dbFlags);
         }
       }
 
@@ -682,7 +665,7 @@ export function registerMailIpcHandlers(): void {
       const threadFlags = threadFlagMap[flag];
       if (threadFlags) {
         const firstEmail = deduped.values().next().value;
-        const flagThreadId = firstEmail ? String(firstEmail['gmailThreadId'] || '') : '';
+        const flagThreadId = firstEmail ? String(firstEmail['xGmThrid'] || '') : '';
         if (flagThreadId) {
           db.updateThreadFlags(numAccountId, flagThreadId, threadFlags);
         }
@@ -693,7 +676,7 @@ export function registerMailIpcHandlers(): void {
       const queueId = queueService.enqueue(
         numAccountId,
         'flag',
-        { messageIds, flag, value, resolvedUids },
+        { xGmMsgIds: Array.from(deduped.keys()), flag, value },
         description,
       );
 
@@ -715,7 +698,7 @@ export function registerMailIpcHandlers(): void {
 
       const resolvedEmails: Array<Record<string, unknown>> = [];
       for (const id of messageIds) {
-        const byMessageId = db.getEmailByGmailMessageId(numAccountId, id);
+        const byMessageId = db.getEmailByXGmMsgId(numAccountId, id);
         if (byMessageId) {
           resolvedEmails.push(byMessageId);
           continue;
@@ -725,48 +708,40 @@ export function registerMailIpcHandlers(): void {
 
       const deduped = new Map<string, Record<string, unknown>>();
       for (const email of resolvedEmails) {
-        const gmailMessageId = String(email['gmailMessageId'] || '');
-        if (gmailMessageId) {
-          deduped.set(gmailMessageId, email);
+        const xGmMsgId = String(email['xGmMsgId'] || '');
+        if (xGmMsgId) {
+          deduped.set(xGmMsgId, email);
         }
       }
 
-      // CRITICAL: Snapshot UIDs BEFORE optimistic DB update.
-      const resolvedUids: number[] = [];
-      const resolvedEmailsMeta: Array<{ gmailMessageId: string; gmailThreadId: string }> = [];
+      const resolvedEmailsMeta: Array<{ xGmMsgId: string; xGmThrid: string }> = [];
 
       for (const email of deduped.values()) {
-        const gmailMessageId = String(email['gmailMessageId'] || '');
-        const gmailThreadId = String(email['gmailThreadId'] || '');
-        resolvedEmailsMeta.push({ gmailMessageId, gmailThreadId });
-
-        const folderUids = db.getFolderUidsForEmail(numAccountId, gmailMessageId);
-        const entry = folderUids.find(fu => fu.folder === folder);
-        if (entry) {
-          resolvedUids.push(entry.uid);
-        }
+        const xGmMsgId = String(email['xGmMsgId'] || '');
+        const xGmThrid = String(email['xGmThrid'] || '');
+        resolvedEmailsMeta.push({ xGmMsgId, xGmThrid });
       }
 
-      // Optimistic DB update (after UID snapshot)
+      // Optimistic DB update
       if (isPermanent) {
         for (const email of deduped.values()) {
-          db.removeEmailAndAssociations(numAccountId, String(email['gmailMessageId']));
+          db.removeEmailAndAssociations(numAccountId, String(email['xGmMsgId']));
         }
       } else {
         for (const email of deduped.values()) {
-          const gmailMessageId = String(email['gmailMessageId'] || '');
-          const gmailThreadId = String(email['gmailThreadId'] || '');
-          if (!gmailMessageId) continue;
+          const xGmMsgId = String(email['xGmMsgId'] || '');
+          const xGmThrid = String(email['xGmThrid'] || '');
+          if (!xGmMsgId) continue;
 
-          db.moveEmailFolder(numAccountId, gmailMessageId, folder, '[Gmail]/Trash', null);
+          db.moveEmailFolder(numAccountId, xGmMsgId, folder, '[Gmail]/Trash', null);
 
-          if (gmailThreadId) {
-            const internalThreadId = db.getThreadInternalId(numAccountId, gmailThreadId);
+          if (xGmThrid) {
+            const internalThreadId = db.getThreadInternalId(numAccountId, xGmThrid);
             if (internalThreadId != null) {
-              if (!db.threadHasEmailsInFolder(numAccountId, gmailThreadId, folder)) {
-                db.moveThreadFolder(internalThreadId, numAccountId, folder, '[Gmail]/Trash');
+              if (!db.threadHasEmailsInFolder(numAccountId, xGmThrid, folder)) {
+                db.moveThreadFolder(numAccountId, xGmThrid, folder, '[Gmail]/Trash');
               } else {
-                db.upsertThreadFolder(internalThreadId, numAccountId, '[Gmail]/Trash');
+                db.upsertThreadFolder(numAccountId, xGmThrid, '[Gmail]/Trash');
               }
             }
           }
@@ -778,10 +753,9 @@ export function registerMailIpcHandlers(): void {
         numAccountId,
         'delete',
         {
-          messageIds,
+          xGmMsgIds: Array.from(deduped.keys()),
           folder,
-          resolvedUids,
-          resolvedEmails: resolvedEmailsMeta,
+          emailMeta: resolvedEmailsMeta,
           permanent: isPermanent,
         },
         description,
@@ -794,17 +768,17 @@ export function registerMailIpcHandlers(): void {
       if (!isPermanent) {
         const pendingOpService = PendingOpService.getInstance();
         const byThread = new Map<string, string[]>();
-        for (const { gmailMessageId, gmailThreadId } of resolvedEmailsMeta) {
-          if (!gmailThreadId) {
+        for (const { xGmMsgId, xGmThrid } of resolvedEmailsMeta) {
+          if (!xGmThrid) {
             continue;
           }
-          if (!byThread.has(gmailThreadId)) {
-            byThread.set(gmailThreadId, []);
+          if (!byThread.has(xGmThrid)) {
+            byThread.set(xGmThrid, []);
           }
-          byThread.get(gmailThreadId)!.push(gmailMessageId);
+          byThread.get(xGmThrid)!.push(xGmMsgId);
         }
-        for (const [gmailThreadId, messageIdList] of byThread) {
-          pendingOpService.register(numAccountId, gmailThreadId, messageIdList);
+        for (const [xGmThrid, messageIdList] of byThread) {
+          pendingOpService.register(numAccountId, xGmThrid, messageIdList);
         }
       }
 
@@ -874,12 +848,11 @@ export function registerMailIpcHandlers(): void {
       const imapService = ImapService.getInstance();
       const lockManager = FolderLockManager.getInstance();
       const folder = '[Gmail]/All Mail';
-      const lockKey = `${accountId}:${folder}`;
 
       log.info(`[MAIL_SEARCH_IMAP] Searching ${queries.length} query variant(s) via IMAP for account ${accountId}`);
 
       let emails: Awaited<ReturnType<typeof imapService.searchEmails>>;
-      const release = await lockManager.acquire(lockKey);
+      const release = await lockManager.acquire(folder, accountId);
       try {
         const searchPromise = imapService.searchEmails(accountId, combinedQuery, 100);
         const timeoutPromise = new Promise<never>((_, reject) =>
@@ -897,7 +870,7 @@ export function registerMailIpcHandlers(): void {
 
       const threadMap = new Map<string, typeof emails>();
       for (const email of emails) {
-        const threadId = email.gmailThreadId || email.gmailMessageId;
+        const threadId = email.xGmThrid || email.xGmMsgId;
         if (!threadMap.has(threadId)) {
           threadMap.set(threadId, []);
         }
@@ -910,8 +883,8 @@ export function registerMailIpcHandlers(): void {
         for (const email of emails) {
           db.upsertEmail({
             accountId: numAccountId,
-            gmailMessageId: email.gmailMessageId,
-            gmailThreadId: email.gmailThreadId,
+            xGmMsgId: email.xGmMsgId,
+            xGmThrid: email.xGmThrid,
             folder: folder,
             folderUid: email.uid,
             fromAddress: email.fromAddress,
@@ -939,7 +912,7 @@ export function registerMailIpcHandlers(): void {
         }
 
         for (const [threadId, threadEmails] of threadMap) {
-          const uniqueEmails = [...new Map(threadEmails.map((email) => [email.gmailMessageId, email])).values()];
+          const uniqueEmails = [...new Map(threadEmails.map((email) => [email.xGmMsgId, email])).values()];
           const latest = uniqueEmails.reduce((a, b) =>
             new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
           );
@@ -951,22 +924,20 @@ export function registerMailIpcHandlers(): void {
           const existingMessageCount = (existingThread?.['messageCount'] as number) || 0;
 
           if (!existingThread || uniqueEmails.length >= existingMessageCount) {
-            const dbThreadId = db.upsertThread({
+            db.upsertThread({
               accountId: numAccountId,
-              gmailThreadId: threadId,
+              xGmThrid: threadId,
               subject: latest.subject,
               lastMessageDate: latest.date,
               participants,
               messageCount: Math.max(uniqueEmails.length, existingMessageCount),
               snippet: latest.snippet,
-              folder: folder,
               isRead: allRead,
               isStarred: anyStarred,
             });
-            db.upsertThreadFolder(dbThreadId, numAccountId, folder);
+            db.upsertThreadFolder(numAccountId, threadId, folder);
           } else {
-            const existingId = existingThread['id'] as number;
-            db.upsertThreadFolder(existingId, numAccountId, folder);
+            db.upsertThreadFolder(numAccountId, threadId, folder);
           }
         }
 
@@ -978,7 +949,7 @@ export function registerMailIpcHandlers(): void {
 
       const threads: Array<Record<string, unknown>> = [];
       for (const [threadId, threadEmails] of threadMap) {
-        const uniqueEmails = [...new Map(threadEmails.map((email) => [email.gmailMessageId, email])).values()];
+        const uniqueEmails = [...new Map(threadEmails.map((email) => [email.xGmMsgId, email])).values()];
         const latest = uniqueEmails.reduce((a, b) =>
           new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
         );
@@ -991,7 +962,7 @@ export function registerMailIpcHandlers(): void {
         threads.push({
           id: existingThread?.['id'] || 0,
           accountId: numAccountId,
-          gmailThreadId: threadId,
+          xGmThrid: threadId,
           subject: (existingThread?.['subject'] as string) || latest.subject,
           lastMessageDate: latest.date,
           participants: (existingThread?.['participants'] as string) || participants,
@@ -1086,7 +1057,7 @@ export function registerMailIpcHandlers(): void {
       // Upsert fetched emails into DB (same pattern as SyncService.syncAccount)
       const threadMap = new Map<string, typeof emails>();
       for (const email of emails) {
-        const threadId = email.gmailThreadId || email.gmailMessageId;
+        const threadId = email.xGmThrid || email.xGmMsgId;
         if (!threadMap.has(threadId)) {
           threadMap.set(threadId, []);
         }
@@ -1097,8 +1068,8 @@ export function registerMailIpcHandlers(): void {
       for (const email of emails) {
         db.upsertEmail({
           accountId: numAccountId,
-          gmailMessageId: email.gmailMessageId,
-          gmailThreadId: email.gmailThreadId,
+          xGmMsgId: email.xGmMsgId,
+          xGmThrid: email.xGmThrid,
           folder: folderId,
           folderUid: email.uid,
           fromAddress: email.fromAddress,
@@ -1125,9 +1096,9 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // Upsert threads (dedupe by gmailMessageId)
+      // Upsert threads (dedupe by xGmMsgId)
       for (const [threadId, threadEmails] of threadMap) {
-        const uniqueEmails = [...new Map(threadEmails.map(e => [e.gmailMessageId, e])).values()];
+        const uniqueEmails = [...new Map(threadEmails.map(e => [e.xGmMsgId, e])).values()];
 
         const latest = uniqueEmails.reduce((a, b) =>
           new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
@@ -1136,20 +1107,19 @@ export function registerMailIpcHandlers(): void {
         const allRead = uniqueEmails.every(e => e.isRead);
         const anyStarred = uniqueEmails.some(e => e.isStarred);
 
-        const dbThreadId = db.upsertThread({
+        db.upsertThread({
           accountId: numAccountId,
-          gmailThreadId: threadId,
+          xGmThrid: threadId,
           subject: latest.subject,
           lastMessageDate: latest.date,
           participants,
           messageCount: uniqueEmails.length,
           snippet: latest.snippet,
-          folder: folderId,
           isRead: allRead,
           isStarred: anyStarred,
         });
 
-        db.upsertThreadFolder(dbThreadId, numAccountId, folderId);
+        db.upsertThreadFolder(numAccountId, threadId, folderId);
       }
 
       // Query DB directly for threads before the requested date (proper SQL pagination)

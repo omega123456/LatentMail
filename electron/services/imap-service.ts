@@ -6,8 +6,12 @@ import { DatabaseService } from './database-service';
 
 interface FetchedEmail {
   uid: number;
-  gmailMessageId: string;
-  gmailThreadId: string;
+  /** Gmail X-GM-MSGID (globally unique message identifier, returned as string by ImapFlow) */
+  xGmMsgId: string;
+  /** Gmail X-GM-THRID (thread identifier, returned as string by ImapFlow) */
+  xGmThrid: string;
+  /** RFC 5322 Message-ID (for compose In-Reply-To/References) */
+  messageId: string;
   folder: string;
   fromAddress: string;
   fromName: string;
@@ -26,6 +30,8 @@ interface FetchedEmail {
   size: number;
   hasAttachments: boolean;
   labels: string;
+  /** CONDSTORE modseq value (string, from BigInt). Only present on CONDSTORE fetches. */
+  modseq?: string;
 }
 
 interface MailboxInfo {
@@ -44,6 +50,8 @@ export class ImapService {
   private connecting: Map<string, Promise<ImapFlow>> = new Map();
   /** Dedicated IDLE connections — separate from the shared pool */
   private idleConnections: Map<string, ImapFlow> = new Map();
+  /** Held mailbox locks for dedicated IDLE connections. */
+  private idleMailboxLocks: Map<string, { release: () => void }> = new Map();
 
   private constructor() {}
 
@@ -236,8 +244,9 @@ export class ImapService {
         source: false,
         labels: true,
         threadId: true,
+        emailId: true,
         size: true,
-      }, { uid: true })) {
+      } as any, { uid: true })) {
         if (!msg) continue;
         const email = this.parseMessage(msg as FetchMessageObject, folder);
         if (email) {
@@ -318,8 +327,9 @@ export class ImapService {
         source: true,
         labels: true,
         threadId: true,
+        emailId: true,
         size: true,
-      }, { uid: true });
+      } as any, { uid: true });
 
       if (!msg) return null;
 
@@ -352,24 +362,24 @@ export class ImapService {
    * Always searches the thread's known folders first (to pick up drafts and folder-specific UIDs),
    * then searches [Gmail]/All Mail as an authoritative baseline to catch messages that may have
    * been moved out of their original folder.
-   * Results are deduplicated by gmailMessageId.
+   * Results are deduplicated by xGmMsgId.
    */
   async fetchThread(
     accountId: string,
-    gmailThreadId: string
+    xGmThrid: string
   ): Promise<FetchedEmail[]> {
     const db = DatabaseService.getInstance();
     const numAccountId = Number(accountId);
     const ALL_MAIL_PATH = '[Gmail]/All Mail';
 
     // Known folders from DB (excludes All Mail; will be added explicitly below)
-    const knownFolders = db.getFoldersForThread(numAccountId, gmailThreadId).filter(
+    const knownFolders = db.getFoldersForThread(numAccountId, xGmThrid).filter(
       (f) => f !== ALL_MAIL_PATH
     );
 
     // Always append All Mail as an authoritative baseline — finds messages that
     // were moved to a folder we don't have in thread_folders, or archived threads.
-    // De-duplication by gmailMessageId prevents double-counting.
+    // De-duplication by xGmMsgId prevents double-counting.
     const folders = knownFolders.length > 0
       ? [...knownFolders, ALL_MAIL_PATH]
       : [ALL_MAIL_PATH];
@@ -380,7 +390,7 @@ export class ImapService {
     for (const folder of folders) {
       const lock = await client.getMailboxLock(folder);
       try {
-        const searchResult = await client.search({ threadId: gmailThreadId }, { uid: true }) as number[] | false;
+        const searchResult = await client.search({ threadId: xGmThrid }, { uid: true }) as number[] | false;
         if (!searchResult || searchResult.length === 0) continue;
 
         const uids = Array.from(searchResult);
@@ -394,8 +404,9 @@ export class ImapService {
           source: true,
           labels: true,
           threadId: true,
+          emailId: true,
           size: true,
-        }, { uid: true })) {
+        } as any, { uid: true })) {
           if (!msg) continue;
           const fetchMsg = msg as FetchMessageObject;
           const email = this.parseMessage(fetchMsg, folder);
@@ -412,7 +423,7 @@ export class ImapService {
                 log.warn('Failed to parse thread message body:', err);
               }
             }
-            byMessageId.set(email.gmailMessageId, email);
+            byMessageId.set(email.xGmMsgId, email);
           }
         }
       } finally {
@@ -477,8 +488,9 @@ export class ImapService {
         source: false,
         labels: true,
         threadId: true,
+        emailId: true,
         size: true,
-      }, { uid: true })) {
+      } as any, { uid: true })) {
         if (!msg) continue;
         const email = this.parseMessage(msg as FetchMessageObject, folder);
         if (email) {
@@ -551,8 +563,9 @@ export class ImapService {
           source: false,
           labels: true,
           threadId: true,
+          emailId: true,
           size: true,
-        }, { uid: true })) {
+        } as any, { uid: true })) {
           if (controller.signal.aborted) {
             log.warn(`[IMAP] searchEmails: fetch aborted due to timeout for account ${accountId}`);
             break;
@@ -667,11 +680,13 @@ export class ImapService {
     client.on('close', () => {
       log.info(`IDLE connection closed for account ${accountId}`);
       this.idleConnections.delete(accountId);
+      this.idleMailboxLocks.delete(accountId);
     });
 
     client.on('error', (err: Error) => {
       log.error(`IDLE connection error for account ${accountId}:`, err);
       this.idleConnections.delete(accountId);
+      this.idleMailboxLocks.delete(accountId);
     });
 
     await client.connect();
@@ -685,6 +700,16 @@ export class ImapService {
    * Disconnect the IDLE connection for an account.
    */
   async disconnectIdle(accountId: string): Promise<void> {
+    const lock = this.idleMailboxLocks.get(accountId);
+    if (lock) {
+      try {
+        lock.release();
+      } catch {
+        // Ignore release errors
+      }
+      this.idleMailboxLocks.delete(accountId);
+    }
+
     const client = this.idleConnections.get(accountId);
     if (client) {
       try {
@@ -709,10 +734,24 @@ export class ImapService {
     onError?: (err: Error) => void,
   ): Promise<void> {
     const client = await this.connectIdle(accountId);
-    await client.getMailboxLock(folder);
+    const lock = await client.getMailboxLock(folder);
+    this.idleMailboxLocks.set(accountId, lock as { release: () => void });
 
-    client.on('exists', () => {
-      log.info(`[IDLE] New message detected in ${folder} for account ${accountId}`);
+    client.on('exists', (event: { path?: string; count?: number; prevCount?: number }) => {
+      const path = event.path ?? folder;
+      const count = Number(event.count ?? 0);
+      const prevCount = Number(event.prevCount ?? 0);
+
+      if (path !== folder) {
+        return;
+      }
+
+      if (count <= prevCount) {
+        log.debug(`[IDLE] EXISTS non-growth event on ${folder} for account ${accountId}: prev=${prevCount}, now=${count}`);
+        return;
+      }
+
+      log.info(`[IDLE] New message detected in ${folder} for account ${accountId} (exists ${prevCount} -> ${count})`);
       onNewMail();
     });
 
@@ -761,7 +800,122 @@ export class ImapService {
     }
   }
 
-  // ---- Private helpers ----
+  // ---- X-GM-MSGID Resolution ----
+
+  /**
+   * Resolve UIDs for multiple X-GM-MSGID values in a specific folder.
+   * Uses IMAP SEARCH with emailId (X-GM-MSGID) for each message.
+   * Returns a Map of X-GM-MSGID → UID (only entries where UID was found).
+   */
+  async resolveUidsByXGmMsgId(
+    accountId: string,
+    folder: string,
+    xGmMsgIds: string[]
+  ): Promise<Map<string, number>> {
+    const client = await this.connect(accountId);
+    const result = new Map<string, number>();
+
+    const lock = await client.getMailboxLock(folder);
+    try {
+      for (const xGmMsgId of xGmMsgIds) {
+        try {
+          const searchResult = await client.search(
+            { emailId: xGmMsgId } as Record<string, unknown>,
+            { uid: true }
+          ) as number[] | false;
+
+          if (searchResult && searchResult.length > 0) {
+            result.set(xGmMsgId, searchResult[0]);
+          }
+        } catch (err) {
+          log.warn(`[IMAP] resolveUidsByXGmMsgId: failed to resolve ${xGmMsgId} in ${folder}:`, err);
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    return result;
+  }
+
+  // ---- CONDSTORE ----
+
+  /**
+   * Fetch emails changed since a given modseq value using CONDSTORE.
+   * Returns fetched emails plus mailbox metadata.
+   */
+  async fetchChangedSince(
+    accountId: string,
+    folder: string,
+    changedSince: string,
+  ): Promise<{
+    emails: FetchedEmail[];
+    highestModseq: string;
+    uidValidity: string;
+    noModseq: boolean;
+  }> {
+    const client = await this.connect(accountId);
+
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const emails: FetchedEmail[] = [];
+
+      // Use changedSince option with UID FETCH
+      const changedSinceBigInt = BigInt(changedSince);
+      for await (const msg of client.fetch('1:*', {
+        uid: true,
+        envelope: true,
+        flags: true,
+        bodyStructure: true,
+        headers: true,
+        source: false,
+        labels: true,
+        threadId: true,
+        emailId: true,
+        size: true,
+      } as any, { uid: true, changedSince: changedSinceBigInt })) {
+        if (!msg) continue;
+        const email = this.parseMessage(msg as FetchMessageObject, folder);
+        if (email) {
+          emails.push(email);
+        }
+      }
+
+      const mailbox = client.mailbox as { highestModseq?: bigint; uidValidity?: bigint; noModseq?: boolean };
+      return {
+        emails,
+        highestModseq: String(mailbox.highestModseq ?? '0'),
+        uidValidity: String(mailbox.uidValidity ?? '0'),
+        noModseq: mailbox.noModseq ?? false,
+      };
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Lightweight mailbox status: get highestModseq and uidValidity without fetching messages.
+   */
+  async getMailboxStatus(
+    accountId: string,
+    folder: string
+  ): Promise<{ highestModseq: string; uidValidity: string; messages: number; condstoreSupported: boolean }> {
+    const client = await this.connect(accountId);
+    const status = await client.status(folder, {
+      messages: true,
+      uidValidity: true,
+      highestModseq: true,
+    });
+    const condstoreSupported = status.highestModseq != null;
+    return {
+      highestModseq: String(status.highestModseq ?? '0'),
+      uidValidity: String(status.uidValidity ?? '0'),
+      messages: status.messages ?? 0,
+      condstoreSupported,
+    };
+  }
+
+  // ---- Draft helpers ----
 
   /**
    * Append a raw RFC822 message to [Gmail]/Drafts with the \Draft flag.
@@ -850,12 +1004,17 @@ export class ImapService {
       const subject = envelope.subject || '(no subject)';
       const snippet = subject.substring(0, 100);
 
-      // Use Message-ID header as stable identifier (same across all folders).
-      // Fall back to raw headers parse, then to UID string for malformed messages.
-      // Normalize to <...> format for consistency.
+      // X-GM-MSGID: ImapFlow maps Gmail's X-GM-MSGID to msg.emailId (string).
+      // This is the primary message identifier.
+      const xGmMsgId = (msg as unknown as { emailId?: string }).emailId || '';
+
+      // X-GM-THRID: ImapFlow maps Gmail's X-GM-THRID to msg.threadId (string).
+      const xGmThrid = msg.threadId || '';
+
+      // RFC 5322 Message-ID: still needed for compose (In-Reply-To/References).
+      // Fall back to raw headers parse, then to empty string for malformed messages.
       let messageId = (envelope.messageId ?? '').trim();
       if (messageId) {
-        // Ensure we extract just the <...> token
         const angleMatch = messageId.match(/<[^>]+>/);
         if (angleMatch) {
           messageId = angleMatch[0];
@@ -864,14 +1023,19 @@ export class ImapService {
       if (!messageId && msg.headers) {
         messageId = this.parseMessageIdFromHeaders(msg.headers);
       }
-      if (!messageId) {
-        messageId = String(msg.uid);
-      }
+
+      // Extract modseq if present (CONDSTORE)
+      const modseq = (msg as unknown as { modseq?: bigint }).modseq;
+      const modseqStr = modseq != null ? String(modseq) : undefined;
+
+      // If xGmMsgId is empty, fall back to message_id or uid for identification
+      const effectiveXGmMsgId = xGmMsgId || messageId || String(msg.uid);
 
       return {
         uid: msg.uid,
-        gmailMessageId: messageId,
-        gmailThreadId: msg.threadId || '',
+        xGmMsgId: effectiveXGmMsgId,
+        xGmThrid: xGmThrid,
+        messageId,
         folder,
         fromAddress,
         fromName,
@@ -890,6 +1054,7 @@ export class ImapService {
         size: msg.size || 0,
         hasAttachments,
         labels: labels.join(','),
+        modseq: modseqStr,
       };
     } catch (err) {
       log.warn('Failed to parse message:', err);

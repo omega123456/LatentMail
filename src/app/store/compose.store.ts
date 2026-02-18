@@ -22,8 +22,8 @@ interface ComposeState {
   queueId: string | null;
   /** Whether the server has confirmed the draft exists (queue completed). */
   serverConfirmed: boolean;
-  /** Server-confirmed gmailMessageId of the draft (for delete on discard). */
-  serverGmailMessageId: string | null;
+  /** Server-confirmed xGmMsgId of the draft (for delete on discard). */
+  serverXGmMsgId: string | null;
   to: string;
   cc: string;
   bcc: string;
@@ -51,7 +51,7 @@ const initialState: ComposeState = {
   accountDisplayName: '',
   queueId: null,
   serverConfirmed: false,
-  serverGmailMessageId: null,
+  serverXGmMsgId: null,
   to: '',
   cc: '',
   bcc: '',
@@ -126,7 +126,7 @@ export const ComposeStore = signalStore(
         queueId: string;
         status: string;
         error?: string;
-        result?: { gmailMessageId?: string };
+        result?: { xGmMsgId?: string };
       }>('queue:update').subscribe((update) => {
         const currentQueueId = store.queueId();
         if (!currentQueueId || update.queueId !== currentQueueId) return;
@@ -136,7 +136,7 @@ export const ComposeStore = signalStore(
             serverConfirmed: true,
             saving: false,
             lastSavedAt: new Date().toISOString(),
-            serverGmailMessageId: update.result?.gmailMessageId || store.serverGmailMessageId(),
+            serverXGmMsgId: update.result?.xGmMsgId || store.serverXGmMsgId(),
           });
         } else if (update.status === 'failed') {
           patchState(store, {
@@ -161,20 +161,20 @@ export const ComposeStore = signalStore(
 
       // Determine if this is an update or a new draft
       const currentQueueId = store.queueId();
-      const currentServerGmailMessageId = store.serverGmailMessageId();
+      const currentServerXGmMsgId = store.serverXGmMsgId();
       
       // Three paths:
       // 1. Update via queueId (draft created this session)
-      // 2. Update via serverGmailMessageId (draft opened from server)
-      // 3. Create new draft (neither queueId nor serverGmailMessageId)
+      // 2. Update via serverXGmMsgId (draft opened from server)
+      // 3. Create new draft (neither queueId nor serverXGmMsgId)
       const isUpdateViaQueueId = !!currentQueueId;
-      const isUpdateViaServerGmailMessageId = !currentQueueId && !!currentServerGmailMessageId;
-      const isUpdate = isUpdateViaQueueId || isUpdateViaServerGmailMessageId;
+      const isUpdateViaServerXGmMsgId = !currentQueueId && !!currentServerXGmMsgId;
+      const isUpdate = isUpdateViaQueueId || isUpdateViaServerXGmMsgId;
 
       // Block draft-update until the initial draft-create is server-confirmed.
       // This prevents enqueuing an update before the server IDs are available,
       // which would fall back to a duplicate draft-create.
-      // (Only applies to updates via queueId; updates via serverGmailMessageId don't need confirmation)
+      // (Only applies to updates via queueId; updates via serverXGmMsgId don't need confirmation)
       if (isUpdateViaQueueId && !store.serverConfirmed()) return;
 
       enqueueInFlight = true;
@@ -204,7 +204,7 @@ export const ComposeStore = signalStore(
           ? {
               ...basePayload,
               originalQueueId: currentQueueId || undefined,
-              serverDraftGmailMessageId: currentServerGmailMessageId || undefined,
+              serverDraftXGmMsgId: currentServerXGmMsgId || undefined,
             }
           : basePayload;
 
@@ -273,8 +273,8 @@ export const ComposeStore = signalStore(
             to = '';
           }
 
-          inReplyTo = msg.gmailMessageId;
-          references = msg.gmailMessageId;
+          inReplyTo = msg.messageId || msg.xGmMsgId;
+          references = msg.messageId || msg.xGmMsgId;
 
           // Build quoted body
           const date = new Date(msg.date).toLocaleString();
@@ -294,8 +294,8 @@ export const ComposeStore = signalStore(
             accountEmail: context.accountEmail,
             accountDisplayName: context.accountDisplayName,
             queueId: null,
-            serverConfirmed: context.serverDraftGmailMessageId ? true : false,
-            serverGmailMessageId: context.serverDraftGmailMessageId ?? null,
+            serverConfirmed: context.serverDraftXGmMsgId ? true : false,
+            serverXGmMsgId: context.serverDraftXGmMsgId ?? null,
             to: d.to,
             cc: d.cc,
             bcc: d.bcc,
@@ -340,7 +340,7 @@ export const ComposeStore = signalStore(
           accountDisplayName: context.accountDisplayName,
           queueId: null,
           serverConfirmed: false,
-          serverGmailMessageId: null,
+          serverXGmMsgId: null,
           to,
           cc,
           bcc: '',
@@ -420,9 +420,9 @@ export const ComposeStore = signalStore(
             // Pass the draft's queueId so the send worker can delete the server draft
             // via in-memory mapping (draft created this session)
             originalQueueId: store.queueId() || undefined,
-            // Also pass server gmailMessageId for drafts opened from server
+            // Also pass server xGmMsgId for drafts opened from server
             // (fallback when queueId mapping is unavailable)
-            serverDraftGmailMessageId: store.serverGmailMessageId() || undefined,
+            serverDraftXGmMsgId: store.serverXGmMsgId() || undefined,
           };
 
           const response = await electronService.sendMail(String(store.accountId()), message);
@@ -478,12 +478,12 @@ export const ComposeStore = signalStore(
         unsubscribeFromQueueUpdates();
         // If the server has confirmed the draft exists, enqueue a delete operation
         // to remove it from the server's [Gmail]/Drafts folder.
-        const gmailMessageId = store.serverGmailMessageId();
-        if (store.serverConfirmed() && gmailMessageId && store.accountId()) {
+        const xGmMsgId = store.serverXGmMsgId();
+        if (store.serverConfirmed() && xGmMsgId && store.accountId()) {
           try {
             await electronService.deleteEmails(
               String(store.accountId()),
-              [gmailMessageId],
+              [xGmMsgId],
               '[Gmail]/Drafts',
             );
           } catch {
