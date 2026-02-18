@@ -527,28 +527,10 @@ export class SyncService {
       }
     }
 
-    // Remove stale associations in a transaction
-    db.getDatabase().run('BEGIN');
-    try {
-      for (const stale of staleEntries) {
-        // Remove email-folder association
-        db.removeEmailFolderAssociation(numAccountId, stale.xGmMsgId, folder);
-
-        // Check if the email's thread still has emails in this folder
-        const email = db.getEmailByXGmMsgId(numAccountId, stale.xGmMsgId);
-        if (email) {
-          const threadId = String(email['xGmThrid'] || '');
-          if (threadId && !db.threadHasEmailsInFolder(numAccountId, threadId, folder)) {
-            db.removeThreadFolderAssociation(numAccountId, threadId, folder);
-            log.debug(`[SyncService] reconcileFolder: removed thread-folder for thread ${threadId} from ${folder}`);
-          }
-        }
-      }
-      db.getDatabase().run('COMMIT');
-    } catch (err) {
-      db.getDatabase().run('ROLLBACK');
-      throw err;
-    }
+    // Remove stale associations atomically via a dedicated DB method (owns its own transaction
+    // and scheduleSave — avoids mixing manual BEGIN/COMMIT with higher-level DB methods that
+    // have their own scheduleSave() side effects).
+    db.removeStaleEmailFolderAssociations(numAccountId, folder, staleEntries.map(e => e.xGmMsgId));
 
     // Remove orphan emails (emails with zero email_folders associations)
     let orphanEmails: Array<{ xGmMsgId: string; xGmThrid: string }> = [];

@@ -16,8 +16,8 @@ export class QueueSettingsComponent {
 
   readonly sortedItems = computed(() => {
     return [...this.queueStore.items()].sort((a, b) => {
-      // Processing first, then pending, then failed, then completed
-      const order: Record<string, number> = { processing: 0, pending: 1, failed: 2, completed: 3 };
+      // Processing first, then pending, then failed, then cancelled, then completed
+      const order: Record<string, number> = { processing: 0, pending: 1, failed: 2, cancelled: 3, completed: 4 };
       const diff = (order[a.status] ?? 4) - (order[b.status] ?? 4);
       if (diff !== 0) return diff;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -42,6 +42,7 @@ export class QueueSettingsComponent {
       processing: 'Active',
       completed: 'Done',
       failed: 'Failed',
+      cancelled: 'Cancelled',
     };
     return labels[status] || status;
   }

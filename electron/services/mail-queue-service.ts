@@ -23,7 +23,7 @@ export type QueueOperationType =
   | 'flag'
   | 'delete';
 
-export type QueueItemStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type QueueItemStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
 export interface DraftPayload {
   subject: string;
@@ -283,11 +283,11 @@ export class MailQueueService {
     return count;
   }
 
-  /** Clear completed items from the tracking map. */
+  /** Clear completed and cancelled items from the tracking map. */
   clearCompleted(): number {
     let count = 0;
     for (const [id, item] of this.items.entries()) {
-      if (item.status === 'completed') {
+      if (item.status === 'completed' || item.status === 'cancelled') {
         this.items.delete(id);
         count++;
       }
@@ -300,8 +300,8 @@ export class MailQueueService {
     const item = this.items.get(queueId);
     if (!item || item.status !== 'pending') return false;
 
-    item.status = 'failed';
-    item.error = 'Cancelled by user';
+    item.status = 'cancelled';
+    item.error = undefined;
     item.completedAt = new Date().toISOString();
     this.emitUpdate(item);
 
@@ -825,6 +825,11 @@ export class MailQueueService {
     const lockManager = FolderLockManager.getInstance();
 
     const sourceFolders = this.resolveSourceFoldersForMove(payload);
+    if (sourceFolders.length === 0) {
+      throw new Error(
+        `move (${item.queueId}): no source folders resolved for ${payload.xGmMsgIds.join(', ')} — cannot perform IMAP move`
+      );
+    }
     const runtimeResolvedByFolder: Record<string, number[]> = {};
 
     const resolvedAny = new Set<string>();
@@ -1003,16 +1008,20 @@ export class MailQueueService {
   }
 
   private applyResolutionWarning(item: QueueItem, unresolvedCount: number, totalCount: number): void {
+    // Empty payload — nothing to resolve; treat as clean success (no warning on completed item).
     if (totalCount <= 0) {
-      item.error = 'Completed with warnings: No messages found on server — they may have been deleted or moved';
+      item.error = undefined;
+      log.warn(`[MailQueue] ${item.type} (${item.queueId}): payload contained no message IDs — operation was a no-op`);
       return;
     }
 
+    // All resolved — clean success.
     if (unresolvedCount <= 0) {
       item.error = undefined;
       return;
     }
 
+    // Some or all unresolved — set a warning string (item.status will still be 'completed').
     if (unresolvedCount >= totalCount) {
       item.error = 'Completed with warnings: No messages found on server — they may have been deleted or moved';
       return;

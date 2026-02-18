@@ -143,6 +143,8 @@ export const ComposeStore = signalStore(
             saving: false,
             error: update.error || 'Draft save failed',
           });
+        } else if (update.status === 'cancelled') {
+          patchState(store, { saving: false });
         }
       });
 

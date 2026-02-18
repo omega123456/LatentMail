@@ -7,7 +7,7 @@ export interface QueueItemSnapshot {
   queueId: string;
   accountId: number;
   type: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   createdAt: string;
   completedAt?: string;
   retryCount: number;
@@ -34,6 +34,7 @@ export const QueueStore = signalStore(
     processingCount: computed(() => store.items().filter(i => i.status === 'processing').length),
     completedCount: computed(() => store.items().filter(i => i.status === 'completed').length),
     failedCount: computed(() => store.items().filter(i => i.status === 'failed').length),
+    cancelledCount: computed(() => store.items().filter(i => i.status === 'cancelled').length),
     totalCount: computed(() => store.items().length),
     hasItems: computed(() => store.items().length > 0),
   })),
@@ -99,9 +100,9 @@ export const QueueStore = signalStore(
         const response = await electronService.clearCompletedOperations();
         if (response.success && response.data) {
           const { clearedCount } = response.data as { clearedCount: number };
-          // Remove completed items from local state too
+          // Remove completed and cancelled items from local state too
           patchState(store, {
-            items: store.items().filter(i => i.status !== 'completed'),
+            items: store.items().filter(i => i.status !== 'completed' && i.status !== 'cancelled'),
           });
           return clearedCount;
         }

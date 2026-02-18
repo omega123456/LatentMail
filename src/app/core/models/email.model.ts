@@ -36,7 +36,7 @@ export interface Thread {
   participants?: string;
   messageCount: number;
   snippet?: string;
-  folder: string;
+  folder?: string;
   isRead: boolean;
   isStarred: boolean;
   folders?: string[];

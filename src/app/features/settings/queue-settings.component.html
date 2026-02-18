@@ -71,6 +71,13 @@
               </button>
             </div>
           }
+          @if (item.status === 'cancelled') {
+            <div class="item-actions">
+              <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+          }
         </div>
       }
     </div>

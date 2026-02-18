@@ -443,16 +443,45 @@ export class DatabaseService {
 
   deleteEmailsByAccount(accountId: number): void {
     if (!this.db) throw new Error('Database not initialized');
+    // Clean up junction tables first (no FK cascade from emails to email_folders in new schema)
+    this.db.run('DELETE FROM email_folders WHERE account_id = :accountId', { ':accountId': accountId });
+    this.db.run('DELETE FROM thread_folders WHERE account_id = :accountId', { ':accountId': accountId });
     this.db.run('DELETE FROM emails WHERE account_id = :accountId', { ':accountId': accountId });
+    this.db.run('DELETE FROM threads WHERE account_id = :accountId', { ':accountId': accountId });
     this.scheduleSave();
   }
 
   deleteEmailsByThreadId(accountId: number, xGmThrid: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'DELETE FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-      { ':accountId': accountId, ':xGmThrid': xGmThrid }
-    );
+    this.db.run('BEGIN');
+    try {
+      // Remove email_folders associations for all emails in this thread before deleting the emails
+      this.db.run(
+        `DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid IN (
+           SELECT x_gm_msgid FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
+         )`,
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      // Remove thread_folders associations
+      this.db.run(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      // Delete the email rows (CASCADE handles attachments, search_index)
+      this.db.run(
+        'DELETE FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      // Delete the thread row itself
+      this.db.run(
+        'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
+      );
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
     this.scheduleSave();
   }
 
@@ -583,6 +612,7 @@ export class DatabaseService {
        VALUES (:accountId, :xGmThrid, :folder)`,
       { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
     );
+    this.scheduleSave();
   }
 
   removeThreadFolderAssociation(accountId: number, xGmThrid: string, folder: string): void {
@@ -622,6 +652,67 @@ export class DatabaseService {
       'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
       { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
     );
+    this.scheduleSave();
+  }
+
+  /**
+   * Atomically remove email-folder (and thread-folder) associations for a set of stale
+   * x_gm_msgid values from a given folder.  All raw SQL runs inside a single BEGIN/COMMIT
+   * block owned entirely by this method, so no scheduleSave() side effects leak out of the
+   * transaction boundary.  scheduleSave() is called once after a successful commit.
+   */
+  removeStaleEmailFolderAssociations(accountId: number, folder: string, xGmMsgIds: string[]): void {
+    if (!this.db) throw new Error('Database not initialized');
+    if (xGmMsgIds.length === 0) return;
+
+    // Collect thread IDs before mutating (needed for thread-folder cleanup check).
+    const affectedThreadIds = new Map<string, string>(); // xGmMsgId → xGmThrid
+    for (const xGmMsgId of xGmMsgIds) {
+      const emailResult = this.db.exec(
+        'SELECT x_gm_thrid FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+        { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
+      );
+      if (emailResult.length > 0 && emailResult[0].values.length > 0) {
+        const xGmThrid = emailResult[0].values[0][0] as string;
+        if (xGmThrid) {
+          affectedThreadIds.set(xGmMsgId, xGmThrid);
+        }
+      }
+    }
+
+    this.db.run('BEGIN');
+    try {
+      for (const xGmMsgId of xGmMsgIds) {
+        // Remove email-folder association (raw SQL — no scheduleSave inside transaction)
+        this.db.run(
+          'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
+          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
+        );
+
+        // Remove thread-folder if no remaining emails for this thread exist in the folder
+        const xGmThrid = affectedThreadIds.get(xGmMsgId);
+        if (xGmThrid) {
+          const countResult = this.db.exec(
+            `SELECT COUNT(*) FROM email_folders ef
+             JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+             WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
+            { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+          );
+          const remaining = (countResult.length > 0 && countResult[0].values.length > 0)
+            ? countResult[0].values[0][0] as number : 0;
+          if (remaining === 0) {
+            this.db.run(
+              'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
+              { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+            );
+          }
+        }
+      }
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
     this.scheduleSave();
   }
 
@@ -1498,7 +1589,7 @@ export class DatabaseService {
       const col = columns[i];
       const val = row[i];
       const key = this.toCamelKey(col);
-      if (col === 'is_read' || col === 'is_starred' || col === 'is_important' || col === 'is_draft' || col === 'has_attachments') {
+      if (col === 'is_read' || col === 'is_starred' || col === 'is_important' || col === 'is_draft' || col === 'is_filtered' || col === 'has_attachments') {
         obj[key] = val === 1;
       } else {
         obj[key] = val;
