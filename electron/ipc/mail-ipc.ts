@@ -233,6 +233,8 @@ export function registerMailIpcHandlers(): void {
         const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId', { ':accountId': numAccountId });
         log.info(`DEBUG: total threads=${threadCount[0]?.values[0]?.[0]}, total thread_folders=${tfCount[0]?.values[0]?.[0]}, folders in thread_folders=${JSON.stringify(tfFolders[0]?.values)}`);
       }
+      // Enrich threads with folders (from thread_folders) so list can show e.g. Draft/Sent/Deleted in Trash
+      threads = attachThreadFolders(threads);
       // Enrich threads with label info
       const enrichedThreads = attachThreadLabels(threads);
       return ipcSuccess(enrichedThreads);

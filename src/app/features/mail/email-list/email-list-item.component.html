@@ -43,7 +43,14 @@
         <span class="label-chip-text">{{ lbl.name }}</span>
       </span>
     }
-    @if (folderBadge(); as badge) {
+    @if (trashFolderBadges().length > 0) {
+      @for (badge of trashFolderBadges(); track badge.cssClass) {
+        <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title">
+          <span class="material-symbols-outlined folder-badge-icon">{{ badge.icon }}</span>
+          <span class="folder-badge-text">{{ badge.displayName }}</span>
+        </span>
+      }
+    } @else if (folderBadge(); as badge) {
       <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title">
         <span class="material-symbols-outlined folder-badge-icon">{{ badge.icon }}</span>
         <span class="folder-badge-text">{{ badge.displayName }}</span>

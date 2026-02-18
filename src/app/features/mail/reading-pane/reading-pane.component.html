@@ -123,11 +123,25 @@
             <div class="header-content">
               <div class="header-top">
                 <span class="sender-name">{{ message.fromName || message.fromAddress }}</span>
-                @if (isDraftMessage(message)) {
-                <span class="message-badge message-badge--draft" title="Draft">
-                  <span class="material-symbols-outlined message-badge-icon">edit_note</span>
-                  <span class="message-badge-text">Draft</span>
-                </span>
+                @if (foldersStore.activeFolderId() !== '[Gmail]/Trash') {
+                  @if (isDraftMessage(message)) {
+                  <span class="message-badge message-badge--draft" title="Draft">
+                    <span class="material-symbols-outlined message-badge-icon">edit_note</span>
+                    <span class="message-badge-text">Draft</span>
+                  </span>
+                  }
+                  @if (isSentMessage(message)) {
+                  <span class="message-badge message-badge--sent" title="Sent">
+                    <span class="material-symbols-outlined message-badge-icon">send</span>
+                    <span class="message-badge-text">Sent</span>
+                  </span>
+                  }
+                  @if (isDeletedMessage(message)) {
+                  <span class="message-badge message-badge--deleted" title="Deleted">
+                    <span class="material-symbols-outlined message-badge-icon">delete</span>
+                    <span class="message-badge-text">Deleted</span>
+                  </span>
+                  }
                 }
                 <span class="message-date">{{ message.date | relativeTime }}</span>
               </div>

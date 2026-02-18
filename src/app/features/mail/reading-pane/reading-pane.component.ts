@@ -72,6 +72,24 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     return folders.includes('[Gmail]/Drafts');
   }
 
+  /** Whether this message is in [Gmail]/Sent Mail. */
+  isSentMessage(message: Email): boolean {
+    const folders = message.folders;
+    if (!folders || folders.length === 0) {
+      return false;
+    }
+    return folders.includes('[Gmail]/Sent Mail');
+  }
+
+  /** Whether this message is in [Gmail]/Trash. */
+  isDeletedMessage(message: Email): boolean {
+    const folders = message.folders;
+    if (!folders || folders.length === 0) {
+      return false;
+    }
+    return folders.includes('[Gmail]/Trash');
+  }
+
   getInitial(email: Email): string {
     const name = email.fromName || email.fromAddress;
     return name.charAt(0).toUpperCase();

@@ -50,6 +50,8 @@ export class EmailListItemComponent {
   readonly isSelected = input<boolean>(false);
   readonly density = input<DensityMode>('comfortable');
   readonly showFolderBadge = input<boolean>(false);
+  /** When set to [Gmail]/Trash, list item shows Draft/Sent/Deleted badges from thread folders. */
+  readonly activeFolderId = input<string | null>(null);
   readonly clicked = output<Thread>();
   readonly starToggled = output<Thread>();
 
@@ -97,6 +99,26 @@ export class EmailListItemComponent {
       title: selectedFolder,
     };
   });
+
+  /** When viewing Trash, show only the Draft badge for threads that are also in Drafts. */
+  readonly trashFolderBadges = computed<FolderBadgeInfo[]>(() => {
+    if (this.activeFolderId() !== '[Gmail]/Trash') {
+      return [];
+    }
+    const folders = this.thread().folders;
+    if (!folders || folders.length === 0) {
+      return [];
+    }
+    if (!this.hasFolder(folders, '[Gmail]/Drafts')) {
+      return [];
+    }
+    const b = FOLDER_BADGE_META['[gmail]/drafts'];
+    return [{ ...b, title: b.displayName }];
+  });
+
+  private hasFolder(folders: string[], target: string): boolean {
+    return this.findFolderCaseInsensitive(folders, target) !== null;
+  }
 
   getSenderName(): string {
     const participants = this.thread().participants;
