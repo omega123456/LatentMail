@@ -105,17 +105,37 @@ export const EmailsStore = signalStore(
   { providedIn: 'root' },
   withState(initialState),
 
-  withComputed((store) => ({
-    unreadCount: computed(() =>
-      store.threads().filter(t => !t.isRead).length
-    ),
-    selectedMessages: computed(() =>
-      store.selectedThread()?.messages ?? []
-    ),
-    isEmpty: computed(() =>
-      !store.loading() && store.threads().length === 0
-    ),
-  })),
+  withComputed((store) => {
+    // Inject FoldersStore here (top level of withComputed callback) — this runs
+    // inside the store constructor where the Angular injection context is available.
+    // Do NOT move this inject() call inside the computed() closures below, as those
+    // closures run during change detection where injection context is not available.
+    const foldersStore = inject(FoldersStore);
+
+    return {
+      unreadCount: computed(() =>
+        store.threads().filter(t => !t.isRead).length
+      ),
+      selectedMessages: computed(() => {
+        const messages = store.selectedThread()?.messages ?? [];
+        const activeFolderId = foldersStore.activeFolderId();
+
+        // When viewing the Trash folder, show all messages (including those in Trash)
+        if (activeFolderId === '[Gmail]/Trash') {
+          return messages;
+        }
+
+        // For all other folders (including null during search), hide messages that
+        // have been moved to Trash — they should not appear in non-Trash thread views
+        return messages.filter(
+          m => !m.folders?.includes('[Gmail]/Trash')
+        );
+      }),
+      isEmpty: computed(() =>
+        !store.loading() && store.threads().length === 0
+      ),
+    };
+  }),
 
   withMethods((store) => {
     const electronService = inject(ElectronService);
