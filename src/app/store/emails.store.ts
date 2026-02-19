@@ -739,13 +739,25 @@ export const EmailsStore = signalStore(
           //  but the above block catches that case already)
         }
 
-        if (
-          activeAccountId != null &&
-          event.accountId === activeAccountId &&
-          activeFolderId != null &&
-          event.folders.includes(activeFolderId)
-        ) {
+        const sameAccount = activeAccountId != null && event.accountId === activeAccountId;
+        const touchesActiveFolder = activeFolderId != null && event.folders.includes(activeFolderId);
+
+        if (sameAccount && touchesActiveFolder) {
           store.refreshThreads();
+        }
+
+        // Reload the open thread whenever an operation mutates its messages.
+        // draft-update always emits [Gmail]/Drafts so it never matches touchesActiveFolder
+        // when viewing INBOX; delete/move/send do touch the active folder but also need
+        // the thread messages refreshed, not just the list.
+        const messagesMutatingReasons: MailFolderUpdatedPayload['reason'][] = [
+          'draft-update', 'delete', 'move', 'send',
+        ];
+        if (sameAccount && messagesMutatingReasons.includes(event.reason)) {
+          const selectedId = store.selectedThreadId();
+          if (selectedId) {
+            store.loadThread(activeAccountId!, selectedId);
+          }
         }
         });
 

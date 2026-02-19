@@ -104,7 +104,7 @@ export interface ServerIds {
   xGmMsgId: string;
   xGmThrid: string;
   imapUid: number;
-  imapUidValidity: number;
+  imapUidValidity: number | null;
 }
 
 export interface QueueItem {
@@ -661,12 +661,15 @@ export class MailQueueService {
       if (draftsEntry) {
         const oldEmail = db.getEmailByXGmMsgId(item.accountId, payload.serverDraftXGmMsgId);
         const xGmThrid = oldEmail ? String(oldEmail['xGmThrid'] || '') : '';
-        // Construct ServerIds from DB data (no UIDVALIDITY stored; pass 0)
+        // Look up stored UIDVALIDITY from folder_state so deleteDraftByUid can validate the UID.
+        // Falls back to null (skip check) if no sync has occurred yet for this folder.
+        const folderState = db.getFolderState(item.accountId, GMAIL_DRAFTS_FOLDER);
+        const storedUidValidity = folderState ? Number(folderState.uidValidity) : null;
         oldServerIds = {
           xGmMsgId: payload.serverDraftXGmMsgId,
           xGmThrid,
           imapUid: draftsEntry.uid,
-          imapUidValidity: 0,
+          imapUidValidity: storedUidValidity,
         };
       }
     }
@@ -731,15 +734,11 @@ export class MailQueueService {
           oldServerIds.imapUidValidity,
         );
 
-        // Clean up old email/thread associations from local DB
-        db.removeEmailFolderAssociation(item.accountId, oldServerIds.xGmMsgId, GMAIL_DRAFTS_FOLDER);
-        const oldEmail = db.getEmailByXGmMsgId(item.accountId, oldServerIds.xGmMsgId);
-        if (oldEmail) {
-          const oldThreadId = String(oldEmail['xGmThrid'] || '');
-          if (oldThreadId && !db.threadHasEmailsInFolder(item.accountId, oldThreadId, GMAIL_DRAFTS_FOLDER)) {
-            db.removeThreadFolderAssociation(item.accountId, oldThreadId, GMAIL_DRAFTS_FOLDER);
-          }
-        }
+        // Remove the old draft email row and all its associations from the local DB.
+        // A draft exists only in [Gmail]/Drafts, so once deleted from the server it
+        // is a true orphan — removeEmailAndAssociations cleans up emails, email_folders,
+        // thread_folders, and orphaned threads atomically.
+        db.removeEmailAndAssociations(item.accountId, oldServerIds.xGmMsgId);
       } catch (delErr) {
         log.warn(`[MailQueue] draft-update (${item.queueId}): failed to delete old draft uid=${oldServerIds.imapUid} (continuing):`, delErr);
       }
@@ -1122,7 +1121,7 @@ export class MailQueueService {
     // Path 1: Resolve via in-memory mapping (draft created in this session)
     let draftXGmMsgId: string | undefined;
     let draftImapUid: number | undefined;
-    let draftUidValidity: number | undefined;
+    let draftUidValidity: number | null | undefined;
 
     if (payload.originalQueueId) {
       const serverIds = this.queueIdToServerIds.get(payload.originalQueueId);
