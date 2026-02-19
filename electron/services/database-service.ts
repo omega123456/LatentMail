@@ -284,7 +284,7 @@ export class DatabaseService {
         html_body = COALESCE(NULLIF(excluded.html_body, ''), html_body),
         date = excluded.date,
         is_read = excluded.is_read, is_starred = excluded.is_starred, is_important = excluded.is_important,
-        is_draft = excluded.is_draft,
+        is_draft = MAX(is_draft, excluded.is_draft),
         snippet = excluded.snippet, size = excluded.size, has_attachments = excluded.has_attachments,
         labels = excluded.labels`,
       {
