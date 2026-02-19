@@ -146,12 +146,14 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     switch (event.action) {
       case 'delete': {
-        // Per-message delete when event.message is set, otherwise whole thread via threadId
+        // Per-message delete when event.message is set, otherwise whole thread via threadId.
+        // For per-message: omit sourceFolder so backend uses each message's actual folder(s).
         const deleteIds = event.message
           ? [event.message.xGmMsgId]
           : [thread.xGmThrid];
         const deletePerMsg = event.message?.xGmMsgId;
-        this.emailsStore.moveEmails(activeAccount.id, deleteIds, '[Gmail]/Trash', thread.xGmThrid, currentFolder, deletePerMsg);
+        const deleteSourceFolder = deletePerMsg ? undefined : currentFolder;
+        this.emailsStore.moveEmails(activeAccount.id, deleteIds, '[Gmail]/Trash', thread.xGmThrid, deleteSourceFolder, deletePerMsg);
         if (!deletePerMsg) {
           this.emailsStore.clearSelection();
         }
@@ -161,12 +163,14 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         if (!event.targetFolder) {
           break;
         }
-        // Per-message move when event.message is set, otherwise whole thread via threadId
+        // Per-message move when event.message is set, otherwise whole thread via threadId.
+        // For per-message: omit sourceFolder so backend uses each message's actual folder(s).
         const moveIds = event.message
           ? [event.message.xGmMsgId]
           : [thread.xGmThrid];
         const movePerMsg = event.message?.xGmMsgId;
-        this.emailsStore.moveEmails(activeAccount.id, moveIds, event.targetFolder, thread.xGmThrid, currentFolder, movePerMsg);
+        const moveSourceFolder = movePerMsg ? undefined : currentFolder;
+        this.emailsStore.moveEmails(activeAccount.id, moveIds, event.targetFolder, thread.xGmThrid, moveSourceFolder, movePerMsg);
         if (!movePerMsg) {
           this.emailsStore.clearSelection();
         }

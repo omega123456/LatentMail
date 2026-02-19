@@ -1581,13 +1581,16 @@ export class MailQueueService {
     for (const folder of uniqueFolders) {
       try {
         const status = await imapService.getMailboxStatus(String(accountId), folder);
-        db.upsertFolderState({
+        // Only update uidValidity and condstoreSupported — do NOT advance highestModseq.
+        // The modseq must only advance inside the sync path (fetchChangedSince) so that
+        // the next incremental sync does not skip messages that arrived between our last
+        // sync and this queue op.
+        db.updateFolderStateNonModseq(
           accountId,
           folder,
-          uidValidity: status.uidValidity,
-          highestModseq: status.highestModseq,
-          condstoreSupported: status.condstoreSupported,
-        });
+          status.uidValidity,
+          status.condstoreSupported,
+        );
       } catch (err) {
         log.warn(`[MailQueue] Failed to update folder_state for ${folder} (account ${accountId}):`, err);
       }

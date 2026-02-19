@@ -1093,6 +1093,36 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
+  /**
+   * Update folder_state for uidValidity and condstoreSupported only.
+   * Does NOT touch highest_modseq — caller is a queue post-op, not the sync path.
+   * If no row exists yet, inserts with highest_modseq = NULL so the next sync
+   * falls back to a full date-based fetch.
+   */
+  updateFolderStateNonModseq(
+    accountId: number,
+    folder: string,
+    uidValidity: string,
+    condstoreSupported: boolean,
+  ): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT INTO folder_state (account_id, folder, uid_validity, highest_modseq, condstore_supported, updated_at)
+       VALUES (:accountId, :folder, :uidValidity, NULL, :condstoreSupported, datetime('now'))
+       ON CONFLICT(account_id, folder) DO UPDATE SET
+        uid_validity        = excluded.uid_validity,
+        condstore_supported = excluded.condstore_supported,
+        updated_at          = datetime('now')`,
+      {
+        ':accountId': accountId,
+        ':folder': folder,
+        ':uidValidity': uidValidity,
+        ':condstoreSupported': condstoreSupported ? 1 : 0,
+      }
+    );
+    this.scheduleSave();
+  }
+
   getFolderState(accountId: number, folder: string): FolderStateRecord | null {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
