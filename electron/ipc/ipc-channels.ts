@@ -4,6 +4,7 @@ export const IPC_CHANNELS = {
   // Mail operations
   MAIL_FETCH_EMAILS: 'mail:fetch-emails',
   MAIL_FETCH_THREAD: 'mail:fetch-thread',
+  MAIL_GET_THREAD_FROM_DB: 'mail:get-thread-from-db',
   MAIL_SEND: 'mail:send',
   MAIL_MOVE: 'mail:move',
   MAIL_FLAG: 'mail:flag',

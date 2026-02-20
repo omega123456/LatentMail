@@ -20,7 +20,8 @@ interface IpcResponse<T = unknown> {
 interface ElectronAPI {
   mail: {
     fetchEmails: (accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => Promise<IpcResponse>;
-    fetchThread: (accountId: string, threadId: string) => Promise<IpcResponse>;
+    fetchThread: (accountId: string, threadId: string, forceFromServer?: boolean) => Promise<IpcResponse>;
+    getThreadFromDb: (accountId: string, threadId: string) => Promise<IpcResponse>;
     send: (accountId: string, message: unknown) => Promise<IpcResponse>;
     move: (accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string) => Promise<IpcResponse>;
     flag: (accountId: string, messageIds: string[], flag: string, value: boolean) => Promise<IpcResponse>;
@@ -116,8 +117,12 @@ export class ElectronService {
     return this.invoke(() => this.api!.mail.fetchEmails(accountId, folderId, options));
   }
 
-  async fetchThread(accountId: string, threadId: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.mail.fetchThread(accountId, threadId));
+  async fetchThread(accountId: string, threadId: string, forceFromServer?: boolean): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.fetchThread(accountId, threadId, forceFromServer));
+  }
+
+  async getThreadFromDb(accountId: string, threadId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.mail.getThreadFromDb(accountId, threadId));
   }
 
   async sendMail(accountId: string, message: unknown): Promise<IpcResponse> {

@@ -300,16 +300,31 @@ export const EmailsStore = signalStore(
         }
       },
 
-      /** Load a full thread with messages */
+      /** Load a full thread with messages. Shows DB cache first if available, then always fetches from server and updates. */
       async loadThread(accountId: number, threadId: string): Promise<void> {
-        patchState(store, { loadingThread: true, selectedThreadId: threadId });
+        patchState(store, { loadingThread: true, selectedThreadId: threadId, error: null });
+        const accountIdStr = String(accountId);
+
+        // Show DB data immediately if we have it (instant display)
         try {
-          const response = await electronService.fetchThread(String(accountId), threadId);
+          const dbResponse = await electronService.getThreadFromDb(accountIdStr, threadId);
+          if (dbResponse.success && dbResponse.data) {
+            const threadFromDb = dbResponse.data as Thread & { messages?: Email[] };
+            patchState(store, { selectedThread: threadFromDb, loadingThread: false });
+          }
+        } catch {
+          // Non-fatal: we will fetch from server next
+        }
+
+        // Always fetch from server and reconcile; overwrite view when server responds
+        try {
+          const response = await electronService.fetchThread(accountIdStr, threadId, true);
           if (response.success && response.data) {
             const thread = response.data as Thread & { messages?: Email[] };
             patchState(store, {
               selectedThread: thread,
               loadingThread: false,
+              error: null,
             });
           } else {
             patchState(store, {

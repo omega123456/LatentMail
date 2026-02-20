@@ -15,6 +15,61 @@ import { PendingOpService } from '../services/pending-op-service';
 export function registerMailIpcHandlers(): void {
   const db = DatabaseService.getInstance();
 
+  /**
+   * Build thread response object (thread metadata + messages with folders).
+   * Shared by MAIL_FETCH_THREAD and MAIL_GET_THREAD_FROM_DB.
+   */
+  function buildThreadResponse(
+    thread: Record<string, unknown>,
+    messages: Array<Record<string, unknown>>,
+    pendingIds: Set<string>,
+    numAccountId: number
+  ): Record<string, unknown> {
+    const messagesWithFolders: Array<Record<string, unknown>> = messages.map((m) => {
+      const xGmMsgId = String(m['xGmMsgId'] ?? '');
+      const folders = xGmMsgId ? db.getFoldersForEmail(numAccountId, xGmMsgId) : [];
+      return { ...m, folders };
+    });
+    let threadResponse: Record<string, unknown> = { ...thread };
+    if (pendingIds.size > 0 && messagesWithFolders.length > 0) {
+      const msgCount = messagesWithFolders.length;
+      const parseTs = (d: unknown): number => {
+        if (typeof d === 'number') {
+          return Number.isFinite(d) ? d : 0;
+        }
+        const parsed = Date.parse(String(d));
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const latestMsg = messagesWithFolders.reduce((a, b) => {
+        return parseTs(b['date']) > parseTs(a['date']) ? b : a;
+      });
+      const allRead = messagesWithFolders.every((m) => m['isRead'] === true);
+      const anyStarred = messagesWithFolders.some((m) => m['isStarred'] === true);
+      const participants = [...new Set(messagesWithFolders.map((m) => String(m['fromAddress'] ?? '')))].join(', ');
+
+      threadResponse = {
+        ...threadResponse,
+        messageCount: msgCount,
+        snippet: String(latestMsg['snippet'] ?? ''),
+        lastMessageDate: latestMsg['date'] != null ? String(latestMsg['date']) : String(threadResponse['lastMessageDate'] ?? ''),
+        isRead: allRead,
+        isStarred: anyStarred,
+        participants,
+      };
+    } else if (pendingIds.size > 0 && messagesWithFolders.length === 0) {
+      threadResponse = {
+        ...threadResponse,
+        messageCount: 0,
+        snippet: '',
+        participants: '',
+        lastMessageDate: '',
+        isRead: true,
+        isStarred: false,
+      };
+    }
+    return { ...threadResponse, messages: messagesWithFolders };
+  }
+
   const normalizeSearchQueries = (queryInput: unknown): string[] => {
     if (typeof queryInput === 'string') {
       const trimmed = queryInput.trim();
@@ -287,7 +342,7 @@ export function registerMailIpcHandlers(): void {
   });
 
   // Fetch a full thread with all messages
-  ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_THREAD, async (_event, accountId: string, threadId: string) => {
+  ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_THREAD, async (_event, accountId: string, threadId: string, forceFromServer?: boolean) => {
     try {
       log.info(`Fetching thread ${threadId} for account ${accountId}`);
       const numAccountId = Number(accountId);
@@ -330,7 +385,8 @@ export function registerMailIpcHandlers(): void {
           (m) => !m['htmlBody'] && !m['textBody']
         );
         const shouldFetch =
-          (messages.length === 0 || missingBodies.length > 0) && !threadFetchAttempted.has(fetchKey);
+          forceFromServer === true ||
+          ((messages.length === 0 || missingBodies.length > 0) && !threadFetchAttempted.has(fetchKey));
         if (shouldFetch) {
           threadFetchAttempted.add(fetchKey);
           log.info(`FETCH_THREAD: ${missingBodies.length}/${messages.length} messages missing bodies — fetching from IMAP`);
@@ -339,6 +395,13 @@ export function registerMailIpcHandlers(): void {
             const imapService = ImapService.getInstance();
             const fetchedMessages = await imapService.fetchThread(accountId, threadId);
             log.info(`FETCH_THREAD: IMAP returned ${fetchedMessages.length} messages for thread ${threadId}`);
+
+            // Capture local thread message IDs before any upserts (for reconcile-to-server below)
+            const localXGmMsgIds = new Set(
+              db.getEmailsByThreadId(numAccountId, threadId).map((m) => String(m['xGmMsgId'] ?? '')).filter(Boolean)
+            );
+            const serverXGmMsgIds = new Set(fetchedMessages.map((m) => m.xGmMsgId));
+            const staleXGmMsgIds = [...localXGmMsgIds].filter((id) => !serverXGmMsgIds.has(id));
 
             // Update DB with fetched bodies
             for (const fetched of fetchedMessages) {
@@ -370,6 +433,16 @@ export function registerMailIpcHandlers(): void {
               }
             }
 
+            // Reconcile thread to server: remove local messages no longer on server (e.g. draft deleted by Gmail after send)
+            for (const xGmMsgId of staleXGmMsgIds) {
+              db.removeEmailAndAssociations(numAccountId, xGmMsgId);
+            }
+            if (staleXGmMsgIds.length > 0) {
+              log.info(`FETCH_THREAD: removed ${staleXGmMsgIds.length} stale message(s) from thread ${threadId} (no longer on server)`);
+            }
+            db.recomputeThreadMetadata(numAccountId, threadId);
+            db.removeOrphanedThreads(numAccountId);
+
             // Re-fetch messages from DB with bodies (re-apply pending filter)
             messages = db.getEmailsByThreadId(numAccountId, threadId);
             if (pendingIds.size > 0) {
@@ -382,60 +455,33 @@ export function registerMailIpcHandlers(): void {
         }
       }
 
-      // Enrich each message with folders so the UI can show e.g. a Draft badge
-      const messagesWithFolders: Array<Record<string, unknown>> = messages.map((m) => {
-        const xGmMsgId = String(m['xGmMsgId'] ?? '');
-        const folders = xGmMsgId ? db.getFoldersForEmail(numAccountId, xGmMsgId) : [];
-        return { ...m, folders };
-      });
-
-      // Recompute thread metadata inline from the filtered message set (response-level only,
-      // no DB write) so the returned messageCount/snippet/isRead/isStarred are consistent
-      // with what the user sees after pending messages are filtered out.
-      let threadResponse: Record<string, unknown> = { ...thread };
-      if (pendingIds.size > 0 && messagesWithFolders.length > 0) {
-        const msgCount = messagesWithFolders.length;
-        const parseTs = (d: unknown): number => {
-          if (typeof d === 'number') {
-            return Number.isFinite(d) ? d : 0;
-          }
-          const parsed = Date.parse(String(d));
-          return Number.isFinite(parsed) ? parsed : 0;
-        };
-        const latestMsg = messagesWithFolders.reduce((a, b) => {
-          return parseTs(b['date']) > parseTs(a['date']) ? b : a;
-        });
-        const allRead = messagesWithFolders.every((m) => m['isRead'] === true);
-        const anyStarred = messagesWithFolders.some((m) => m['isStarred'] === true);
-        const participants = [...new Set(messagesWithFolders.map((m) => String(m['fromAddress'] ?? '')))].join(', ');
-
-        threadResponse = {
-          ...threadResponse,
-          messageCount: msgCount,
-          snippet: String(latestMsg['snippet'] ?? ''),
-          lastMessageDate: latestMsg['date'] != null ? String(latestMsg['date']) : String(threadResponse['lastMessageDate'] ?? ''),
-          isRead: allRead,
-          isStarred: anyStarred,
-          participants,
-        };
-      } else if (pendingIds.size > 0 && messagesWithFolders.length === 0) {
-        // All messages filtered — normalize all metadata to empty/neutral values
-        // to prevent ghost metadata appearing in the UI for an empty thread.
-        threadResponse = {
-          ...threadResponse,
-          messageCount: 0,
-          snippet: '',
-          participants: '',
-          lastMessageDate: '',
-          isRead: true,
-          isStarred: false,
-        };
-      }
-
-      return ipcSuccess({ ...threadResponse, messages: messagesWithFolders });
+      const response = buildThreadResponse(thread, messages, pendingIds, numAccountId);
+      return ipcSuccess(response);
     } catch (err) {
       log.error('Failed to fetch thread:', err);
       return ipcError('MAIL_FETCH_THREAD_FAILED', 'Failed to fetch thread');
+    }
+  });
+
+  // Get thread + messages from DB only (no IMAP). Used for instant display when opening a thread.
+  ipcMain.handle(IPC_CHANNELS.MAIL_GET_THREAD_FROM_DB, async (_event, accountId: string, threadId: string) => {
+    try {
+      const numAccountId = Number(accountId);
+      const thread = db.getThreadById(numAccountId, threadId);
+      if (!thread) {
+        return ipcError('MAIL_THREAD_NOT_FOUND', 'Thread not found');
+      }
+      let messages = db.getEmailsByThreadId(numAccountId, threadId);
+      const pendingOpService = PendingOpService.getInstance();
+      const pendingIds = pendingOpService.getPendingForThread(numAccountId, threadId);
+      if (pendingIds.size > 0) {
+        messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
+      }
+      const response = buildThreadResponse(thread, messages, pendingIds, numAccountId);
+      return ipcSuccess(response);
+    } catch (err) {
+      log.error('Failed to get thread from DB:', err);
+      return ipcError('MAIL_FETCH_THREAD_FAILED', 'Failed to get thread');
     }
   });
 
