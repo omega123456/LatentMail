@@ -310,12 +310,17 @@ export const EmailsStore = signalStore(
         });
         const accountIdStr = String(accountId);
 
-        // Show DB data immediately if we have it (instant display)
+        // Show DB data immediately if we have it (instant display).
+        // Only clear loadingThread when messages have actual body content;
+        // if all bodies are empty the user would see a hollow shell, so keep
+        // the spinner visible and let the server fetch fill everything in.
         try {
           const dbResponse = await electronService.getThreadFromDb(accountIdStr, threadId);
           if (dbResponse.success && dbResponse.data) {
             const threadFromDb = dbResponse.data as Thread & { messages?: Email[] };
-            if (store.selectedThreadId() === threadId) {
+            const messages = threadFromDb.messages ?? [];
+            const hasContent = messages.length > 0 && messages.some(m => m.htmlBody || m.textBody);
+            if (store.selectedThreadId() === threadId && hasContent) {
               patchState(store, { selectedThread: threadFromDb, loadingThread: false });
             }
           }
