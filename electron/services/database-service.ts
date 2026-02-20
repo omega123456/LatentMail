@@ -530,7 +530,13 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, MAX(e.date) AS last_message_date, t.participants,
-        t.message_count, t.snippet, tf.folder, t.is_read, t.is_starred
+        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+         FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+           AND (:folder = '[Gmail]/Trash' OR ef2.folder != '[Gmail]/Trash')
+        ) AS message_count,
+        t.snippet, tf.folder, t.is_read, t.is_starred
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder
@@ -553,7 +559,13 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, MAX(e.date) AS last_message_date, t.participants,
-        t.message_count, t.snippet, tf.folder, t.is_read, t.is_starred
+        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+         FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+           AND (:folder = '[Gmail]/Trash' OR ef2.folder != '[Gmail]/Trash')
+        ) AS message_count,
+        t.snippet, tf.folder, t.is_read, t.is_starred
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder
@@ -975,6 +987,12 @@ export class DatabaseService {
     return result[0].values.map((row) => row[0] as string);
   }
 
+  /**
+   * Recomputes the stored thread metadata (message_count, subject, snippet, etc.).
+   * Note: threads.message_count stores the TOTAL email count for internal use
+   * (thread existence checks, cleanup). It is NOT used for display — all thread
+   * list queries compute a visible_count via derived table that excludes Trash-only emails.
+   */
   recomputeThreadMetadata(accountId: number, xGmThrid: string): void {
     if (!this.db) throw new Error('Database not initialized');
 
@@ -1403,7 +1421,12 @@ export class DatabaseService {
         t.subject,
         t.last_message_date,
         t.participants,
-        t.message_count,
+        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+         FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+           AND ef2.folder != '[Gmail]/Trash'
+        ) AS message_count,
         t.snippet,
         'search' AS folder,
         t.is_read,
@@ -1495,7 +1518,12 @@ export class DatabaseService {
          t.subject,
          t.last_message_date,
          t.participants,
-         t.message_count,
+         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+          FROM emails e2
+          JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+          WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+            AND ef2.folder != '[Gmail]/Trash'
+         ) AS message_count,
          t.snippet,
          'search' AS folder,
          t.is_read,
@@ -1852,7 +1880,14 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT DISTINCT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date,
-        t.participants, t.message_count, t.snippet, 'label::' || :labelId AS folder,
+        t.participants,
+        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+         FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+           AND ef2.folder != '[Gmail]/Trash'
+        ) AS message_count,
+        t.snippet, 'label::' || :labelId AS folder,
         t.is_read, t.is_starred
        FROM threads t
        JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
@@ -1869,7 +1904,14 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
       `SELECT DISTINCT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date,
-        t.participants, t.message_count, t.snippet, 'label::' || :labelId AS folder,
+        t.participants,
+        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+         FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+           AND ef2.folder != '[Gmail]/Trash'
+        ) AS message_count,
+        t.snippet, 'label::' || :labelId AS folder,
         t.is_read, t.is_starred
        FROM threads t
        JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid

@@ -321,7 +321,18 @@ export const EmailsStore = signalStore(
             const messages = threadFromDb.messages ?? [];
             const hasContent = messages.length > 0 && messages.some(m => m.htmlBody || m.textBody);
             if (store.selectedThreadId() === threadId && hasContent) {
-              patchState(store, { selectedThread: threadFromDb, loadingThread: false });
+              // Compute folder-aware visible message count for the list badge.
+              // When viewing Trash, show total count; otherwise exclude trashed messages.
+              const activeFolderId = foldersStore.activeFolderId();
+              const visibleMessages = activeFolderId === '[Gmail]/Trash'
+                ? messages
+                : messages.filter(m => !m.folders?.includes('[Gmail]/Trash'));
+              const visibleCount = visibleMessages.length;
+
+              const updatedThreads = store.threads().map((t) =>
+                t.xGmThrid === threadId ? { ...t, messageCount: visibleCount } : t
+              );
+              patchState(store, { selectedThread: threadFromDb, loadingThread: false, threads: updatedThreads });
             }
           }
         } catch {
@@ -345,7 +356,13 @@ export const EmailsStore = signalStore(
             const hasDraft = messages.some(
               (m) => (m as Email & { folders?: string[] }).folders?.includes('[Gmail]/Drafts') || m.isDraft
             );
-            const messageCount = messages.length;
+            // Compute folder-aware visible message count for the list badge.
+            // When viewing Trash, show total count; otherwise exclude trashed messages.
+            const activeFolderId = foldersStore.activeFolderId();
+            const visibleMessages = activeFolderId === '[Gmail]/Trash'
+              ? messages
+              : messages.filter(m => !m.folders?.includes('[Gmail]/Trash'));
+            const messageCount = visibleMessages.length;
             const latestMsg = messageCount > 0
               ? messages.reduce((a, b) => (new Date(b.date).getTime() > new Date(a.date).getTime() ? b : a))
               : null;
