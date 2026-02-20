@@ -5,6 +5,7 @@ import { app } from 'electron';
 import log from 'electron-log/main';
 import { CREATE_TABLES_SQL, SCHEMA_VERSION } from '../database/schema';
 import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord } from '../database/models';
+import { ALL_MAIL_PATH } from './sync-service';
 
 export class DatabaseService {
   private static instance: DatabaseService;
@@ -53,14 +54,14 @@ export class DatabaseService {
     });
 
     // Load existing database or create new one
+    let currentVersion = 0;
     let isLegacyDb = false;
     if (fs.existsSync(this.dbPath)) {
       const fileBuffer = fs.readFileSync(this.dbPath);
       this.db = new SQL.Database(fileBuffer);
       log.info('Loaded existing database');
 
-      // Check for legacy schema (old era: version > 1 and <= 7)
-      let currentVersion = 0;
+      // Check for legacy schema
       try {
         const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
         if (result.length > 0 && result[0].values.length > 0) {
@@ -71,7 +72,7 @@ export class DatabaseService {
         currentVersion = 0;
       }
 
-      // Detect old-era schema: version > 1 (new-era is 1) and <= 7 (old-era max)
+      // Detect old-era schema: version greater than current new-era schema and <= 7 (old-era max)
       // OR version 0 with old-style columns (gmail_message_id in emails table)
       if (currentVersion > SCHEMA_VERSION && currentVersion <= 7) {
         isLegacyDb = true;
@@ -123,6 +124,10 @@ export class DatabaseService {
     // Run schema creation (creates tables if they don't exist)
     this.db.run(CREATE_TABLES_SQL);
 
+    if (currentVersion === 1 && SCHEMA_VERSION === 2) {
+      this.runAllMailAssociationCleanupMigration();
+    }
+
     // Ensure version row exists and is up to date
     this.db.run('DELETE FROM schema_version');
     this.db.run('INSERT INTO schema_version (version) VALUES (:version)', { ':version': SCHEMA_VERSION });
@@ -132,6 +137,96 @@ export class DatabaseService {
     this.saveToDisk();
 
     log.info('Database schema initialized');
+  }
+
+  private runAllMailAssociationCleanupMigration(): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    log.info(`[DatabaseService] Running schema migration v1 -> v2: cleaning ${ALL_MAIL_PATH} associations`);
+
+    const staleEmailFolderCountResult = this.db.exec(
+      'SELECT COUNT(*) FROM email_folders WHERE folder = :folder',
+      { ':folder': ALL_MAIL_PATH }
+    );
+    const staleEmailFolderCount =
+      staleEmailFolderCountResult.length > 0 && staleEmailFolderCountResult[0].values.length > 0
+        ? (staleEmailFolderCountResult[0].values[0][0] as number)
+        : 0;
+
+    const staleThreadFolderCountResult = this.db.exec(
+      'SELECT COUNT(*) FROM thread_folders WHERE folder = :folder',
+      { ':folder': ALL_MAIL_PATH }
+    );
+    const staleThreadFolderCount =
+      staleThreadFolderCountResult.length > 0 && staleThreadFolderCountResult[0].values.length > 0
+        ? (staleThreadFolderCountResult[0].values[0][0] as number)
+        : 0;
+
+    this.db.run('BEGIN');
+    try {
+      this.db.run('DELETE FROM email_folders WHERE folder = :folder', { ':folder': ALL_MAIL_PATH });
+      this.db.run('DELETE FROM thread_folders WHERE folder = :folder', { ':folder': ALL_MAIL_PATH });
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+
+    const accountIdResult = this.db.exec('SELECT id FROM accounts');
+    const accountIds: number[] = [];
+    if (accountIdResult.length > 0) {
+      for (const row of accountIdResult[0].values) {
+        const accountId = row[0] as number;
+        if (Number.isFinite(accountId)) {
+          accountIds.push(accountId);
+        }
+      }
+    }
+
+    let orphanEmailCount = 0;
+    let orphanThreadCount = 0;
+    const affectedThreadsByAccount = new Map<number, Set<string>>();
+
+    for (const accountId of accountIds) {
+      const orphanedEmails = this.removeOrphanedEmails(accountId);
+      orphanEmailCount += orphanedEmails.length;
+
+      if (orphanedEmails.length > 0) {
+        if (!affectedThreadsByAccount.has(accountId)) {
+          affectedThreadsByAccount.set(accountId, new Set<string>());
+        }
+        const affectedThreadIds = affectedThreadsByAccount.get(accountId)!;
+        for (const orphanedEmail of orphanedEmails) {
+          if (orphanedEmail.xGmThrid) {
+            affectedThreadIds.add(orphanedEmail.xGmThrid);
+          }
+        }
+      }
+    }
+
+    for (const [accountId, threadIds] of affectedThreadsByAccount) {
+      for (const xGmThrid of threadIds) {
+        try {
+          this.recomputeThreadMetadata(accountId, xGmThrid);
+        } catch (err) {
+          log.warn(`[DatabaseService] Migration v1 -> v2: recomputeThreadMetadata failed for thread ${xGmThrid}:`, err);
+        }
+      }
+    }
+
+    for (const accountId of accountIds) {
+      try {
+        orphanThreadCount += this.removeOrphanedThreads(accountId);
+      } catch (err) {
+        log.warn(`[DatabaseService] Migration v1 -> v2: removeOrphanedThreads failed for account ${accountId}:`, err);
+      }
+    }
+
+    log.info(
+      `[DatabaseService] Migration v1 -> v2 complete: deleted ${staleEmailFolderCount} email_folders and ${staleThreadFolderCount} thread_folders for ${ALL_MAIL_PATH}; removed ${orphanEmailCount} orphan email(s) and ${orphanThreadCount} orphan thread(s) across ${accountIds.length} account(s)`
+    );
   }
 
   /** Persist the in-memory database to disk */
@@ -319,18 +414,21 @@ export class DatabaseService {
     );
     const id = result[0].values[0][0] as number;
 
-    // Record folder association in the link table (keyed by x_gm_msgid, not email_id)
-    if (email.folderUid != null) {
-      this.db.run(
-        `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :folderUid)
-         ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`,
-        { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder, ':folderUid': email.folderUid }
-      );
-    } else {
-      this.db.run(
-        'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
-        { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder }
-      );
+    // Record folder association in the link table (keyed by x_gm_msgid, not email_id).
+    // [Gmail]/All Mail is a discovery scope, not a persisted folder association here.
+    if (email.folder !== ALL_MAIL_PATH) {
+      if (email.folderUid != null) {
+        this.db.run(
+          `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :folderUid)
+           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`,
+          { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder, ':folderUid': email.folderUid }
+        );
+      } else {
+        this.db.run(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
+          { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder }
+        );
+      }
     }
 
     this.scheduleSave();

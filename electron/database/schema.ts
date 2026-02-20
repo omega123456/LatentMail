@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
-// New-era schema (v1): X-GM-MSGID as primary identifier, CONDSTORE folder state
+// New-era schema (v2): X-GM-MSGID as primary identifier, CONDSTORE folder state
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table

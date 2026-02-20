@@ -22,6 +22,8 @@ const GMAIL_FOLDER_MAP: Record<string, { name: string; icon: string }> = {
 /** Priority folders to sync first */
 const PRIORITY_FOLDERS = ['INBOX', '[Gmail]/Sent Mail', '[Gmail]/Drafts'];
 
+export const ALL_MAIL_PATH = '[Gmail]/All Mail';
+
 interface SyncProgress {
   accountId: string;
   folder: string;
@@ -104,7 +106,7 @@ export class SyncService {
       const numAccountId = Number(accountId);
 
       for (const mb of mailboxes) {
-        if (mb.path === '[Gmail]/All Mail') {
+        if (mb.path === ALL_MAIL_PATH) {
           continue; // All Mail not stored or synced
         }
         const specialUseInfo = GMAIL_FOLDER_MAP[mb.specialUse];
@@ -128,7 +130,6 @@ export class SyncService {
       log.info(`Sync scope: isInitialSync=${isInitialSync}, sinceDate=${sinceDate.toISOString()}, lastSyncAt=${syncState.lastSyncAt}`);
 
       // 3. Sync priority folders first, then others (exclude All Mail)
-      const ALL_MAIL_PATH = '[Gmail]/All Mail';
       const allFolders = mailboxes
         .filter(mb => mb.listed && mb.messages > 0 && mb.path !== ALL_MAIL_PATH)
         .map(mb => mb.path);
@@ -226,12 +227,7 @@ export class SyncService {
               folderHighestModseq = changed.highestModseq;
             }
 
-            const lastReconciledAtMs = existingFolderState.lastReconciledAt
-              ? Date.parse(existingFolderState.lastReconciledAt)
-              : 0;
-            shouldReconcile = !lastReconciledAtMs || Number.isNaN(lastReconciledAtMs)
-              ? true
-              : (Date.now() - lastReconciledAtMs) >= 5 * 60 * 1000;
+            shouldReconcile = true;
           } else {
             const hasUsableFolderState =
               !!existingFolderState && existingFolderState.uidValidity === mailboxStatus.uidValidity;

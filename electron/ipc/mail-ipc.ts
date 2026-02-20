@@ -3,7 +3,7 @@ import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { SyncService } from '../services/sync-service';
+import { SyncService, ALL_MAIL_PATH } from '../services/sync-service';
 import { MailQueueService } from '../services/mail-queue-service';
 import { FolderLockManager } from '../services/folder-lock-manager';
 import { PendingOpService } from '../services/pending-op-service';
@@ -893,7 +893,7 @@ export function registerMailIpcHandlers(): void {
       const numAccountId = Number(accountId);
       const imapService = ImapService.getInstance();
       const lockManager = FolderLockManager.getInstance();
-      const folder = '[Gmail]/All Mail';
+      const folder = ALL_MAIL_PATH;
 
       log.info(`[MAIL_SEARCH_IMAP] Searching ${queries.length} query variant(s) via IMAP for account ${accountId}`);
 
@@ -981,9 +981,13 @@ export function registerMailIpcHandlers(): void {
               isRead: allRead,
               isStarred: anyStarred,
             });
-            db.upsertThreadFolder(numAccountId, threadId, folder);
+            if (folder !== ALL_MAIL_PATH) {
+              db.upsertThreadFolder(numAccountId, threadId, folder);
+            }
           } else {
-            db.upsertThreadFolder(numAccountId, threadId, folder);
+            if (folder !== ALL_MAIL_PATH) {
+              db.upsertThreadFolder(numAccountId, threadId, folder);
+            }
           }
         }
 
@@ -1218,7 +1222,7 @@ export function registerMailIpcHandlers(): void {
       const labels = db.getLabelsByAccount(numAccountId);
       const unreadByFolder = db.getUnreadThreadCountsByFolder(numAccountId);
       const labelsWithThreadCounts = labels
-        .filter((row) => (row.gmailLabelId as string) !== '[Gmail]/All Mail')
+        .filter((row) => (row.gmailLabelId as string) !== ALL_MAIL_PATH)
         .map((row) => ({
           ...row,
           unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,
