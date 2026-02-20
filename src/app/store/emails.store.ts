@@ -766,7 +766,7 @@ export const EmailsStore = signalStore(
         // when viewing INBOX; delete/move/send do touch the active folder but also need
         // the thread messages refreshed, not just the list.
         const messagesMutatingReasons: MailFolderUpdatedPayload['reason'][] = [
-          'draft-update', 'delete', 'move', 'send',
+          'draft-create', 'draft-update', 'delete', 'move', 'send',
         ];
         if (sameAccount && messagesMutatingReasons.includes(event.reason)) {
           const selectedId = store.selectedThreadId();
