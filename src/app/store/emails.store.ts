@@ -326,6 +326,30 @@ export const EmailsStore = signalStore(
               loadingThread: false,
               error: null,
             });
+            // Update the corresponding thread in the list so count, draft badge, snippet, etc. stay in sync after send/delete/draft changes
+            const messages = thread.messages ?? [];
+            const hasDraft = messages.some(
+              (m) => (m as Email & { folders?: string[] }).folders?.includes('[Gmail]/Drafts') || m.isDraft
+            );
+            const messageCount = messages.length;
+            const latestMsg = messageCount > 0
+              ? messages.reduce((a, b) => (new Date(b.date).getTime() > new Date(a.date).getTime() ? b : a))
+              : null;
+            const listThreadMeta: Partial<Thread> = {
+              messageCount,
+              snippet: latestMsg?.snippet ?? thread.snippet ?? '',
+              lastMessageDate: latestMsg?.date ?? thread.lastMessageDate ?? '',
+              isRead: messageCount > 0 ? messages.every((m) => m.isRead) : true,
+              isStarred: messageCount > 0 ? messages.some((m) => m.isStarred) : false,
+              participants: messageCount > 0
+                ? [...new Set(messages.map((m) => m.fromAddress).filter(Boolean))].join(', ')
+                : (thread.participants ?? ''),
+              hasDraft,
+            };
+            const updatedThreads = store.threads().map((t) =>
+              t.xGmThrid === threadId ? { ...t, ...listThreadMeta } : t
+            );
+            patchState(store, { threads: updatedThreads });
           } else {
             patchState(store, {
               loadingThread: false,
