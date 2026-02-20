@@ -3,6 +3,7 @@ import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { OAuthService } from '../services/oauth-service';
+import { SyncService } from '../services/sync-service';
 
 export function registerAuthIpcHandlers(): void {
   // Initiate OAuth login flow (opens system browser)
@@ -11,6 +12,18 @@ export function registerAuthIpcHandlers(): void {
       log.info('OAuth login requested');
       const oauthService = OAuthService.getInstance();
       const account = await oauthService.login();
+
+      // Trigger initial sync and IDLE for the new account (same as main.ts does at startup)
+      const syncService = SyncService.getInstance();
+      syncService.syncAccount(String(account.id))
+        .then(() => {
+          syncService.startIdle(String(account.id)).catch(err => {
+            log.warn(`Failed to start IDLE for account ${account.id}:`, err);
+          });
+        })
+        .catch(err => {
+          log.warn('Post-login sync failed:', err);
+        });
 
       // Map to the format the renderer expects
       return ipcSuccess({
