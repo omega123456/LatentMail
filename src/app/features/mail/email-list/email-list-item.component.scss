@@ -46,7 +46,6 @@
     .folder-badge {
       font-size: 10px;
       padding: 1px 5px;
-      max-width: 90px;
     }
 
     .folder-badge-icon {
@@ -67,11 +66,16 @@
     .folder-badge {
       font-size: 11px;
       padding: 2px 7px;
-      max-width: 110px;
     }
 
     .folder-badge-icon {
       font-size: 12px;
+    }
+
+    // Show badge text in spacious mode
+    .folder-badge-text,
+    .label-chip-text {
+      display: inline;
     }
   }
 }
@@ -107,14 +111,30 @@
   min-width: 0;
 }
 
-.email-sender {
+.email-top-left {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
   flex: 1;
+  overflow: hidden;
+}
+
+.email-top-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.email-sender {
   min-width: 0;
   font-size: 14px;
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 1;
 
   &.bold {
     font-weight: 700;
@@ -128,20 +148,33 @@
   white-space: nowrap;
 }
 
-.email-subject {
-  display: block;
+.email-subject-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  max-width: 100%;
+  margin-top: 2px;
+}
+
+.email-subject {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 2px;
 
   &.bold {
     font-weight: 600;
   }
+}
+
+.email-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .email-snippet {
@@ -156,19 +189,12 @@
   margin-top: 2px;
 }
 
-.email-indicators {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 28px;
-}
-
 .star-icon {
   font-size: 18px;
   color: var(--color-text-tertiary);
   cursor: pointer;
   transition: color 200ms ease;
+  flex-shrink: 0;
 
   &:hover {
     color: var(--color-accent);
@@ -184,15 +210,12 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  max-width: 100px;
   border-radius: var(--radius-sm);
   padding: 2px 6px;
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .folder-badge-icon {
@@ -201,10 +224,9 @@
   font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;
 }
 
+// Badge text hidden by default (compact & comfortable); shown in spacious via override above
 .folder-badge-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: none;
 }
 
 .folder-badge--inbox {
@@ -302,15 +324,12 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  max-width: 100px;
   border-radius: var(--radius-sm);
   padding: 2px 6px;
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   background-color: #E8F5E9;
   color: #2E7D32;
 }
@@ -321,10 +340,9 @@
   font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;
 }
 
+// Label chip text hidden by default; shown in spacious via override above
 .label-chip-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: none;
 }
 
 :host-context([data-theme='dark']) .label-chip {
@@ -338,4 +356,6 @@
   background-color: var(--color-surface-variant);
   border-radius: 8px;
   padding: 1px 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }

@@ -71,9 +71,18 @@ export class EmailListItemComponent {
       return null;
     }
 
-    const folders = this.thread().folders;
+    let folders = this.thread().folders;
     if (!folders || folders.length === 0) {
       return null;
+    }
+
+    // If draftBadge is already showing a Drafts indicator, filter [Gmail]/Drafts
+    // from the candidate list so we don't render a second Drafts badge.
+    if (this.draftBadge() !== null) {
+      folders = folders.filter((f) => f.toLowerCase() !== '[gmail]/drafts');
+      if (folders.length === 0) {
+        return null;
+      }
     }
 
     const selectedFolder = this.selectPriorityFolder(folders);

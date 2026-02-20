@@ -11,52 +11,63 @@
   </div>
   <div class="email-content">
     <div class="email-top-row">
-      <span class="email-sender" [class.bold]="!thread().isRead">
-        {{ getSenderName() }}
-      </span>
-      <span class="email-date">{{ thread().lastMessageDate | relativeTime }}</span>
+      <div class="email-top-left">
+        <span class="email-sender" [class.bold]="!thread().isRead">
+          {{ getSenderName() }}
+        </span>
+        @if (thread().messageCount > 1) {
+          <span
+            class="message-count"
+            [title]="thread().messageCount + ' messages in thread'"
+          >{{ thread().messageCount }}</span>
+        }
+      </div>
+      <div class="email-top-right">
+        <span class="email-date">{{ thread().lastMessageDate | relativeTime }}</span>
+        @if (thread().isStarred) {
+          <span
+            class="material-symbols-outlined star-icon starred"
+            aria-label="Unstar"
+            (click)="onStarClick($event)"
+          >star</span>
+        } @else {
+          <span
+            class="material-symbols-outlined star-icon"
+            aria-label="Star"
+            (click)="onStarClick($event)"
+          >star_border</span>
+        }
+      </div>
     </div>
-    <div class="email-subject" [class.bold]="!thread().isRead">
-      {{ thread().subject || '(no subject)' }}
+    <div class="email-subject-row">
+      <span class="email-subject" [class.bold]="!thread().isRead">
+        {{ thread().subject || '(no subject)' }}
+      </span>
+      <div class="email-badges">
+        @if (draftBadge(); as dBadge) {
+          <span class="folder-badge" [ngClass]="dBadge.cssClass" [title]="dBadge.title" [attr.aria-label]="dBadge.displayName">
+            <span class="material-symbols-outlined folder-badge-icon" aria-hidden="true">{{ dBadge.icon }}</span>
+            <span class="folder-badge-text">{{ dBadge.displayName }}</span>
+          </span>
+        }
+        @if (folderBadge(); as badge) {
+          <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title" [attr.aria-label]="badge.displayName">
+            <span class="material-symbols-outlined folder-badge-icon" aria-hidden="true">{{ badge.icon }}</span>
+            <span class="folder-badge-text">{{ badge.displayName }}</span>
+          </span>
+        }
+        @if (labelBadge(); as lbl) {
+          <span class="label-chip" [title]="lbl.name" [attr.aria-label]="lbl.name">
+            <span class="material-symbols-outlined label-chip-icon" aria-hidden="true">sell</span>
+            <span class="label-chip-text">{{ lbl.name }}</span>
+          </span>
+        }
+      </div>
     </div>
     @if (density() !== 'compact') {
       <div class="email-snippet">
         {{ thread().snippet }}
       </div>
-    }
-  </div>
-  <div class="email-indicators">
-    @if (thread().isStarred) {
-      <span
-        class="material-symbols-outlined star-icon starred"
-        (click)="onStarClick($event)"
-      >star</span>
-    } @else {
-      <span
-        class="material-symbols-outlined star-icon"
-        (click)="onStarClick($event)"
-      >star_border</span>
-    }
-    @if (labelBadge(); as lbl) {
-      <span class="label-chip" [title]="lbl.name">
-        <span class="material-symbols-outlined label-chip-icon">sell</span>
-        <span class="label-chip-text">{{ lbl.name }}</span>
-      </span>
-    }
-    @if (draftBadge(); as dBadge) {
-      <span class="folder-badge" [ngClass]="dBadge.cssClass" [title]="dBadge.title">
-        <span class="material-symbols-outlined folder-badge-icon">{{ dBadge.icon }}</span>
-        <span class="folder-badge-text">{{ dBadge.displayName }}</span>
-      </span>
-    }
-    @if (folderBadge(); as badge) {
-      <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title">
-        <span class="material-symbols-outlined folder-badge-icon">{{ badge.icon }}</span>
-        <span class="folder-badge-text">{{ badge.displayName }}</span>
-      </span>
-    }
-    @if (thread().messageCount > 1) {
-      <span class="message-count">{{ thread().messageCount }}</span>
     }
   </div>
 </div>
