@@ -4,6 +4,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
@@ -34,6 +35,12 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   private readonly accountsStore = inject(AccountsStore);
   private readonly ngZone = inject(NgZone);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly sanitizer = inject(DomSanitizer);
+
+  /** Safe HTML for the quoted block (app-controlled email content). */
+  get sanitizedQuotedHtml(): SafeHtml {
+    return this.sanitizer.bypassSecurityTrustHtml(this.composeStore.quotedHtml());
+  }
 
   @ViewChild('editorContainer') editorContainer!: ElementRef<HTMLElement>;
   @ViewChild('subjectInput') subjectInput?: ElementRef<HTMLInputElement>;

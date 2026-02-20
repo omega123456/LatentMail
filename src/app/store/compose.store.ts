@@ -41,6 +41,10 @@ interface ComposeState {
   lastSavedAt: string | null;
   signatures: Signature[];
   activeSignatureId: string | null;
+  /** Read-only quoted block HTML for reply/reply-all/forward (not parsed by TipTap). */
+  quotedHtml: string;
+  /** Plain-text version of quoted block for MIME text part. */
+  quotedText: string;
 }
 
 const initialState: ComposeState = {
@@ -69,6 +73,8 @@ const initialState: ComposeState = {
   lastSavedAt: null,
   signatures: [],
   activeSignatureId: null,
+  quotedHtml: '',
+  quotedText: '',
 };
 
 export const ComposeStore = signalStore(
@@ -183,13 +189,15 @@ export const ComposeStore = signalStore(
       patchState(store, { saving: true });
 
       try {
+        const fullHtml = store.htmlBody() + (store.quotedHtml() || '');
+        const fullText = store.textBody() + (store.quotedText() ? '\n\n' + store.quotedText() : '');
         const basePayload = {
           subject: store.subject(),
           to: store.to(),
           cc: store.cc() || undefined,
           bcc: store.bcc() || undefined,
-          htmlBody: store.htmlBody() || undefined,
-          textBody: store.textBody() || undefined,
+          htmlBody: fullHtml || undefined,
+          textBody: fullText || undefined,
           inReplyTo: store.inReplyTo() || undefined,
           references: store.references() || undefined,
           attachments: store.attachments().length > 0
@@ -243,6 +251,8 @@ export const ComposeStore = signalStore(
         let cc = '';
         let subject = '';
         let htmlBody = '';
+        let quotedHtml = '';
+        let quotedText = '';
         let inReplyTo = '';
         let references = '';
         let showCc = false;
@@ -278,13 +288,14 @@ export const ComposeStore = signalStore(
           inReplyTo = msg.messageId || msg.xGmMsgId;
           references = msg.messageId || msg.xGmMsgId;
 
-          // Build quoted body
+          // Build quoted block for read-only display (not put through TipTap)
           const date = new Date(msg.date).toLocaleString();
           const from = msg.fromName ? `${msg.fromName} &lt;${msg.fromAddress}&gt;` : msg.fromAddress;
-          htmlBody = `<br><br><div style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 0; color: #666;">` +
+          quotedHtml = `<div class="quoted-block" style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 0; color: #666;">` +
             `<p>On ${date}, ${from} wrote:</p>` +
             `${msg.htmlBody || msg.textBody?.replace(/\n/g, '<br>') || ''}` +
             `</div>`;
+          quotedText = msg.textBody || (msg.htmlBody ? msg.htmlBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '');
         }
 
         if (context.draft) {
@@ -310,19 +321,23 @@ export const ComposeStore = signalStore(
             showCc: !!d.cc,
             showBcc: !!d.bcc,
             error: null,
+            quotedHtml: '',
+            quotedText: '',
           });
           return;
         }
 
-        // Apply default signature
+        // Build editable part only (prefill + signature); quoted block is in quotedHtml
         const defaultSig = store.signatures().find(s => s.isDefault);
         if (defaultSig && context.mode === 'new') {
           htmlBody = `<br><br><div class="signature">${defaultSig.html}</div>`;
-        } else if (defaultSig && htmlBody) {
-          htmlBody = `<br><br><div class="signature">${defaultSig.html}</div>` + htmlBody;
+        } else if (defaultSig && quotedHtml) {
+          htmlBody = `<br><br><div class="signature">${defaultSig.html}</div>`;
+        } else if (defaultSig) {
+          htmlBody = `<br><br><div class="signature">${defaultSig.html}</div>`;
         }
 
-        // Prepend prefill body (e.g. AI smart reply) before signature/quoted text
+        // Prepend prefill body (e.g. AI smart reply) before signature
         let textBody = '';
         if (context.prefillBody) {
           textBody = context.prefillBody;
@@ -357,6 +372,8 @@ export const ComposeStore = signalStore(
           error: null,
           lastSavedAt: null,
           activeSignatureId: defaultSig?.id || null,
+          quotedHtml,
+          quotedText,
         });
       },
 
@@ -403,13 +420,15 @@ export const ComposeStore = signalStore(
         if (!store.accountId() || !store.canSend()) return false;
         patchState(store, { sending: true, error: null });
         try {
+          const fullHtml = store.htmlBody() + (store.quotedHtml() || '');
+          const fullText = store.textBody() + (store.quotedText() ? '\n\n' + store.quotedText() : '');
           const message = {
             to: store.to(),
             cc: store.cc() || undefined,
             bcc: store.bcc() || undefined,
             subject: store.subject(),
-            html: store.htmlBody(),
-            text: store.textBody() || undefined,
+            html: fullHtml,
+            text: fullText || undefined,
             inReplyTo: store.inReplyTo() || undefined,
             references: store.references() || undefined,
             attachments: store.attachments().length > 0

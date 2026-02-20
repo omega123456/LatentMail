@@ -81,8 +81,18 @@
         <app-compose-toolbar [editor]="editor" />
       }
 
-      <!-- Editor -->
-      <div class="editor-container" #editorContainer (click)="focusEditor()"></div>
+      <!-- Editor (reduced height when quoted message is shown below) -->
+      <div
+        class="editor-container"
+        [class.editor-container--with-quoted]="composeStore.quotedHtml()"
+        #editorContainer
+        (click)="focusEditor()"
+      ></div>
+
+      <!-- Quoted message (read-only, preserves full HTML; not parsed by TipTap) -->
+      @if (composeStore.quotedHtml()) {
+        <div class="quoted-block-wrapper" [innerHTML]="sanitizedQuotedHtml"></div>
+      }
 
       <!-- Attachments -->
       <app-attachment-upload
