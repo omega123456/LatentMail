@@ -366,10 +366,10 @@ export const EmailsStore = signalStore(
             const latestMsg = messageCount > 0
               ? messages.reduce((a, b) => (new Date(b.date).getTime() > new Date(a.date).getTime() ? b : a))
               : null;
+            // Do not include lastMessageDate — list already has it; updating it here causes the list item timestamp to refresh when the thread opens
             const listThreadMeta: Partial<Thread> = {
               messageCount,
               snippet: latestMsg?.snippet ?? thread.snippet ?? '',
-              lastMessageDate: latestMsg?.date ?? thread.lastMessageDate ?? '',
               isRead: messageCount > 0 ? messages.every((m) => m.isRead) : true,
               isStarred: messageCount > 0 ? messages.some((m) => m.isStarred) : false,
               participants: messageCount > 0
