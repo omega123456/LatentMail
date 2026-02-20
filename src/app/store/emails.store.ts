@@ -302,7 +302,12 @@ export const EmailsStore = signalStore(
 
       /** Load a full thread with messages. Shows DB cache first if available, then always fetches from server and updates. */
       async loadThread(accountId: number, threadId: string): Promise<void> {
-        patchState(store, { loadingThread: true, selectedThreadId: threadId, error: null });
+        patchState(store, {
+          loadingThread: true,
+          selectedThreadId: threadId,
+          selectedThread: store.selectedThreadId() === threadId ? store.selectedThread() : null,
+          error: null,
+        });
         const accountIdStr = String(accountId);
 
         // Show DB data immediately if we have it (instant display)
@@ -310,7 +315,9 @@ export const EmailsStore = signalStore(
           const dbResponse = await electronService.getThreadFromDb(accountIdStr, threadId);
           if (dbResponse.success && dbResponse.data) {
             const threadFromDb = dbResponse.data as Thread & { messages?: Email[] };
-            patchState(store, { selectedThread: threadFromDb, loadingThread: false });
+            if (store.selectedThreadId() === threadId) {
+              patchState(store, { selectedThread: threadFromDb, loadingThread: false });
+            }
           }
         } catch {
           // Non-fatal: we will fetch from server next
@@ -321,11 +328,13 @@ export const EmailsStore = signalStore(
           const response = await electronService.fetchThread(accountIdStr, threadId, true);
           if (response.success && response.data) {
             const thread = response.data as Thread & { messages?: Email[] };
-            patchState(store, {
-              selectedThread: thread,
-              loadingThread: false,
-              error: null,
-            });
+            if (store.selectedThreadId() === threadId) {
+              patchState(store, {
+                selectedThread: thread,
+                loadingThread: false,
+                error: null,
+              });
+            }
             // Update the corresponding thread in the list so count, draft badge, snippet, etc. stay in sync after send/delete/draft changes
             const messages = thread.messages ?? [];
             const hasDraft = messages.some(
@@ -351,16 +360,20 @@ export const EmailsStore = signalStore(
             );
             patchState(store, { threads: updatedThreads });
           } else {
-            patchState(store, {
-              loadingThread: false,
-              error: response.error?.message || 'Failed to load thread',
-            });
+            if (store.selectedThreadId() === threadId) {
+              patchState(store, {
+                loadingThread: false,
+                error: response.error?.message || 'Failed to load thread',
+              });
+            }
           }
         } catch (err: unknown) {
-          patchState(store, {
-            loadingThread: false,
-            error: err instanceof Error ? err.message : 'Failed to load thread',
-          });
+          if (store.selectedThreadId() === threadId) {
+            patchState(store, {
+              loadingThread: false,
+              error: err instanceof Error ? err.message : 'Failed to load thread',
+            });
+          }
         }
       },
 
