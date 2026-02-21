@@ -302,6 +302,7 @@ export class SyncService {
               size: email.size,
               hasAttachments: email.hasAttachments,
               labels: email.labels,
+              messageId: email.messageId,
             });
 
             // Update contacts
@@ -889,6 +890,7 @@ export class SyncService {
           size: email.size,
           hasAttachments: email.hasAttachments,
           labels: email.labels,
+          messageId: email.messageId,
         });
 
         if (email.fromAddress) {

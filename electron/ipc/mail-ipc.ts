@@ -278,6 +278,7 @@ export function registerMailIpcHandlers(): void {
                 size: email.size,
                 hasAttachments: email.hasAttachments,
                 labels: email.labels,
+                messageId: email.messageId,
               });
 
               if (email.fromAddress) {
@@ -429,6 +430,7 @@ export function registerMailIpcHandlers(): void {
                   size: fetched.size,
                   hasAttachments: fetched.hasAttachments,
                   labels: fetched.labels,
+                  messageId: fetched.messageId,
                 });
               }
             }
@@ -950,6 +952,7 @@ export function registerMailIpcHandlers(): void {
             size: email.size,
             hasAttachments: email.hasAttachments,
             labels: email.labels,
+            messageId: email.messageId,
           });
 
           if (email.fromAddress) {
@@ -1139,6 +1142,7 @@ export function registerMailIpcHandlers(): void {
           size: email.size,
           hasAttachments: email.hasAttachments,
           labels: email.labels,
+          messageId: email.messageId,
         });
 
         if (email.fromAddress) {

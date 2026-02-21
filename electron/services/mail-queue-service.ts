@@ -582,6 +582,17 @@ export class MailQueueService {
       const xGmMsgId = fetched?.xGmMsgId || draftMessageId;
       const xGmThrid = fetched?.xGmThrid || draftMessageId;
 
+      log.info(`[MailQueue] draft-create (${item.queueId}): thread assignment`, {
+        hasInReplyTo: !!payload.inReplyTo,
+        hasReferences: !!payload.references,
+        inReplyTo: payload.inReplyTo,
+        references: payload.references,
+        fetchedXGmThrid: fetched?.xGmThrid,
+        fetchedXGmMsgId: fetched?.xGmMsgId,
+        newThreadCreated: fetched?.xGmThrid === fetched?.xGmMsgId,
+        xGmThridSource: fetched?.xGmThrid ? 'server' : 'draftMessageId',
+      });
+
       // Insert server-confirmed data into local DB
       db.upsertEmail({
         accountId: item.accountId,
@@ -604,10 +615,17 @@ export class MailQueueService {
         isDraft: fetched?.isDraft ?? true,
         snippet: (payload.textBody || '').substring(0, 100),
         hasAttachments: (payload.attachments?.length ?? 0) > 0,
+        messageId: fetched?.messageId ?? draftMessageId,
       });
 
       // Upsert thread
       const existingThread = db.getThreadById(item.accountId, xGmThrid);
+
+      log.info(`[MailQueue] draft-create (${item.queueId}): existingThread`, {
+        xGmThrid,
+        found: !!existingThread,
+      });
+
       if (!existingThread) {
         db.upsertThread({
           accountId: item.accountId,
@@ -781,6 +799,7 @@ export class MailQueueService {
         isDraft: fetched?.isDraft ?? true,
         snippet: (payload.textBody || '').substring(0, 100),
         hasAttachments: (payload.attachments?.length ?? 0) > 0,
+        messageId: fetched?.messageId ?? newMessageId,
       });
 
       // Upsert thread
@@ -1503,6 +1522,7 @@ export class MailQueueService {
       size: number;
       hasAttachments: boolean;
       labels: string;
+      messageId?: string;
     }>,
   ): void {
     const db = DatabaseService.getInstance();
@@ -1542,6 +1562,7 @@ export class MailQueueService {
         size: email.size,
         hasAttachments: email.hasAttachments,
         labels: email.labels,
+        messageId: email.messageId,
       });
     }
 
