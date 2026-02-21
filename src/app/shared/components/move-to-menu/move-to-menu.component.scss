@@ -25,9 +25,7 @@
 }
 
 .move-to-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  /* Positioned by CDK overlay pane; only size and appearance here */
   z-index: 1000;
   min-width: 240px;
   max-height: 360px;

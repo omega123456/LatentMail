@@ -1,6 +1,7 @@
 <div class="move-to-menu">
-  <!-- Trigger button -->
+  <!-- Trigger button (origin for overlay) -->
   <button
+    #trigger
     class="move-to-trigger"
     (click)="toggle(); $event.stopPropagation()"
     [attr.aria-haspopup]="true"
@@ -11,8 +12,8 @@
     <span class="trigger-label">Move to</span>
   </button>
 
-  <!-- Dropdown popover -->
-  @if (isOpen()) {
+  <!-- Dropdown panel content (attached to overlay when open) -->
+  <ng-template #dropdownPanel>
     <div
       class="move-to-dropdown"
       role="menu"
@@ -83,5 +84,5 @@
         }
       </div>
     </div>
-  }
+  </ng-template>
 </div>

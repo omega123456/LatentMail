@@ -9,9 +9,15 @@ import {
   inject,
   OnDestroy,
   HostListener,
+  viewChild,
+  ViewContainerRef,
+  TemplateRef,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Overlay, OverlayConfig, OverlayModule } from '@angular/cdk/overlay';
+import { TemplatePortal } from '@angular/cdk/portal';
+import type { OverlayRef } from '@angular/cdk/overlay';
 import { Folder } from '../../../core/models/account.model';
 
 /** Folder IDs excluded from the Move To menu */
@@ -44,13 +50,22 @@ const FOLDER_ICON_MAP: Record<string, string> = {
 @Component({
   selector: 'app-move-to-menu',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, OverlayModule],
   templateUrl: './move-to-menu.component.html',
   styleUrl: './move-to-menu.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class MoveToMenuComponent implements OnDestroy {
   private readonly elRef = inject(ElementRef);
+  private readonly overlay = inject(Overlay);
+  private readonly viewContainerRef = inject(ViewContainerRef);
+
+  /** Trigger button element for overlay origin. */
+  private readonly triggerRef = viewChild<ElementRef<HTMLButtonElement>>('trigger');
+  /** Panel content rendered in overlay. */
+  private readonly dropdownPanelRef = viewChild<TemplateRef<unknown>>('dropdownPanel');
+
+  private overlayRef: OverlayRef | null = null;
 
   /** The full list of folders. */
   readonly folders = input.required<Folder[]>();
@@ -133,20 +148,53 @@ export class MoveToMenuComponent implements OnDestroy {
     }
   }
 
-  /** Open the dropdown and focus the search input or dropdown container. */
+  /** Open the dropdown in an overlay and focus the search input or panel. */
   open(): void {
+    const triggerEl = this.triggerRef()?.nativeElement;
+    const panelTpl = this.dropdownPanelRef();
+    if (!triggerEl || !panelTpl) {
+      setTimeout(() => this.open(), 0);
+      return;
+    }
+
+    this.disposeOverlay();
     this.isOpen.set(true);
     this.searchText.set('');
     this.focusedIndex.set(-1);
 
-    // Focus search input or dropdown container after Angular renders it
+    const positionStrategy = this.overlay
+      .position()
+      .flexibleConnectedTo(triggerEl)
+      .withPositions([
+        { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top' },
+        { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom' },
+      ])
+      .withDefaultOffsetY(4);
+    const scrollStrategy = this.overlay.scrollStrategies.reposition();
+    const config = new OverlayConfig({
+      positionStrategy,
+      scrollStrategy,
+      hasBackdrop: false,
+    });
+
+    this.overlayRef = this.overlay.create(config);
+    this.overlayRef.attach(
+      new TemplatePortal(panelTpl, this.viewContainerRef)
+    );
+
     setTimeout(() => {
-      const el: HTMLElement = this.elRef.nativeElement;
-      const searchInput = el.querySelector<HTMLInputElement>('.search-input');
+      if (!this.overlayRef?.overlayElement) {
+        return;
+      }
+      const searchInput = this.overlayRef.overlayElement.querySelector<HTMLInputElement>(
+        '.search-input'
+      );
       if (searchInput) {
         searchInput.focus();
       } else {
-        const dropdown = el.querySelector<HTMLElement>('.move-to-dropdown');
+        const dropdown = this.overlayRef.overlayElement.querySelector<HTMLElement>(
+          '.move-to-dropdown'
+        );
         if (dropdown) {
           dropdown.focus();
         }
@@ -154,9 +202,18 @@ export class MoveToMenuComponent implements OnDestroy {
     }, 0);
   }
 
-  /** Close the dropdown. */
+  private disposeOverlay(): void {
+    if (this.overlayRef) {
+      this.overlayRef.detach();
+      this.overlayRef.dispose();
+      this.overlayRef = null;
+    }
+  }
+
+  /** Close the dropdown and dispose the overlay. */
   close(): void {
     if (this.isOpen()) {
+      this.disposeOverlay();
       this.isOpen.set(false);
       this.searchText.set('');
       this.focusedIndex.set(-1);
@@ -208,10 +265,13 @@ export class MoveToMenuComponent implements OnDestroy {
     }
   }
 
-  /** Handle click outside to close the dropdown. */
+  /** Handle click outside to close the dropdown (trigger or overlay pane). */
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent): void {
-    if (this.isOpen() && !this.elRef.nativeElement.contains(event.target)) {
+    const target = event.target as Node;
+    const inTrigger = this.elRef.nativeElement.contains(target);
+    const inOverlay = this.overlayRef?.overlayElement?.contains(target);
+    if (this.isOpen() && !inTrigger && !inOverlay) {
       this.close();
     }
   }
@@ -225,9 +285,11 @@ export class MoveToMenuComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
-    // Ensure menu is closed on destroy
+    this.disposeOverlay();
     if (this.isOpen()) {
-      this.close();
+      this.isOpen.set(false);
+      this.searchText.set('');
+      this.focusedIndex.set(-1);
     }
   }
 }
