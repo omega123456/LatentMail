@@ -728,20 +728,82 @@ export const EmailsStore = signalStore(
               store.currentPage() > 0;
 
             if (preserveScrolledList) {
-              // User has scrolled — merge instead of replace to preserve scroll position.
-              // Update existing threads in-place. While preserving position, do not prepend
-              // top-of-list arrivals since that shifts virtual-scroll indices and feels jumpy.
+              // User has scrolled or loaded additional pages — merge instead of replace to
+              // preserve virtual-scroll position. Strategy: ID-based diff.
+              //   • Deletions: existing threads whose IDs should have appeared in the fresh
+              //     first-page query but didn't (confirmed removed on server).
+              //   • Additions: fresh threads not present in the existing list (new arrivals).
+              //   • Updates: threads in both sets get flags/snippet/messageCount refreshed.
               const existingThreads = store.threads();
 
-              // Build a lookup for fresh data to update flags (read/starred) on existing threads
+              // Build ID sets for O(1) lookups
+              const freshIdSet = new Set(freshThreads.map(t => t.xGmThrid));
+              const existingIdSet = new Set(existingThreads.map(t => t.xGmThrid));
+
+              // Build a lookup map for fresh thread data (for updating existing threads)
               const freshMap = new Map(freshThreads.map(t => [t.xGmThrid, t]));
 
-              const updatedExisting = existingThreads.map(t => {
-                const fresh = freshMap.get(t.xGmThrid);
-                return fresh ? { ...t, isRead: fresh.isRead, isStarred: fresh.isStarred, snippet: fresh.snippet, messageCount: fresh.messageCount } : t;
-              });
+              // Determine if the folder has shrunk below a single page.
+              // If so, every existing thread absent from fresh data is a confirmed deletion.
+              const folderShrunkBelowPage = freshThreads.length < PAGE_SIZE;
 
-              patchState(store, { threads: updatedExisting });
+              // Date boundary: oldest lastMessageDate among fresh threads.
+              // Existing threads with a date strictly NEWER than this boundary should have
+              // appeared in the first-page query — if they're absent, they were deleted.
+              // Threads at or older than the boundary may be paginated below the fold — keep them.
+              const boundary =
+                freshThreads.length > 0
+                  ? new Date(freshThreads[freshThreads.length - 1].lastMessageDate).getTime()
+                  : null;
+
+              // Step 1: Filter existing threads — remove confirmed deletions, update kept ones
+              const filteredExisting = existingThreads
+                .filter(t => {
+                  if (freshIdSet.has(t.xGmThrid)) {
+                    return true; // Present in fresh data — always keep
+                  }
+                  if (folderShrunkBelowPage) {
+                    return false; // Folder shrank below one page — all absences are deletions
+                  }
+                  if (boundary === null) {
+                    return true; // No fresh threads, can't determine boundary — keep
+                  }
+                  // Only remove if the thread's date is strictly newer than the boundary.
+                  // Threads at exactly the boundary date are ties — err on the side of keeping.
+                  const threadDate = t.lastMessageDate
+                    ? new Date(t.lastMessageDate).getTime()
+                    : 0;
+                  return threadDate <= boundary; // Keep paginated threads and boundary ties
+                })
+                .map(t => {
+                  const fresh = freshMap.get(t.xGmThrid);
+                  return fresh
+                    ? { ...t, isRead: fresh.isRead, isStarred: fresh.isStarred, snippet: fresh.snippet, messageCount: fresh.messageCount }
+                    : t;
+                });
+
+              // Step 2: Identify new arrivals — prepend them so they appear above current view
+              const newThreads = freshThreads.filter(t => !existingIdSet.has(t.xGmThrid));
+
+              // Step 3: Assemble merged list: new arrivals first, then updated/filtered existing
+              const mergedThreads = [...newThreads, ...filteredExisting];
+
+              // Step 4: Clear selection if the selected thread was deleted
+              const selectedStillExists = currentSelectedId
+                ? mergedThreads.some(t => t.xGmThrid === currentSelectedId)
+                : true;
+
+              // Step 5: Update serverCursorDate to the oldest thread in the merged list
+              const newCursorDate = getOldestThreadDate(mergedThreads);
+
+              patchState(store, {
+                threads: mergedThreads,
+                dbExhausted: folderShrunkBelowPage,
+                serverCursorDate: newCursorDate || store.serverCursorDate(),
+                ...(currentSelectedId && !selectedStillExists
+                  ? { selectedThreadId: null, selectedThread: null }
+                  : {}),
+              });
             } else {
               // User on first page — replace normally
               const selectedStillExists = currentSelectedId

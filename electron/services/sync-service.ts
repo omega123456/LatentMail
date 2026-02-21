@@ -394,10 +394,24 @@ export class SyncService {
         let reconciled = false;
         if (shouldReconcile && serverUidsForReconcile.length > 0) {
           try {
-            await this.reconcileFolderWithServerUids(accountId, folder, serverUidsForReconcile);
+            const removalCount = await this.reconcileFolderWithServerUids(accountId, folder, serverUidsForReconcile);
             // Mark reconciliation time so IDLE skips it within the next 30s
             this.lastReconciliation.set(`${accountId}:${folder}`, Date.now());
             reconciled = true;
+
+            // Fold reconciliation removals into folder-changed tracking so the
+            // single emitFolderUpdated call below covers both upserts and deletions.
+            if (removalCount > 0) {
+              folderChangeCount += removalCount;
+              if (folderChanged) {
+                // Upserts also produced changes — mixed event
+                folderChangeType = 'mixed';
+              } else {
+                // Only reconciliation produced changes
+                folderChangeType = 'deletions';
+                folderChanged = true;
+              }
+            }
           } catch (reconcileErr) {
             log.warn(`Reconciliation failed for folder ${folder} account ${accountId} (continuing):`, reconcileErr);
           }
@@ -479,7 +493,14 @@ export class SyncService {
       release();
     }
 
-    await this.reconcileFolderWithServerUids(accountId, folder, serverUids);
+    const removalCount = await this.reconcileFolderWithServerUids(accountId, folder, serverUids);
+
+    // Emit a folder-updated event if reconciliation removed stale entries.
+    // The renderer's debounceTime(500) coalesces this with any preceding incremental-fetch
+    // event; since reconcileFolder runs 30s after that fetch, they won't collide anyway.
+    if (removalCount > 0) {
+      this.emitFolderUpdated(Number(accountId), [folder], 'sync', 'deletions', removalCount);
+    }
   }
 
   /**
@@ -493,7 +514,7 @@ export class SyncService {
     accountId: string,
     folder: string,
     serverUids: number[],
-  ): Promise<void> {
+  ): Promise<number> {
     const db = DatabaseService.getInstance();
     const numAccountId = Number(accountId);
 
@@ -506,7 +527,7 @@ export class SyncService {
     const staleEntries = localFolderUids.filter(entry => !serverUidSet.has(entry.uid));
 
     if (staleEntries.length === 0) {
-      return; // Nothing to reconcile
+      return 0; // Nothing to reconcile
     }
 
     log.info(`[SyncService] reconcileFolder: removing ${staleEntries.length} stale email-folder associations from ${folder} for account ${accountId}`);
@@ -563,6 +584,8 @@ export class SyncService {
     } catch (orphanThreadErr) {
       log.warn(`[SyncService] reconcileFolder: removeOrphanedThreads failed (continuing):`, orphanThreadErr);
     }
+
+    return staleEntries.length;
   }
 
   /**

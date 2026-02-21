@@ -42,6 +42,12 @@ export class EmailListComponent {
     return threads.filter(t => cache[t.xGmThrid] === filter);
   });
 
+  /**
+   * Thread IDs from the previous render cycle, used for detecting prepended threads
+   * during merge-mode background refreshes so scroll position can be compensated.
+   */
+  private previousThreadIds: string[] = [];
+
   constructor() {
     // Reset scroll to top when folder/account switches trigger a fresh thread load.
     // loadThreads() sets preserveListPosition to false — when that happens, scroll to top.
@@ -49,6 +55,61 @@ export class EmailListComponent {
       const preserve = this.emailsStore.preserveListPosition();
       if (!preserve && this.viewport) {
         this.viewport.scrollToIndex(0);
+      }
+    });
+
+    // Scroll offset compensation for prepended threads during merge-mode background refresh.
+    //
+    // When new threads are prepended (new arrivals while user is scrolled), CDK virtual
+    // scroll would shift the viewport — the user's current view appears to "jump" because
+    // the same scroll offset now points to a different item. This effect compensates by
+    // detecting how many items were inserted before the user's current anchor and adjusting
+    // the viewport offset accordingly, so the user sees the same content.
+    //
+    // Only compensates when preserveListPosition is true (user has scrolled or paginated);
+    // on fresh loads (preserveListPosition=false) the other effect above scrolls to top.
+    effect(() => {
+      const threads = this.filteredThreads(); // reactive — runs when threads change
+      const preserve = this.emailsStore.preserveListPosition();
+
+      const currentIds = threads.map(t => t.xGmThrid);
+      const prevIds = this.previousThreadIds;
+
+      // Always update stored IDs for the next comparison, regardless of whether
+      // we compensate this cycle.
+      this.previousThreadIds = currentIds;
+
+      if (!preserve || !this.viewport || prevIds.length === 0 || currentIds.length === 0) {
+        return;
+      }
+
+      // Anchor: the first thread visible in the rendered range from the previous list.
+      // getRenderedRange() reflects the old rendered state at effect-run time (before
+      // Angular has re-rendered the DOM for the new thread list).
+      const renderedRange = this.viewport.getRenderedRange();
+      const anchorPrevIndex = Math.max(0, renderedRange.start);
+      const anchorId = prevIds[anchorPrevIndex] ?? prevIds[0];
+
+      if (!anchorId) {
+        return;
+      }
+
+      // Find the anchor thread's new index in the updated list.
+      const newAnchorIndex = currentIds.indexOf(anchorId);
+      if (newAnchorIndex < 0) {
+        // Anchor thread was deleted — do not compensate (selection clearing handles UI).
+        return;
+      }
+
+      const deltaIndex = newAnchorIndex - anchorPrevIndex;
+      if (deltaIndex !== 0) {
+        // Items were prepended (deltaIndex > 0) or deleted above the viewport (deltaIndex < 0).
+        // Compensate by shifting the viewport offset so the user continues looking at the same
+        // content. Positive delta: new emails appear above, visible when scrolling up.
+        // Negative delta: deletions above the fold — scroll offset reduces to follow content up.
+        const itemSize = this.uiStore.densityHeight();
+        const currentOffset = this.viewport.measureScrollOffset();
+        this.viewport.scrollToOffset(currentOffset + deltaIndex * itemSize);
       }
     });
   }
