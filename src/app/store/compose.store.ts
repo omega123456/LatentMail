@@ -77,6 +77,70 @@ const initialState: ComposeState = {
   quotedText: '',
 };
 
+/**
+ * Splits draft HTML that was saved as editable + quoted block into editable and quoted parts
+ * so the read-only pane can be restored when editing a reply draft.
+ * Looks for the app-emitted <div class="quoted-block" ...> wrapper and splits on it.
+ */
+function splitDraftBody(fullHtml: string): {
+  editableHtml: string;
+  quotedHtml: string;
+  quotedText: string;
+} {
+  if (!fullHtml || typeof fullHtml !== 'string') {
+    return { editableHtml: fullHtml || '', quotedHtml: '', quotedText: '' };
+  }
+  const lower = fullHtml.toLowerCase();
+  const classPattern = 'class="quoted-block"';
+  const classPatternAlt = "class='quoted-block'";
+  const classIndex =
+    lower.indexOf(classPattern) !== -1
+      ? fullHtml.indexOf(classPattern)
+      : fullHtml.indexOf(classPatternAlt);
+  if (classIndex === -1) {
+    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
+  }
+  const openTagStart = fullHtml.lastIndexOf('<div', classIndex);
+  if (openTagStart === -1) {
+    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
+  }
+  const openTagEnd = fullHtml.indexOf('>', openTagStart);
+  if (openTagEnd === -1) {
+    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
+  }
+  let count = 1;
+  let pos = openTagEnd + 1;
+  let endIndex = -1;
+  while (count > 0 && pos < fullHtml.length) {
+    const nextDiv = lower.indexOf('<div', pos);
+    const nextClose = lower.indexOf('</div>', pos);
+    if (nextClose === -1) {
+      return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
+    }
+    if (nextDiv === -1 || nextClose < nextDiv) {
+      count--;
+      if (count === 0) {
+        endIndex = nextClose + 6;
+        break;
+      }
+      pos = nextClose + 6;
+    } else {
+      count++;
+      pos = nextDiv + 4;
+    }
+  }
+  if (endIndex === -1) {
+    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
+  }
+  const editableHtml = fullHtml.slice(0, openTagStart).trimEnd();
+  const quotedHtml = fullHtml.slice(openTagStart, endIndex);
+  const quotedText = quotedHtml
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { editableHtml, quotedHtml, quotedText };
+}
+
 export const ComposeStore = signalStore(
   { providedIn: 'root' },
   withState(initialState),
@@ -300,6 +364,7 @@ export const ComposeStore = signalStore(
 
         if (context.draft) {
           const d = context.draft;
+          const { editableHtml, quotedHtml: splitQuotedHtml, quotedText: splitQuotedText } = splitDraftBody(d.htmlBody);
           patchState(store, {
             isOpen: true,
             mode: context.mode,
@@ -313,7 +378,7 @@ export const ComposeStore = signalStore(
             cc: d.cc,
             bcc: d.bcc,
             subject: d.subject,
-            htmlBody: d.htmlBody,
+            htmlBody: editableHtml,
             textBody: d.textBody,
             inReplyTo: d.inReplyTo || '',
             references: d.references || '',
@@ -321,8 +386,8 @@ export const ComposeStore = signalStore(
             showCc: !!d.cc,
             showBcc: !!d.bcc,
             error: null,
-            quotedHtml: '',
-            quotedText: '',
+            quotedHtml: splitQuotedHtml,
+            quotedText: splitQuotedText,
           });
           return;
         }
