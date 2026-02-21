@@ -11,6 +11,7 @@ import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 import { EmailBodyFrameComponent } from './email-body-frame.component';
 import { EmailActionRibbonComponent } from '../../../shared/components/email-actions/email-action-ribbon.component';
 import { EmailActionContext, EmailActionEvent } from '../../../shared/components/email-actions/email-action.model';
+import { getOrderedFolderBadges } from '../../../shared/constants/folder-badges';
 
 @Component({
   selector: 'app-reading-pane',
@@ -63,22 +64,14 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     this.aiStreamSub?.unsubscribe();
   }
 
-  /** Whether this message is in [Gmail]/Sent Mail. */
-  isSentMessage(message: Email): boolean {
+  /**
+   * Returns ordered folder badges for a message (all folders the message appears in).
+   * Used to show every folder label on each mail item in thread view.
+   */
+  getMessageFolderBadges(message: Email): Array<{ displayName: string; cssClass: string; icon: string; title: string }> {
     const folders = message.folders;
-    if (!folders || folders.length === 0) {
-      return false;
-    }
-    return folders.includes('[Gmail]/Sent Mail');
-  }
-
-  /** Whether this message is in [Gmail]/Trash. */
-  isDeletedMessage(message: Email): boolean {
-    const folders = message.folders;
-    if (!folders || folders.length === 0) {
-      return false;
-    }
-    return folders.includes('[Gmail]/Trash');
+    const nameLookup = this.foldersStore.folders();
+    return getOrderedFolderBadges(folders ?? [], nameLookup);
   }
 
   getInitial(email: Email): string {

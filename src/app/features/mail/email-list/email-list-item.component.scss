@@ -1,3 +1,5 @@
+@use '../../../shared/styles/folder-badges' as *;
+
 :host {
   display: block;
   min-width: 0;
@@ -206,117 +208,9 @@
   }
 }
 
-.folder-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.folder-badge-icon {
-  font-size: 12px;
-  line-height: 1;
-  font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;
-}
-
-// Badge text hidden by default (compact & comfortable); shown in spacious via override above
+// Badge text hidden by default (compact & comfortable); shown in spacious via .email-item.spacious
 .folder-badge-text {
   display: none;
-}
-
-.folder-badge--inbox {
-  background-color: #E3F2FD;
-  color: #1976D2;
-}
-
-.folder-badge--sent {
-  background-color: #F3E5F5;
-  color: #7B1FA2;
-}
-
-.folder-badge--drafts {
-  background-color: #FFF3E0;
-  color: #E65100;
-}
-
-.folder-badge--trash {
-  background-color: #FFEBEE;
-  color: #C62828;
-}
-
-.folder-badge--spam {
-  background-color: #FCE4EC;
-  color: #C2185B;
-}
-
-.folder-badge--starred {
-  background-color: #FFF9C4;
-  color: #F57F17;
-}
-
-.folder-badge--important {
-  background-color: #FFE0B2;
-  color: #EF6C00;
-}
-
-.folder-badge--all-mail {
-  background-color: #E0F2F1;
-  color: #00695C;
-}
-
-.folder-badge--custom {
-  background-color: #F5F5F5;
-  color: #666666;
-}
-
-:host-context([data-theme='dark']) .folder-badge--inbox {
-  background-color: #1A237E;
-  color: #64B5F6;
-}
-
-:host-context([data-theme='dark']) .folder-badge--sent {
-  background-color: #4A148C;
-  color: #CE93D8;
-}
-
-:host-context([data-theme='dark']) .folder-badge--drafts {
-  background-color: #3A2413;
-  color: #FFB74D;
-}
-
-:host-context([data-theme='dark']) .folder-badge--trash {
-  background-color: #3A1111;
-  color: #EF5350;
-}
-
-:host-context([data-theme='dark']) .folder-badge--spam {
-  background-color: #880E4F;
-  color: #F06292;
-}
-
-:host-context([data-theme='dark']) .folder-badge--starred {
-  background-color: #2E2410;
-  color: #FFD863;
-}
-
-:host-context([data-theme='dark']) .folder-badge--important {
-  background-color: #3A2413;
-  color: #FFB74D;
-}
-
-:host-context([data-theme='dark']) .folder-badge--all-mail {
-  background-color: #103533;
-  color: #4DB6AC;
-}
-
-:host-context([data-theme='dark']) .folder-badge--custom {
-  background-color: #1E1E1E;
-  color: #B0B0B0;
 }
 
 // Label chip (filter-assigned label)

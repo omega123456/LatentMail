@@ -1,3 +1,5 @@
+@use '../../../shared/styles/folder-badges' as *;
+
 :host {
   display: flex;
   flex-direction: column;
@@ -115,54 +117,6 @@
   font-size: 14px;
   font-weight: 500;
   color: var(--color-text-primary);
-}
-
-.message-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  border-radius: var(--radius-sm, 4px);
-  padding: 2px 6px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-
-  .message-badge-icon {
-    font-size: 12px;
-    line-height: 1;
-    font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 20;
-  }
-}
-
-.message-badge--draft {
-  background-color: #FFF3E0;
-  color: #E65100;
-}
-
-:host-context([data-theme='dark']) .message-badge--draft {
-  background-color: #3A2413;
-  color: #FFB74D;
-}
-
-.message-badge--sent {
-  background-color: #F3E5F5;
-  color: #7B1FA2;
-}
-
-:host-context([data-theme='dark']) .message-badge--sent {
-  background-color: #4A148C;
-  color: #CE93D8;
-}
-
-.message-badge--deleted {
-  background-color: #FFEBEE;
-  color: #C62828;
-}
-
-:host-context([data-theme='dark']) .message-badge--deleted {
-  background-color: #3A1111;
-  color: #EF5350;
 }
 
 .message-date {
