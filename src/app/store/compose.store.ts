@@ -77,11 +77,6 @@ const initialState: ComposeState = {
   quotedText: '',
 };
 
-/**
- * Splits draft HTML that was saved as editable + quoted block into editable and quoted parts
- * so the read-only pane can be restored when editing a reply draft.
- * Looks for the app-emitted <div class="quoted-block" ...> wrapper and splits on it.
- */
 function splitDraftBody(fullHtml: string): {
   editableHtml: string;
   quotedHtml: string;
@@ -90,54 +85,16 @@ function splitDraftBody(fullHtml: string): {
   if (!fullHtml || typeof fullHtml !== 'string') {
     return { editableHtml: fullHtml || '', quotedHtml: '', quotedText: '' };
   }
-  const lower = fullHtml.toLowerCase();
-  const classPattern = 'class="quoted-block"';
-  const classPatternAlt = "class='quoted-block'";
-  const classIndex =
-    lower.indexOf(classPattern) !== -1
-      ? fullHtml.indexOf(classPattern)
-      : fullHtml.indexOf(classPatternAlt);
-  if (classIndex === -1) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = fullHtml;
+  const quoted = wrap.querySelector('.quoted-block');
+  if (!quoted) {
     return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
   }
-  const openTagStart = fullHtml.lastIndexOf('<div', classIndex);
-  if (openTagStart === -1) {
-    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
-  }
-  const openTagEnd = fullHtml.indexOf('>', openTagStart);
-  if (openTagEnd === -1) {
-    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
-  }
-  let count = 1;
-  let pos = openTagEnd + 1;
-  let endIndex = -1;
-  while (count > 0 && pos < fullHtml.length) {
-    const nextDiv = lower.indexOf('<div', pos);
-    const nextClose = lower.indexOf('</div>', pos);
-    if (nextClose === -1) {
-      return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
-    }
-    if (nextDiv === -1 || nextClose < nextDiv) {
-      count--;
-      if (count === 0) {
-        endIndex = nextClose + 6;
-        break;
-      }
-      pos = nextClose + 6;
-    } else {
-      count++;
-      pos = nextDiv + 4;
-    }
-  }
-  if (endIndex === -1) {
-    return { editableHtml: fullHtml, quotedHtml: '', quotedText: '' };
-  }
-  const editableHtml = fullHtml.slice(0, openTagStart).trimEnd();
-  const quotedHtml = fullHtml.slice(openTagStart, endIndex);
-  const quotedText = quotedHtml
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const quotedHtml = quoted.outerHTML;
+  const quotedText = (quoted as HTMLElement).innerText.replace(/\s+/g, ' ').trim();
+  quoted.remove();
+  const editableHtml = wrap.innerHTML.trimEnd();
   return { editableHtml, quotedHtml, quotedText };
 }
 
