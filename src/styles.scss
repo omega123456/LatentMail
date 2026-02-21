@@ -1,10 +1,8 @@
 // Angular Material must be @use'd before any other rules (Sass requirement)
 @use '@angular/material' as mat;
 
-@import "tailwindcss";
-
 // ============================================================
-// Design Tokens — Shared between Angular Material and Tailwind
+// Design Tokens — Shared between Angular Material and components
 // ============================================================
 
 :root {

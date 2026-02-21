@@ -83,7 +83,7 @@ mailclient/
 
 - **Shell**: Electron 40+
 - **Frontend**: Angular 21+ (standalone components, signals)
-- **UI**: Angular Material + Tailwind CSS v4
+- **UI**: Angular Material + custom SCSS
 - **State**: NgRx SignalStore
 - **Database**: SQLite via better-sqlite3 (FTS5 full-text search)
 - **Logging**: electron-log

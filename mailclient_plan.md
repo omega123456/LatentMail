@@ -36,7 +36,7 @@ MailClient is a cross-platform desktop email client for **Windows 10+ (x64)** an
 |-------|-----------|
 | **Desktop Shell** | Electron 40+ |
 | **Frontend Framework** | Angular 21+ (standalone components, signals) |
-| **UI Components** | Angular Material + Tailwind CSS |
+| **UI Components** | Angular Material + custom SCSS |
 | **State Management** | NgRx SignalStore |
 | **Rich Text Editor** | TipTap (ProseMirror-based) |
 | **Local Database** | SQLite (via sql.js WASM — in-memory, persist to disk) |
@@ -70,7 +70,6 @@ D:\mailclient\
 ├── package.json
 ├── forge.config.ts                    # Electron Forge configuration
 ├── tsconfig.json                      # Root TypeScript config
-├── tailwind.config.ts                 # Tailwind CSS configuration
 ├── angular.json                       # Angular workspace config
 ├── vite.config.ts                     # Vite build config (Angular + Electron)
 ├── vitest.config.ts                   # Test configuration
@@ -1222,12 +1221,12 @@ Each AI feature uses a tailored system prompt that:
 - Local search uses LIKE on metadata (subject, from, to, date, flags); server-side search via IMAP provides full coverage. FTS5 is unavailable in the sql.js WASM build.
 - If other native modules are added later, use `@electron/rebuild` and optionally `@electron-forge/plugin-auto-unpack-natives` for packaging.
 
-### Styling Integration (Angular Material + Tailwind)
+### Styling Integration (Angular Material + custom SCSS)
 
 - **Angular Material**: Used for interactive components (buttons, inputs, dialogs, lists, menus, toolbars, overlays, toggles, tabs)
-- **Tailwind CSS**: Used for layout utilities (flexbox, grid, spacing, sizing, positioning) and custom styling beyond Material components
-- **Theme Integration**: CSS custom properties (design tokens) defined in `styles.scss` are consumed by both Angular Material's custom theme and Tailwind's `theme.extend` configuration
-- **Specificity**: Tailwind utilities applied via class names; Angular Material styles via theme configuration — avoid `!important` overrides
+- **Custom SCSS**: Component-scoped SCSS for layout (flexbox, grid, spacing, sizing) and styling beyond Material; design tokens (CSS custom properties) in `styles.scss` for theme and density
+- **Theme Integration**: CSS custom properties (design tokens) defined in `styles.scss` are consumed by Angular Material's custom theme and by component SCSS via `var(--*)`
+- **Specificity**: Component class names in SCSS; Angular Material styles via theme configuration — avoid `!important` overrides
 
 ### NgRx SignalStore Patterns
 
@@ -1427,7 +1426,7 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 1. Initialize Angular 21 project with standalone components and Vite build
 2. Set up Electron 40 with Electron Forge and configure the plugin-vite integration
 3. Create `.env.example` with all required environment variables
-4. Set up Tailwind CSS and Angular Material theming with shared design tokens
+4. Set up Angular Material theming with shared design tokens (CSS custom properties in styles.scss)
 5. Create custom titlebar component (frameless on Windows, native on macOS)
 6. Implement Electron main process entry with window management and single-instance lock
 7. Set up preload script with typed contextBridge API
@@ -1650,7 +1649,6 @@ All mail operations (draft save, send, move, flag, delete) are queued via MailQu
 | `@angular/material` | UI component library |
 | `@angular/cdk` | Component Dev Kit (virtual scroll, overlay, drag-drop) |
 | `@ngrx/signals` | Signal-based state management |
-| `tailwindcss` | Utility-first CSS |
 | `imapflow` | IMAP client library |
 | `nodemailer` | SMTP email sending |
 | `sql.js` | SQLite via WASM (in-memory DB, persist to disk) |
