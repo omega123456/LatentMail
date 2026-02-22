@@ -155,6 +155,7 @@ const electronAPI = {
       'mail:new-email',
       'mail:notification-click',
       'mail:thread-refresh',
+      'mail:fetch-older-done',
       'system:notification',
       'system:tray-action',
     ];

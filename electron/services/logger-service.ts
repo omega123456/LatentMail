@@ -54,7 +54,7 @@ export class LoggerService {
     this.cleanupOldLogs();
 
     const envLevel = process.env['LOG_LEVEL'];
-    this.currentLevel = isValidLevel(envLevel) ? envLevel : 'info';
+    this.currentLevel = isValidLevel(envLevel) ? envLevel : 'error';
     log.transports.file.level = this.currentLevel;
     // Console transport is deliberately left at its electron-log default.
   }

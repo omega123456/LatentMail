@@ -17,6 +17,17 @@ interface IpcResponse<T = unknown> {
   };
 }
 
+/** Payload for mail:fetch-older-done event (success: threads/hasMore/nextBeforeDate; error: error string). */
+export interface MailFetchOlderDonePayload {
+  queueId: string;
+  accountId: number;
+  folderId: string;
+  threads?: Array<Record<string, unknown>>;
+  hasMore?: boolean;
+  nextBeforeDate?: string | null;
+  error?: string;
+}
+
 interface ElectronAPI {
   mail: {
     fetchEmails: (accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => Promise<IpcResponse>;
@@ -345,6 +356,11 @@ export class ElectronService {
 
   // ---- Event streams (main → renderer push events) ----
   // One IPC listener per channel is shared by all subscribers to avoid MaxListenersExceededWarning.
+
+  /** Payload for mail:fetch-older-done (success or error from queue worker). */
+  onFetchOlderDone(): Observable<MailFetchOlderDonePayload> {
+    return this.onEvent<MailFetchOlderDonePayload>('mail:fetch-older-done');
+  }
 
   onEvent<T = unknown>(channel: string): Observable<T> {
     if (!this.api) {

@@ -11,6 +11,7 @@ import { FolderLockManager } from './folder-lock-manager';
 import { PendingOpService } from './pending-op-service';
 import { SyncService } from './sync-service';
 import { buildDraftMime } from './draft-mime';
+import { executeFetchOlder } from './fetch-older-handler';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 // ---------------------------------------------------------------------------
@@ -25,7 +26,8 @@ export type QueueOperationType =
   | 'flag'
   | 'delete'
   | 'sync-folder'
-  | 'sync-thread';
+  | 'sync-thread'
+  | 'fetch-older';
 
 export type QueueItemStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
@@ -114,6 +116,15 @@ export interface SyncThreadPayload {
   forceFromServer: boolean;
 }
 
+export interface FetchOlderPayload {
+  /** IMAP folder path (e.g. 'INBOX', '[Gmail]/Sent Mail'). */
+  folder: string;
+  /** ISO date string — fetch emails before this date. */
+  beforeDate: string;
+  /** Max number of emails to fetch. */
+  limit: number;
+}
+
 export type QueuePayload =
   | DraftPayload
   | DraftUpdatePayload
@@ -122,7 +133,8 @@ export type QueuePayload =
   | FlagPayload
   | DeletePayload
   | SyncFolderPayload
-  | SyncThreadPayload;
+  | SyncThreadPayload
+  | FetchOlderPayload;
 
 export interface ServerIds {
   xGmMsgId: string;
@@ -157,6 +169,17 @@ export interface MailFolderUpdatedPayload {
   reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync';
   changeType?: 'new_messages' | 'flag_changes' | 'deletions' | 'mixed';
   count?: number;
+}
+
+/** Payload for the mail:fetch-older-done push event (success or error). */
+export interface MailFetchOlderDonePayload {
+  queueId: string;
+  accountId: number;
+  folderId: string;
+  threads?: Array<Record<string, unknown>>;
+  hasMore?: boolean;
+  nextBeforeDate?: string | null;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -476,14 +499,17 @@ export class MailQueueService {
         case 'sync-thread':
           await this.processSyncThread(item);
           break;
+        case 'fetch-older':
+          await this.processFetchOlder(item);
+          break;
         default:
           throw new Error(`Unknown operation type: ${(item as QueueItem).type}`);
       }
 
       // Best-effort post-operation fetch: confirm server state and update local DB.
       // Failures are logged as warnings — the IMAP action already succeeded.
-      // Sync operations handle their own post-processing inside their worker methods.
-      if (item.type !== 'sync-folder' && item.type !== 'sync-thread') {
+      // Sync and fetch-older operations handle their own post-processing inside their worker methods.
+      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'fetch-older') {
         try {
           await this.postOpFetch(item);
         } catch (fetchErr) {
@@ -503,15 +529,23 @@ export class MailQueueService {
 
       log.warn(`[MailQueue] Failed ${item.type} (${item.queueId}): [${category}] ${errMsg}`);
 
-      // Sync operations fail immediately on any error — no retry/backoff.
-      // Rationale: network blips are transient; the next timer tick re-enqueues fresh items.
-      // A failed sync-folder does not block subsequent queue items.
-      if (item.type === 'sync-folder' || item.type === 'sync-thread') {
+      // Sync and fetch-older operations fail immediately on any error — no retry/backoff.
+      // Rationale: network blips are transient; the next timer tick or user scroll re-enqueues.
+      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'fetch-older') {
         item.status = 'failed';
         item.error = errMsg;
         item.completedAt = new Date().toISOString();
         this.cleanupDedupKey(item);
         this.emitUpdate(item);
+        if (item.type === 'fetch-older') {
+          const foPayload = item.payload as FetchOlderPayload;
+          this.emitFetchOlderDone({
+            queueId: item.queueId,
+            accountId: item.accountId,
+            folderId: foPayload.folder,
+            error: errMsg,
+          });
+        }
         log.warn(`[MailQueue] ${item.type} failed immediately (${item.queueId}), no retry: ${errMsg}`);
         return;
       }
@@ -1167,6 +1201,10 @@ export class MailQueueService {
       const payload = item.payload as SyncFolderPayload;
       return payload.folder === folder;
     }
+    if (item.type === 'fetch-older') {
+      const payload = item.payload as FetchOlderPayload;
+      return payload.folder === folder;
+    }
     return false;
   }
 
@@ -1370,6 +1408,40 @@ export class MailQueueService {
 
     // Emit thread-refresh so the renderer re-loads the thread with bodies.
     this.emitThreadRefresh(item.accountId, payload.xGmThrid, 'sync');
+  }
+
+  // -----------------------------------------------------------------------
+  // Fetch-older worker (scroll-to-load)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Process a fetch-older queue item.
+   * Runs inside folder lock; calls shared executeFetchOlder, then emits
+   * MAIL_FETCH_OLDER_DONE so the renderer can append threads and update cursor.
+   */
+  private async processFetchOlder(item: QueueItem): Promise<void> {
+    const payload = item.payload as FetchOlderPayload;
+    const lockManager = FolderLockManager.getInstance();
+
+    const release = await lockManager.acquire(payload.folder, item.accountId);
+    try {
+      const result = await executeFetchOlder(
+        item.accountId,
+        payload.folder,
+        payload.beforeDate,
+        payload.limit
+      );
+      this.emitFetchOlderDone({
+        queueId: item.queueId,
+        accountId: item.accountId,
+        folderId: payload.folder,
+        threads: result.threads,
+        hasMore: result.hasMore,
+        nextBeforeDate: result.nextBeforeDate,
+      });
+    } finally {
+      release();
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1821,6 +1893,23 @@ export class MailQueueService {
       for (const win of windows) {
         if (!win.isDestroyed()) {
           win.webContents.send(IPC_EVENTS.MAIL_THREAD_REFRESH, payload);
+        }
+      }
+    } catch {
+      // Window may not exist yet during startup
+    }
+  }
+
+  /**
+   * Emit mail:fetch-older-done event to all renderer windows.
+   * Success: includes threads, hasMore, nextBeforeDate. Error: includes error string.
+   */
+  private emitFetchOlderDone(payload: MailFetchOlderDonePayload): void {
+    try {
+      const windows = BrowserWindow.getAllWindows();
+      for (const win of windows) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC_EVENTS.MAIL_FETCH_OLDER_DONE, payload);
         }
       }
     } catch {

@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { signalStore, withState, withMethods, withComputed, patchState, withHooks } from '@ngrx/signals';
 import { debounceTime } from 'rxjs';
 import { ElectronService } from '../core/services/electron.service';
+import { MailFetchOlderDonePayload } from '../core/services/electron.service';
 import { Thread, Email } from '../core/models/email.model';
 import { AccountsStore } from './accounts.store';
 import { FoldersStore } from './folders.store';
@@ -145,21 +146,22 @@ export const EmailsStore = signalStore(
     const accountsStore = inject(AccountsStore);
     const foldersStore = inject(FoldersStore);
 
-    /** Fetch older emails from IMAP server when local DB is exhausted */
+    /** Fetch older emails from IMAP server when local DB is exhausted. Enqueues a fetch-older op; result arrives via mail:fetch-older-done. */
     async function _loadMoreFromServer(accountId: number, folderId: string): Promise<void> {
-      if (store.fetchingMore() || !store.hasMore()) return;
+      if (store.fetchingMore() || !store.hasMore()) {
+        return;
+      }
+
+      const threads = store.threads();
+      const beforeDate = store.serverCursorDate() || getOldestThreadDate(threads);
+      if (!beforeDate) {
+        patchState(store, { hasMore: false });
+        return;
+      }
 
       patchState(store, { fetchingMore: true, fetchError: null });
 
       try {
-        // Use explicit server cursor when available; fall back to oldest loaded thread.
-        const threads = store.threads();
-        const beforeDate = store.serverCursorDate() || getOldestThreadDate(threads);
-        if (!beforeDate) {
-          patchState(store, { fetchingMore: false, hasMore: false });
-          return;
-        }
-
         const response = await electronService.fetchOlderEmails(
           String(accountId),
           folderId,
@@ -167,26 +169,13 @@ export const EmailsStore = signalStore(
           PAGE_SIZE
         );
 
-        if (response.success && response.data) {
-          const result = response.data as { threads: Thread[]; hasMore: boolean; nextBeforeDate?: string };
-          const existingIds = new Set(store.threads().map(t => t.xGmThrid));
-          const newThreads = result.threads.filter(t => !existingIds.has(t.xGmThrid));
-          const nextCursorDate = result.nextBeforeDate || getOldestThreadDate(result.threads) || beforeDate;
-          const cursorAdvanced = isOlderDate(nextCursorDate, beforeDate);
-          // Never continue auto-pagination when neither visible data nor cursor advances.
-          const hasMore = result.hasMore && (newThreads.length > 0 || cursorAdvanced);
-
-          patchState(store, {
-            threads: [...store.threads(), ...newThreads],
-            fetchingMore: false,
-            hasMore,
-            serverCursorDate: nextCursorDate,
-            hasLoadedMore: store.hasLoadedMore() || newThreads.length > 0,
-          });
+        if (response.success && response.data && (response.data as { queueId?: string }).queueId) {
+          // Enqueued; result will be applied when mail:fetch-older-done fires for this account/folder.
+          // Do not patch threads/hasMore here.
         } else {
           patchState(store, {
             fetchingMore: false,
-            fetchError: response.error?.message || 'Failed to fetch older emails from server',
+            fetchError: response.error?.message || 'Failed to enqueue fetch older emails',
           });
         }
       } catch (err: unknown) {
@@ -924,6 +913,33 @@ export const EmailsStore = signalStore(
           // Reconcile from DB only (queue item already processed; no enqueue).
           await store.reconcileThreadFromDb(event.accountId, event.xGmThrid);
         }
+      });
+
+      // Subscribe to mail:fetch-older-done (scroll-to-load result from queue worker).
+      electronService.onFetchOlderDone().subscribe((payload: MailFetchOlderDonePayload) => {
+        const activeAccountId = accountsStore.activeAccountId();
+        const activeFolderId = foldersStore.activeFolderId();
+        if (activeAccountId == null || payload.accountId !== activeAccountId || activeFolderId !== payload.folderId) {
+          return;
+        }
+        if (payload.error) {
+          patchState(store, { fetchingMore: false, fetchError: payload.error });
+          return;
+        }
+        const newThreads = ((payload.threads ?? []) as unknown) as Thread[];
+        const existingIds = new Set(store.threads().map((t) => t.xGmThrid));
+        const deduped = newThreads.filter((t) => !existingIds.has(t.xGmThrid));
+        const nextCursorDate = payload.nextBeforeDate ?? store.serverCursorDate();
+        const beforeDate = store.serverCursorDate();
+        const cursorAdvanced = beforeDate ? isOlderDate(nextCursorDate ?? beforeDate, beforeDate) : true;
+        const hasMore = (payload.hasMore ?? false) && (deduped.length > 0 || cursorAdvanced);
+        patchState(store, {
+          threads: [...store.threads(), ...deduped],
+          fetchingMore: false,
+          hasMore,
+          serverCursorDate: nextCursorDate ?? null,
+          hasLoadedMore: store.hasLoadedMore() || deduped.length > 0,
+        });
       });
 
       // Subscribe to mail:notification-click events.
