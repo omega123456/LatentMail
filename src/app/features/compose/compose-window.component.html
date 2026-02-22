@@ -1,7 +1,10 @@
 @if (composeStore.isOpen()) {
   <div class="compose-backdrop">
     <div
+      #composeWindowEl
       class="compose-window"
+      [style.width.px]="composeWidth()"
+      [style.height]="composeHeight() === null ? 'auto' : composeHeight() + 'px'"
       (click)="$event.stopPropagation()"
       (dragover)="onDragOver($event)"
       (drop)="onDrop($event)"
@@ -89,7 +92,7 @@
         class="editor-container"
         [class.editor-container--with-quoted]="composeStore.quotedHtml()"
         #editorContainer
-        (click)="focusEditor()"
+        (click)="focusEditor($event)"
       ></div>
 
       <!-- Quoted message (read-only, preserves full HTML; not parsed by TipTap) -->
@@ -156,6 +159,23 @@
           {{ composeStore.error() }}
         </div>
       }
+
+      <!-- Resize handles (top, left, top-left — window anchored bottom-right) -->
+      <div
+        class="resize-handle resize-handle--n"
+        title="Resize"
+        (mousedown)="startResize('north', $event)"
+      ></div>
+      <div
+        class="resize-handle resize-handle--w"
+        title="Resize"
+        (mousedown)="startResize('west', $event)"
+      ></div>
+      <div
+        class="resize-handle resize-handle--nw"
+        title="Resize"
+        (mousedown)="startResize('northwest', $event)"
+      ></div>
     </div>
   </div>
 }

@@ -1,6 +1,6 @@
 import {
   Component, inject, OnInit, OnDestroy, ElementRef, ViewChild, AfterViewInit,
-  NgZone, ChangeDetectorRef,
+  NgZone, ChangeDetectorRef, signal, HostListener,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -18,6 +18,22 @@ import { ComposeToolbarComponent } from './compose-toolbar.component';
 import { AttachmentUploadComponent } from './attachment-upload.component';
 import { SignatureSelectorComponent } from './signature-selector.component';
 import { DraftAttachment } from '../../core/models/email.model';
+
+const MIN_COMPOSE_WIDTH = 400;
+const MAX_COMPOSE_WIDTH = 1200;
+const MIN_COMPOSE_HEIGHT = 320;
+const DEFAULT_COMPOSE_WIDTH = 865;
+const DEFAULT_COMPOSE_HEIGHT = 700;
+
+type ResizeEdge = 'north' | 'west' | 'northwest';
+
+interface ResizeState {
+  edge: ResizeEdge;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
+}
 
 @Component({
   selector: 'app-compose-window',
@@ -37,17 +53,24 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly sanitizer = inject(DomSanitizer);
 
+  /** Width in pixels; default 865. */
+  readonly composeWidth = signal(DEFAULT_COMPOSE_WIDTH);
+  /** Height in pixels; null = auto (content height). */
+  readonly composeHeight = signal<number | null>(DEFAULT_COMPOSE_HEIGHT);
+
   /** Safe HTML for the quoted block (app-controlled email content). */
   get sanitizedQuotedHtml(): SafeHtml {
     return this.sanitizer.bypassSecurityTrustHtml(this.composeStore.quotedHtml());
   }
 
   @ViewChild('editorContainer') editorContainer!: ElementRef<HTMLElement>;
+  @ViewChild('composeWindowEl') composeWindowEl?: ElementRef<HTMLElement>;
   @ViewChild('subjectInput') subjectInput?: ElementRef<HTMLInputElement>;
   @ViewChild('inlineImageInput') inlineImageInput?: ElementRef<HTMLInputElement>;
 
   editor: Editor | null = null;
   private openWatchTimer: ReturnType<typeof setInterval> | null = null;
+  private resizeState: ResizeState | null = null;
 
   ngOnInit(): void {
     this.composeStore.loadSignatures();
@@ -94,7 +117,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
         return;
       }
 
-      const ed = new Editor({
+      const editorInstance = new Editor({
         element: container,
         extensions: [
           StarterKit.configure({
@@ -124,17 +147,17 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
             if (!files?.length) {
               return false;
             }
-            const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'));
+            const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
             if (imageFiles.length === 0) {
               return false;
             }
-            const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
-            if (pos == null) {
+            const dropPosition = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+            if (dropPosition == null) {
               return false;
             }
             event.preventDefault();
             event.stopPropagation();
-            let insertPos = pos;
+            let insertPosition = dropPosition;
             const insertNext = (index: number): void => {
               if (index >= imageFiles.length) {
                 return;
@@ -143,8 +166,8 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
               const reader = new FileReader();
               reader.onload = () => {
                 const dataUrl = reader.result as string;
-                ed.chain().focus().insertContentAt(insertPos, { type: 'image', attrs: { src: dataUrl } }).run();
-                insertPos += 1;
+                editorInstance.chain().focus().insertContentAt(insertPosition, { type: 'image', attrs: { src: dataUrl } }).run();
+                insertPosition += 1;
                 insertNext(index + 1);
               };
               reader.readAsDataURL(file);
@@ -158,10 +181,10 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
       this.ngZone.runOutsideAngular(() => {
         setTimeout(() => {
           if (this.composeStore.isOpen() && !this.editor) {
-            this.editor = ed;
+            this.editor = editorInstance;
             this.ngZone.run(() => this.cdr.markForCheck());
           } else {
-            ed.destroy();
+            editorInstance.destroy();
           }
         }, 0);
       });
@@ -176,8 +199,18 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
     }, 0);
   }
 
-  focusEditor(): void {
-    this.editor?.commands.focus();
+  focusEditor(clickEvent?: MouseEvent): void {
+    const editor = this.editor;
+    if (!editor) {
+      return;
+    }
+    // When click was on the container (e.g. padding), put caret at end; otherwise do nothing so content click selection is kept
+    const targetIsContainer = clickEvent?.target === this.editorContainer?.nativeElement;
+    if (targetIsContainer) {
+      editor.chain().focus('end').run();
+    } else {
+      editor.commands.focus();
+    }
   }
 
   private destroyEditor(): void {
@@ -202,6 +235,53 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   async discard(): Promise<void> {
     this.destroyEditor();
     await this.composeStore.discardDraft();
+  }
+
+  startResize(edge: ResizeEdge, event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const element = this.composeWindowEl?.nativeElement;
+    if (!element) {
+      return;
+    }
+    const bounds = element.getBoundingClientRect();
+    const currentHeight = this.composeHeight() ?? bounds.height;
+    this.resizeState = {
+      edge,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: this.composeWidth(),
+      startHeight: currentHeight,
+    };
+  }
+
+  @HostListener('document:mousemove', ['$event'])
+  onDocumentMouseMove(event: MouseEvent): void {
+    const state = this.resizeState;
+    if (!state) {
+      return;
+    }
+    // Window is anchored bottom-right: top/left handles grow upward and left
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    let width = state.startWidth;
+    let height = state.startHeight;
+    if (state.edge === 'west' || state.edge === 'northwest') {
+      width = Math.min(MAX_COMPOSE_WIDTH, Math.max(MIN_COMPOSE_WIDTH, state.startWidth - deltaX));
+    }
+    if (state.edge === 'north' || state.edge === 'northwest') {
+      const maxHeight = typeof window !== 'undefined' ? window.innerHeight * 0.95 : 2000;
+      height = Math.min(maxHeight, Math.max(MIN_COMPOSE_HEIGHT, state.startHeight - deltaY));
+    }
+    this.composeWidth.set(width);
+    this.composeHeight.set(height);
+  }
+
+  @HostListener('document:mouseup')
+  onDocumentMouseUp(): void {
+    if (this.resizeState) {
+      this.resizeState = null;
+    }
   }
 
   openAttachPicker(): void {
