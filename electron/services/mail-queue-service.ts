@@ -21,7 +21,9 @@ export type QueueOperationType =
   | 'send'
   | 'move'
   | 'flag'
-  | 'delete';
+  | 'delete'
+  | 'sync-folder'
+  | 'sync-thread';
 
 export type QueueItemStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
@@ -92,13 +94,33 @@ export interface DeletePayload {
   runtimeResolvedUids?: number[];
 }
 
+export interface SyncFolderPayload {
+  /** IMAP folder path to sync (e.g. 'INBOX', '[Gmail]/Sent Mail'). */
+  folder: string;
+  /** Whether this is an initial sync (affects fetch limit and date range). */
+  isInitial: boolean;
+  /** ISO date string for incremental fetch scope. */
+  sinceDate: string;
+  /** Whether to show desktop notifications for new emails found (true for IDLE-triggered syncs). */
+  showNotifications: boolean;
+}
+
+export interface SyncThreadPayload {
+  /** Gmail thread ID (xGmThrid) to fetch bodies for. */
+  xGmThrid: string;
+  /** Whether to bypass body-exists check and force a fresh fetch. */
+  forceFromServer: boolean;
+}
+
 export type QueuePayload =
   | DraftPayload
   | DraftUpdatePayload
   | SendPayload
   | MovePayload
   | FlagPayload
-  | DeletePayload;
+  | DeletePayload
+  | SyncFolderPayload
+  | SyncThreadPayload;
 
 export interface ServerIds {
   xGmMsgId: string;
@@ -119,6 +141,8 @@ export interface QueueItem {
   error?: string;
   result?: ServerIds | null;
   description: string;
+  /** Dedup key for sync operations; prevents duplicate sync items from being enqueued. */
+  dedupKey?: string;
 }
 
 /** Serialisable snapshot of a QueueItem sent to the renderer. */
@@ -195,6 +219,13 @@ export class MailQueueService {
   /** Per-account paused state (e.g. auth failure). */
   private pausedAccounts = new Set<number>();
 
+  /**
+   * Active dedup keys for sync operations.
+   * Maps dedupKey → queueId for items that are pending or processing.
+   * Allows enqueue() to skip duplicate sync items.
+   */
+  private activeDedupKeys = new Map<string, string>();
+
   private constructor() {}
 
   static getInstance(): MailQueueService {
@@ -211,6 +242,10 @@ export class MailQueueService {
   /**
    * Enqueue a mail operation. Returns the queueId immediately.
    * The caller can track the operation via `queue:update` events keyed by queueId.
+   *
+   * @param dedupKey  Optional dedup key (for sync operations). If an item with the same
+   *                  key is already pending or processing, the enqueue is skipped and the
+   *                  existing item's queueId is returned.
    */
   enqueue(
     accountId: number,
@@ -218,7 +253,20 @@ export class MailQueueService {
     payload: QueuePayload,
     description: string,
     providedQueueId?: string,
+    dedupKey?: string,
   ): string {
+    // Deduplication: if a matching item is already active, return its id without re-enqueueing.
+    if (dedupKey) {
+      const existingId = this.activeDedupKeys.get(dedupKey);
+      if (existingId) {
+        const existingItem = this.items.get(existingId);
+        if (existingItem && (existingItem.status === 'pending' || existingItem.status === 'processing')) {
+          log.debug(`[MailQueue] Dedup: skipping ${type} (dedupKey=${dedupKey}) — already queued as ${existingId}`);
+          return existingId;
+        }
+      }
+    }
+
     const queueId = providedQueueId || randomUUID();
 
     const item: QueueItem = {
@@ -230,9 +278,15 @@ export class MailQueueService {
       createdAt: new Date().toISOString(),
       retryCount: 0,
       description,
+      dedupKey,
     };
 
     this.items.set(queueId, item);
+
+    if (dedupKey) {
+      this.activeDedupKeys.set(dedupKey, queueId);
+    }
+
     this.emitUpdate(item);
 
     // Push into the account's fastq
@@ -303,6 +357,7 @@ export class MailQueueService {
     item.status = 'cancelled';
     item.error = undefined;
     item.completedAt = new Date().toISOString();
+    this.cleanupDedupKey(item);
     this.emitUpdate(item);
 
     // Clear any pending retry timer
@@ -313,6 +368,20 @@ export class MailQueueService {
     }
 
     return true;
+  }
+
+  /**
+   * Remove the dedup key for a queue item after its lifecycle ends (completed, failed, cancelled).
+   * Only removes the key if this item is still the registered owner (prevents races when an item
+   * finishes after a newer item with the same key was already enqueued).
+   */
+  private cleanupDedupKey(item: QueueItem): void {
+    if (!item.dedupKey) {
+      return;
+    }
+    if (this.activeDedupKeys.get(item.dedupKey) === item.queueId) {
+      this.activeDedupKeys.delete(item.dedupKey);
+    }
   }
 
   /** Count of non-completed/non-failed items. */
@@ -399,21 +468,31 @@ export class MailQueueService {
         case 'send':
           await this.processSend(item);
           break;
+        case 'sync-folder':
+          await this.processSyncFolder(item);
+          break;
+        case 'sync-thread':
+          await this.processSyncThread(item);
+          break;
         default:
-          throw new Error(`Unknown operation type: ${item.type}`);
+          throw new Error(`Unknown operation type: ${(item as QueueItem).type}`);
       }
 
       // Best-effort post-operation fetch: confirm server state and update local DB.
       // Failures are logged as warnings — the IMAP action already succeeded.
-      try {
-        await this.postOpFetch(item);
-      } catch (fetchErr) {
-        log.warn(`[MailQueue] Post-op fetch failed for ${item.type} (${item.queueId}): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+      // Sync operations handle their own post-processing inside their worker methods.
+      if (item.type !== 'sync-folder' && item.type !== 'sync-thread') {
+        try {
+          await this.postOpFetch(item);
+        } catch (fetchErr) {
+          log.warn(`[MailQueue] Post-op fetch failed for ${item.type} (${item.queueId}): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+        }
       }
 
       // Success
       item.status = 'completed';
       item.completedAt = new Date().toISOString();
+      this.cleanupDedupKey(item);
       this.emitUpdate(item);
       log.info(`[MailQueue] Completed ${item.type} (${item.queueId})`);
     } catch (err) {
@@ -421,6 +500,19 @@ export class MailQueueService {
       const errMsg = err instanceof Error ? err.message : String(err);
 
       log.warn(`[MailQueue] Failed ${item.type} (${item.queueId}): [${category}] ${errMsg}`);
+
+      // Sync operations fail immediately on any error — no retry/backoff.
+      // Rationale: network blips are transient; the next timer tick re-enqueues fresh items.
+      // A failed sync-folder does not block subsequent queue items.
+      if (item.type === 'sync-folder' || item.type === 'sync-thread') {
+        item.status = 'failed';
+        item.error = errMsg;
+        item.completedAt = new Date().toISOString();
+        this.cleanupDedupKey(item);
+        this.emitUpdate(item);
+        log.warn(`[MailQueue] ${item.type} failed immediately (${item.queueId}), no retry: ${errMsg}`);
+        return;
+      }
 
       // Fail immediately with no auto-retry: send (not idempotent) or delete/move/flag
       // when no messages found on server (retrying would never succeed). Same UX: mark
@@ -463,10 +555,9 @@ export class MailQueueService {
       this.emitUpdate(item);
       log.error(`[MailQueue] Permanently failed ${item.type} (${item.queueId}) after ${item.retryCount} retries: ${errMsg}`);
 
-      // On permanent failure for move/delete: still clear pending ops and
-      // threadBodyFetchAttempted so the thread can be re-fetched from IMAP.
-      // The server-side op failed, so the messages still exist — they will
-      // reappear correctly when the thread is next opened.
+      // On permanent failure for move/delete: still clear pending ops so the thread can
+      // be re-fetched from IMAP. The server-side op failed, so the messages still exist
+      // and will reappear correctly when the thread is next opened.
       if (item.type === 'move' || item.type === 'delete') {
         this.clearPendingOpsOnFailure(item);
       }
@@ -474,8 +565,8 @@ export class MailQueueService {
   }
 
   /**
-   * Clear pending ops and threadBodyFetchAttempted for a failed move/delete operation.
-   * This unblocks future IMAP re-fetch so messages reappear correctly.
+   * Clear pending ops for a failed move/delete operation.
+   * This unblocks future sync-thread fetches so messages reappear correctly.
    * If emailMeta is unavailable, logs a warning — the next sync reconciliation
    * will correct any remaining inconsistencies.
    */
@@ -505,7 +596,6 @@ export class MailQueueService {
 
       for (const [xGmThrid, messageIds] of byThread) {
         pendingOpService.clear(item.accountId, xGmThrid, messageIds);
-        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${xGmThrid}`);
       }
     } catch (err) {
       log.warn(`[MailQueue] clearPendingOpsOnFailure failed for ${item.queueId}:`, err);
@@ -1071,6 +1161,10 @@ export class MailQueueService {
       }
       return runtimeFolders.includes(folder);
     }
+    if (item.type === 'sync-folder') {
+      const payload = item.payload as SyncFolderPayload;
+      return payload.folder === folder;
+    }
     return false;
   }
 
@@ -1215,6 +1309,68 @@ export class MailQueueService {
   }
 
   // -----------------------------------------------------------------------
+  // Sync-folder worker
+  // -----------------------------------------------------------------------
+
+  /**
+   * Process a sync-folder queue item.
+   * Delegates IMAP fetch + DB upsert + reconciliation to SyncService.syncFolder()
+   * (Pattern A: lock → fetch → upsert → reconcile → release lock).
+   * After success, emits MAIL_FOLDER_UPDATED so the renderer reloads the folder.
+   * After UIDVALIDITY reset, fails pending operations targeting the affected folder.
+   */
+  private async processSyncFolder(item: QueueItem): Promise<void> {
+    const payload = item.payload as SyncFolderPayload;
+    const syncService = SyncService.getInstance();
+
+    const result = await syncService.syncFolder(
+      String(item.accountId),
+      payload.folder,
+      payload.isInitial,
+      new Date(payload.sinceDate),
+      payload.showNotifications,
+    );
+
+    // UIDVALIDITY reset: fail any pending operations targeting this folder.
+    // syncFolder() has already wiped folder data in the DB.
+    if (result.uidValidityChanged) {
+      const invalidated = this.failOperationsForFolder(
+        item.accountId,
+        payload.folder,
+        'UIDVALIDITY changed for folder — UIDs are no longer valid',
+      );
+      if (invalidated > 0) {
+        log.warn(`[MailQueue] processSyncFolder: Invalidated ${invalidated} queued operation(s) for ${payload.folder} after UIDVALIDITY reset`);
+      }
+    }
+
+    // Emit folder-updated event so renderer reloads the folder list and thread list.
+    if (result.folderChanged) {
+      this.emitFolderUpdated(item.accountId, [payload.folder], 'sync', result.changeType, result.changeCount);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Sync-thread worker
+  // -----------------------------------------------------------------------
+
+  /**
+   * Process a sync-thread queue item.
+   * Delegates IMAP thread fetch + DB body upsert + stale-message reconciliation
+   * to SyncService.syncThread(). After success, emits MAIL_THREAD_REFRESH so
+   * the renderer re-loads the thread with freshly-fetched bodies.
+   */
+  private async processSyncThread(item: QueueItem): Promise<void> {
+    const payload = item.payload as SyncThreadPayload;
+    const syncService = SyncService.getInstance();
+
+    await syncService.syncThread(String(item.accountId), payload.xGmThrid);
+
+    // Emit thread-refresh so the renderer re-loads the thread with bodies.
+    this.emitThreadRefresh(item.accountId, payload.xGmThrid, 'sync');
+  }
+
+  // -----------------------------------------------------------------------
   // Post-operation fetch — confirm server state & update local DB
   // -----------------------------------------------------------------------
 
@@ -1292,17 +1448,14 @@ export class MailQueueService {
         // 1. Clear pending ops for these messages
         pendingOpService.clear(item.accountId, xGmThrid, messageIds);
 
-        // 2. Clear threadBodyFetchAttempted so next open re-fetches from IMAP if needed
-        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${xGmThrid}`);
-
-        // 3. Recompute thread metadata from actual DB state
+        // 2. Recompute thread metadata from actual DB state
         try {
           db.recomputeThreadMetadata(item.accountId, xGmThrid);
         } catch (recomputeErr) {
           log.warn(`[MailQueue] postOpFetchMove: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
         }
 
-        // 4. Emit thread-refresh so renderer re-loads if this thread is selected
+        // 3. Emit thread-refresh so renderer re-loads if this thread is selected
         this.emitThreadRefresh(item.accountId, xGmThrid, 'move');
       }
     }
@@ -1350,10 +1503,7 @@ export class MailQueueService {
         // 1. Clear pending ops for these messages
         pendingOpService.clear(item.accountId, xGmThrid, messageIds);
 
-        // 2. Clear threadBodyFetchAttempted so next open re-fetches from IMAP if needed
-        pendingOpService.threadBodyFetchAttempted.delete(`${item.accountId}:${xGmThrid}`);
-
-        // 3. Recompute thread metadata from actual DB state
+        // 2. Recompute thread metadata from actual DB state
         try {
           db.recomputeThreadMetadata(item.accountId, xGmThrid);
         } catch (recomputeErr) {
@@ -1486,12 +1636,26 @@ export class MailQueueService {
    * server's complete UID set and remove stale associations. Used after unstar to
    * clean [Gmail]/Starred promptly without waiting for a full account sync.
    *
-   * Delegates to SyncService.reconcileFolder() for a consistent, enhanced reconciliation
-   * that also removes orphan emails, recomputes thread metadata, and removes orphan threads.
+   * Fetches UIDs under the folder lock, then delegates DB cleanup to
+   * SyncService.reconcileFolderWithServerUids() (which is lock-free DB work).
    */
   private async reconcileFolder(accountId: number, folder: string): Promise<void> {
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
     const syncService = SyncService.getInstance();
-    await syncService.reconcileFolder(String(accountId), folder);
+
+    let serverUids: number[];
+    const release = await lockManager.acquire(folder, accountId);
+    try {
+      serverUids = await imapService.fetchFolderUids(String(accountId), folder);
+    } finally {
+      release();
+    }
+
+    const removalCount = await syncService.reconcileFolderWithServerUids(String(accountId), folder, serverUids);
+    if (removalCount > 0) {
+      this.emitFolderUpdated(accountId, [folder], 'sync', 'deletions', removalCount);
+    }
   }
 
   /**
@@ -1647,7 +1811,7 @@ export class MailQueueService {
   private emitThreadRefresh(
     accountId: number,
     xGmThrid: string,
-    action: 'move' | 'delete',
+    action: 'move' | 'delete' | 'sync',
   ): void {
     const payload = { accountId, xGmThrid, action };
     try {

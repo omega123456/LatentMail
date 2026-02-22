@@ -1,10 +1,12 @@
 import { Component, computed, inject, OnInit, OnDestroy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { AccountsStore } from '../../../store/accounts.store';
 import { EmailsStore } from '../../../store/emails.store';
 import { AiStore } from '../../../store/ai.store';
 import { UiStore } from '../../../store/ui.store';
+import { QueueStore } from '../../../store/queue.store';
 import { ElectronService } from '../../../core/services/electron.service';
 
 @Component({
@@ -19,7 +21,9 @@ export class StatusBarComponent implements OnInit, OnDestroy {
   readonly emailsStore = inject(EmailsStore);
   readonly aiStore = inject(AiStore);
   readonly uiStore = inject(UiStore);
+  readonly queueStore = inject(QueueStore);
   private readonly electronService = inject(ElectronService);
+  private readonly router = inject(Router);
 
   /** Counter that increments every 30s to trigger relative time recalculation */
   readonly tick = signal(0);
@@ -67,6 +71,64 @@ export class StatusBarComponent implements OnInit, OnDestroy {
       .subscribe(status => {
         this.aiStore.updateStatus(status);
       });
+  }
+
+  /** Computed icon for the queue status indicator. Always returns an icon (idle = 'done'). */
+  readonly queueIcon = computed(() => {
+    const processing = this.queueStore.processingCount() > 0;
+    const failed = this.queueStore.failedCount() > 0;
+    const pending = this.queueStore.pendingCount() > 0;
+    if (processing) {
+      return 'autorenew';
+    }
+    if (failed) {
+      return 'error';
+    }
+    if (pending) {
+      return 'hourglass_empty';
+    }
+    return 'done';
+  });
+
+  /** Tooltip text for the queue status indicator. */
+  readonly queueTooltip = computed(() => {
+    const processing = this.queueStore.processingCount();
+    const pending = this.queueStore.pendingCount();
+    const failed = this.queueStore.failedCount();
+    const desc = this.queueStore.currentProcessingDescription();
+    const parts: string[] = [];
+    if (desc) {
+      parts.push(`Processing: ${desc}`);
+    }
+    const counts: string[] = [];
+    if (pending > 0) {
+      counts.push(`${pending} pending`);
+    }
+    if (processing > 0) {
+      counts.push(`${processing} processing`);
+    }
+    if (failed > 0) {
+      counts.push(`${failed} failed`);
+    }
+    if (counts.length > 0) {
+      parts.push(counts.join(', '));
+    }
+    if (failed > 0 && processing === 0 && pending === 0) {
+      parts.push('Click to view');
+    }
+    const text = parts.join(' | ');
+    return text || 'Queue: idle — click to open queue settings';
+  });
+
+  /** Aria label for the queue status indicator. */
+  readonly queueAriaLabel = computed(() => {
+    const active = this.queueStore.activeCount();
+    const failed = this.queueStore.failedCount();
+    return `Queue: ${active} active, ${failed} failed — open queue settings`;
+  });
+
+  navigateToQueue(): void {
+    this.router.navigate(['/settings/queue']);
   }
 
   ngOnDestroy(): void {

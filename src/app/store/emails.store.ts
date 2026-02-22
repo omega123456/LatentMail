@@ -300,7 +300,7 @@ export const EmailsStore = signalStore(
         }
       },
 
-      /** Load a full thread with messages. Shows DB cache first if available, then always fetches from server and updates. */
+      /** Load a full thread with messages. Shows DB cache first if available, then enqueues one sync-thread; reconcile runs on mail:thread-refresh. */
       async loadThread(accountId: number, threadId: string): Promise<void> {
         patchState(store, {
           loadingThread: true,
@@ -339,56 +339,67 @@ export const EmailsStore = signalStore(
           // Non-fatal: we will fetch from server next
         }
 
-        // Always fetch from server and reconcile; overwrite view when server responds
+        // Enqueue sync-thread so main process fetches bodies and reconciles; reconcile runs on mail:thread-refresh.
         try {
-          const response = await electronService.fetchThread(accountIdStr, threadId, true);
-          if (response.success && response.data) {
-            const thread = response.data as Thread & { messages?: Email[] };
-            if (store.selectedThreadId() === threadId) {
-              patchState(store, {
-                selectedThread: thread,
-                loadingThread: false,
-                error: null,
-              });
-            }
-            // Update the corresponding thread in the list so count, draft badge, snippet, etc. stay in sync after send/delete/draft changes
-            const messages = thread.messages ?? [];
-            const hasDraft = messages.some(
-              (m) => (m as Email & { folders?: string[] }).folders?.includes('[Gmail]/Drafts') || m.isDraft
-            );
-            // Compute folder-aware visible message count for the list badge.
-            // When viewing Trash, show total count; otherwise exclude trashed messages.
-            const activeFolderId = foldersStore.activeFolderId();
-            const visibleMessages = activeFolderId === '[Gmail]/Trash'
-              ? messages
-              : messages.filter(m => !m.folders?.includes('[Gmail]/Trash'));
-            const messageCount = visibleMessages.length;
-            const latestMsg = messageCount > 0
-              ? messages.reduce((a, b) => (new Date(b.date).getTime() > new Date(a.date).getTime() ? b : a))
-              : null;
-            // Do not include lastMessageDate — list already has it; updating it here causes the list item timestamp to refresh when the thread opens
-            const listThreadMeta: Partial<Thread> = {
-              messageCount,
-              snippet: latestMsg?.snippet ?? thread.snippet ?? '',
-              isRead: messageCount > 0 ? messages.every((m) => m.isRead) : true,
-              isStarred: messageCount > 0 ? messages.some((m) => m.isStarred) : false,
-              participants: messageCount > 0
-                ? [...new Set(messages.map((m) => m.fromAddress).filter(Boolean))].join(', ')
-                : (thread.participants ?? ''),
-              hasDraft,
-            };
-            const updatedThreads = store.threads().map((t) =>
-              t.xGmThrid === threadId ? { ...t, ...listThreadMeta } : t
-            );
-            patchState(store, { threads: updatedThreads });
-          } else {
-            if (store.selectedThreadId() === threadId) {
-              patchState(store, {
-                loadingThread: false,
-                error: response.error?.message || 'Failed to load thread',
-              });
-            }
+          await electronService.fetchThread(accountIdStr, threadId, true);
+        } catch (err: unknown) {
+          if (store.selectedThreadId() === threadId) {
+            patchState(store, {
+              loadingThread: false,
+              error: err instanceof Error ? err.message : 'Failed to load thread',
+            });
           }
+        }
+      },
+
+      /** Reconcile thread from DB only (no enqueue). Called when a sync-thread queue item completes (mail:thread-refresh). */
+      async reconcileThreadFromDb(accountId: number, threadId: string): Promise<void> {
+        const accountIdStr = String(accountId);
+        try {
+          const dbResponse = await electronService.getThreadFromDb(accountIdStr, threadId);
+          if (!dbResponse.success || !dbResponse.data) {
+            if (store.selectedThreadId() === threadId) {
+              patchState(store, {
+                loadingThread: false,
+                error: dbResponse.error?.message ?? 'Failed to load thread',
+              });
+            }
+            return;
+          }
+          const thread = dbResponse.data as Thread & { messages?: Email[] };
+          const messages = thread.messages ?? [];
+          if (store.selectedThreadId() === threadId) {
+            patchState(store, {
+              selectedThread: thread,
+              loadingThread: false,
+              error: null,
+            });
+          }
+          const hasDraft = messages.some(
+            (m) => (m as Email & { folders?: string[] }).folders?.includes('[Gmail]/Drafts') || m.isDraft
+          );
+          const activeFolderId = foldersStore.activeFolderId();
+          const visibleMessages = activeFolderId === '[Gmail]/Trash'
+            ? messages
+            : messages.filter(m => !m.folders?.includes('[Gmail]/Trash'));
+          const messageCount = visibleMessages.length;
+          const latestMsg = messageCount > 0
+            ? messages.reduce((a, b) => (new Date(b.date).getTime() > new Date(a.date).getTime() ? b : a))
+            : null;
+          const listThreadMeta: Partial<Thread> = {
+            messageCount,
+            snippet: latestMsg?.snippet ?? thread.snippet ?? '',
+            isRead: messageCount > 0 ? messages.every((m) => m.isRead) : true,
+            isStarred: messageCount > 0 ? messages.some((m) => m.isStarred) : false,
+            participants: messageCount > 0
+              ? [...new Set(messages.map((m) => m.fromAddress).filter(Boolean))].join(', ')
+              : (thread.participants ?? ''),
+            hasDraft,
+          };
+          const updatedThreads = store.threads().map((t) =>
+            t.xGmThrid === threadId ? { ...t, ...listThreadMeta } : t
+          );
+          patchState(store, { threads: updatedThreads });
         } catch (err: unknown) {
           if (store.selectedThreadId() === threadId) {
             patchState(store, {
@@ -929,8 +940,8 @@ export const EmailsStore = signalStore(
         }
         const selectedThreadId = store.selectedThreadId();
         if (selectedThreadId === event.xGmThrid) {
-          // Re-load thread from the now-clean DB (pending ops cleared, metadata recomputed)
-          await store.loadThread(event.accountId, event.xGmThrid);
+          // Reconcile from DB only (queue item already processed; no enqueue).
+          await store.reconcileThreadFromDb(event.accountId, event.xGmThrid);
         }
       });
 

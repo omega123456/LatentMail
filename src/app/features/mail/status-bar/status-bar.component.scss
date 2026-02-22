@@ -63,3 +63,56 @@
     font-size: 13px;
   }
 }
+
+// Queue status indicator
+.queue-status {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: inherit;
+  line-height: inherit;
+  position: relative;
+
+  &:hover {
+    color: var(--color-text-secondary);
+  }
+
+  .material-symbols-outlined {
+    font-size: 14px;
+  }
+
+  &.processing {
+    color: var(--color-primary);
+  }
+
+  &.failed {
+    color: var(--color-error, #f44336);
+  }
+
+  &.pending {
+    color: var(--color-accent, var(--color-text-tertiary));
+  }
+
+  &.idle {
+    opacity: 0.8;
+  }
+
+  .queue-count {
+    font-size: 11px;
+  }
+
+  .queue-failed-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--color-error, #f44336);
+    flex-shrink: 0;
+    margin-left: 1px;
+  }
+}

@@ -37,6 +37,13 @@ export const QueueStore = signalStore(
     cancelledCount: computed(() => store.items().filter(i => i.status === 'cancelled').length),
     totalCount: computed(() => store.items().length),
     hasItems: computed(() => store.items().length > 0),
+    /** Total count of pending + processing items (used for queue status badge). */
+    activeCount: computed(() => store.items().filter(i => i.status === 'pending' || i.status === 'processing').length),
+    /** Description of the currently processing item, or null when queue is idle. */
+    currentProcessingDescription: computed(() => {
+      const processing = store.items().find(i => i.status === 'processing');
+      return processing?.description ?? null;
+    }),
   })),
 
   withMethods((store) => {
@@ -71,7 +78,10 @@ export const QueueStore = signalStore(
         if (idx >= 0) {
           const previousStatus = currentItems[idx].status;
           if (previousStatus !== update.status) {
-            if (update.status === 'failed') {
+            // Suppress failure toasts for background sync operations — they are transient
+            // and will be retried automatically on the next sync tick.
+            const isSyncOp = update.type === 'sync-folder' || update.type === 'sync-thread';
+            if (update.status === 'failed' && !isSyncOp) {
               toastService.error(`${update.description} failed: ${update.error || 'Unknown error'}`);
             } else if (update.status === 'completed' && update.type === 'send') {
               toastService.success('Email sent successfully');

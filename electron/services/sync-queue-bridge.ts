@@ -1,0 +1,329 @@
+import { BrowserWindow } from 'electron';
+import log from 'electron-log/main';
+import { DatabaseService } from './database-service';
+import { SyncService, ALL_MAIL_PATH } from './sync-service';
+import { MailQueueService } from './mail-queue-service';
+import { IPC_EVENTS } from '../ipc/ipc-channels';
+
+/** Priority folders to sync first (INBOX, then Sent, then Drafts, then others). */
+const PRIORITY_FOLDERS = ['INBOX', '[Gmail]/Sent Mail', '[Gmail]/Drafts'];
+
+/**
+ * SyncQueueBridge — translates sync triggers into deduplicated queue items.
+ *
+ * Responsibilities:
+ * - Owns the background sync timer (moved from SyncService)
+ * - On timer tick: fetches mailbox list, upserts labels, enqueues one sync-folder
+ *   item per folder with dedup keys (priority-ordered: INBOX, Sent, Drafts first)
+ * - On IDLE new-mail: enqueues a sync-folder for INBOX (dedup prevents double-queue)
+ * - Provides enqueueThreadSync() for MAIL_FETCH_THREAD
+ * - Provides enqueueSyncForAccount() for MAIL_SYNC_ACCOUNT
+ * - Starts and stops IDLE connections (delegating to SyncService)
+ *
+ * Dependency order (acyclic):
+ *   SyncQueueBridge → MailQueueService → SyncService
+ *   SyncQueueBridge → SyncService
+ *   (SyncService does NOT import SyncQueueBridge or MailQueueService)
+ */
+export class SyncQueueBridge {
+  private static instance: SyncQueueBridge;
+
+  /** Background sync timer handle. */
+  private syncInterval: ReturnType<typeof setInterval> | null = null;
+
+  private constructor() {}
+
+  static getInstance(): SyncQueueBridge {
+    if (!SyncQueueBridge.instance) {
+      SyncQueueBridge.instance = new SyncQueueBridge();
+    }
+    return SyncQueueBridge.instance;
+  }
+
+  // -----------------------------------------------------------------------
+  // Lifecycle
+  // -----------------------------------------------------------------------
+
+  /**
+   * Start the background sync timer and kick off an initial sync.
+   * After the initial sync items are enqueued, starts IDLE for each active account.
+   * This replaces SyncService.startBackgroundSync() + the syncAllAccounts() startup call.
+   *
+   * @param intervalMs  Override sync interval (ms). Falls back to DB setting or 5 minutes.
+   */
+  start(intervalMs?: number): void {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+    }
+
+    const db = DatabaseService.getInstance();
+    const intervalSetting = db.getSetting('syncInterval');
+    const interval = intervalMs || this.parseSyncIntervalMs(intervalSetting);
+
+    this.syncInterval = setInterval(() => {
+      this.onSyncTick().catch((err) => {
+        log.error('[SyncQueueBridge] Background sync tick failed:', err);
+      });
+    }, interval);
+
+    log.info(`[SyncQueueBridge] Background sync started with ${interval / 1000}s interval`);
+
+    // Kick off an initial sync tick, then start IDLE after queue items are enqueued.
+    this.onSyncTick()
+      .then(() => {
+        this.startIdleForAllAccounts();
+      })
+      .catch((err) => {
+        log.warn('[SyncQueueBridge] Initial sync tick failed:', err);
+        // Still start IDLE even if the initial sync failed
+        this.startIdleForAllAccounts();
+      });
+  }
+
+  /**
+   * Stop the background sync timer.
+   * Does not stop IDLE connections — call SyncService.stopAllIdle() separately.
+   */
+  stop(): void {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+      log.info('[SyncQueueBridge] Background sync stopped');
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Account-level sync
+  // -----------------------------------------------------------------------
+
+  /**
+   * Enqueue per-folder sync items for a single account.
+   * Fetches the mailbox list, upserts labels, then enqueues one sync-folder
+   * item per folder in priority order (INBOX, Sent, Drafts, then others).
+   * Each item gets a dedup key — duplicate items are silently skipped.
+   *
+   * @param accountId  Numeric account ID.
+   * @param showNotifications  Whether folder syncs should trigger desktop notifications.
+   *                           Defaults to false (timer/manual syncs don't notify).
+   */
+  async enqueueSyncForAccount(accountId: number, showNotifications = false): Promise<void> {
+    const syncService = SyncService.getInstance();
+    const queue = MailQueueService.getInstance();
+    const db = DatabaseService.getInstance();
+
+    const accountIdStr = String(accountId);
+
+    // Emit syncing progress to keep the status bar "Last synced" indicator updated.
+    this.emitProgress(accountIdStr, 0, 'syncing');
+
+    let mailboxes: Awaited<ReturnType<typeof syncService.getMailboxesForSync>>;
+    try {
+      mailboxes = await syncService.getMailboxesForSync(accountIdStr);
+    } catch (err) {
+      log.error(`[SyncQueueBridge] Failed to fetch mailboxes for account ${accountId}:`, err);
+      this.emitProgress(accountIdStr, 0, 'error', err instanceof Error ? err.message : 'Failed to fetch mailboxes');
+      return;
+    }
+
+    // Upsert labels from the fresh mailbox list.
+    syncService.upsertLabelsFromMailboxes(accountId, mailboxes);
+
+    // Determine sync scope.
+    const syncState = db.getAccountSyncState(accountId);
+    const isInitial = !syncState.lastSyncAt;
+    const sinceDate = isInitial
+      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days for initial sync
+      : new Date(syncState.lastSyncAt!);
+
+    log.info(`[SyncQueueBridge] enqueueSyncForAccount: account=${accountId}, isInitial=${isInitial}, sinceDate=${sinceDate.toISOString()}`);
+
+    // Build priority-ordered folder list (All Mail excluded; empty folders excluded).
+    const allFolderPaths = mailboxes
+      .filter((mb) => mb.listed && mb.messages > 0 && mb.path !== ALL_MAIL_PATH)
+      .map((mb) => mb.path);
+
+    const priorityFolders = PRIORITY_FOLDERS.filter((f) => allFolderPaths.includes(f));
+    const otherFolders = allFolderPaths.filter((f) => !PRIORITY_FOLDERS.includes(f));
+    const foldersToSync = [...priorityFolders, ...otherFolders];
+
+    // Enqueue one sync-folder item per folder with a dedup key.
+    for (const folder of foldersToSync) {
+      const dedupKey = `sync-folder:${accountId}:${folder}`;
+      queue.enqueue(
+        accountId,
+        'sync-folder',
+        {
+          folder,
+          isInitial,
+          sinceDate: sinceDate.toISOString(),
+          showNotifications,
+        },
+        `Sync ${folder}`,
+        undefined,
+        dedupKey,
+      );
+    }
+
+    // Update account sync state timestamp now (reflects when we last triggered a sync).
+    db.updateAccountSyncState(accountId, new Date().toISOString());
+
+    // Emit done to update the "Last synced" indicator in the status bar.
+    this.emitProgress(accountIdStr, 100, 'done');
+
+    log.info(`[SyncQueueBridge] enqueueSyncForAccount: enqueued ${foldersToSync.length} folder sync item(s) for account ${accountId}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // IDLE → queue bridging
+  // -----------------------------------------------------------------------
+
+  /**
+   * Enqueue a sync-folder item for INBOX (called from IDLE onNewMail callback).
+   * Uses a dedup key so rapid IDLE signals don't stack up duplicate items.
+   * Sets showNotifications=true so new emails trigger a desktop notification.
+   *
+   * @param accountId  Account ID as string (matching the IDLE connection's accountId format).
+   */
+  enqueueInboxSync(accountId: string): void {
+    const numAccountId = Number(accountId);
+    const queue = MailQueueService.getInstance();
+    const db = DatabaseService.getInstance();
+
+    const syncState = db.getAccountSyncState(numAccountId);
+    const isInitial = !syncState.lastSyncAt;
+    const sinceDate = isInitial
+      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+      : new Date(syncState.lastSyncAt!);
+
+    const dedupKey = `sync-folder:${numAccountId}:INBOX`;
+    queue.enqueue(
+      numAccountId,
+      'sync-folder',
+      {
+        folder: 'INBOX',
+        isInitial,
+        sinceDate: sinceDate.toISOString(),
+        showNotifications: true, // IDLE-triggered syncs show desktop notifications
+      },
+      'Sync INBOX',
+      undefined,
+      dedupKey,
+    );
+
+    log.debug(`[SyncQueueBridge] enqueueInboxSync: enqueued sync-folder for INBOX (account ${accountId})`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Thread sync
+  // -----------------------------------------------------------------------
+
+  /**
+   * Enqueue a sync-thread item to fetch and reconcile a thread's bodies from IMAP.
+   * Uses a dedup key so clicking the same thread multiple times only results in one fetch.
+   * Called by the MAIL_FETCH_THREAD IPC handler when bodies are missing.
+   *
+   * @param accountId       Numeric account ID.
+   * @param xGmThrid        Gmail thread ID to fetch.
+   * @param forceFromServer Whether to bypass the body-exists check.
+   * @returns The queueId for the enqueued item.
+   */
+  enqueueThreadSync(accountId: number, xGmThrid: string, forceFromServer = false): string {
+    const queue = MailQueueService.getInstance();
+    const dedupKey = `sync-thread:${accountId}:${xGmThrid}`;
+    return queue.enqueue(
+      accountId,
+      'sync-thread',
+      { xGmThrid, forceFromServer },
+      `Fetch thread bodies`,
+      undefined,
+      dedupKey,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Private helpers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Called on each background sync timer tick.
+   * Enqueues per-folder sync items for all active (non-reauth-needed) accounts.
+   */
+  private async onSyncTick(): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const accounts = db.getAccounts();
+
+    const promises = accounts
+      .filter((a) => !a.needs_reauth)
+      .map((a) =>
+        this.enqueueSyncForAccount(a.id, false).catch((err) => {
+          log.error(`[SyncQueueBridge] onSyncTick: failed to enqueue sync for account ${a.id}:`, err);
+        })
+      );
+
+    await Promise.allSettled(promises);
+  }
+
+  /**
+   * Start IDLE connections for all active accounts.
+   * Called after the initial sync tick so IDLE connections benefit from the initial sync state.
+   */
+  private startIdleForAllAccounts(): void {
+    const db = DatabaseService.getInstance();
+    const syncService = SyncService.getInstance();
+    const accounts = db.getAccounts();
+
+    for (const account of accounts) {
+      if (!account.needs_reauth) {
+        syncService
+          .startIdle(String(account.id), () => {
+            this.enqueueInboxSync(String(account.id));
+          })
+          .catch((err) => {
+            log.warn(`[SyncQueueBridge] Failed to start IDLE for account ${account.id}:`, err);
+          });
+      }
+    }
+  }
+
+  /**
+   * Parse the sync interval setting (supports both legacy "minutes" and new "ms" formats).
+   * Returns milliseconds. Minimum 60 seconds.
+   */
+  private parseSyncIntervalMs(value: string | null): number {
+    if (!value) {
+      return 300_000;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 300_000;
+    }
+    // Backward compatibility: older values were stored as minutes.
+    if (parsed < 1000) {
+      return Math.max(60_000, parsed * 60_000);
+    }
+    return Math.max(60_000, parsed);
+  }
+
+  /**
+   * Emit MAIL_SYNC progress event to all renderer windows.
+   * Used to update the "Last synced" indicator and syncing spinner in the status bar.
+   */
+  private emitProgress(
+    accountId: string,
+    progress: number,
+    status: 'syncing' | 'done' | 'error',
+    error?: string,
+  ): void {
+    const payload = { accountId, folder: '', progress, newCount: 0, status, error };
+    try {
+      const windows = BrowserWindow.getAllWindows();
+      for (const win of windows) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC_EVENTS.MAIL_SYNC, payload);
+        }
+      }
+    } catch {
+      // Window may not exist yet during startup
+    }
+  }
+}

@@ -32,6 +32,8 @@ export class QueueSettingsComponent {
       'move': 'drive_file_move',
       'flag': 'flag',
       'delete': 'delete',
+      'sync-folder': 'folder_sync',
+      'sync-thread': 'mark_email_read',
     };
     return icons[type] || 'pending';
   }

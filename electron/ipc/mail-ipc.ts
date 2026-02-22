@@ -3,14 +3,11 @@ import log from 'electron-log/main';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { SyncService, ALL_MAIL_PATH } from '../services/sync-service';
+import { ALL_MAIL_PATH } from '../services/sync-service';
 import { MailQueueService } from '../services/mail-queue-service';
+import { SyncQueueBridge } from '../services/sync-queue-bridge';
 import { FolderLockManager } from '../services/folder-lock-manager';
 import { PendingOpService } from '../services/pending-op-service';
-
-// threadBodyFetchAttempted now lives on PendingOpService to avoid circular imports
-// between mail-ipc.ts and mail-queue-service.ts. Access via:
-//   PendingOpService.getInstance().threadBodyFetchAttempted
 
 export function registerMailIpcHandlers(): void {
   const db = DatabaseService.getInstance();
@@ -342,121 +339,50 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Fetch a full thread with all messages
+  // Fetch a full thread with all messages.
+  // Returns DB-only data immediately. If bodies are missing, enqueues a sync-thread
+  // item that fetches from IMAP asynchronously and emits MAIL_THREAD_REFRESH when done.
   ipcMain.handle(IPC_CHANNELS.MAIL_FETCH_THREAD, async (_event, accountId: string, threadId: string, forceFromServer?: boolean) => {
     try {
       log.info(`Fetching thread ${threadId} for account ${accountId}`);
       const numAccountId = Number(accountId);
       const pendingOpService = PendingOpService.getInstance();
 
-      // Get thread metadata
+      // Get thread metadata from DB
       const thread = db.getThreadById(numAccountId, threadId);
       if (!thread) {
         return ipcError('MAIL_THREAD_NOT_FOUND', 'Thread not found');
       }
 
-      // Get all messages in this thread
+      // Get all messages in this thread from DB
       let messages = db.getEmailsByThreadId(numAccountId, threadId);
       log.info(`FETCH_THREAD: ${messages.length} messages from DB for thread ${threadId}`);
 
-      // Filter out any messages that are pending queue confirmation (move/delete).
-      // The optimistic DB update (moveEmailFolder) already reflects the correct local
-      // state, so these messages should not appear in the response.
+      // Filter out messages that are pending queue confirmation (move/delete).
+      // The optimistic DB update already reflects the correct local state.
       const pendingIds = pendingOpService.getPendingForThread(numAccountId, threadId);
       if (pendingIds.size > 0) {
         messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
         log.info(`FETCH_THREAD: filtered ${pendingIds.size} pending message(s), ${messages.length} remaining for thread ${threadId}`);
       }
 
-      // Fetch from IMAP when messages are missing bodies OR when the local cache has
-      // been invalidated (0 messages after filtering). Guard: skip if a queue op is
-      // still in-flight for this thread — the IMAP fetch would re-introduce the message
-      // before the server-side delete/move has executed.
-      const fetchKey = `${accountId}:${threadId}`;
-      const threadFetchAttempted = pendingOpService.threadBodyFetchAttempted;
+      // Enqueue async IMAP fetch if bodies are missing and no pending ops block it.
+      // Dedup in the queue ensures clicking the same thread twice only results in one fetch.
+      // The sync-thread queue worker will upsert bodies and emit MAIL_THREAD_REFRESH
+      // when done so the renderer reloads automatically.
       const hasPending = pendingOpService.hasPendingForThread(numAccountId, threadId);
-
-      if (hasPending) {
-        // Block IMAP re-fetch while queue op is in-flight.
-        // Mark as attempted so we don't loop; queue worker will clear this after completion.
-        threadFetchAttempted.add(fetchKey);
-        log.info(`FETCH_THREAD: blocking IMAP re-fetch for thread ${threadId} — queue op in-flight`);
-      } else {
-        const missingBodies = messages.filter(
-          (m) => !m['htmlBody'] && !m['textBody']
-        );
-        const shouldFetch =
-          forceFromServer === true ||
-          ((messages.length === 0 || missingBodies.length > 0) && !threadFetchAttempted.has(fetchKey));
-        if (shouldFetch) {
-          threadFetchAttempted.add(fetchKey);
-          log.info(`FETCH_THREAD: ${missingBodies.length}/${messages.length} messages missing bodies — fetching from IMAP`);
-
-          try {
-            const imapService = ImapService.getInstance();
-            const fetchedMessages = await imapService.fetchThread(accountId, threadId);
-            log.info(`FETCH_THREAD: IMAP returned ${fetchedMessages.length} messages for thread ${threadId}`);
-
-            // Capture local thread message IDs before any upserts (for reconcile-to-server below)
-            const localXGmMsgIds = new Set(
-              db.getEmailsByThreadId(numAccountId, threadId).map((m) => String(m['xGmMsgId'] ?? '')).filter(Boolean)
-            );
-            const serverXGmMsgIds = new Set(fetchedMessages.map((m) => m.xGmMsgId));
-            const staleXGmMsgIds = [...localXGmMsgIds].filter((id) => !serverXGmMsgIds.has(id));
-
-            // Update DB with fetched bodies
-            for (const fetched of fetchedMessages) {
-              if (fetched.htmlBody || fetched.textBody) {
-                db.upsertEmail({
-                  accountId: numAccountId,
-                  xGmMsgId: fetched.xGmMsgId,
-                  xGmThrid: fetched.xGmThrid,
-                  folder: fetched.folder,
-                  folderUid: fetched.uid,
-                  fromAddress: fetched.fromAddress,
-                  fromName: fetched.fromName,
-                  toAddresses: fetched.toAddresses,
-                  ccAddresses: fetched.ccAddresses,
-                  bccAddresses: fetched.bccAddresses,
-                  subject: fetched.subject,
-                  textBody: fetched.textBody,
-                  htmlBody: fetched.htmlBody,
-                  date: fetched.date,
-                  isRead: fetched.isRead,
-                  isStarred: fetched.isStarred,
-                  isImportant: fetched.isImportant,
-                  isDraft: fetched.isDraft,
-                  snippet: fetched.snippet,
-                  size: fetched.size,
-                  hasAttachments: fetched.hasAttachments,
-                  labels: fetched.labels,
-                  messageId: fetched.messageId,
-                });
-              }
-            }
-
-            // Reconcile thread to server: remove local messages no longer on server (e.g. draft deleted by Gmail after send)
-            for (const xGmMsgId of staleXGmMsgIds) {
-              db.removeEmailAndAssociations(numAccountId, xGmMsgId);
-            }
-            if (staleXGmMsgIds.length > 0) {
-              log.info(`FETCH_THREAD: removed ${staleXGmMsgIds.length} stale message(s) from thread ${threadId} (no longer on server)`);
-            }
-            db.recomputeThreadMetadata(numAccountId, threadId);
-            db.removeOrphanedThreads(numAccountId);
-
-            // Re-fetch messages from DB with bodies (re-apply pending filter)
-            messages = db.getEmailsByThreadId(numAccountId, threadId);
-            if (pendingIds.size > 0) {
-              messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
-            }
-          } catch (err) {
-            log.warn(`Failed to fetch thread bodies from IMAP for ${threadId}:`, err);
-          // Continue with what we have from DB
-          }
+      if (!hasPending) {
+        const missingBodies = messages.filter((m) => !m['htmlBody'] && !m['textBody']);
+        const needsFetch = forceFromServer === true || messages.length === 0 || missingBodies.length > 0;
+        if (needsFetch) {
+          log.info(`FETCH_THREAD: enqueueing sync-thread for ${threadId} (${missingBodies.length}/${messages.length} missing bodies, force=${forceFromServer})`);
+          SyncQueueBridge.getInstance().enqueueThreadSync(numAccountId, threadId, forceFromServer === true);
         }
+      } else {
+        log.info(`FETCH_THREAD: skipping sync-thread enqueue for ${threadId} — queue op in-flight`);
       }
 
+      // Return DB-only data immediately (renderer will receive MAIL_THREAD_REFRESH when bodies arrive).
       const response = buildThreadResponse(thread, messages, pendingIds, numAccountId);
       return ipcSuccess(response);
     } catch (err) {
@@ -1047,12 +973,13 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Trigger manual sync for an account
+  // Trigger manual sync for an account — enqueues per-folder items via the queue bridge.
+  // Returns immediately; progress is visible via the queue status indicator.
   ipcMain.handle(IPC_CHANNELS.MAIL_SYNC_ACCOUNT, async (_event, accountId: string) => {
     try {
       log.info(`Manual sync triggered for account ${accountId}`);
-      const syncService = SyncService.getInstance();
-      await syncService.syncAccount(accountId);
+      const bridge = SyncQueueBridge.getInstance();
+      await bridge.enqueueSyncForAccount(Number(accountId), false);
       return ipcSuccess(null);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Sync failed';

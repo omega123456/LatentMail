@@ -4,6 +4,7 @@ import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { OAuthService } from '../services/oauth-service';
 import { SyncService } from '../services/sync-service';
+import { SyncQueueBridge } from '../services/sync-queue-bridge';
 
 export function registerAuthIpcHandlers(): void {
   // Initiate OAuth login flow (opens system browser)
@@ -13,16 +14,19 @@ export function registerAuthIpcHandlers(): void {
       const oauthService = OAuthService.getInstance();
       const account = await oauthService.login();
 
-      // Trigger initial sync and IDLE for the new account (same as main.ts does at startup)
+      // Trigger initial sync and start IDLE for the new account.
+      // Uses SyncQueueBridge so the sync goes through the per-account FIFO queue,
+      // consistent with background sync and startup behaviour.
+      const bridge = SyncQueueBridge.getInstance();
       const syncService = SyncService.getInstance();
-      syncService.syncAccount(String(account.id))
+      bridge.enqueueSyncForAccount(account.id, false)
         .then(() => {
-          syncService.startIdle(String(account.id)).catch(err => {
-            log.warn(`Failed to start IDLE for account ${account.id}:`, err);
+          return syncService.startIdle(String(account.id), () => {
+            bridge.enqueueInboxSync(String(account.id));
           });
         })
         .catch(err => {
-          log.warn('Post-login sync failed:', err);
+          log.warn('Post-login sync or IDLE failed:', err);
         });
 
       // Map to the format the renderer expects

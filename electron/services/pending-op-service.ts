@@ -5,14 +5,10 @@ import log from 'electron-log/main';
  * confirmation of a move/delete operation.
  *
  * Used to:
- *   - Block IMAP thread re-fetch in MAIL_FETCH_THREAD while ops are in-flight,
+ *   - Block sync-thread enqueueing in MAIL_FETCH_THREAD while ops are in-flight,
  *     preventing the server from re-contaminating the DB with the "deleted" message
  *     before the queue worker executes the IMAP delete.
  *   - Filter pending messages out of FETCH_THREAD results (response-level).
- *
- * Also owns the `threadBodyFetchAttempted` set (previously in mail-ipc.ts) so that
- * MailQueueService can clear it after queue confirmation without creating a circular
- * import cycle between mail-ipc.ts and mail-queue-service.ts.
  *
  * Cleared by queue worker post-op handlers after successful execution or
  * permanent failure.
@@ -28,14 +24,6 @@ export class PendingOpService {
    * Synchronous Map operations are atomic in single-threaded Node.js.
    */
   private pendingOps = new Map<string, Set<string>>();
-
-  /**
-   * Set of "accountId:xGmThrid" fetch keys for which an IMAP body fetch
-   * has already been attempted. Guards against infinite re-fetch for orphan threads.
-   * Lives here (not in mail-ipc.ts) so MailQueueService can clear entries after
-   * queue confirmation without a circular import.
-   */
-  readonly threadBodyFetchAttempted = new Set<string>();
 
   private constructor() {}
 

@@ -6,6 +6,7 @@ import { registerAllIpcHandlers } from './ipc';
 import { DatabaseService } from './services/database-service';
 import { OAuthService } from './services/oauth-service';
 import { SyncService } from './services/sync-service';
+import { SyncQueueBridge } from './services/sync-queue-bridge';
 import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
 
@@ -55,30 +56,13 @@ if (!gotTheLock) {
       log.warn('Failed to initialize OAuth refresh timers:', err);
     }
 
-    // Start background sync for all accounts
+    // Start background sync via SyncQueueBridge.
+    // This enqueues per-folder sync items into MailQueueService (concurrency-1 per account),
+    // which eliminates the race condition between sync reconciliation and queue operations.
     try {
-      const syncService = SyncService.getInstance();
-      syncService.startBackgroundSync();
-
-      // Trigger initial sync for all accounts, then start IDLE
-      syncService.syncAllAccounts()
-        .then(() => {
-          // Start IDLE for each active account after initial sync completes
-          const dbForIdle = DatabaseService.getInstance();
-          const accounts = dbForIdle.getAccounts();
-          for (const account of accounts) {
-            if (!account.needs_reauth) {
-              syncService.startIdle(String(account.id)).catch(err => {
-                log.warn(`Failed to start IDLE for account ${account.id}:`, err);
-              });
-            }
-          }
-        })
-        .catch(err => {
-          log.warn('Initial sync failed:', err);
-        });
+      SyncQueueBridge.getInstance().start();
     } catch (err) {
-      log.warn('Failed to start background sync:', err);
+      log.warn('Failed to start SyncQueueBridge:', err);
     }
 
     // Create the main window
@@ -213,9 +197,8 @@ app.on('before-quit', async (event) => {
 
   // Stop background sync, IDLE, and disconnect IMAP
   try {
-    const syncForQuit = SyncService.getInstance();
-    syncForQuit.stopBackgroundSync();
-    syncForQuit.stopAllIdle().catch(() => {});
+    SyncQueueBridge.getInstance().stop();
+    SyncService.getInstance().stopAllIdle().catch(() => {});
     MailQueueService.getInstance().cancelAllRetries();
     ImapService.getInstance().disconnectAll().catch(() => {});
   } catch {
