@@ -1,8 +1,15 @@
+import { app } from 'electron';
 import log from 'electron-log/main';
+import fs from 'fs';
+import path from 'path';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+const LOG_RETENTION_DAYS = 7;
 const VALID_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
+
+/** Matches daily log filenames: main-YYYY-MM-DD.log */
+const DAILY_LOG_PATTERN = /^main-\d{4}-\d{2}-\d{2}\.log$/;
 
 function isValidLevel(value: unknown): value is LogLevel {
   return typeof value === 'string' && (VALID_LEVELS as readonly string[]).includes(value);
@@ -12,10 +19,14 @@ function isValidLevel(value: unknown): value is LogLevel {
  * Singleton wrapper around `electron-log` that centralizes all logging configuration
  * for the main process.
  *
+ * File transport uses daily log files (one per calendar day, e.g. main-YYYY-MM-DD.log)
+ * and automatically deletes logs older than LOG_RETENTION_DAYS (7) on startup.
+ *
  * Two-phase initialization:
- *  - Phase 1 (constructor / first getInstance() call): calls log.initialize(), sets the
- *    file transport max size, and applies the LOG_LEVEL env var (or 'info' as the
- *    ultimate fallback). Logging is fully functional after Phase 1.
+ *  - Phase 1 (constructor / first getInstance() call): calls log.initialize(), sets
+ *    daily resolvePathFn, disables size-based rotation, runs 7-day cleanup, and applies
+ *    the LOG_LEVEL env var (or 'info' as the ultimate fallback). Logging is fully
+ *    functional after Phase 1.
  *  - Phase 2 (initialize() method): lazily imports DatabaseService and overrides the
  *    transport level with whatever was persisted in the settings table.  Must be called
  *    after DatabaseService.initialize() completes.
@@ -32,12 +43,61 @@ export class LoggerService {
   private constructor() {
     // ── Phase 1: early bootstrap ───────────────────────────────────────────
     log.initialize();
-    log.transports.file.maxSize = 10 * 1024 * 1024; // 10 MB
+
+    log.transports.file.resolvePathFn = (variables, message) => {
+      const date = message?.date ?? new Date();
+      const dateStr = date.toISOString().split('T')[0];
+      return path.join(variables.libraryDefaultDir, `main-${dateStr}.log`);
+    };
+    log.transports.file.maxSize = 0; // Daily rotation only; no size-based rotation
+
+    this.cleanupOldLogs();
 
     const envLevel = process.env['LOG_LEVEL'];
     this.currentLevel = isValidLevel(envLevel) ? envLevel : 'info';
     log.transports.file.level = this.currentLevel;
     // Console transport is deliberately left at its electron-log default.
+  }
+
+  /**
+   * Deletes daily log files older than LOG_RETENTION_DAYS. Uses the same log
+   * directory rules as electron-log. Never throws; logs errors and returns.
+   */
+  private cleanupOldLogs(): void {
+    try {
+      const logDir =
+        process.platform === 'darwin'
+          ? path.join(app.getPath('home'), 'Library', 'Logs', app.getName())
+          : path.join(app.getPath('userData'), 'logs');
+
+      if (!fs.existsSync(logDir)) {
+        return;
+      }
+
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - LOG_RETENTION_DAYS);
+      cutoff.setHours(0, 0, 0, 0);
+
+      const entries = fs.readdirSync(logDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !DAILY_LOG_PATTERN.test(entry.name)) {
+          continue;
+        }
+        const match = entry.name.match(/^main-(\d{4})-(\d{2})-(\d{2})\.log$/);
+        if (!match) {
+          continue;
+        }
+        const [, y, m, d] = match;
+        const fileDate = new Date(parseInt(y!, 10), parseInt(m!, 10) - 1, parseInt(d!, 10));
+        if (fileDate < cutoff) {
+          const fullPath = path.join(logDir, entry.name);
+          fs.unlinkSync(fullPath);
+          log.info(`[LoggerService] Removed old log file: ${entry.name}`);
+        }
+      }
+    } catch (err) {
+      log.warn('[LoggerService] Failed to cleanup old log files:', err);
+    }
   }
 
   static getInstance(): LoggerService {
