@@ -23,6 +23,63 @@ const GMAIL_FOLDER_MAP: Record<string, { name: string; icon: string }> = {
 
 export const ALL_MAIL_PATH = '[Gmail]/All Mail';
 
+/**
+ * Gmail X-GM-LABELS system label → IMAP folder path mapping.
+ * Used by syncAllMail() to convert raw labels from ImapFlow's msg.labels Set
+ * into folder paths for the email_folders junction table.
+ */
+const GMAIL_LABEL_TO_FOLDER: Record<string, string> = {
+  '\\Inbox': 'INBOX',
+  '\\Sent': '[Gmail]/Sent Mail',
+  '\\Draft': '[Gmail]/Drafts',
+  '\\Trash': '[Gmail]/Trash',
+  '\\Junk': '[Gmail]/Spam',
+  '\\Starred': '[Gmail]/Starred',
+  '\\Important': '[Gmail]/Important',
+};
+
+/**
+ * Convert raw X-GM-LABELS Set (from ImapFlow msg.labels) into validated IMAP folder paths.
+ *
+ * - System labels are mapped via GMAIL_LABEL_TO_FOLDER.
+ * - User labels are validated against the known mailbox path set.
+ * - [Gmail]/All Mail is always excluded (never stored as a folder association).
+ *
+ * @param rawLabels  Raw Set<string> from msg.labels (before CSV join).
+ * @param knownMailboxPaths  Set of known IMAP folder paths for the account (from getMailboxesForSync).
+ * @returns Array of validated IMAP folder paths.
+ */
+function mapLabelsToFolderPaths(rawLabels: string[], knownMailboxPaths: Set<string>): string[] {
+  const folderPaths: string[] = [];
+
+  for (const label of rawLabels) {
+    // System label mapping
+    const systemPath = GMAIL_LABEL_TO_FOLDER[label];
+    if (systemPath) {
+      // INBOX is guaranteed to exist; other system folders are validated against
+      // known mailbox paths (user may have hidden them in Gmail IMAP settings).
+      if (systemPath === 'INBOX' || knownMailboxPaths.has(systemPath)) {
+        folderPaths.push(systemPath);
+      }
+      continue;
+    }
+
+    // Skip All Mail — never stored as a folder association
+    if (label === ALL_MAIL_PATH) {
+      continue;
+    }
+
+    // User label: validate against known mailbox paths
+    if (knownMailboxPaths.has(label)) {
+      folderPaths.push(label);
+    } else {
+      log.debug(`[SyncService] mapLabelsToFolderPaths: skipping unknown label "${label}"`);
+    }
+  }
+
+  return folderPaths;
+}
+
 /** Result returned by syncFolder() for the queue worker to act on. */
 export interface SyncFolderResult {
   uidValidityChanged: boolean;
@@ -123,13 +180,12 @@ export class SyncService {
 
   /**
    * Sync a single folder for an account.
-   *
-   * Pattern A locking: acquires folder lock → fetches (emails + server UIDs) →
-   * upserts to DB → reconciles → releases lock. This ensures reconciliation runs
-   * inside the serialized queue context with no "outside lock" race window.
+   * Retained **only** for the IDLE-triggered INBOX sync path. All other folder
+   * discovery goes through syncAllMail(). No reconciliation logic — the 5-min
+   * All Mail sync handles folder reconciliation.
    *
    * @param accountId        Account ID as string.
-   * @param folder           Folder path (e.g. 'INBOX', '[Gmail]/Sent Mail').
+   * @param folder           Folder path (e.g. 'INBOX').
    * @param isInitial        True for the first-ever sync (affects fetch limit).
    * @param sinceDate        For incremental fetches, only emails since this date.
    * @param showNotifications True when triggered by IDLE (shows desktop notification).
@@ -223,14 +279,6 @@ export class SyncService {
           ? sinceDate
           : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         emails = await imapService.fetchEmails(accountId, folder, { limit: fetchLimit, since: folderSinceDate });
-      }
-
-      // --- Fetch server UIDs for reconciliation (while still holding lock) ---
-      let serverUidsForReconcile: number[] = [];
-      try {
-        serverUidsForReconcile = await imapService.fetchFolderUids(accountId, folder);
-      } catch (uidErr) {
-        log.warn(`[SyncService] syncFolder: failed to fetch UIDs for ${folder} (reconciliation will be skipped):`, uidErr);
       }
 
       // --- Group emails by thread, skip pending ops ---
@@ -350,24 +398,6 @@ export class SyncService {
         }
       }
 
-      // --- Reconciliation (Pattern A — within lock) ---
-      if (serverUidsForReconcile.length > 0) {
-        try {
-          const removalCount = await this.reconcileFolderWithServerUids(accountId, folder, serverUidsForReconcile);
-          if (removalCount > 0) {
-            folderChangeCount += removalCount;
-            if (newCount > 0 || flagChangeCount > 0) {
-              folderChangeType = 'mixed';
-            } else {
-              folderChangeType = 'deletions';
-            }
-            folderChanged = true;
-          }
-        } catch (reconcileErr) {
-          log.warn(`[SyncService] syncFolder: Reconciliation failed for ${folder} account ${accountId}:`, reconcileErr);
-        }
-      }
-
       // Fold email upsert changes into the result
       folderChangeCount += newCount + flagChangeCount;
       if (newCount > 0 || flagChangeCount > 0) {
@@ -375,13 +405,9 @@ export class SyncService {
         if (newCount > 0 && flagChangeCount > 0) {
           folderChangeType = 'mixed';
         } else if (newCount > 0) {
-          if (folderChangeType !== 'mixed') {
-            folderChangeType = 'new_messages';
-          }
+          folderChangeType = 'new_messages';
         } else if (flagChangeCount > 0) {
-          if (folderChangeType !== 'mixed') {
-            folderChangeType = 'flag_changes';
-          }
+          folderChangeType = 'flag_changes';
         }
       }
 
@@ -392,7 +418,6 @@ export class SyncService {
         uidValidity: folderUidValidity,
         highestModseq: folderCondstoreSupported ? folderHighestModseq : null,
         condstoreSupported: folderCondstoreSupported,
-        ...(serverUidsForReconcile.length > 0 ? { lastReconciledAt: new Date().toISOString() } : {}),
       });
 
       // --- Desktop notifications for new INBOX emails ---
@@ -406,6 +431,273 @@ export class SyncService {
     }
 
     return { uidValidityChanged, folderChanged, changeType: folderChangeType, changeCount: folderChangeCount };
+  }
+
+  // -----------------------------------------------------------------------
+  // All Mail sync (called by MailQueueService.processSyncAllMail)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Central sync method: fetches from [Gmail]/All Mail and distributes emails
+   * to their correct folders via X-GM-LABELS → folder path mapping.
+   *
+   * - Initial sync: date-based fetch (30-day window, limit 100)
+   * - Incremental sync: CONDSTORE fetchChangedSince on All Mail
+   * - For each email: upsert row, map labels → folders, reconcile email_folders
+   * - Cleans orphans, recomputes thread metadata, runs INBOX filters
+   * - Returns the set of affected folders for the queue worker to emit events
+   *
+   * @param accountId          Account ID as string.
+   * @param isInitial          True for first-ever sync (no folder_state for All Mail).
+   * @param sinceDate          For date-based fallback fetch.
+   * @param knownMailboxPaths  Set of known IMAP folder paths (for label validation).
+   * @returns Set of affected folder paths.
+   */
+  async syncAllMail(
+    accountId: string,
+    isInitial: boolean,
+    sinceDate: Date,
+    knownMailboxPaths: Set<string>,
+  ): Promise<Set<string>> {
+    const db = DatabaseService.getInstance();
+    const imapService = ImapService.getInstance();
+    const lockManager = FolderLockManager.getInstance();
+    const numAccountId = Number(accountId);
+
+    const affectedFolders = new Set<string>();
+    const affectedThreadIds = new Set<string>();
+
+    const existingFolderState = db.getFolderState(numAccountId, ALL_MAIL_PATH);
+
+    // Acquire folder lock on All Mail for the IMAP fetch.
+    const release = await lockManager.acquire(ALL_MAIL_PATH, accountId);
+    try {
+      // --- Mailbox status ---
+      const mailboxStatus = await imapService.getMailboxStatus(accountId, ALL_MAIL_PATH);
+      const allMailUidValidity = mailboxStatus.uidValidity;
+      const allMailCondstoreSupported = mailboxStatus.condstoreSupported;
+      let allMailHighestModseq: string | null = allMailCondstoreSupported ? mailboxStatus.highestModseq : null;
+
+      // UIDVALIDITY reset: delete All Mail folder_state only (no email_folders entries to wipe).
+      let uidValidityChanged = false;
+      if (existingFolderState && existingFolderState.uidValidity !== mailboxStatus.uidValidity) {
+        log.warn(`[SyncService] syncAllMail: UIDVALIDITY changed for All Mail (account ${accountId}): ${existingFolderState.uidValidity} -> ${mailboxStatus.uidValidity}. Deleting folder_state.`);
+        db.deleteFolderState(numAccountId, ALL_MAIL_PATH);
+        uidValidityChanged = true;
+      }
+
+      // --- Fetch emails ---
+      const fetchLimit = isInitial ? 100 : 200;
+      let emails: Awaited<ReturnType<typeof imapService.fetchEmails>> = [];
+
+      const canUseCondstore =
+        !uidValidityChanged &&
+        allMailCondstoreSupported &&
+        !!existingFolderState &&
+        existingFolderState.uidValidity === mailboxStatus.uidValidity &&
+        existingFolderState.condstoreSupported;
+
+      if (canUseCondstore) {
+        const changedSince = existingFolderState!.highestModseq ?? '0';
+        const changed = await imapService.fetchChangedSince(accountId, ALL_MAIL_PATH, changedSince);
+
+        const sorted = [...changed.emails].sort((a, b) => {
+          const ma = BigInt(a.modseq ?? '0');
+          const mb = BigInt(b.modseq ?? '0');
+          if (ma < mb) {
+            return -1;
+          }
+          if (ma > mb) {
+            return 1;
+          }
+          return a.uid - b.uid;
+        });
+        emails = sorted.slice(0, fetchLimit);
+
+        if (emails.length > 0) {
+          let maxProcessed = BigInt(changedSince || '0');
+          for (const email of emails) {
+            const modseq = BigInt(email.modseq ?? '0');
+            if (modseq > maxProcessed) {
+              maxProcessed = modseq;
+            }
+          }
+          allMailHighestModseq = String(maxProcessed);
+        } else {
+          allMailHighestModseq = changed.highestModseq;
+        }
+      } else {
+        // Date-based fetch (initial sync or CONDSTORE not available / UIDVALIDITY reset)
+        const fetchSinceDate = (uidValidityChanged || !existingFolderState)
+          ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+          : sinceDate;
+        emails = await imapService.fetchEmails(accountId, ALL_MAIL_PATH, { limit: fetchLimit, since: fetchSinceDate });
+      }
+
+      // --- Process fetched emails (within a batch transaction for performance) ---
+      const pendingOpService = PendingOpService.getInstance();
+      let newInboxEmails = false;
+      const rawDb = db.getDatabase();
+      rawDb.run('BEGIN');
+
+      try {
+      for (const email of emails) {
+        const threadId = email.xGmThrid || email.xGmMsgId;
+
+        // Skip emails with pending queue operations
+        const pendingForThread = pendingOpService.getPendingForThread(numAccountId, threadId);
+        if (pendingForThread.has(email.xGmMsgId)) {
+          log.debug(`[SyncService] syncAllMail: skipping pending message ${email.xGmMsgId}`);
+          continue;
+        }
+
+        // Upsert the email row (folder=ALL_MAIL_PATH → skips email_folders insertion)
+        db.upsertEmail({
+          accountId: numAccountId,
+          xGmMsgId: email.xGmMsgId,
+          xGmThrid: email.xGmThrid,
+          folder: ALL_MAIL_PATH,
+          folderUid: email.uid,
+          fromAddress: email.fromAddress,
+          fromName: email.fromName,
+          toAddresses: email.toAddresses,
+          ccAddresses: email.ccAddresses,
+          bccAddresses: email.bccAddresses,
+          subject: email.subject,
+          textBody: email.textBody,
+          htmlBody: email.htmlBody,
+          date: email.date,
+          isRead: email.isRead,
+          isStarred: email.isStarred,
+          isImportant: email.isImportant,
+          isDraft: email.isDraft,
+          snippet: email.snippet,
+          size: email.size,
+          hasAttachments: email.hasAttachments,
+          labels: email.labels,
+          messageId: email.messageId,
+        });
+
+        // Upsert contact
+        if (email.fromAddress) {
+          db.upsertContact(email.fromAddress, email.fromName);
+        }
+
+        // Map raw labels → folder paths and reconcile email_folders.
+        // If no labels map to known folders (archived email), use All Mail as a
+        // fallback folder so the email retains at least one email_folders association
+        // and doesn't get orphan-cleaned.
+        const mappedPaths = mapLabelsToFolderPaths(email.rawLabels, knownMailboxPaths);
+        const folderPaths = mappedPaths.length > 0 ? mappedPaths : [ALL_MAIL_PATH];
+        const reconciled = db.reconcileEmailFolders(numAccountId, email.xGmMsgId, email.xGmThrid, folderPaths);
+        for (const folder of reconciled) {
+          affectedFolders.add(folder);
+        }
+        // Also add all current folder paths as affected (for new emails)
+        for (const folder of folderPaths) {
+          affectedFolders.add(folder);
+        }
+
+        // Track if any emails belong to INBOX (for filter processing)
+        if (folderPaths.includes('INBOX')) {
+          newInboxEmails = true;
+        }
+
+        // Upsert thread
+        db.upsertThread({
+          accountId: numAccountId,
+          xGmThrid: threadId,
+          subject: email.subject,
+          lastMessageDate: email.date,
+          participants: email.fromAddress,
+          messageCount: 1,
+          snippet: email.snippet,
+          isRead: email.isRead,
+          isStarred: email.isStarred,
+        });
+
+        // Upsert thread_folders for each folder path
+        for (const folder of folderPaths) {
+          db.upsertThreadFolder(numAccountId, threadId, folder);
+        }
+
+        affectedThreadIds.add(threadId);
+      }
+      rawDb.run('COMMIT');
+      } catch (batchErr) {
+        rawDb.run('ROLLBACK');
+        throw batchErr;
+      }
+
+      // --- Orphan cleanup ---
+      // Note: CONDSTORE doesn't report server-side deletions (EXPUNGE). Emails permanently
+      // deleted via another client won't be detected here. A periodic full-UID reconciliation
+      // against All Mail would be needed for that — deferred to a future enhancement.
+      try {
+        const orphanEmails = db.removeOrphanedEmails(numAccountId);
+        for (const orphan of orphanEmails) {
+          if (orphan.xGmThrid) {
+            affectedThreadIds.add(orphan.xGmThrid);
+          }
+        }
+      } catch (orphanErr) {
+        log.warn(`[SyncService] syncAllMail: removeOrphanedEmails failed (continuing):`, orphanErr);
+      }
+
+      try {
+        db.removeOrphanedThreads(numAccountId);
+      } catch (orphanErr) {
+        log.warn(`[SyncService] syncAllMail: removeOrphanedThreads failed (continuing):`, orphanErr);
+      }
+
+      // --- Recompute thread metadata ---
+      for (const xGmThrid of affectedThreadIds) {
+        try {
+          db.recomputeThreadMetadata(numAccountId, xGmThrid);
+        } catch (recomputeErr) {
+          log.warn(`[SyncService] syncAllMail: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
+        }
+      }
+
+      // --- Filter processing for new INBOX emails ---
+      if (newInboxEmails) {
+        try {
+          log.debug(`[SyncService] syncAllMail: triggering filter processing for account ${accountId}`);
+          const filterService = FilterService.getInstance();
+          const filterResult = await filterService.processNewEmails(numAccountId);
+          log.debug(`[SyncService] syncAllMail: filter done for account ${accountId}: ${filterResult.emailsMatched} matched, ${filterResult.actionsDispatched} dispatched`);
+        } catch (filterErr) {
+          log.warn(`[SyncService] syncAllMail: filter processing failed for account ${accountId} (continuing):`, filterErr);
+        }
+      }
+
+      // --- Persist folder state for All Mail ---
+      db.upsertFolderState({
+        accountId: numAccountId,
+        folder: ALL_MAIL_PATH,
+        uidValidity: allMailUidValidity,
+        highestModseq: allMailCondstoreSupported ? allMailHighestModseq : null,
+        condstoreSupported: allMailCondstoreSupported,
+      });
+
+      // --- One-time stale folder_state cleanup ---
+      if (emails.length > 0) {
+        try {
+          const cleaned = db.cleanupStaleFolderStates(numAccountId, ['INBOX', ALL_MAIL_PATH]);
+          if (cleaned > 0) {
+            log.info(`[SyncService] syncAllMail: cleaned up ${cleaned} stale folder_state row(s) for account ${accountId}`);
+          }
+        } catch (cleanupErr) {
+          log.warn(`[SyncService] syncAllMail: stale folder_state cleanup failed (continuing):`, cleanupErr);
+        }
+      }
+
+      log.info(`[SyncService] syncAllMail: ${emails.length} emails processed, ${affectedFolders.size} folders affected for account ${accountId}`);
+    } finally {
+      release();
+    }
+
+    return affectedFolders;
   }
 
   // -----------------------------------------------------------------------

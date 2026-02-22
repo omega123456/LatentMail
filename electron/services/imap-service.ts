@@ -32,6 +32,8 @@ interface FetchedEmail {
   size: number;
   hasAttachments: boolean;
   labels: string;
+  /** Raw labels from ImapFlow's msg.labels Set (before CSV join). Used for All Mail label-to-folder mapping. */
+  rawLabels: string[];
   /** CONDSTORE modseq value (string, from BigInt). Only present on CONDSTORE fetches. */
   modseq?: string;
 }
@@ -1056,6 +1058,7 @@ export class ImapService {
         size: msg.size || 0,
         hasAttachments,
         labels: labels.join(','),
+        rawLabels: labels,
         modseq: modseqStr,
       };
     } catch (err) {

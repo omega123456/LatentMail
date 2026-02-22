@@ -3,20 +3,17 @@ import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 
 const log = LoggerService.getInstance();
-import { SyncService, ALL_MAIL_PATH } from './sync-service';
+import { SyncService } from './sync-service';
 import { MailQueueService } from './mail-queue-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
-
-/** Priority folders to sync first (INBOX, then Sent, then Drafts, then others). */
-const PRIORITY_FOLDERS = ['INBOX', '[Gmail]/Sent Mail', '[Gmail]/Drafts'];
 
 /**
  * SyncQueueBridge — translates sync triggers into deduplicated queue items.
  *
  * Responsibilities:
  * - Owns the background sync timer (moved from SyncService)
- * - On timer tick: fetches mailbox list, upserts labels, enqueues one sync-folder
- *   item per folder with dedup keys (priority-ordered: INBOX, Sent, Drafts first)
+ * - On timer tick: fetches mailbox list, upserts labels, enqueues a single
+ *   sync-allmail queue item per account (All Mail-based sync)
  * - On IDLE new-mail: enqueues a sync-folder for INBOX (dedup prevents double-queue)
  * - Provides enqueueThreadSync() for MAIL_FETCH_THREAD
  * - Provides enqueueSyncForAccount() for MAIL_SYNC_ACCOUNT
@@ -99,16 +96,15 @@ export class SyncQueueBridge {
   // -----------------------------------------------------------------------
 
   /**
-   * Enqueue per-folder sync items for a single account.
-   * Fetches the mailbox list, upserts labels, then enqueues one sync-folder
-   * item per folder in priority order (INBOX, Sent, Drafts, then others).
-   * Each item gets a dedup key — duplicate items are silently skipped.
+   * Enqueue a single sync-allmail item for an account.
+   * Fetches the mailbox list and upserts labels (needed for label-to-folder validation),
+   * then enqueues a single sync-allmail queue item with a dedup key.
    *
    * @param accountId  Numeric account ID.
-   * @param showNotifications  Whether folder syncs should trigger desktop notifications.
-   *                           Defaults to false (timer/manual syncs don't notify).
+   * @param showNotifications  Unused (kept for interface compatibility). Notifications
+   *                           are handled by the IDLE INBOX sync path only.
    */
-  async enqueueSyncForAccount(accountId: number, showNotifications = false): Promise<void> {
+  async enqueueSyncForAccount(accountId: number, _showNotifications = false): Promise<void> {
     const syncService = SyncService.getInstance();
     const queue = MailQueueService.getInstance();
     const db = DatabaseService.getInstance();
@@ -127,7 +123,7 @@ export class SyncQueueBridge {
       return;
     }
 
-    // Upsert labels from the fresh mailbox list.
+    // Upsert labels from the fresh mailbox list (needed for label-to-folder validation).
     syncService.upsertLabelsFromMailboxes(accountId, mailboxes);
 
     // Determine sync scope.
@@ -139,32 +135,19 @@ export class SyncQueueBridge {
 
     log.info(`[SyncQueueBridge] enqueueSyncForAccount: account=${accountId}, isInitial=${isInitial}, sinceDate=${sinceDate.toISOString()}`);
 
-    // Build priority-ordered folder list (All Mail excluded; empty folders excluded).
-    const allFolderPaths = mailboxes
-      .filter((mb) => mb.listed && mb.messages > 0 && mb.path !== ALL_MAIL_PATH)
-      .map((mb) => mb.path);
-
-    const priorityFolders = PRIORITY_FOLDERS.filter((f) => allFolderPaths.includes(f));
-    const otherFolders = allFolderPaths.filter((f) => !PRIORITY_FOLDERS.includes(f));
-    const foldersToSync = [...priorityFolders, ...otherFolders];
-
-    // Enqueue one sync-folder item per folder with a dedup key.
-    for (const folder of foldersToSync) {
-      const dedupKey = `sync-folder:${accountId}:${folder}`;
-      queue.enqueue(
-        accountId,
-        'sync-folder',
-        {
-          folder,
-          isInitial,
-          sinceDate: sinceDate.toISOString(),
-          showNotifications,
-        },
-        `Sync ${folder}`,
-        undefined,
-        dedupKey,
-      );
-    }
+    // Enqueue a single sync-allmail item with a dedup key.
+    const dedupKey = `sync-allmail:${accountId}`;
+    queue.enqueue(
+      accountId,
+      'sync-allmail',
+      {
+        isInitial,
+        sinceDate: sinceDate.toISOString(),
+      },
+      `Sync All Mail`,
+      undefined,
+      dedupKey,
+    );
 
     // Update account sync state timestamp now (reflects when we last triggered a sync).
     db.updateAccountSyncState(accountId, new Date().toISOString());
@@ -172,7 +155,7 @@ export class SyncQueueBridge {
     // Emit done to update the "Last synced" indicator in the status bar.
     this.emitProgress(accountIdStr, 100, 'done');
 
-    log.info(`[SyncQueueBridge] enqueueSyncForAccount: enqueued ${foldersToSync.length} folder sync item(s) for account ${accountId}`);
+    log.info(`[SyncQueueBridge] enqueueSyncForAccount: enqueued sync-allmail for account ${accountId}`);
   }
 
   // -----------------------------------------------------------------------

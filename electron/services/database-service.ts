@@ -646,6 +646,135 @@ export class DatabaseService {
     return result[0].values[0][0] as number;
   }
 
+  // ---- Label-based email-folder reconciliation (All Mail sync) ----
+
+  /**
+   * Synchronize email_folders entries for a single email based on its current folder paths
+   * (derived from X-GM-LABELS mapping in the All Mail sync path).
+   *
+   * Compares existing folder associations against the `currentFolderPaths` array:
+   * - Adds missing associations (email_folders with uid=NULL, thread_folders upsert)
+   * - Removes stale associations (email_folders delete, thread_folders cleanup)
+   *
+   * Wrapped in a DB transaction for atomicity. Returns the set of all affected
+   * folder paths (added + removed) for event emission tracking.
+   */
+  reconcileEmailFolders(
+    accountId: number,
+    xGmMsgId: string,
+    xGmThrid: string,
+    currentFolderPaths: string[],
+  ): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const affectedFolders = new Set<string>();
+
+    // Get existing folder associations
+    const existingFolders = this.getFoldersForEmail(accountId, xGmMsgId);
+    const existingSet = new Set(existingFolders);
+    const currentSet = new Set(currentFolderPaths);
+
+    // Determine adds and removes
+    const toAdd = currentFolderPaths.filter((f) => !existingSet.has(f));
+    const toRemove = existingFolders.filter((f) => !currentSet.has(f));
+
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      return affectedFolders;
+    }
+
+    // Use SAVEPOINT (not BEGIN) so this can be safely nested inside an outer transaction.
+    const savepointName = `reconcile_${xGmMsgId.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    this.db.run(`SAVEPOINT ${savepointName}`);
+    try {
+      // Add missing folder associations
+      for (const folder of toAdd) {
+        this.db.run(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
+          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
+        );
+        // Upsert thread_folders
+        this.db.run(
+          'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)',
+          { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+        );
+        affectedFolders.add(folder);
+      }
+
+      // Remove stale folder associations
+      for (const folder of toRemove) {
+        this.db.run(
+          'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
+          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
+        );
+        // Check if thread still has other emails in this folder
+        const countResult = this.db.exec(
+          `SELECT COUNT(*) FROM email_folders ef
+           JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+           WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
+          { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+        );
+        const remaining = (countResult.length > 0 && countResult[0].values.length > 0)
+          ? countResult[0].values[0][0] as number : 0;
+        if (remaining === 0) {
+          this.db.run(
+            'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
+            { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
+          );
+        }
+        affectedFolders.add(folder);
+      }
+
+      this.db.run(`RELEASE ${savepointName}`);
+    } catch (err) {
+      this.db.run(`ROLLBACK TO ${savepointName}`);
+      this.db.run(`RELEASE ${savepointName}`);
+      throw err;
+    }
+
+    if (affectedFolders.size > 0) {
+      this.scheduleSave();
+    }
+    return affectedFolders;
+  }
+
+  /**
+   * Delete all folder_state rows for an account except the specified folders.
+   * Used for one-time cleanup after switching to All Mail sync.
+   */
+  cleanupStaleFolderStates(accountId: number, keepFolders: string[]): number {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    if (keepFolders.length === 0) {
+      return 0;
+    }
+
+    const placeholders = keepFolders.map((_, i) => `:keep${i}`).join(', ');
+    const params: Record<string, string | number> = { ':accountId': accountId };
+    for (let i = 0; i < keepFolders.length; i++) {
+      params[`:keep${i}`] = keepFolders[i];
+    }
+
+    // Count before delete
+    const countResult = this.db.exec(
+      `SELECT COUNT(*) FROM folder_state WHERE account_id = :accountId AND folder NOT IN (${placeholders})`,
+      params
+    );
+    const count = (countResult.length > 0 && countResult[0].values.length > 0)
+      ? countResult[0].values[0][0] as number : 0;
+
+    if (count > 0) {
+      this.db.run(
+        `DELETE FROM folder_state WHERE account_id = :accountId AND folder NOT IN (${placeholders})`,
+        params
+      );
+      this.scheduleSave();
+    }
+    return count;
+  }
+
   // ---- Email-Folder association management (keyed by X-GM-MSGID) ----
 
   removeEmailFolderAssociation(accountId: number, xGmMsgId: string, folder: string): void {

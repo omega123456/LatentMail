@@ -27,6 +27,7 @@ export type QueueOperationType =
   | 'delete'
   | 'sync-folder'
   | 'sync-thread'
+  | 'sync-allmail'
   | 'fetch-older';
 
 export type QueueItemStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
@@ -116,6 +117,13 @@ export interface SyncThreadPayload {
   forceFromServer: boolean;
 }
 
+export interface SyncAllMailPayload {
+  /** Whether this is an initial sync (no prior All Mail folder_state). */
+  isInitial: boolean;
+  /** ISO date string for date-based fallback fetch scope. */
+  sinceDate: string;
+}
+
 export interface FetchOlderPayload {
   /** IMAP folder path (e.g. 'INBOX', '[Gmail]/Sent Mail'). */
   folder: string;
@@ -134,6 +142,7 @@ export type QueuePayload =
   | DeletePayload
   | SyncFolderPayload
   | SyncThreadPayload
+  | SyncAllMailPayload
   | FetchOlderPayload;
 
 export interface ServerIds {
@@ -499,6 +508,9 @@ export class MailQueueService {
         case 'sync-thread':
           await this.processSyncThread(item);
           break;
+        case 'sync-allmail':
+          await this.processSyncAllMail(item);
+          break;
         case 'fetch-older':
           await this.processFetchOlder(item);
           break;
@@ -509,7 +521,7 @@ export class MailQueueService {
       // Best-effort post-operation fetch: confirm server state and update local DB.
       // Failures are logged as warnings — the IMAP action already succeeded.
       // Sync and fetch-older operations handle their own post-processing inside their worker methods.
-      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'fetch-older') {
+      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older') {
         try {
           await this.postOpFetch(item);
         } catch (fetchErr) {
@@ -531,7 +543,7 @@ export class MailQueueService {
 
       // Sync and fetch-older operations fail immediately on any error — no retry/backoff.
       // Rationale: network blips are transient; the next timer tick or user scroll re-enqueues.
-      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'fetch-older') {
+      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older') {
         item.status = 'failed';
         item.error = errMsg;
         item.completedAt = new Date().toISOString();
@@ -1387,6 +1399,45 @@ export class MailQueueService {
     // Emit folder-updated event so renderer reloads the folder list and thread list.
     if (result.folderChanged) {
       this.emitFolderUpdated(item.accountId, [payload.folder], 'sync', result.changeType, result.changeCount);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Sync-allmail worker
+  // -----------------------------------------------------------------------
+
+  /**
+   * Process a sync-allmail queue item.
+   * Delegates to SyncService.syncAllMail() which fetches from [Gmail]/All Mail,
+   * maps labels to folders, reconciles email_folders, and returns affected folders.
+   * Emits MAIL_FOLDER_UPDATED for all affected folders.
+   */
+  private async processSyncAllMail(item: QueueItem): Promise<void> {
+    const payload = item.payload as SyncAllMailPayload;
+    const syncService = SyncService.getInstance();
+    const db = DatabaseService.getInstance();
+
+    // Build known mailbox paths set for label validation.
+    // We need the full mailbox list (including All Mail path for the filter).
+    let knownPaths: Set<string>;
+    try {
+      const mailboxes = await syncService.getMailboxesForSync(String(item.accountId));
+      knownPaths = new Set(mailboxes.map((mb) => mb.path));
+    } catch (err) {
+      log.warn(`[MailQueue] processSyncAllMail: failed to fetch mailbox list, proceeding with empty set:`, err);
+      knownPaths = new Set();
+    }
+
+    const affectedFolders = await syncService.syncAllMail(
+      String(item.accountId),
+      payload.isInitial,
+      new Date(payload.sinceDate),
+      knownPaths,
+    );
+
+    // Emit folder-updated for all affected folders
+    if (affectedFolders.size > 0) {
+      this.emitFolderUpdated(item.accountId, Array.from(affectedFolders), 'sync', 'mixed');
     }
   }
 
