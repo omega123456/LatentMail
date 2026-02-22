@@ -1,5 +1,7 @@
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { BrowserWindow } from 'electron';
+
+const log = LoggerService.getInstance();
 import { DatabaseService } from './database-service';
 import * as crypto from 'crypto';
 import { SearchIntent } from '../utils/search-query-generator';

@@ -1,6 +1,8 @@
 import * as nodemailer from 'nodemailer';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { OAuthService } from './oauth-service';
+
+const log = LoggerService.getInstance();
 import { DatabaseService } from './database-service';
 
 export interface SendMailOptions {

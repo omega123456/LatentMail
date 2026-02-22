@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { app, BrowserWindow, shell, dialog, Notification } from 'electron';
 import * as path from 'path';
-import log from 'electron-log/main';
+import { LoggerService } from './services/logger-service';
 import { registerAllIpcHandlers } from './ipc';
 import { DatabaseService } from './services/database-service';
 import { OAuthService } from './services/oauth-service';
@@ -13,10 +13,8 @@ import { MailQueueService } from './services/mail-queue-service';
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
 
-// Configure logging
-log.initialize();
-log.transports.file.maxSize = 10 * 1024 * 1024; // 10MB
-log.transports.file.level = (process.env['LOG_LEVEL'] as 'debug' | 'info' | 'warn' | 'error') || 'info';
+// Phase 1: Initialize logging with env-based defaults (no DB dependency yet).
+const logger = LoggerService.getInstance();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -28,21 +26,25 @@ if (!gotTheLock) {
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (mainWindow.isMinimized()) { mainWindow.restore(); }
       mainWindow.focus();
     }
   });
 
   app.whenReady().then(async () => {
-    log.info('MailClient starting...');
+    logger.info('MailClient starting...');
 
-    // Initialize database
+    // Initialize database, then apply the DB-persisted log level (Phase 2).
     try {
       const dbService = DatabaseService.getInstance();
       await dbService.initialize();
-      log.info('Database initialized successfully');
+      logger.info('Database initialized successfully');
+
+      // Phase 2: Apply the DB-persisted log level (overrides env default if set).
+      // Placed inside the try block so it only runs when the DB is fully ready.
+      LoggerService.getInstance().initialize();
     } catch (err) {
-      log.error('Failed to initialize database:', err);
+      logger.error('Failed to initialize database:', err);
     }
 
     // Register IPC handlers
@@ -53,7 +55,7 @@ if (!gotTheLock) {
       const oauthService = OAuthService.getInstance();
       oauthService.initializeRefreshTimers();
     } catch (err) {
-      log.warn('Failed to initialize OAuth refresh timers:', err);
+      logger.warn('Failed to initialize OAuth refresh timers:', err);
     }
 
     // Start background sync via SyncQueueBridge.
@@ -62,7 +64,7 @@ if (!gotTheLock) {
     try {
       SyncQueueBridge.getInstance().start();
     } catch (err) {
-      log.warn('Failed to start SyncQueueBridge:', err);
+      logger.warn('Failed to start SyncQueueBridge:', err);
     }
 
     // Create the main window
@@ -127,7 +129,7 @@ function createMainWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../dist/mailclient-app/browser/index.html'));
   }
 
-  log.info('Main window created');
+  logger.info('Main window created');
 }
 
 function saveWindowState(win: BrowserWindow): void {
@@ -137,7 +139,7 @@ function saveWindowState(win: BrowserWindow): void {
     const dbService = DatabaseService.getInstance();
     dbService.setSetting('windowState', JSON.stringify({ bounds, isMaximized }));
   } catch (err) {
-    log.warn('Failed to save window state:', err);
+    logger.warn('Failed to save window state:', err);
   }
 }
 
@@ -155,7 +157,7 @@ function restoreWindowState(win: BrowserWindow): void {
       }
     }
   } catch (err) {
-    log.warn('Failed to restore window state:', err);
+    logger.warn('Failed to restore window state:', err);
   }
 }
 

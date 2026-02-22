@@ -2,8 +2,10 @@ import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { CREATE_TABLES_SQL, SCHEMA_VERSION } from '../database/schema';
+
+const log = LoggerService.getInstance();
 import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord } from '../database/models';
 import { ALL_MAIL_PATH } from './sync-service';
 

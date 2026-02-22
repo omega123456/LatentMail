@@ -4,6 +4,10 @@ import { ElectronService } from '../core/services/electron.service';
 import { ThemeMode } from '../core/services/theme.service';
 import { LayoutMode, DensityMode } from '../core/services/layout.service';
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+const VALID_LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
+
 export interface SettingsState {
   theme: ThemeMode;
   layout: LayoutMode;
@@ -14,6 +18,7 @@ export interface SettingsState {
   showUnreadCounts: boolean;
   blockRemoteImages: boolean;
   showAvatars: boolean;
+  logLevel: LogLevel;
   loading: boolean;
   error: string | null;
 }
@@ -28,6 +33,7 @@ const initialState: SettingsState = {
   showUnreadCounts: true,
   blockRemoteImages: true,
   showAvatars: true,
+  logLevel: 'info',
   loading: false,
   error: null,
 };
@@ -50,6 +56,10 @@ export const SettingsStore = signalStore(
             : rawSyncInterval >= 1000
               ? Math.max(1, Math.round(rawSyncInterval / 60000))
               : Math.max(1, rawSyncInterval);
+          const storedLogLevel = data['logLevel'];
+          const logLevel: LogLevel = (VALID_LOG_LEVELS as readonly string[]).includes(storedLogLevel)
+            ? (storedLogLevel as LogLevel)
+            : 'info';
           patchState(store, {
             theme: (data['theme'] as ThemeMode) || store.theme(),
             layout: (data['layout'] as LayoutMode) || store.layout(),
@@ -60,6 +70,7 @@ export const SettingsStore = signalStore(
             showUnreadCounts: data['showUnreadCounts'] !== undefined ? data['showUnreadCounts'] === 'true' : store.showUnreadCounts(),
             blockRemoteImages: data['blockRemoteImages'] !== undefined ? data['blockRemoteImages'] === 'true' : store.blockRemoteImages(),
             showAvatars: data['showAvatars'] !== undefined ? data['showAvatars'] === 'true' : store.showAvatars(),
+            logLevel,
             loading: false,
           });
         } else {
@@ -108,6 +119,22 @@ export const SettingsStore = signalStore(
         const newVal = !current;
         patchState(store, { [key]: newVal } as Partial<SettingsState>);
         await electronService.setSettings({ [key]: String(newVal) });
+      },
+
+      /**
+       * Update the log level in local state and notify the main process via the
+       * dedicated `db:set-log-level` IPC channel.  The main process applies the
+       * change immediately and persists it — the renderer does NOT call db:set-settings
+       * for this key.
+       *
+       * State is patched only after a successful IPC response to avoid a stale
+       * optimistic update that would revert on the next app restart.
+       */
+      async setLogLevel(level: LogLevel): Promise<void> {
+        const response = await electronService.setLogLevel(level);
+        if (response.success) {
+          patchState(store, { logLevel: level });
+        }
       },
     };
   })

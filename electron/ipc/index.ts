@@ -1,5 +1,7 @@
-import log from 'electron-log/main';
+import { LoggerService } from '../services/logger-service';
 import { registerSystemIpcHandlers } from './system-ipc';
+
+const log = LoggerService.getInstance();
 import { registerDbIpcHandlers } from './db-ipc';
 import { registerMailIpcHandlers } from './mail-ipc';
 import { registerAuthIpcHandlers } from './auth-ipc';

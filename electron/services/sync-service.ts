@@ -1,6 +1,8 @@
 import { BrowserWindow, Notification } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { ImapService } from './imap-service';
+
+const log = LoggerService.getInstance();
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { OAuthService } from './oauth-service';

@@ -1,7 +1,12 @@
 import { ipcMain } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
+import type { LogLevel } from '../services/logger-service';
+
+const log = LoggerService.getInstance();
+
+const VALID_LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 export function registerDbIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.DB_GET_SETTINGS, (_event, keys?: string[]) => {
@@ -31,6 +36,22 @@ export function registerDbIpcHandlers(): void {
     } catch (err) {
       log.error('Failed to set settings:', err);
       return ipcError('DB_WRITE_FAILED', 'Failed to write settings');
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.DB_SET_LOG_LEVEL, async (_event, level: unknown) => {
+    if (typeof level !== 'string' || !(VALID_LOG_LEVELS as readonly string[]).includes(level)) {
+      return ipcError(
+        'INVALID_LOG_LEVEL',
+        `Invalid log level: '${String(level)}'. Must be one of: ${VALID_LOG_LEVELS.join(', ')}`
+      );
+    }
+    try {
+      LoggerService.getInstance().setLevel(level as LogLevel);
+      return ipcSuccess(null);
+    } catch (err) {
+      log.error('Failed to set log level:', err);
+      return ipcError('DB_WRITE_FAILED', 'Failed to apply log level');
     }
   });
 

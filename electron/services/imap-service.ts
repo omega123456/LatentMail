@@ -1,6 +1,8 @@
 import { ImapFlow, FetchMessageObject } from 'imapflow';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { simpleParser } from 'mailparser';
+
+const log = LoggerService.getInstance();
 import { OAuthService } from './oauth-service';
 import { DatabaseService } from './database-service';
 

@@ -1,4 +1,6 @@
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
+
+const log = LoggerService.getInstance();
 
 /**
  * PendingOpService — tracks xGmMsgIds that are awaiting server-side

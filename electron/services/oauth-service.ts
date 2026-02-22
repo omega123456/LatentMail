@@ -1,8 +1,10 @@
 import * as crypto from 'crypto';
 import * as https from 'https';
 import { shell } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { OAuthLoopbackServer } from './oauth-loopback';
+
+const log = LoggerService.getInstance();
 import { CredentialService } from './credential-service';
 import { DatabaseService } from './database-service';
 

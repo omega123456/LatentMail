@@ -1,6 +1,8 @@
 import { ipcMain, BrowserWindow } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
+
+const log = LoggerService.getInstance();
 import { OllamaService } from '../services/ollama-service';
 import { DatabaseService } from '../services/database-service';
 import { SearchIntent, SearchQueryGenerator } from '../utils/search-query-generator';

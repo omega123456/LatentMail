@@ -1,4 +1,6 @@
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
+
+const log = LoggerService.getInstance();
 
 /**
  * FolderLockManager — shared per-folder async lock manager.

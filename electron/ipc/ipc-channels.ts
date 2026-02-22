@@ -52,6 +52,7 @@ export const IPC_CHANNELS = {
   // Database/settings operations
   DB_GET_SETTINGS: 'db:get-settings',
   DB_SET_SETTINGS: 'db:set-settings',
+  DB_SET_LOG_LEVEL: 'db:set-log-level',
   DB_GET_FILTERS: 'db:get-filters',
   DB_SAVE_FILTER: 'db:save-filter',
   DB_UPDATE_FILTER: 'db:update-filter',

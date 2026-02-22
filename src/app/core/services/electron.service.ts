@@ -75,6 +75,7 @@ interface ElectronAPI {
     deleteFilter: (filterId: number) => Promise<IpcResponse>;
     toggleFilter: (filterId: number, isEnabled: boolean) => Promise<IpcResponse>;
     getUserLabels: (accountId: number) => Promise<IpcResponse>;
+    setLogLevel: (level: string) => Promise<IpcResponse>;
   };
   filter: {
     applyAll: (accountId: number) => Promise<IpcResponse>;
@@ -311,6 +312,10 @@ export class ElectronService {
 
   async getUserLabels(accountId: number): Promise<IpcResponse> {
     return this.invoke(() => this.api!.db.getUserLabels(accountId));
+  }
+
+  async setLogLevel(level: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.db.setLogLevel(level));
   }
 
   // ---- Filter operations ----

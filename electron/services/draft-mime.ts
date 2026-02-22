@@ -1,5 +1,7 @@
 import * as nodemailer from 'nodemailer';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
+
+const log = LoggerService.getInstance();
 
 interface DraftMimeOptions {
   from: string;        // e.g. "Display Name <user@gmail.com>"

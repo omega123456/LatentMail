@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
+
+const log = LoggerService.getInstance();
 import { MailQueueService, QueueOperationType, QueuePayload } from '../services/mail-queue-service';
 
 export function registerQueueIpcHandlers(): void {

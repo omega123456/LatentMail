@@ -1,6 +1,8 @@
 import { BrowserWindow } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
+
+const log = LoggerService.getInstance();
 import { SyncService, ALL_MAIL_PATH } from './sync-service';
 import { MailQueueService } from './mail-queue-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';

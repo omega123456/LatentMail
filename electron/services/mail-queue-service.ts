@@ -1,6 +1,8 @@
 import { BrowserWindow } from 'electron';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
 import * as fastq from 'fastq';
+
+const log = LoggerService.getInstance();
 import { randomUUID } from 'crypto';
 import { ImapService } from './imap-service';
 import { SmtpService } from './smtp-service';

@@ -1,7 +1,9 @@
 import { safeStorage, app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
+
+const log = LoggerService.getInstance();
 
 interface StoredCredentials {
   [accountId: string]: {

@@ -1,6 +1,8 @@
 import * as http from 'http';
 import * as url from 'url';
-import log from 'electron-log/main';
+import { LoggerService } from './logger-service';
+
+const log = LoggerService.getInstance();
 
 export interface OAuthCallbackResult {
   code: string;

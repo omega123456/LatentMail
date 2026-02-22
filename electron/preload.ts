@@ -126,6 +126,8 @@ const electronAPI = {
       ipcRenderer.invoke('db:toggle-filter', filterId, isEnabled) as Promise<IpcResponse>,
     getUserLabels: (accountId: number) =>
       ipcRenderer.invoke('db:get-user-labels', accountId) as Promise<IpcResponse>,
+    setLogLevel: (level: string) =>
+      ipcRenderer.invoke('db:set-log-level', level) as Promise<IpcResponse>,
   },
 
   // Filter operations
