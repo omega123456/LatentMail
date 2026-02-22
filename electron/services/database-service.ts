@@ -95,7 +95,12 @@ export class DatabaseService {
       logger: log,
     });
 
-    await umzug.up();
+    const executed = await umzug.up();
+    if (executed.length > 0) {
+      log.info(`[MIGRATIONS] Migrations executed: ${executed.map((m) => m.name).join(', ')}`);
+    } else {
+      log.info('[MIGRATIONS] No pending migrations');
+    }
     this.saveToDisk();
     log.info('Database schema initialized (Umzug)');
   }

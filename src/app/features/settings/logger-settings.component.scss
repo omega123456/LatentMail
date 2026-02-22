@@ -1,18 +1,53 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.logger-settings {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 h2 {
   font-size: 18px;
   font-weight: 600;
   margin: 0 0 24px 0;
   color: var(--color-text-primary);
+  flex-shrink: 0;
 }
 
 .settings-section {
   margin-bottom: 28px;
+  flex-shrink: 0;
 
   h3 {
     font-size: 14px;
     font-weight: 600;
     margin: 0 0 12px 0;
     color: var(--color-text-primary);
+  }
+
+  &.log-entries-section {
+    flex: 1;
+    flex-shrink: 1;
+    margin-bottom: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+
+    .log-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      background: var(--color-surface);
+      padding: 8px 0;
+    }
   }
 }
 
@@ -56,14 +91,6 @@ h2 {
   margin-bottom: 12px;
 }
 
-.log-list {
-  max-height: 400px;
-  overflow-y: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  padding: 8px 0;
-}
 
 .log-entry {
   display: grid;
@@ -118,5 +145,6 @@ h2 {
     color: var(--color-text-primary);
     word-break: break-word;
     min-width: 0;
+    white-space: pre-wrap;
   }
 }

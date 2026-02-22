@@ -5,7 +5,7 @@ import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 const log = LoggerService.getInstance();
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { ALL_MAIL_PATH } from '../services/sync-service';
+import { ALL_MAIL_PATH, EXCLUDED_FOLDER_PATHS } from '../services/sync-service';
 import { MailQueueService } from '../services/mail-queue-service';
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
 import { FolderLockManager } from '../services/folder-lock-manager';
@@ -905,7 +905,7 @@ export function registerMailIpcHandlers(): void {
       const labels = db.getLabelsByAccount(numAccountId);
       const unreadByFolder = db.getUnreadThreadCountsByFolder(numAccountId);
       const labelsWithThreadCounts = labels
-        .filter((row) => (row.gmailLabelId as string) !== ALL_MAIL_PATH)
+        .filter((row) => !EXCLUDED_FOLDER_PATHS.includes(row.gmailLabelId as string))
         .map((row) => ({
           ...row,
           unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,

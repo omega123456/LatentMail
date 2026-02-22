@@ -200,7 +200,7 @@ export class LoggerService {
         }
         try {
           const content = fs.readFileSync(filePath, 'utf-8');
-          return content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+          return content.split(/\r?\n/);
         } catch {
           return [];
         }
@@ -218,6 +218,9 @@ export class LoggerService {
             level: match[2].toLowerCase(),
             message: match[3] ?? '',
           });
+        } else if (entries.length > 0) {
+          // Multi-line: stack traces and continuation lines belong to the previous entry
+          entries[entries.length - 1].message += '\n' + line;
         }
       }
 

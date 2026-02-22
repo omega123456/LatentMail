@@ -23,6 +23,12 @@ const GMAIL_FOLDER_MAP: Record<string, { name: string; icon: string }> = {
 
 export const ALL_MAIL_PATH = '[Gmail]/All Mail';
 
+/** IMAP parent mailbox for Gmail system folders; not a real folder — exclude from sidebar. */
+export const GMAIL_PARENT_PATH = '[Gmail]';
+
+/** Folder paths excluded from sidebar and from label sync (not real selectable folders). */
+export const EXCLUDED_FOLDER_PATHS: readonly string[] = [ALL_MAIL_PATH, GMAIL_PARENT_PATH];
+
 /**
  * Gmail X-GM-LABELS system label → IMAP folder path mapping.
  * Used by syncAllMail() to convert raw labels from ImapFlow's msg.labels Set
@@ -64,8 +70,8 @@ function mapLabelsToFolderPaths(rawLabels: string[], knownMailboxPaths: Set<stri
       continue;
     }
 
-    // Skip All Mail — never stored as a folder association
-    if (label === ALL_MAIL_PATH) {
+    // Skip excluded folders (All Mail, Gmail parent) — never stored as folder associations
+    if (EXCLUDED_FOLDER_PATHS.includes(label)) {
       continue;
     }
 
@@ -146,7 +152,7 @@ export class SyncService {
   async getMailboxesForSync(accountId: string): Promise<Awaited<ReturnType<typeof ImapService.prototype.getMailboxes>>> {
     const imapService = ImapService.getInstance();
     const mailboxes = await imapService.getMailboxes(accountId);
-    return mailboxes.filter((mb) => mb.path !== ALL_MAIL_PATH);
+    return mailboxes.filter((mb) => !EXCLUDED_FOLDER_PATHS.includes(mb.path));
   }
 
   /**
@@ -159,7 +165,7 @@ export class SyncService {
   ): void {
     const db = DatabaseService.getInstance();
     for (const mb of mailboxes) {
-      if (mb.path === ALL_MAIL_PATH) {
+      if (EXCLUDED_FOLDER_PATHS.includes(mb.path)) {
         continue;
       }
       const specialUseInfo = GMAIL_FOLDER_MAP[mb.specialUse];
