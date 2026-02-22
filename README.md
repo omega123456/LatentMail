@@ -6,9 +6,6 @@ A cross-platform desktop email client built with Electron 40 and Angular 21, fea
 
 - **Node.js** 20+ (tested with v24)
 - **Yarn** 1.x (`npm install -g yarn`)
-- **Visual C++ Build Tools** (Windows) — required for `better-sqlite3` native module
-  - Install via [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-  - Or: `npm install -g windows-build-tools`
 - **Google OAuth2 Client ID** — Create a "Desktop" type client in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 - **Ollama** (optional) — For AI features, install from [ollama.com](https://ollama.com)
 
@@ -22,8 +19,8 @@ yarn install
 cp .env.example .env
 # Edit .env and set your GOOGLE_CLIENT_ID
 
-# Rebuild native modules for Electron
-npx @electron/rebuild
+# Optional: rebuild native modules if you add any
+# npx @electron/rebuild
 ```
 
 ## Development
@@ -63,7 +60,7 @@ mailclient/
 │   ├── preload.ts         # Context bridge (IPC API)
 │   ├── ipc/               # IPC handler modules
 │   ├── services/          # Backend services (DB, credentials, etc.)
-│   ├── database/          # SQLite schema and migrations
+│   ├── database/          # SQLite schema and Umzug migrations (migrations/)
 │   └── utils/             # Platform utilities
 ├── src/                   # Angular renderer process
 │   ├── app/
@@ -85,7 +82,7 @@ mailclient/
 - **Frontend**: Angular 21+ (standalone components, signals)
 - **UI**: Angular Material + custom SCSS
 - **State**: NgRx SignalStore
-- **Database**: SQLite via better-sqlite3 (FTS5 full-text search)
+- **Database**: SQLite via sql.js (WASM, in-memory with persist to disk); schema managed by Umzug migrations in `electron/database/migrations/`
 - **Logging**: electron-log
 - **Credentials**: Electron safeStorage API (DPAPI/Keychain)
 - **Build**: Electron Forge

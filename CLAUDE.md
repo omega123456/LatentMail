@@ -73,9 +73,9 @@ All main-renderer communication flows through the IPC bridge defined in `electro
 - `db-ipc.ts` - Settings persistence
 - `system-ipc.ts` - Window controls (minimize, maximize, close)
 
-### Database Schema (SQLite via better-sqlite3)
+### Database Schema (SQLite via sql.js)
 
-**Schema version**: 5 (tracked in `schema_version` table)
+**Migrations**: Schema is managed by **Umzug** (file-based migrations). Migrations live in `electron/database/migrations/`; executed migrations are recorded in the `schema_migrations` table. On app start, `DatabaseService.initialize()` runs `umzug.up()`. To add schema changes: add a new migration file (e.g. `002_add_foo.ts`) with `up` (and optionally `down`) receiving `{ context: { db, databaseService } }`.
 
 **Core tables**:
 - `accounts` - Gmail accounts (email, tokens stored separately in OS keychain)
@@ -95,8 +95,8 @@ All main-renderer communication flows through the IPC bridge defined in `electro
 **Important constraints**:
 - Emails can exist in multiple folders (via `email_folders` junction table)
 - IMAP UIDs are stored per-folder in `email_folders.uid` (different UIDs in different folders)
-- `gmail_message_id` is the stable identifier across all folders
-- Schema migrations happen automatically on app start in `DatabaseService.migrate()`
+- `x_gm_msgid` (Gmail message ID) is the stable identifier across all folders
+- New DBs use only `schema_migrations` (Umzug); legacy `schema_version` table is no longer written
 
 ### State Management (NgRx SignalStore)
 
@@ -172,12 +172,12 @@ The app uses a **persistent, resumable queue** for all mail operations (`MailQue
 4. Add TypeScript interface to `ElectronAPI` in `src/app/core/services/electron.service.ts`
 5. Call via `electronService.api.<namespace>.<method>()` in Angular components
 
-### Database Schema Migrations
+### Database Schema Migrations (Umzug)
 
-1. Increment `SCHEMA_VERSION` in `electron/database/schema.ts`
-2. Add migration logic in `DatabaseService.migrate()` in `electron/services/database-service.ts`
-3. Use `db.prepare()` for each ALTER/CREATE statement
-4. Test migration from previous version (database persists across restarts)
+1. Add a new file under `electron/database/migrations/` (e.g. `002_add_foo.ts`) with named exports `up` and optionally `down`.
+2. Migration functions receive `{ context }: { context: { db, databaseService } }`. Use `context.db.run()` or `context.db.exec()` for SQL; use **named placeholders** (`:name`) and objects for parameters.
+3. Run `yarn build:electron` so the new migration is compiled to `dist-electron/database/migrations/*.js`. Migrations run automatically on app start via `umzug.up()` in `DatabaseService.initialize()`.
+4. The `schema_migrations` table records executed migration names; no manual version bump needed.
 
 ### Handling Email Operations
 
@@ -193,7 +193,7 @@ The app uses a **persistent, resumable queue** for all mail operations (`MailQue
 
 **Critical**: UIDs are **per-folder** and can change (e.g., after EXPUNGE). Always:
 - Store UIDs in `email_folders.uid` (per email-folder pair)
-- Use `gmail_message_id` as the stable cross-folder identifier
+- Use `x_gm_msgid` (Gmail message ID) as the stable cross-folder identifier
 - Snapshot UIDs at operation enqueue time
 - Handle "UID not found" errors gracefully (email may have been deleted/moved)
 

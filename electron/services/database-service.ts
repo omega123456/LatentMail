@@ -2,8 +2,9 @@ import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
+import { Umzug } from 'umzug';
 import { LoggerService } from './logger-service';
-import { CREATE_TABLES_SQL, SCHEMA_VERSION } from '../database/schema';
+import { createSqlJsStorage } from '../database/umzug-storage';
 
 const log = LoggerService.getInstance();
 import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord } from '../database/models';
@@ -36,13 +37,11 @@ export class DatabaseService {
     this.dbPath = this.getDbPath();
     log.info(`Initializing database at: ${this.dbPath}`);
 
-    // Ensure directory exists
     const dir = path.dirname(this.dbPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Initialize sql.js with the WASM binary from node_modules
     const wasmPath = path.join(
       app.getAppPath(),
       'node_modules',
@@ -50,185 +49,55 @@ export class DatabaseService {
       'dist',
       'sql-wasm.wasm'
     );
+    const SQL = await initSqlJs({ locateFile: () => wasmPath });
 
-    const SQL = await initSqlJs({
-      locateFile: () => wasmPath,
-    });
-
-    // Load existing database or create new one
-    let currentVersion = 0;
-    let isLegacyDb = false;
     if (fs.existsSync(this.dbPath)) {
       const fileBuffer = fs.readFileSync(this.dbPath);
       this.db = new SQL.Database(fileBuffer);
       log.info('Loaded existing database');
 
-      // Check for legacy schema
+      let hasSchemaMigrations = false;
+      let hasSchemaVersion = false;
       try {
-        const result = this.db.exec('SELECT version FROM schema_version LIMIT 1');
-        if (result.length > 0 && result[0].values.length > 0) {
-          currentVersion = (result[0].values[0][0] as number) || 0;
-        }
+        this.db.exec('SELECT name FROM schema_migrations LIMIT 1');
+        hasSchemaMigrations = true;
       } catch {
-        // schema_version table may not exist
-        currentVersion = 0;
+        // schema_migrations table does not exist
       }
-
-      // Detect old-era schema: version greater than current new-era schema and <= 7 (old-era max)
-      // OR version 0 with old-style columns (gmail_message_id in emails table)
-      if (currentVersion > SCHEMA_VERSION && currentVersion <= 7) {
-        isLegacyDb = true;
-      } else if (currentVersion === 0) {
-        // Check if it has old-style columns
-        try {
-          const colCheck = this.db.exec("PRAGMA table_info(emails)");
-          const hasGmailMessageId = colCheck.length > 0 && colCheck[0].values.some(
-            (row) => (row[1] as string) === 'gmail_message_id'
-          );
-          if (hasGmailMessageId) {
-            isLegacyDb = true;
-          }
-        } catch {
-          // If we can't check, assume fresh DB
-        }
-      } else if (currentVersion === SCHEMA_VERSION) {
-        // Current era, check that schema is actually correct
-        try {
-          const colCheck = this.db.exec("PRAGMA table_info(emails)");
-          const hasXGmMsgId = colCheck.length > 0 && colCheck[0].values.some(
-            (row) => (row[1] as string) === 'x_gm_msgid'
-          );
-          if (!hasXGmMsgId) {
-            // Version says 1 but columns are wrong — legacy DB
-            isLegacyDb = true;
-          }
-        } catch {
-          isLegacyDb = true;
-        }
+      try {
+        this.db.exec('SELECT version FROM schema_version LIMIT 1');
+        hasSchemaVersion = true;
+      } catch {
+        // schema_version table does not exist
       }
-
-      if (isLegacyDb) {
-        log.info(`Database reset: detected legacy schema (v${currentVersion}), deleting and recreating with new schema v${SCHEMA_VERSION}`);
+      if (hasSchemaVersion && !hasSchemaMigrations) {
+        log.info('Database reset: old schema_version-based DB detected; removing and starting fresh with Umzug migrations');
         this.db.close();
         this.db = null;
         fs.unlinkSync(this.dbPath);
         this.db = new SQL.Database();
-        log.info('Created fresh database after legacy cleanup');
+        log.info('Created fresh database');
       }
     } else {
       this.db = new SQL.Database();
       log.info('Created new database');
     }
 
-    // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
 
-    // Run schema creation (creates tables if they don't exist)
-    this.db.run(CREATE_TABLES_SQL);
+    const migrationsDir = path.join(__dirname, '..', 'database', 'migrations');
+    const umzug = new Umzug({
+      migrations: {
+        glob: ['*.js', { cwd: migrationsDir }],
+      },
+      context: { db: this.db, databaseService: this },
+      storage: createSqlJsStorage(this.db),
+      logger: log,
+    });
 
-    if (currentVersion === 1) {
-      this.runAllMailAssociationCleanupMigration();
-    }
-
-    // Ensure version row exists and is up to date
-    this.db.run('DELETE FROM schema_version');
-    this.db.run('INSERT INTO schema_version (version) VALUES (:version)', { ':version': SCHEMA_VERSION });
-    log.info(`Database schema version set to ${SCHEMA_VERSION}`);
-
-    // Save to disk
+    await umzug.up();
     this.saveToDisk();
-
-    log.info('Database schema initialized');
-  }
-
-  private runAllMailAssociationCleanupMigration(): void {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-
-    log.info(`[DatabaseService] Running schema migration v1 -> v2: cleaning ${ALL_MAIL_PATH} associations`);
-
-    const staleEmailFolderCountResult = this.db.exec(
-      'SELECT COUNT(*) FROM email_folders WHERE folder = :folder',
-      { ':folder': ALL_MAIL_PATH }
-    );
-    const staleEmailFolderCount =
-      staleEmailFolderCountResult.length > 0 && staleEmailFolderCountResult[0].values.length > 0
-        ? (staleEmailFolderCountResult[0].values[0][0] as number)
-        : 0;
-
-    const staleThreadFolderCountResult = this.db.exec(
-      'SELECT COUNT(*) FROM thread_folders WHERE folder = :folder',
-      { ':folder': ALL_MAIL_PATH }
-    );
-    const staleThreadFolderCount =
-      staleThreadFolderCountResult.length > 0 && staleThreadFolderCountResult[0].values.length > 0
-        ? (staleThreadFolderCountResult[0].values[0][0] as number)
-        : 0;
-
-    this.db.run('BEGIN');
-    try {
-      this.db.run('DELETE FROM email_folders WHERE folder = :folder', { ':folder': ALL_MAIL_PATH });
-      this.db.run('DELETE FROM thread_folders WHERE folder = :folder', { ':folder': ALL_MAIL_PATH });
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-
-    const accountIdResult = this.db.exec('SELECT id FROM accounts');
-    const accountIds: number[] = [];
-    if (accountIdResult.length > 0) {
-      for (const row of accountIdResult[0].values) {
-        const accountId = row[0] as number;
-        if (Number.isFinite(accountId)) {
-          accountIds.push(accountId);
-        }
-      }
-    }
-
-    let orphanEmailCount = 0;
-    let orphanThreadCount = 0;
-    const affectedThreadsByAccount = new Map<number, Set<string>>();
-
-    for (const accountId of accountIds) {
-      const orphanedEmails = this.removeOrphanedEmails(accountId);
-      orphanEmailCount += orphanedEmails.length;
-
-      if (orphanedEmails.length > 0) {
-        if (!affectedThreadsByAccount.has(accountId)) {
-          affectedThreadsByAccount.set(accountId, new Set<string>());
-        }
-        const affectedThreadIds = affectedThreadsByAccount.get(accountId)!;
-        for (const orphanedEmail of orphanedEmails) {
-          if (orphanedEmail.xGmThrid) {
-            affectedThreadIds.add(orphanedEmail.xGmThrid);
-          }
-        }
-      }
-    }
-
-    for (const [accountId, threadIds] of affectedThreadsByAccount) {
-      for (const xGmThrid of threadIds) {
-        try {
-          this.recomputeThreadMetadata(accountId, xGmThrid);
-        } catch (err) {
-          log.warn(`[DatabaseService] Migration v1 -> v2: recomputeThreadMetadata failed for thread ${xGmThrid}:`, err);
-        }
-      }
-    }
-
-    for (const accountId of accountIds) {
-      try {
-        orphanThreadCount += this.removeOrphanedThreads(accountId);
-      } catch (err) {
-        log.warn(`[DatabaseService] Migration v1 -> v2: removeOrphanedThreads failed for account ${accountId}:`, err);
-      }
-    }
-
-    log.info(
-      `[DatabaseService] Migration v1 -> v2 complete: deleted ${staleEmailFolderCount} email_folders and ${staleThreadFolderCount} thread_folders for ${ALL_MAIL_PATH}; removed ${orphanEmailCount} orphan email(s) and ${orphanThreadCount} orphan thread(s) across ${accountIds.length} account(s)`
-    );
+    log.info('Database schema initialized (Umzug)');
   }
 
   /** Persist the in-memory database to disk */

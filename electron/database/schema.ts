@@ -1,9 +1,5 @@
-// SQLite schema definitions for MailClient
-// New-era schema (v2): X-GM-MSGID as primary identifier, CONDSTORE folder state
-
-export const SCHEMA_VERSION = 3;
-
-export const CREATE_TABLES_SQL = `
+export function getInitialSchemaForMigrations(): string {
+  return `
   -- Accounts table
   CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY,
@@ -201,8 +197,7 @@ export const CREATE_TABLES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_search_subject ON search_index(subject);
   CREATE INDEX IF NOT EXISTS idx_search_from ON search_index(from_address);
 
-  -- Schema version tracking
-  CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
-  );
+  -- Umzug migration tracking
+  CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY);
 `;
+}
