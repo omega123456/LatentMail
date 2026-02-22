@@ -355,8 +355,9 @@ export const EmailsStore = signalStore(
       /** Reconcile thread from DB only (no enqueue). Called when a sync-thread queue item completes (mail:thread-refresh). */
       async reconcileThreadFromDb(accountId: number, threadId: string): Promise<void> {
         const accountIdStr = String(accountId);
+        const activeFolderId = foldersStore.activeFolderId();
         try {
-          const dbResponse = await electronService.getThreadFromDb(accountIdStr, threadId);
+          const dbResponse = await electronService.getThreadFromDb(accountIdStr, threadId, activeFolderId ?? undefined);
           if (!dbResponse.success || !dbResponse.data) {
             if (store.selectedThreadId() === threadId) {
               patchState(store, {
@@ -367,7 +368,6 @@ export const EmailsStore = signalStore(
             return;
           }
           const thread = dbResponse.data as Thread & { messages?: Email[] };
-          const messages = thread.messages ?? [];
           if (store.selectedThreadId() === threadId) {
             patchState(store, {
               selectedThread: thread,
@@ -375,29 +375,10 @@ export const EmailsStore = signalStore(
               error: null,
             });
           }
-          const hasDraft = messages.some(
-            (m) => (m as Email & { folders?: string[] }).folders?.includes('[Gmail]/Drafts') || m.isDraft
-          );
-          const activeFolderId = foldersStore.activeFolderId();
-          const visibleMessages = activeFolderId === '[Gmail]/Trash'
-            ? messages
-            : messages.filter(m => !m.folders?.includes('[Gmail]/Trash'));
-          const messageCount = visibleMessages.length;
-          const latestMsg = messageCount > 0
-            ? messages.reduce((a, b) => (new Date(b.date).getTime() > new Date(a.date).getTime() ? b : a))
-            : null;
-          const listThreadMeta: Partial<Thread> = {
-            messageCount,
-            snippet: latestMsg?.snippet ?? thread.snippet ?? '',
-            isRead: messageCount > 0 ? messages.every((m) => m.isRead) : true,
-            isStarred: messageCount > 0 ? messages.some((m) => m.isStarred) : false,
-            participants: messageCount > 0
-              ? [...new Set(messages.map((m) => m.fromAddress).filter(Boolean))].join(', ')
-              : (thread.participants ?? ''),
-            hasDraft,
-          };
+          // Response has same list-row shape as folder fetch when folderId was passed; reuse for list update.
+          const { messages: _m, ...listRow } = thread;
           const updatedThreads = store.threads().map((t) =>
-            t.xGmThrid === threadId ? { ...t, ...listThreadMeta } : t
+            t.xGmThrid === threadId ? { ...t, ...listRow } : t
           );
           patchState(store, { threads: updatedThreads });
         } catch (err: unknown) {

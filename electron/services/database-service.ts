@@ -623,9 +623,23 @@ export class DatabaseService {
     accountId: number,
     folder: string,
     limit: number = 50,
-    offset: number = 0
+    offset: number = 0,
+    threadId?: string
   ): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
+    const params: Record<string, string | number> = {
+      ':accountId': accountId,
+      ':folder': folder,
+      ':limit': limit,
+      ':offset': offset,
+    };
+    if (threadId != null && threadId !== '') {
+      params[':threadId'] = threadId;
+    }
+    const whereClause =
+      threadId != null && threadId !== ''
+        ? 'WHERE t.account_id = :accountId AND t.x_gm_thrid = :threadId'
+        : 'WHERE t.account_id = :accountId';
     const result = this.db.exec(
       `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, MAX(e.date) AS last_message_date, t.participants,
         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
@@ -639,10 +653,10 @@ export class DatabaseService {
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder
        INNER JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid AND e.x_gm_thrid = t.x_gm_thrid
-       WHERE t.account_id = :accountId
+       ${whereClause}
        GROUP BY t.id
        ORDER BY MAX(e.date) DESC LIMIT :limit OFFSET :offset`,
-      { ':accountId': accountId, ':folder': folder, ':limit': limit, ':offset': offset }
+      params
     );
     if (result.length === 0) return [];
     return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));

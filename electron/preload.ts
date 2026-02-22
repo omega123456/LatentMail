@@ -18,8 +18,8 @@ const electronAPI = {
       ipcRenderer.invoke('mail:fetch-emails', accountId, folderId, options) as Promise<IpcResponse>,
     fetchThread: (accountId: string, threadId: string, forceFromServer?: boolean) =>
       ipcRenderer.invoke('mail:fetch-thread', accountId, threadId, forceFromServer) as Promise<IpcResponse>,
-    getThreadFromDb: (accountId: string, threadId: string) =>
-      ipcRenderer.invoke('mail:get-thread-from-db', accountId, threadId) as Promise<IpcResponse>,
+    getThreadFromDb: (accountId: string, threadId: string, folderId?: string) =>
+      ipcRenderer.invoke('mail:get-thread-from-db', accountId, threadId, folderId) as Promise<IpcResponse>,
     send: (accountId: string, message: unknown) =>
       ipcRenderer.invoke('mail:send', accountId, message) as Promise<IpcResponse>,
     move: (accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string) =>

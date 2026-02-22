@@ -159,6 +159,26 @@ export function registerMailIpcHandlers(): void {
   };
 
   /**
+   * Get threads for a folder with list-row enrichment (folders, labels, hasDraft).
+   * When threadId is provided, returns at most one thread (same shape as list items).
+   * Used by MAIL_FETCH_EMAILS and by MAIL_GET_THREAD_FROM_DB when folderId is supplied.
+   */
+  function getEnrichedThreadsForFolder(
+    numAccountId: number,
+    folderId: string,
+    limit: number,
+    offset: number,
+    threadId?: string
+  ): Array<Record<string, unknown>> {
+    const effectiveLimit = threadId != null && threadId !== '' ? 1 : limit;
+    const effectiveOffset = threadId != null && threadId !== '' ? 0 : offset;
+    let threads = db.getThreadsByFolder(numAccountId, folderId, effectiveLimit, effectiveOffset, threadId);
+    threads = attachThreadFolders(threads);
+    threads = attachThreadLabels(threads);
+    return attachThreadDraftStatus(threads);
+  }
+
+  /**
    * Enrich threads with hasDraft status.
    * For each thread, checks if any constituent email has is_draft=1.
    * Follows the same pattern as attachThreadFolders/attachThreadLabels.
@@ -218,105 +238,8 @@ export function registerMailIpcHandlers(): void {
         return ipcSuccess(threads);
       }
 
-      let threads = db.getThreadsByFolder(numAccountId, folderId, limit, offset);
+      const threads = getEnrichedThreadsForFolder(numAccountId, folderId, limit, offset);
       log.info(`MAIL_FETCH_EMAILS: account=${accountId} folder=${folderId} returned ${threads.length} threads`);
-
-      // Targeted IMAP fallback for [Gmail]/Starred: if the local DB returns zero
-      // threads on the first page, fetch from server to populate folder associations.
-      // This handles the case where starred messages exist on the server but
-      // thread_folders for [Gmail]/Starred are stale or not yet synced.
-      if (threads.length === 0 && offset === 0 && folderId === '[Gmail]/Starred') {
-        log.info(`MAIL_FETCH_EMAILS: [Gmail]/Starred is empty locally — fetching from IMAP`);
-        try {
-          const imapService = ImapService.getInstance();
-          const lockManager = FolderLockManager.getInstance();
-
-          let emails: Awaited<ReturnType<typeof imapService.fetchEmails>>;
-          const release = await lockManager.acquire(folderId, accountId);
-          try {
-            emails = await imapService.fetchEmails(accountId, folderId, { limit: 100 });
-          } finally {
-            release();
-          }
-
-          if (emails.length > 0) {
-            // Group by thread for upsert
-            const threadMap = new Map<string, typeof emails>();
-            for (const email of emails) {
-              const threadId = email.xGmThrid || email.xGmMsgId;
-              if (!threadMap.has(threadId)) {
-                threadMap.set(threadId, []);
-              }
-              threadMap.get(threadId)!.push(email);
-            }
-
-            // Upsert emails
-            for (const email of emails) {
-              db.upsertEmail({
-                accountId: numAccountId,
-                xGmMsgId: email.xGmMsgId,
-                xGmThrid: email.xGmThrid,
-                folder: folderId,
-                folderUid: email.uid,
-                fromAddress: email.fromAddress,
-                fromName: email.fromName,
-                toAddresses: email.toAddresses,
-                ccAddresses: email.ccAddresses,
-                bccAddresses: email.bccAddresses,
-                subject: email.subject,
-                textBody: email.textBody,
-                htmlBody: email.htmlBody,
-                date: email.date,
-                isRead: email.isRead,
-                isStarred: email.isStarred,
-                isImportant: email.isImportant,
-                isDraft: email.isDraft,
-                snippet: email.snippet,
-                size: email.size,
-                hasAttachments: email.hasAttachments,
-                labels: email.labels,
-                messageId: email.messageId,
-              });
-
-              if (email.fromAddress) {
-                db.upsertContact(email.fromAddress, email.fromName);
-              }
-            }
-
-            // Upsert threads
-            for (const [threadId, threadEmails] of threadMap) {
-              const uniqueEmails = [...new Map(threadEmails.map(e => [e.xGmMsgId, e])).values()];
-              const latest = uniqueEmails.reduce((a, b) =>
-                new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
-              );
-              const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
-              const allRead = uniqueEmails.every(e => e.isRead);
-              const anyStarred = uniqueEmails.some(e => e.isStarred);
-
-              db.upsertThread({
-                accountId: numAccountId,
-                xGmThrid: threadId,
-                subject: latest.subject,
-                lastMessageDate: latest.date,
-                participants,
-                messageCount: uniqueEmails.length,
-                snippet: latest.snippet,
-                isRead: allRead,
-                isStarred: anyStarred,
-              });
-
-              db.upsertThreadFolder(numAccountId, threadId, folderId);
-            }
-
-            log.info(`MAIL_FETCH_EMAILS: Starred IMAP fallback fetched ${emails.length} emails, ${threadMap.size} threads`);
-
-            // Re-query DB to get properly formatted results
-            threads = db.getThreadsByFolder(numAccountId, folderId, limit, offset);
-          }
-        } catch (imapErr) {
-          log.warn(`MAIL_FETCH_EMAILS: Starred IMAP fallback failed (returning empty):`, imapErr);
-        }
-      }
 
       if (threads.length === 0) {
         // Debug: check what's actually in the DB
@@ -326,13 +249,7 @@ export function registerMailIpcHandlers(): void {
         const tfFolders = rawDb.exec('SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId', { ':accountId': numAccountId });
         log.info(`DEBUG: total threads=${threadCount[0]?.values[0]?.[0]}, total thread_folders=${tfCount[0]?.values[0]?.[0]}, folders in thread_folders=${JSON.stringify(tfFolders[0]?.values)}`);
       }
-      // Enrich threads with folders (from thread_folders) so list can show e.g. Draft/Sent/Deleted in Trash
-      threads = attachThreadFolders(threads);
-      // Enrich threads with label info
-      threads = attachThreadLabels(threads);
-      // Enrich threads with draft status
-      const enrichedThreads = attachThreadDraftStatus(threads);
-      return ipcSuccess(enrichedThreads);
+      return ipcSuccess(threads);
     } catch (err) {
       log.error('Failed to fetch emails:', err);
       return ipcError('MAIL_FETCH_FAILED', 'Failed to fetch emails');
@@ -392,16 +309,33 @@ export function registerMailIpcHandlers(): void {
   });
 
   // Get thread + messages from DB only (no IMAP). Used for instant display when opening a thread.
-  ipcMain.handle(IPC_CHANNELS.MAIL_GET_THREAD_FROM_DB, async (_event, accountId: string, threadId: string) => {
+  ipcMain.handle(IPC_CHANNELS.MAIL_GET_THREAD_FROM_DB, async (_event, accountId: string, threadId: string, folderId?: string) => {
     try {
       const numAccountId = Number(accountId);
+      const pendingOpService = PendingOpService.getInstance();
+      const pendingIds = pendingOpService.getPendingForThread(numAccountId, threadId);
+
+      // When folderId is provided (e.g. for reconcile), use same list-row shape as folder fetch.
+      if (folderId != null && folderId !== '' && !folderId.startsWith('label::')) {
+        const enrichedThreads = getEnrichedThreadsForFolder(numAccountId, folderId, 1, 0, threadId);
+        if (enrichedThreads.length > 0) {
+          const enrichedThread = enrichedThreads[0];
+          let messages = db.getEmailsByThreadId(numAccountId, threadId);
+          if (pendingIds.size > 0) {
+            messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
+          }
+          const withMessages = buildThreadResponse(enrichedThread, messages, pendingIds, numAccountId);
+          // Keep list-row fields from enriched thread; use buildThreadResponse only for messages array.
+          return ipcSuccess({ ...enrichedThread, messages: withMessages['messages'] });
+        }
+      }
+
+      // No folderId or thread not in folder: use thread-by-id + buildThreadResponse.
       const thread = db.getThreadById(numAccountId, threadId);
       if (!thread) {
         return ipcError('MAIL_THREAD_NOT_FOUND', 'Thread not found');
       }
       let messages = db.getEmailsByThreadId(numAccountId, threadId);
-      const pendingOpService = PendingOpService.getInstance();
-      const pendingIds = pendingOpService.getPendingForThread(numAccountId, threadId);
       if (pendingIds.size > 0) {
         messages = messages.filter((m) => !pendingIds.has(String(m['xGmMsgId'] ?? '')));
       }
