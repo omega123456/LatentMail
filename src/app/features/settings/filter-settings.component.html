@@ -203,20 +203,19 @@
             @for (action of $any(editingFilter()?.actions || []); track $index; let i = $index) {
               <div class="action-row">
                 <select class="form-select" [value]="action.type" (change)="updateAction(i, 'type', $any($event.target).value)">
-                  <option value="label">Add Label</option>
                   <option value="archive">Archive</option>
                   <option value="delete">Delete</option>
                   <option value="star">Star</option>
                   <option value="mark-read">Mark Read</option>
                   <option value="move">Move to</option>
                 </select>
-                @if (action.type === 'label' || action.type === 'move') {
+                @if (action.type === 'move') {
                   <input
                     type="text"
                     class="form-input"
                     [value]="action.value || ''"
                     (input)="updateAction(i, 'value', $any($event.target).value)"
-                    [placeholder]="action.type === 'label' ? 'Label name' : 'Folder name'"
+                    placeholder="Folder name"
                   />
                 }
                 <button class="icon-btn danger" (click)="removeAction(i)">

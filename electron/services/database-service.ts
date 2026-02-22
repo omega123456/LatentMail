@@ -126,7 +126,7 @@ export class DatabaseService {
     // Run schema creation (creates tables if they don't exist)
     this.db.run(CREATE_TABLES_SQL);
 
-    if (currentVersion === 1 && SCHEMA_VERSION === 2) {
+    if (currentVersion === 1) {
       this.runAllMailAssociationCleanupMigration();
     }
 
@@ -959,7 +959,7 @@ export class DatabaseService {
       this.db.run('DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
         { ':accountId': accountId, ':xGmMsgId': xGmMsgId });
 
-      // Remove the email row itself (CASCADE handles attachments, search_index, email_labels)
+      // Remove the email row itself (CASCADE handles attachments, search_index)
       this.db.run('DELETE FROM emails WHERE id = :emailId', { ':emailId': emailId });
 
       // Clean up orphaned thread
@@ -1928,157 +1928,6 @@ export class DatabaseService {
       'UPDATE filters SET is_enabled = :isEnabled, updated_at = datetime(\'now\') WHERE id = :id',
       { ':id': id, ':isEnabled': isEnabled ? 1 : 0 }
     );
-    this.scheduleSave();
-  }
-
-  // ---- User Label operations ----
-
-  upsertUserLabel(accountId: number, name: string, color?: string | null): number {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      `INSERT INTO user_labels (account_id, name, color) VALUES (:accountId, :name, :color)
-       ON CONFLICT(account_id, name) DO UPDATE SET color = COALESCE(excluded.color, user_labels.color)`,
-      { ':accountId': accountId, ':name': name, ':color': color || null }
-    );
-    const result = this.db.exec(
-      'SELECT id FROM user_labels WHERE account_id = :accountId AND name = :name',
-      { ':accountId': accountId, ':name': name }
-    );
-    const id = result[0].values[0][0] as number;
-    this.scheduleSave();
-    return id;
-  }
-
-  getUserLabels(accountId: number): Array<{ id: number; accountId: number; name: string; color: string | null; unreadCount: number }> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT ul.id, ul.account_id, ul.name, ul.color,
-        (SELECT COUNT(DISTINCT t.id)
-         FROM email_labels el2
-         JOIN emails e2 ON e2.id = el2.email_id
-         JOIN threads t ON t.account_id = e2.account_id AND t.x_gm_thrid = e2.x_gm_thrid
-         WHERE el2.label_id = ul.id AND t.is_read = 0
-        ) AS unread_count
-       FROM user_labels ul WHERE ul.account_id = :accountId ORDER BY ul.name ASC`,
-      { ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map(row => ({
-      id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
-      color: row[3] as string | null, unreadCount: (row[4] as number) || 0,
-    }));
-  }
-
-  assignEmailLabel(emailId: number, labelId: number, accountId: number): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'INSERT OR IGNORE INTO email_labels (email_id, label_id, account_id) VALUES (:emailId, :labelId, :accountId)',
-      { ':emailId': emailId, ':labelId': labelId, ':accountId': accountId }
-    );
-    this.scheduleSave();
-  }
-
-  removeEmailLabel(emailId: number): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run('DELETE FROM email_labels WHERE email_id = :emailId', { ':emailId': emailId });
-    this.scheduleSave();
-  }
-
-  emailHasLabel(emailId: number): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec('SELECT 1 FROM email_labels WHERE email_id = :emailId LIMIT 1', { ':emailId': emailId });
-    return result.length > 0 && result[0].values.length > 0;
-  }
-
-  getThreadsByUserLabel(accountId: number, labelId: number, limit: number = 50, offset: number = 0): Array<Record<string, unknown>> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT DISTINCT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date,
-        t.participants,
-        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
-         FROM emails e2
-         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
-         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
-           AND ef2.folder != '[Gmail]/Trash'
-        ) AS message_count,
-        t.snippet, 'label::' || :labelId AS folder,
-        t.is_read, t.is_starred
-       FROM threads t
-       JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
-       JOIN email_labels el ON el.email_id = e.id
-       WHERE el.label_id = :labelId AND el.account_id = :accountId
-       ORDER BY t.last_message_date DESC LIMIT :limit OFFSET :offset`,
-      { ':accountId': accountId, ':labelId': labelId, ':limit': limit, ':offset': offset }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
-  }
-
-  getThreadsByUserLabelBeforeDate(accountId: number, labelId: number, beforeDate: string, limit: number = 50): Array<Record<string, unknown>> {
-    if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT DISTINCT t.id, t.account_id, t.x_gm_thrid, t.subject, t.last_message_date,
-        t.participants,
-        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
-         FROM emails e2
-         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
-         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
-           AND ef2.folder != '[Gmail]/Trash'
-        ) AS message_count,
-        t.snippet, 'label::' || :labelId AS folder,
-        t.is_read, t.is_starred
-       FROM threads t
-       JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
-       JOIN email_labels el ON el.email_id = e.id
-       WHERE el.label_id = :labelId AND el.account_id = :accountId AND t.last_message_date < :beforeDate
-       ORDER BY t.last_message_date DESC LIMIT :limit`,
-      { ':accountId': accountId, ':labelId': labelId, ':beforeDate': beforeDate, ':limit': limit }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
-  }
-
-  getLabelsForThreadBatch(threadIds: number[]): Map<number, { labelId: number; labelName: string; labelColor: string | null }> {
-    if (!this.db) throw new Error('Database not initialized');
-    const map = new Map<number, { labelId: number; labelName: string; labelColor: string | null }>();
-    const uniqueIds = Array.from(new Set(threadIds.filter(id => Number.isFinite(id))));
-    if (uniqueIds.length === 0) return map;
-
-    const placeholders = uniqueIds.map((_, i) => `:tid${i}`);
-    const params: Record<string, number> = {};
-    for (let i = 0; i < uniqueIds.length; i++) {
-      params[`:tid${i}`] = uniqueIds[i];
-    }
-
-    const result = this.db.exec(
-      `SELECT t.id AS thread_id, ul.id AS label_id, ul.name AS label_name, ul.color AS label_color
-       FROM threads t
-       JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
-       JOIN email_labels el ON el.email_id = e.id
-       JOIN user_labels ul ON ul.id = el.label_id
-       WHERE t.id IN (${placeholders.join(', ')})
-       ORDER BY e.date DESC`,
-      params
-    );
-
-    if (result.length === 0) return map;
-
-    for (const row of result[0].values) {
-      const threadId = row[0] as number;
-      if (!map.has(threadId)) {
-        map.set(threadId, {
-          labelId: row[1] as number,
-          labelName: row[2] as string,
-          labelColor: row[3] as string | null,
-        });
-      }
-    }
-    return map;
-  }
-
-  deleteUserLabel(labelId: number): void {
-    if (!this.db) throw new Error('Database not initialized');
-    this.db.run('DELETE FROM user_labels WHERE id = :labelId', { ':labelId': labelId });
     this.scheduleSave();
   }
 

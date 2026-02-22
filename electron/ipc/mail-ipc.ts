@@ -115,53 +115,7 @@ export function registerMailIpcHandlers(): void {
   };
 
   /**
-   * Enrich threads with label info from user_labels.
-   * Adds a `label` field to each thread if any of its emails has a label assigned.
-   */
-  const attachThreadLabels = (threads: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
-    const threadIds = threads
-      .map((thread) => {
-        const rawId = thread['id'];
-        if (typeof rawId === 'number') {
-          return rawId;
-        }
-        if (typeof rawId === 'string') {
-          const parsed = Number(rawId);
-          return Number.isFinite(parsed) ? parsed : null;
-        }
-        return null;
-      })
-      .filter((threadId): threadId is number => threadId != null && threadId > 0);
-
-    if (threadIds.length === 0) {
-      return threads;
-    }
-
-    const labelMap = db.getLabelsForThreadBatch(threadIds);
-    if (labelMap.size === 0) {
-      return threads;
-    }
-
-    return threads.map((thread) => {
-      const rawId = thread['id'];
-      const threadId = typeof rawId === 'number' ? rawId : Number(rawId);
-      const labelInfo = Number.isFinite(threadId) ? labelMap.get(threadId) : undefined;
-      if (!labelInfo) {
-        return thread;
-      }
-      return {
-        ...thread,
-        label: {
-          id: labelInfo.labelId,
-          name: labelInfo.labelName,
-          color: labelInfo.labelColor,
-        },
-      };
-    });
-  };
-
-  /**
-   * Get threads for a folder with list-row enrichment (folders, labels, hasDraft).
+   * Get threads for a folder with list-row enrichment (folders, hasDraft).
    * When threadId is provided, returns at most one thread (same shape as list items).
    * Used by MAIL_FETCH_EMAILS and by MAIL_GET_THREAD_FROM_DB when folderId is supplied.
    */
@@ -176,14 +130,12 @@ export function registerMailIpcHandlers(): void {
     const effectiveOffset = threadId != null && threadId !== '' ? 0 : offset;
     let threads = db.getThreadsByFolder(numAccountId, folderId, effectiveLimit, effectiveOffset, threadId);
     threads = attachThreadFolders(threads);
-    threads = attachThreadLabels(threads);
     return attachThreadDraftStatus(threads);
   }
 
   /**
    * Enrich threads with hasDraft status.
    * For each thread, checks if any constituent email has is_draft=1.
-   * Follows the same pattern as attachThreadFolders/attachThreadLabels.
    */
   const attachThreadDraftStatus = (threads: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
     const threadIds = threads
@@ -226,19 +178,6 @@ export function registerMailIpcHandlers(): void {
       const limit = options?.limit || 50;
       const offset = options?.offset || 0;
       const numAccountId = Number(accountId);
-
-      // Handle virtual label folder: label::<id>
-      if (folderId.startsWith('label::')) {
-        const labelId = Number(folderId.substring(7));
-        if (!Number.isFinite(labelId) || labelId <= 0) {
-          return ipcError('MAIL_INVALID_FOLDER', `Invalid label folder ID: ${folderId}`);
-        }
-        let threads = db.getThreadsByUserLabel(numAccountId, labelId, limit, offset);
-        threads = attachThreadFolders(threads);
-        threads = attachThreadLabels(threads);
-        threads = attachThreadDraftStatus(threads);
-        return ipcSuccess(threads);
-      }
 
       const threads = getEnrichedThreadsForFolder(numAccountId, folderId, limit, offset);
       log.info(`MAIL_FETCH_EMAILS: account=${accountId} folder=${folderId} returned ${threads.length} threads`);
@@ -318,7 +257,7 @@ export function registerMailIpcHandlers(): void {
       const pendingIds = pendingOpService.getPendingForThread(numAccountId, threadId);
 
       // When folderId is provided (e.g. for reconcile), use same list-row shape as folder fetch.
-      if (folderId != null && folderId !== '' && !folderId.startsWith('label::')) {
+      if (folderId != null && folderId !== '') {
         const enrichedThreads = getEnrichedThreadsForFolder(numAccountId, folderId, 1, 0, threadId);
         if (enrichedThreads.length > 0) {
           const enrichedThread = enrichedThreads[0];
@@ -930,24 +869,6 @@ export function registerMailIpcHandlers(): void {
       log.info(`Fetching older emails for account ${accountId}, folder ${folderId}, before ${beforeDate}, limit ${limit}`);
       const numAccountId = Number(accountId);
 
-      // Handle virtual label folder: label::<id> — local-only pagination
-      if (folderId.startsWith('label::')) {
-        const labelId = Number(folderId.substring(7));
-        if (!Number.isFinite(labelId) || labelId <= 0) {
-          return ipcError('MAIL_INVALID_FOLDER', `Invalid label folder ID: ${folderId}`);
-        }
-        const parsedLabelDate = new Date(beforeDate);
-        if (isNaN(parsedLabelDate.getTime())) {
-          return ipcError('INVALID_DATE', `Invalid beforeDate: ${beforeDate}`);
-        }
-        const sanitizedLabelLimit = Math.max(1, Number(limit) || 50);
-        let threads = db.getThreadsByUserLabelBeforeDate(numAccountId, labelId, beforeDate, sanitizedLabelLimit);
-        threads = attachThreadFolders(threads);
-        threads = attachThreadLabels(threads);
-        threads = attachThreadDraftStatus(threads);
-        return ipcSuccess({ threads, hasMore: threads.length === sanitizedLabelLimit });
-      }
-
       const imapService = ImapService.getInstance();
 
       // Validate date
@@ -1095,21 +1016,7 @@ export function registerMailIpcHandlers(): void {
           unreadCount: unreadByFolder[row.gmailLabelId as string] ?? 0,
         }));
 
-      // Append user-defined filter label folders as virtual entries
-      const userLabels = db.getUserLabels(numAccountId);
-      const filterLabelFolders = userLabels.map((label) => ({
-        id: label.id,
-        accountId: numAccountId,
-        gmailLabelId: `label::${label.id}`,
-        name: label.name,
-        type: 'filter-label',
-        color: label.color,
-        unreadCount: label.unreadCount,
-        totalCount: 0,
-        icon: 'sell',
-      }));
-
-      return ipcSuccess([...labelsWithThreadCounts, ...filterLabelFolders]);
+      return ipcSuccess(labelsWithThreadCounts);
     } catch (err) {
       log.error('Failed to get folders:', err);
       return ipcError('MAIL_GET_FOLDERS_FAILED', 'Failed to get folders');

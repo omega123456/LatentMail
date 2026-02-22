@@ -1,7 +1,7 @@
 // SQLite schema definitions for MailClient
 // New-era schema (v2): X-GM-MSGID as primary identifier, CONDSTORE folder state
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const CREATE_TABLES_SQL = `
   -- Accounts table
@@ -200,31 +200,6 @@ export const CREATE_TABLES_SQL = `
 
   CREATE INDEX IF NOT EXISTS idx_search_subject ON search_index(subject);
   CREATE INDEX IF NOT EXISTS idx_search_from ON search_index(from_address);
-
-  -- User-defined labels (local-only, created by filter actions)
-  CREATE TABLE IF NOT EXISTS user_labels (
-    id INTEGER PRIMARY KEY,
-    account_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    color TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-    UNIQUE(account_id, name)
-  );
-
-  -- Email-to-label assignments (one label per email)
-  CREATE TABLE IF NOT EXISTS email_labels (
-    id INTEGER PRIMARY KEY,
-    email_id INTEGER NOT NULL,
-    label_id INTEGER NOT NULL,
-    account_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-    FOREIGN KEY (label_id) REFERENCES user_labels(id) ON DELETE CASCADE,
-    UNIQUE(email_id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_email_labels_account_label ON email_labels(account_id, label_id);
 
   -- Schema version tracking
   CREATE TABLE IF NOT EXISTS schema_version (

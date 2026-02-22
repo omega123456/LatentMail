@@ -3,7 +3,6 @@ import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 
 const log = LoggerService.getInstance();
-import { DatabaseService } from '../services/database-service';
 import { FilterService } from '../services/filter-service';
 
 export function registerFilterIpcHandlers(): void {
@@ -24,22 +23,6 @@ export function registerFilterIpcHandlers(): void {
     } catch (err) {
       log.error(`[FilterIPC] Failed to apply filters for account ${accountId}:`, err);
       return ipcError('FILTER_APPLY_FAILED', 'Failed to apply filters');
-    }
-  });
-
-  // Get user labels for an account (for sidebar display)
-  ipcMain.handle(IPC_CHANNELS.DB_GET_USER_LABELS, (_event, accountId: number) => {
-    try {
-      if (!accountId || typeof accountId !== 'number' || accountId <= 0) {
-        return ipcError('DB_INVALID_INPUT', 'Valid account ID is required');
-      }
-
-      const db = DatabaseService.getInstance();
-      const labels = db.getUserLabels(accountId);
-      return ipcSuccess({ labels });
-    } catch (err) {
-      log.error('[FilterIPC] Failed to get user labels:', err);
-      return ipcError('DB_READ_FAILED', 'Failed to get user labels');
     }
   });
 

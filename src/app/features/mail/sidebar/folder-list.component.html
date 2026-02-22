@@ -75,21 +75,4 @@
       </div>
     }
   }
-
-  @if (!collapsed() && foldersStore.filterLabelFolders().length > 0) {
-    <div class="labels-header">Filter Labels</div>
-    @for (filterLabel of foldersStore.filterLabelFolders(); track filterLabel.gmailLabelId) {
-      <div
-        class="folder-item"
-        [class.active]="!foldersStore.searchActive() && filterLabel.gmailLabelId === foldersStore.activeFolderId()"
-        (click)="onFolderClick(filterLabel.gmailLabelId)"
-      >
-        <span class="material-symbols-outlined">{{ filterLabel.icon || 'sell' }}</span>
-        <span class="folder-name">{{ filterLabel.name }}</span>
-        @if (filterLabel.unreadCount > 0) {
-          <span class="unread-count">{{ filterLabel.unreadCount }}</span>
-        }
-      </div>
-    }
-  }
 </nav>

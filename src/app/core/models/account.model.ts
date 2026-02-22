@@ -12,7 +12,7 @@ export interface Folder {
   accountId: number;
   gmailLabelId: string;
   name: string;
-  type: 'system' | 'user' | 'filter-label';
+  type: 'system' | 'user';
   color?: string;
   unreadCount: number;
   totalCount: number;

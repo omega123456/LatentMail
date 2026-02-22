@@ -5,7 +5,7 @@ export interface FilterCondition {
 }
 
 export interface FilterAction {
-  type: 'label' | 'archive' | 'delete' | 'star' | 'mark-read' | 'move';
+  type: 'archive' | 'delete' | 'star' | 'mark-read' | 'move';
   value?: string;
 }
 

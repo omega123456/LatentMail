@@ -15,7 +15,7 @@ interface FilterCondition {
 }
 
 interface FilterAction {
-  type: 'label' | 'archive' | 'delete' | 'star' | 'mark-read' | 'move';
+  type: 'archive' | 'delete' | 'star' | 'mark-read' | 'move';
   value?: string;
 }
 
@@ -126,8 +126,6 @@ export class FilterService {
         actions: FilterAction[];
       }> = [];
 
-      // Track which emails have been assigned a label (first-wins for label action)
-      const emailsWithLabel = new Set<number>();
       // Track unique matched emails for accurate count
       const matchedEmailIds = new Set<number>();
 
@@ -135,19 +133,7 @@ export class FilterService {
         for (const filter of filters) {
           try {
             if (this.evaluateConditions(email, filter.conditions)) {
-              // Determine which actions to execute
-              const actionsToRun: FilterAction[] = [];
-              for (const action of filter.actions) {
-                if (action.type === 'label') {
-                  // Only apply label if this email doesn't already have one from a higher-priority filter
-                  if (!emailsWithLabel.has(email.id)) {
-                    emailsWithLabel.add(email.id);
-                    actionsToRun.push(action);
-                  }
-                } else {
-                  actionsToRun.push(action);
-                }
-              }
+              const actionsToRun = [...filter.actions];
 
               if (actionsToRun.length > 0) {
                 matchedActions.push({ email, filter, actions: actionsToRun });
@@ -355,24 +341,6 @@ export class FilterService {
     const descriptionPrefix = `[Filter: ${filterName}]`;
 
     switch (action.type) {
-      case 'label': {
-        if (!action.value) {
-          log.warn(`[FilterService] Label action in filter "${filterName}" has no value — skipping for email ${email.id}`);
-          return null;
-        }
-        // Upsert the user label and assign it to the email
-        const labelId = db.upsertUserLabel(accountId, action.value);
-        // Only assign if email doesn't already have a label (DB UNIQUE constraint also protects)
-        if (!db.emailHasLabel(email.id)) {
-          db.assignEmailLabel(email.id, labelId, accountId);
-          log.info(`[FilterService] Applied label "${action.value}" (id=${labelId}) to email ${email.id} via filter "${filterName}"`);
-        } else {
-          log.debug(`[FilterService] Email ${email.id} already has a label, skipping label assignment from filter "${filterName}"`);
-        }
-        // Return virtual label folder ID so data-changed triggers a refresh
-        return `label::${labelId}`;
-      }
-
       case 'mark-read': {
         // Optimistic DB update
         db.updateEmailFlags(accountId, email.xGmMsgId, { isRead: true });

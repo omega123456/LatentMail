@@ -257,7 +257,7 @@ export class FilterSettingsComponent implements OnInit {
     if (!filter) {
       return;
     }
-    const actions = [...(filter.actions || []), { type: 'label' as const, value: '' }];
+    const actions = [...(filter.actions || []), { type: 'mark-read' as const }];
     this.editingFilter.set({ ...filter, actions });
   }
 
@@ -301,7 +301,6 @@ export class FilterSettingsComponent implements OnInit {
 
   actionTypeLabel(type: string): string {
     const labels: Record<string, string> = {
-      label: 'Add Label',
       archive: 'Archive',
       delete: 'Delete',
       star: 'Star',

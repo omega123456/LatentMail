@@ -84,7 +84,7 @@ export class MoveToMenuComponent implements OnDestroy {
   /** Index of the currently focused item for keyboard navigation (-1 = none). */
   readonly focusedIndex = signal(-1);
 
-  /** Filtered system folders (excluding active, excluded IDs, and filter-label type). */
+  /** Filtered system folders (excluding active and excluded IDs). */
   readonly filteredSystemFolders = computed(() => {
     const active = this.activeFolderId();
     const search = this.searchText().toLowerCase();
@@ -102,7 +102,7 @@ export class MoveToMenuComponent implements OnDestroy {
       });
   });
 
-  /** Filtered user label folders (excluding active and filter-label type). */
+  /** Filtered user label folders (excluding active). */
   readonly filteredUserLabels = computed(() => {
     const active = this.activeFolderId();
     const search = this.searchText().toLowerCase();
@@ -122,10 +122,8 @@ export class MoveToMenuComponent implements OnDestroy {
 
   /** Total visible folder count (to determine if search input is shown). */
   readonly totalVisible = computed(() => {
-    // Count total eligible folders BEFORE search filtering (just excluding active + excluded IDs + filter-label)
     const active = this.activeFolderId();
     return this.folders().filter(f =>
-      f.type !== 'filter-label' &&
       !EXCLUDED_FOLDER_IDS.includes(f.gmailLabelId) &&
       f.gmailLabelId !== active
     ).length;
