@@ -13,8 +13,8 @@
   } @else {
     <cdk-virtual-scroll-viewport
       [itemSize]="uiStore.densityHeight()"
+      [class.viewport-overlay-visible]="emailsStore.anyLoadingMore() || !!emailsStore.fetchError()"
       class="email-scroll-viewport"
-      (scrolledIndexChange)="onScroll($event)"
     >
       <app-email-list-item
         *cdkVirtualFor="let thread of filteredThreads(); trackBy: trackByThreadId"
@@ -26,26 +26,35 @@
         (clicked)="onThreadClick(thread)"
         (starToggled)="onStarToggle(thread)"
       />
-      <!-- Bottom-of-list indicators (inside viewport so they scroll with content) -->
-      @if (emailsStore.fetchingMore()) {
-        <div class="list-bottom-indicator" role="status" aria-live="polite">
-          <span class="ellipsis-animated fetch-icon" aria-hidden="true">
-            <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
-          </span>
-          <span class="fetch-text">Fetching older emails...</span>
-        </div>
-      } @else if (emailsStore.fetchError()) {
-        <div class="list-bottom-indicator error" role="status" aria-live="polite">
-          <span class="material-symbols-outlined error-icon">error</span>
-          <span class="error-text">{{ emailsStore.fetchError() }}</span>
-          <button class="retry-btn" (click)="onRetryFetch()">Retry</button>
-        </div>
-      } @else if (!emailsStore.hasMore() && !emailsStore.isEmpty()) {
+      <!-- End-of-list inline indicator: only shown when all emails are loaded -->
+      @if (!emailsStore.hasMore() && !emailsStore.isEmpty()) {
         <div class="list-bottom-indicator end" role="status" aria-live="polite">
           <span class="material-symbols-outlined end-icon">check_circle</span>
           <span class="end-text">You've reached the end</span>
         </div>
       }
     </cdk-virtual-scroll-viewport>
+
+    <!-- Fixed loading/error overlay: anchored to bottom of .email-list-container.
+         Rendered outside the viewport so it does not scroll with content.
+         pointer-events: none on the container; interactive children restore auto. -->
+    @if (emailsStore.anyLoadingMore() || emailsStore.fetchError()) {
+      <div class="load-more-overlay">
+        @if (emailsStore.anyLoadingMore()) {
+          <div class="overlay-content" role="status" aria-live="polite">
+            <span class="ellipsis-animated" aria-hidden="true">
+              <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+            </span>
+            <span class="overlay-text">Loading more emails...</span>
+          </div>
+        } @else if (emailsStore.fetchError()) {
+          <div class="overlay-content" role="alert" aria-live="assertive">
+            <span class="material-symbols-outlined overlay-error-icon">error_outline</span>
+            <span class="overlay-text overlay-error-text">{{ emailsStore.fetchError() }}</span>
+            <button class="retry-btn" (click)="onRetryFetch()">Retry</button>
+          </div>
+        }
+      </div>
+    }
   }
 </div>

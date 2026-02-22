@@ -1,4 +1,4 @@
-import { Component, ViewChild, inject, output, effect, signal, computed } from '@angular/core';
+import { Component, viewChild, inject, output, effect, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CdkVirtualScrollViewport, ScrollingModule } from '@angular/cdk/scrolling';
 import { EmailsStore } from '../../../store/emails.store';
@@ -18,8 +18,10 @@ import { AccountsStore } from '../../../store/accounts.store';
   styleUrl: './email-list.component.scss',
 })
 export class EmailListComponent {
-  @ViewChild(CdkVirtualScrollViewport)
-  private viewport?: CdkVirtualScrollViewport;
+  // Signal-based ViewChild — reactive, works correctly with @if/@else control flow.
+  // Angular updates this signal whenever the viewport enters or leaves the DOM,
+  // which re-runs any effects that read it (enabling clean setup/teardown).
+  readonly viewport = viewChild(CdkVirtualScrollViewport);
 
   readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
@@ -53,8 +55,8 @@ export class EmailListComponent {
     // loadThreads() sets preserveListPosition to false — when that happens, scroll to top.
     effect(() => {
       const preserve = this.emailsStore.preserveListPosition();
-      if (!preserve && this.viewport) {
-        this.viewport.scrollToIndex(0);
+      if (!preserve) {
+        this.viewport()?.scrollToIndex(0);
       }
     });
 
@@ -71,6 +73,7 @@ export class EmailListComponent {
     effect(() => {
       const threads = this.filteredThreads(); // reactive — runs when threads change
       const preserve = this.emailsStore.preserveListPosition();
+      const vp = this.viewport();
 
       const currentIds = threads.map(t => t.xGmThrid);
       const prevIds = this.previousThreadIds;
@@ -79,14 +82,14 @@ export class EmailListComponent {
       // we compensate this cycle.
       this.previousThreadIds = currentIds;
 
-      if (!preserve || !this.viewport || prevIds.length === 0 || currentIds.length === 0) {
+      if (!preserve || !vp || prevIds.length === 0 || currentIds.length === 0) {
         return;
       }
 
       // Anchor: the first thread visible in the rendered range from the previous list.
       // getRenderedRange() reflects the old rendered state at effect-run time (before
       // Angular has re-rendered the DOM for the new thread list).
-      const renderedRange = this.viewport.getRenderedRange();
+      const renderedRange = vp.getRenderedRange();
       const anchorPrevIndex = Math.max(0, renderedRange.start);
       const anchorId = prevIds[anchorPrevIndex] ?? prevIds[0];
 
@@ -108,10 +111,76 @@ export class EmailListComponent {
         // content. Positive delta: new emails appear above, visible when scrolling up.
         // Negative delta: deletions above the fold — scroll offset reduces to follow content up.
         const itemSize = this.uiStore.densityHeight();
-        const currentOffset = this.viewport.measureScrollOffset();
-        this.viewport.scrollToOffset(currentOffset + deltaIndex * itemSize);
+        const currentOffset = vp.measureScrollOffset();
+        vp.scrollToOffset(currentOffset + deltaIndex * itemSize);
       }
     });
+
+    // Scroll-based load-more detection.
+    //
+    // Why not IntersectionObserver + sentinel: CDK virtual scroll manages its own content
+    // wrapper with CSS transforms. Static sibling elements inside the viewport are not part
+    // of this wrapper and cannot be reliably positioned at the logical "end" of the list.
+    // IntersectionObserver with a custom root also has browser inconsistencies around %
+    // rootMargin calculation. Using CDK's own scroll Observable + measureScrollOffset('bottom')
+    // avoids all of these issues — it is a direct API call that returns the exact pixel
+    // distance from the current scroll position to the bottom of the scrollable content.
+    //
+    // Threshold: 2× the viewport height so prefetching begins two screens before the bottom,
+    // matching the original plan's intent of "seamless prefetch the user rarely notices."
+    //
+    // onCleanup() runs when the CDK viewport leaves the DOM (folder switch triggers the @if
+    // block, destroying the viewport) or when the component is destroyed, automatically
+    // unsubscribing without any ngOnDestroy boilerplate.
+    effect((onCleanup) => {
+      const vp = this.viewport();
+      if (!vp) {
+        return;
+      }
+
+      let scrolled = false;
+
+      const subscription = vp.elementScrolled().subscribe(() => {
+        // One-shot: mark list position as preserved on the first scroll event.
+        // This prevents loadThreads() from resetting scroll to top during background refreshes.
+        if (!scrolled && vp.measureScrollOffset() > 0) {
+          scrolled = true;
+          this.emailsStore.markListScrolled();
+        }
+
+        // Check if the user is close enough to the bottom to trigger a prefetch.
+        this.checkAndMaybeLoadMore(vp);
+      });
+
+      onCleanup(() => subscription.unsubscribe());
+    });
+  }
+
+  /**
+   * Checks if the current scroll position is within the prefetch threshold of the bottom
+   * and, if so, calls loadMore. Safe to call multiple times — the store guards against
+   * concurrent loads and redundant calls when hasMore is false.
+   */
+  private checkAndMaybeLoadMore(vp: CdkVirtualScrollViewport): void {
+    if (!this.emailsStore.hasMore() || this.emailsStore.anyLoadingMore()) {
+      return;
+    }
+
+    const activeAccount = this.accountsStore.activeAccount();
+    const activeFolderId = this.foldersStore.activeFolderId();
+    if (!activeAccount || !activeFolderId) {
+      return;
+    }
+
+    // measureScrollOffset('bottom') returns the number of pixels between the current
+    // scroll position's bottom edge and the very end of the scrollable content.
+    // When this falls below the threshold, we're close enough to start prefetching.
+    const distanceFromBottom = vp.measureScrollOffset('bottom');
+    const prefetchThreshold = Math.max(400, vp.getViewportSize() * 2);
+
+    if (distanceFromBottom < prefetchThreshold) {
+      this.emailsStore.loadMore(activeAccount.id, activeFolderId);
+    }
   }
 
   trackByThreadId(_index: number, thread: Thread): string {
@@ -133,36 +202,13 @@ export class EmailListComponent {
     );
   }
 
-  onScroll(index: number): void {
-    if (index > 0) {
-      this.emailsStore.markListScrolled();
-    }
-
-    const threads = this.emailsStore.threads();
-    const renderedRange = this.viewport?.getRenderedRange();
-    const renderedCount = renderedRange ? Math.max(1, renderedRange.end - renderedRange.start) : 10;
-    const remainingItems = threads.length - (index + renderedCount);
-    const nearBottomThreshold = Math.max(10, renderedCount * 2);
-
-    if (
-      remainingItems <= nearBottomThreshold &&
-      this.emailsStore.hasMore() &&
-      !this.emailsStore.loading() &&
-      !this.emailsStore.fetchingMore()
-    ) {
-      const activeAccount = this.accountsStore.activeAccount();
-      const activeFolderId = this.foldersStore.activeFolderId();
-      if (activeAccount && activeFolderId) {
-        this.emailsStore.loadMore(activeAccount.id, activeFolderId);
-      }
-    }
-  }
-
   onRetryFetch(): void {
     const activeAccount = this.accountsStore.activeAccount();
     const activeFolderId = this.foldersStore.activeFolderId();
     if (activeAccount && activeFolderId) {
-      this.emailsStore.loadMoreFromServer(activeAccount.id, activeFolderId);
+      // loadMore() internally routes to DB retry or server retry based on dbExhausted.
+      // Also clears fetchError before attempting (set in the store's loadMore).
+      this.emailsStore.loadMore(activeAccount.id, activeFolderId);
     }
   }
 

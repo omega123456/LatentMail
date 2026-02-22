@@ -46,6 +46,7 @@ interface EmailsState {
   selectedThreadId: string | null;
   selectedThread: (Thread & { messages?: Email[] }) | null;
   loading: boolean;
+  loadingPage: boolean;
   loadingThread: boolean;
   error: string | null;
   hasMore: boolean;
@@ -71,6 +72,7 @@ const initialState: EmailsState = {
   selectedThreadId: null,
   selectedThread: null,
   loading: false,
+  loadingPage: false,
   loadingThread: false,
   error: null,
   hasMore: true,
@@ -119,6 +121,9 @@ export const EmailsStore = signalStore(
     return {
       unreadCount: computed(() =>
         store.threads().filter(t => !t.isRead).length
+      ),
+      anyLoadingMore: computed(() =>
+        store.loadingPage() || store.fetchingMore()
       ),
       selectedMessages: computed(() => {
         const messages = store.selectedThread()?.messages ?? [];
@@ -189,7 +194,7 @@ export const EmailsStore = signalStore(
     return {
       /** Load threads for a folder */
       async loadThreads(accountId: number, folderId: string): Promise<void> {
-        patchState(store, { loading: true, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false });
+        patchState(store, { loading: true, loadingPage: false, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false });
         try {
           const response = await electronService.fetchEmails(
             String(accountId),
@@ -232,17 +237,17 @@ export const EmailsStore = signalStore(
 
       /** Load more threads (pagination) — reads from local DB, then server if DB exhausted */
       async loadMore(accountId: number, folderId: string): Promise<void> {
-        if (!store.hasMore() || store.loading() || store.fetchingMore()) return;
+        if (!store.hasMore() || store.loadingPage() || store.fetchingMore()) return;
 
         // If DB is already known to be exhausted, go straight to server fetch
         if (store.dbExhausted()) {
-          patchState(store, { hasLoadedMore: true });
+          patchState(store, { hasLoadedMore: true, fetchError: null });
           _loadMoreFromServer(accountId, folderId);
           return;
         }
 
         const nextPage = store.currentPage() + 1;
-        patchState(store, { loading: true, hasLoadedMore: true, preserveListPosition: true });
+        patchState(store, { loadingPage: true, fetchError: null, hasLoadedMore: true, preserveListPosition: true });
         try {
           const response = await electronService.fetchEmails(
             String(accountId),
@@ -254,7 +259,7 @@ export const EmailsStore = signalStore(
             const dbHasLess = newThreads.length < PAGE_SIZE;
             patchState(store, {
               threads: [...store.threads(), ...newThreads],
-              loading: false,
+              loadingPage: false,
               currentPage: nextPage,
               dbExhausted: dbHasLess,
               serverCursorDate: getOldestThreadDate([...store.threads(), ...newThreads]),
@@ -266,15 +271,19 @@ export const EmailsStore = signalStore(
               _loadMoreFromServer(accountId, folderId);
             }
           } else {
+            const errorMsg = response.error?.message || 'Failed to load more emails';
             patchState(store, {
-              loading: false,
-              error: response.error?.message || 'Failed to load more emails',
+              loadingPage: false,
+              error: errorMsg,
+              fetchError: errorMsg,
             });
           }
         } catch (err: unknown) {
+          const errorMsg = err instanceof Error ? err.message : 'Failed to load more emails';
           patchState(store, {
-            loading: false,
-            error: err instanceof Error ? err.message : 'Failed to load more emails',
+            loadingPage: false,
+            error: errorMsg,
+            fetchError: errorMsg,
           });
         }
       },

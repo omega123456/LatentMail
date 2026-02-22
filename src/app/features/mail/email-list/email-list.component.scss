@@ -12,6 +12,8 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  // Positioning context for the absolutely-positioned load-more overlay
+  position: relative;
 }
 
 .email-scroll-viewport {
@@ -20,6 +22,13 @@
   overflow-x: hidden;
   width: 100%;
   max-width: 100%;
+  // Shrink the viewport with margin-bottom when the overlay is visible so the
+  // scrollbar track also rises above the overlay (margin-bottom shrinks the
+  // element including its scrollbar; padding-bottom would leave the scrollbar
+  // track extending behind the overlay). ~48px matches the overlay height.
+  &.viewport-overlay-visible {
+    margin-bottom: 48px;
+  }
 
   ::ng-deep .cdk-virtual-scroll-content-wrapper {
     max-width: 100%;
@@ -70,6 +79,7 @@
   }
 }
 
+// Inline end-of-list indicator (stays inside the scroll viewport)
 .list-bottom-indicator {
   display: flex;
   align-items: center;
@@ -80,64 +90,6 @@
   font-size: 13px;
   line-height: 1;
   flex-shrink: 0;
-
-  .fetch-icon {
-    font-size: inherit;
-    color: var(--color-primary);
-    display: flex;
-    align-items: center;
-  }
-
-  .fetch-text {
-    line-height: 1;
-    display: flex;
-    align-items: center;
-  }
-
-  .ellipsis-animated {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    font-weight: bold;
-    letter-spacing: 2px;
-    line-height: 1;
-    font-size: inherit;
-    height: 1em;
-    /* Nudge up so period baseline aligns visually with x-height of label */
-    transform: translateY(-0.06em);
-
-    .dot {
-      animation: ellipsis-dot 1.4s ease-in-out infinite both;
-      line-height: 1;
-
-      &:nth-child(1) { animation-delay: 0s; }
-      &:nth-child(2) { animation-delay: 0.2s; }
-      &:nth-child(3) { animation-delay: 0.4s; }
-    }
-  }
-
-  @keyframes ellipsis-dot {
-    0%, 80%, 100% { opacity: 0.25; }
-    40% { opacity: 1; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .ellipsis-animated .dot {
-      animation: none;
-      opacity: 1;
-    }
-  }
-
-  &.error {
-    .error-icon {
-      font-size: 20px;
-      color: var(--color-error, #d32f2f);
-    }
-    .error-text {
-      color: var(--color-text-secondary);
-    }
-  }
 
   &.end {
     .end-icon {
@@ -150,6 +102,97 @@
   }
 }
 
+// Fixed loading/error overlay — positioned at the bottom of .email-list-container
+.load-more-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--color-surface-variant, rgba(0, 0, 0, 0.05));
+  border-top: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+  // Passthrough pointer events so email rows beneath remain clickable
+  pointer-events: none;
+  // Smooth enter/exit
+  animation: overlay-fade-in 150ms ease-out;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.overlay-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.overlay-text {
+  line-height: 1;
+}
+
+.overlay-error-icon {
+  font-size: 18px;
+  color: var(--color-error, #d32f2f);
+}
+
+.overlay-error-text {
+  color: var(--color-text-secondary);
+}
+
+.ellipsis-animated {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  line-height: 1;
+  font-size: inherit;
+  height: 1em;
+  color: var(--color-primary);
+  /* Nudge up so period baseline aligns visually with x-height of label */
+  transform: translateY(-0.06em);
+
+  .dot {
+    animation: ellipsis-dot 1.4s ease-in-out infinite both;
+    line-height: 1;
+
+    &:nth-child(1) { animation-delay: 0s; }
+    &:nth-child(2) { animation-delay: 0.2s; }
+    &:nth-child(3) { animation-delay: 0.4s; }
+  }
+}
+
+@keyframes ellipsis-dot {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ellipsis-animated .dot {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+// Retry button inside the overlay re-enables pointer events
 .retry-btn {
   background: none;
   border: none;
@@ -159,6 +202,8 @@
   font-family: inherit;
   padding: 4px 8px;
   border-radius: 4px;
+  // Override the parent's pointer-events: none
+  pointer-events: auto;
 
   &:hover {
     background-color: var(--color-surface-variant);
