@@ -212,13 +212,13 @@ export const EmailsStore = signalStore(
               hasMore: true,
               dbExhausted: dbHasLess,
               currentPage: 0,
-              serverCursorDate: getOldestThreadDate(threads),
+              serverCursorDate: getOldestThreadDate(threads) ?? (threads.length === 0 ? new Date().toISOString() : null),
               hasLoadedMore: false,
               preserveListPosition: false,
             });
 
-            // If DB is already exhausted on first load, proactively fetch from server
-            if (dbHasLess && threads.length > 0) {
+            // If DB is already exhausted on first load, proactively fetch from server (including when folder is empty)
+            if (dbHasLess) {
               _loadMoreFromServer(accountId, folderId);
             }
           } else {
