@@ -131,6 +131,14 @@ export class StatusBarComponent implements OnInit, OnDestroy {
     this.router.navigate(['/settings/queue']);
   }
 
+  /** Trigger manual sync for the active account (same logic as former header sync button). */
+  triggerManualSync(): void {
+    const activeAccount = this.accountsStore.activeAccount();
+    if (activeAccount && !this.emailsStore.syncing()) {
+      this.emailsStore.syncAccount(activeAccount.id);
+    }
+  }
+
   ngOnDestroy(): void {
     if (this.tickInterval) {
       clearInterval(this.tickInterval);

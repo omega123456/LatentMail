@@ -33,6 +33,38 @@
   color: var(--color-primary);
 }
 
+// Sync status: clickable, triggers manual refresh
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: inherit;
+  line-height: inherit;
+
+  &:hover:not(:disabled) {
+    color: var(--color-text-secondary);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.9;
+  }
+
+  .material-symbols-outlined {
+    font-size: 14px;
+  }
+
+  &.syncing .material-symbols-outlined {
+    color: var(--color-primary);
+  }
+}
+
 .status-separator {
   color: var(--color-border);
 }

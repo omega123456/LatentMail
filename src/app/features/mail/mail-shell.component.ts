@@ -299,13 +299,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     this.emailLists?.forEach(list => list.setCategoryFilter(null));
   }
 
-  onManualSync(): void {
-    const activeAccount = this.accountsStore.activeAccount();
-    if (activeAccount && !this.emailsStore.syncing()) {
-      this.emailsStore.syncAccount(activeAccount.id);
-    }
-  }
-
   openNewCompose(): void {
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) return;

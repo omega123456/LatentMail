@@ -57,7 +57,7 @@
         </div>
         }
         <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
-        <app-email-list-header (syncClicked)="onManualSync()" (categoryFilterChanged)="onCategoryFilterChanged($event)" />
+        <app-email-list-header (categoryFilterChanged)="onCategoryFilterChanged($event)" />
         <app-email-list #emailList1 (threadSelected)="onThreadSelected($event)" />
       </div>
 
@@ -76,7 +76,7 @@
         }
         <div class="email-list-panel-full">
           <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
-          <app-email-list-header (syncClicked)="onManualSync()" (categoryFilterChanged)="onCategoryFilterChanged($event)" />
+          <app-email-list-header (categoryFilterChanged)="onCategoryFilterChanged($event)" />
           <app-email-list #emailList2 (threadSelected)="onThreadSelected($event)" />
         </div>
 
@@ -99,7 +99,7 @@
           }
           <div class="email-list-panel-full">
             <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
-            <app-email-list-header (syncClicked)="onManualSync()" (categoryFilterChanged)="onCategoryFilterChanged($event)" />
+            <app-email-list-header (categoryFilterChanged)="onCategoryFilterChanged($event)" />
             <app-email-list #emailList3 (threadSelected)="onThreadSelected($event)" />
           </div>
         </div>
