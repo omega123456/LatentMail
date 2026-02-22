@@ -62,6 +62,9 @@ export const IPC_CHANNELS = {
   // Filter operations
   FILTER_APPLY_ALL: 'filter:apply-all',
 
+  // Logger operations
+  LOGGER_GET_RECENT_ENTRIES: 'logger:get-recent-entries',
+
   // System operations
   SYSTEM_MINIMIZE: 'system:minimize',
   SYSTEM_MAXIMIZE: 'system:maximize',

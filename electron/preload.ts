@@ -134,6 +134,12 @@ const electronAPI = {
       ipcRenderer.invoke('filter:apply-all', accountId) as Promise<IpcResponse>,
   },
 
+  // Logger operations
+  logger: {
+    getRecentEntries: () =>
+      ipcRenderer.invoke('logger:get-recent-entries') as Promise<IpcResponse>,
+  },
+
   // System operations
   system: {
     minimize: () => ipcRenderer.invoke('system:minimize') as Promise<void>,

@@ -1,0 +1,49 @@
+<div class="logger-settings">
+  <h2>Logger</h2>
+
+  <section class="settings-section">
+  <h3>Log level</h3>
+  <div class="select-row">
+    <label>Log level:</label>
+    <mat-form-field appearance="outline" class="sync-select">
+      <mat-select [value]="settingsStore.logLevel()" (selectionChange)="settingsStore.setLogLevel($event.value)">
+        <mat-option value="debug">Debug</mat-option>
+        <mat-option value="info">Info</mat-option>
+        <mat-option value="warn">Warning</mat-option>
+        <mat-option value="error">Error</mat-option>
+      </mat-select>
+    </mat-form-field>
+  </div>
+</section>
+
+<section class="settings-section">
+  <h3>Recent log entries</h3>
+  <p class="subtitle">Last 100 log entries from the main process, newest first.</p>
+  <div class="log-actions">
+    <button mat-stroked-button (click)="loadLogEntries()" [disabled]="loading()">
+      <span class="material-symbols-outlined">refresh</span>
+      Refresh
+    </button>
+  </div>
+  @if (error()) {
+    <div class="log-error">{{ error() }}</div>
+  }
+  @if (loading()) {
+    <div class="log-loading">Loading log entries…</div>
+  }
+  @if (!loading() && !error() && logEntries().length === 0) {
+    <div class="log-empty">No log entries found.</div>
+  }
+  @if (!loading() && logEntries().length > 0) {
+    <div class="log-list">
+      @for (entry of logEntries(); track $index) {
+        <div class="log-entry" [class]="'level-' + entry.level">
+          <span class="log-date">{{ entry.date }}</span>
+          <span class="log-level" [class]="'badge-' + entry.level">{{ entry.level }}</span>
+          <span class="log-message">{{ entry.message }}</span>
+        </div>
+      }
+    </div>
+  }
+</section>
+</div>

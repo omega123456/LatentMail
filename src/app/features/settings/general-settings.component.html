@@ -81,19 +81,3 @@
     >Show sender avatars</mat-slide-toggle>
   </div>
 </section>
-
-<section class="settings-section">
-  <h3>Logging</h3>
-  <div class="select-row">
-    <label>Log level:</label>
-    <mat-form-field appearance="outline" class="sync-select">
-      <mat-select [value]="settingsStore.logLevel()" (selectionChange)="settingsStore.setLogLevel($event.value)">
-        <mat-option value="debug">Debug</mat-option>
-        <mat-option value="info">Info</mat-option>
-        <mat-option value="warn">Warning</mat-option>
-        <mat-option value="error">Error</mat-option>
-      </mat-select>
-      <mat-hint>Controls verbosity of the application log file</mat-hint>
-    </mat-form-field>
-  </div>
-</section>

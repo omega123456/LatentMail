@@ -11,6 +11,15 @@ const VALID_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 /** Matches daily log filenames: main-YYYY-MM-DD.log */
 const DAILY_LOG_PATTERN = /^main-\d{4}-\d{2}-\d{2}\.log$/;
 
+/** Matches electron-log default file format: [YYYY-MM-DD HH:mm:ss.mmm] [level] message */
+const LOG_LINE_REGEX = /^\[([^\]]+)\] \[(\w+)\] (.*)$/;
+
+export interface LogEntry {
+  date: string;
+  level: string;
+  message: string;
+}
+
 function isValidLevel(value: unknown): value is LogLevel {
   return typeof value === 'string' && (VALID_LEVELS as readonly string[]).includes(value);
 }
@@ -60,15 +69,21 @@ export class LoggerService {
   }
 
   /**
+   * Returns the directory where daily log files are written (same rules as electron-log).
+   */
+  private getLogDir(): string {
+    return process.platform === 'darwin'
+      ? path.join(app.getPath('home'), 'Library', 'Logs', app.getName())
+      : path.join(app.getPath('userData'), 'logs');
+  }
+
+  /**
    * Deletes daily log files older than LOG_RETENTION_DAYS. Uses the same log
    * directory rules as electron-log. Never throws; logs errors and returns.
    */
   private cleanupOldLogs(): void {
     try {
-      const logDir =
-        process.platform === 'darwin'
-          ? path.join(app.getPath('home'), 'Library', 'Logs', app.getName())
-          : path.join(app.getPath('userData'), 'logs');
+      const logDir = this.getLogDir();
 
       if (!fs.existsSync(logDir)) {
         return;
@@ -158,6 +173,61 @@ export class LoggerService {
   /** Returns the current active file transport log level. */
   getLevel(): LogLevel {
     return this.currentLevel;
+  }
+
+  /**
+   * Reads the last `limit` log entries from the daily log file(s), newest first.
+   * Reads today's file and, if needed, yesterday's to reach the limit.
+   * Returns empty array on missing dir/file or parse errors (never throws).
+   */
+  async getRecentEntries(limit: number): Promise<LogEntry[]> {
+    const entries: LogEntry[] = [];
+    try {
+      const logDir = this.getLogDir();
+      if (!fs.existsSync(logDir)) {
+        return [];
+      }
+
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      const readFileLines = (filePath: string): string[] => {
+        if (!fs.existsSync(filePath)) {
+          return [];
+        }
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          return content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        } catch {
+          return [];
+        }
+      };
+
+      const todayPath = path.join(logDir, `main-${todayStr}.log`);
+      const yesterdayPath = path.join(logDir, `main-${yesterdayStr}.log`);
+      let lines = readFileLines(yesterdayPath).concat(readFileLines(todayPath));
+
+      for (const line of lines) {
+        const match = line.match(LOG_LINE_REGEX);
+        if (match) {
+          entries.push({
+            date: match[1].trim(),
+            level: match[2].toLowerCase(),
+            message: match[3] ?? '',
+          });
+        }
+      }
+
+      const lastN = entries.slice(-limit);
+      lastN.reverse();
+      return lastN;
+    } catch (err) {
+      log.warn('[LoggerService] Failed to read recent log entries:', err);
+      return [];
+    }
   }
 
   // ── Standard logging methods (delegate to electron-log) ──────────────────

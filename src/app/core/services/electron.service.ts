@@ -90,6 +90,9 @@ interface ElectronAPI {
   filter: {
     applyAll: (accountId: number) => Promise<IpcResponse>;
   };
+  logger: {
+    getRecentEntries: () => Promise<IpcResponse>;
+  };
   system: {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
@@ -328,6 +331,12 @@ export class ElectronService {
 
   async applyFilters(accountId: number): Promise<IpcResponse> {
     return this.invoke(() => this.api!.filter.applyAll(accountId));
+  }
+
+  // ---- Logger operations ----
+
+  async getRecentLogEntries(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.logger.getRecentEntries());
   }
 
   // ---- System operations ----

@@ -61,6 +61,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/settings/filter-settings.component').then(m => m.FilterSettingsComponent),
       },
+      {
+        path: 'logger',
+        loadComponent: () =>
+          import('./features/settings/logger-settings.component').then(m => m.LoggerSettingsComponent),
+      },
     ],
   },
   {
