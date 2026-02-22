@@ -1,18 +1,23 @@
-import { Component, inject, computed } from '@angular/core';
+import { Component, inject, computed, signal, effect, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { QueueStore, QueueItemSnapshot } from '../../store/queue.store';
 
 @Component({
   selector: 'app-queue-settings',
   standalone: true,
-  imports: [CommonModule, MatButtonModule, MatIconModule],
+  imports: [CommonModule, MatButtonModule, MatIconModule, MatPaginatorModule],
   templateUrl: './queue-settings.component.html',
   styleUrl: './queue-settings.component.scss',
 })
 export class QueueSettingsComponent {
   readonly queueStore = inject(QueueStore);
+
+  readonly pageIndex = signal(0);
+  readonly pageSize = signal(25);
+  readonly pageSizeOptions = [10, 25, 50, 100];
 
   readonly sortedItems = computed(() => {
     return [...this.queueStore.items()].sort((a, b) => {
@@ -23,6 +28,32 @@ export class QueueSettingsComponent {
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
   });
+
+  readonly paginatedItems = computed(() => {
+    const all = this.sortedItems();
+    const idx = this.pageIndex();
+    const size = this.pageSize();
+    const start = idx * size;
+    return all.slice(start, start + size);
+  });
+
+  constructor() {
+    effect(() => {
+      const total = this.sortedItems().length;
+      untracked(() => {
+        const idx = this.pageIndex();
+        const size = this.pageSize();
+        if (total > 0 && idx * size >= total) {
+          this.pageIndex.set(0);
+        }
+      });
+    });
+  }
+
+  onPage(event: PageEvent): void {
+    this.pageIndex.set(event.pageIndex);
+    this.pageSize.set(event.pageSize);
+  }
 
   typeIcon(type: string): string {
     const icons: Record<string, string> = {

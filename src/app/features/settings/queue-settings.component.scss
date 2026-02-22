@@ -70,10 +70,20 @@ h2 {
   }
 }
 
-.queue-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.queue-list-container {
+  .queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .queue-paginator {
+    margin-top: 8px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-secondary);
+  }
 }
 
 .queue-item {

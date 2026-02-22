@@ -44,8 +44,9 @@
 
   <!-- Queue items -->
   @if (queueStore.hasItems()) {
-    <div class="queue-list">
-      @for (item of sortedItems(); track item.queueId) {
+    <div class="queue-list-container">
+      <div class="queue-list">
+        @for (item of paginatedItems(); track item.queueId) {
         <div class="queue-item" [class]="'status-' + item.status">
           <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
           <div class="item-info">
@@ -79,6 +80,17 @@
             </div>
           }
         </div>
+        }
+      </div>
+      @if (sortedItems().length > pageSize()) {
+        <mat-paginator
+          [length]="sortedItems().length"
+          [pageSize]="pageSize()"
+          [pageIndex]="pageIndex()"
+          [pageSizeOptions]="pageSizeOptions"
+          (page)="onPage($event)"
+          class="queue-paginator">
+        </mat-paginator>
       }
     </div>
   } @else {
