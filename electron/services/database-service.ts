@@ -7,7 +7,7 @@ import { LoggerService } from './logger-service';
 import { createSqlJsStorage } from '../database/umzug-storage';
 
 const log = LoggerService.getInstance();
-import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord } from '../database/models';
+import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord, AttachmentRecord } from '../database/models';
 import { ALL_MAIL_PATH } from './sync-service';
 
 export class DatabaseService {
@@ -524,7 +524,8 @@ export class DatabaseService {
          WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
            AND (:folder = '[Gmail]/Trash' OR ef2.folder != '[Gmail]/Trash')
         ) AS message_count,
-        t.snippet, tf.folder, t.is_read, t.is_starred
+        t.snippet, tf.folder, t.is_read, t.is_starred,
+        MAX(e.has_attachments) AS has_attachments
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder
@@ -553,7 +554,8 @@ export class DatabaseService {
          WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
            AND (:folder = '[Gmail]/Trash' OR ef2.folder != '[Gmail]/Trash')
         ) AS message_count,
-        t.snippet, tf.folder, t.is_read, t.is_starred
+        t.snippet, tf.folder, t.is_read, t.is_starred,
+        MAX(e.has_attachments) AS has_attachments
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder
@@ -1547,7 +1549,10 @@ export class DatabaseService {
         t.snippet,
         'search' AS folder,
         t.is_read,
-        t.is_starred
+        t.is_starred,
+        (SELECT MAX(e3.has_attachments) FROM emails e3
+         WHERE e3.account_id = :accountId AND e3.x_gm_thrid = t.x_gm_thrid
+        ) AS has_attachments
       FROM threads t
       WHERE t.account_id = :accountId
         AND t.x_gm_thrid IN (
@@ -1644,7 +1649,10 @@ export class DatabaseService {
          t.snippet,
          'search' AS folder,
          t.is_read,
-         t.is_starred
+         t.is_starred,
+         (SELECT MAX(e3.has_attachments) FROM emails e3
+          WHERE e3.account_id = :accountId AND e3.x_gm_thrid = t.x_gm_thrid
+         ) AS has_attachments
        FROM threads t
        WHERE t.account_id = :accountId
          AND t.x_gm_thrid IN (${placeholders.join(', ')})
@@ -1786,7 +1794,7 @@ export class DatabaseService {
       const col = columns[i];
       const val = row[i];
       const key = this.toCamelKey(col);
-      if (col === 'is_read' || col === 'is_starred') {
+      if (col === 'is_read' || col === 'is_starred' || col === 'has_attachments') {
         obj[key] = val === 1;
       } else {
         obj[key] = val;
@@ -2001,6 +2009,226 @@ export class DatabaseService {
       id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
       conditions: row[3] as string, actions: row[4] as string, sortOrder: (row[5] as number) || 0,
     }));
+  }
+
+  // ---- Attachment CRUD ----
+
+  /**
+   * Bulk insert attachment metadata rows for a given email.
+   * Skips rows that already exist (idempotent on re-sync).
+   * Returns the internal email_id used for the FK reference.
+   */
+  upsertAttachmentsForEmail(
+    accountId: number,
+    xGmMsgId: string,
+    attachments: Array<{
+      filename: string;
+      mimeType: string | null;
+      size: number | null;
+      contentId: string | null;
+    }>
+  ): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    if (attachments.length === 0) {
+      return;
+    }
+
+    // Look up the email's internal id
+    const emailResult = this.db.exec(
+      'SELECT id FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
+    );
+    if (emailResult.length === 0 || emailResult[0].values.length === 0) {
+      log.warn(`[DB] upsertAttachmentsForEmail: email not found for account=${accountId} msgid=${xGmMsgId}`);
+      return;
+    }
+    const emailId = emailResult[0].values[0][0] as number;
+
+    for (const att of attachments) {
+      // Use INSERT OR IGNORE so that re-syncing a message doesn't duplicate attachment rows.
+      // Attachment identity is determined by (email_id, filename, content_id).
+      this.db.run(
+        `INSERT OR IGNORE INTO attachments (email_id, filename, mime_type, size, content_id)
+         VALUES (:emailId, :filename, :mimeType, :size, :contentId)`,
+        {
+          ':emailId': emailId,
+          ':filename': att.filename,
+          ':mimeType': att.mimeType ?? null,
+          ':size': att.size ?? null,
+          ':contentId': att.contentId ?? null,
+        }
+      );
+    }
+    this.scheduleSave();
+  }
+
+  /**
+   * Get all attachment metadata rows for a given email (by xGmMsgId).
+   */
+  getAttachmentsForEmail(accountId: number, xGmMsgId: string): AttachmentRecord[] {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    const result = this.db.exec(
+      `SELECT a.id, a.email_id, a.filename, a.mime_type, a.size, a.content_id, a.local_path, a.created_at
+       FROM attachments a
+       JOIN emails e ON e.id = a.email_id
+       WHERE e.account_id = :accountId AND e.x_gm_msgid = :xGmMsgId
+       ORDER BY a.id ASC`,
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
+    );
+    if (result.length === 0) {
+      return [];
+    }
+    return result[0].values.map((row) => ({
+      id: row[0] as number,
+      emailId: row[1] as number,
+      filename: row[2] as string,
+      mimeType: row[3] as string | null,
+      size: row[4] as number | null,
+      contentId: row[5] as string | null,
+      localPath: row[6] as string | null,
+      createdAt: row[7] as string,
+    }));
+  }
+
+  /**
+   * Get all attachment metadata rows for multiple emails (by xGmMsgId).
+   * Returns a Map of xGmMsgId → AttachmentRecord[].
+   * Efficient batch query used when loading thread messages.
+   */
+  getAttachmentsForEmails(accountId: number, xGmMsgIds: string[]): Map<string, AttachmentRecord[]> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    const result = new Map<string, AttachmentRecord[]>();
+    if (xGmMsgIds.length === 0) {
+      return result;
+    }
+
+    const placeholders = xGmMsgIds.map((_, i) => `:msgid${i}`).join(', ');
+    const params: Record<string, string | number> = { ':accountId': accountId };
+    for (let i = 0; i < xGmMsgIds.length; i++) {
+      params[`:msgid${i}`] = xGmMsgIds[i];
+    }
+
+    const queryResult = this.db.exec(
+      `SELECT a.id, a.email_id, a.filename, a.mime_type, a.size, a.content_id, a.local_path, a.created_at,
+              e.x_gm_msgid
+       FROM attachments a
+       JOIN emails e ON e.id = a.email_id
+       WHERE e.account_id = :accountId AND e.x_gm_msgid IN (${placeholders})
+       ORDER BY e.x_gm_msgid, a.id ASC`,
+      params
+    );
+
+    if (queryResult.length === 0) {
+      return result;
+    }
+
+    for (const row of queryResult[0].values) {
+      const xGmMsgId = row[8] as string;
+      if (!result.has(xGmMsgId)) {
+        result.set(xGmMsgId, []);
+      }
+      result.get(xGmMsgId)!.push({
+        id: row[0] as number,
+        emailId: row[1] as number,
+        filename: row[2] as string,
+        mimeType: row[3] as string | null,
+        size: row[4] as number | null,
+        contentId: row[5] as string | null,
+        localPath: row[6] as string | null,
+        createdAt: row[7] as string,
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Update the local_path for a cached attachment file.
+   */
+  updateAttachmentLocalPath(attachmentId: number, localPath: string): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    this.db.run(
+      'UPDATE attachments SET local_path = :localPath WHERE id = :id',
+      { ':localPath': localPath, ':id': attachmentId }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Delete all cached attachment files for an account from the DB (local_path records).
+   * Used during account removal to clean up local_path references before filesystem cleanup.
+   */
+  clearAttachmentLocalPathsForAccount(accountId: number): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    this.db.run(
+      `UPDATE attachments SET local_path = NULL
+       WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)`,
+      { ':accountId': accountId }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Get a single attachment record by its ID.
+   */
+  getAttachmentById(attachmentId: number): AttachmentRecord | null {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    const result = this.db.exec(
+      `SELECT id, email_id, filename, mime_type, size, content_id, local_path, created_at
+       FROM attachments WHERE id = :id`,
+      { ':id': attachmentId }
+    );
+    if (result.length === 0 || result[0].values.length === 0) {
+      return null;
+    }
+    const row = result[0].values[0];
+    return {
+      id: row[0] as number,
+      emailId: row[1] as number,
+      filename: row[2] as string,
+      mimeType: row[3] as string | null,
+      size: row[4] as number | null,
+      contentId: row[5] as string | null,
+      localPath: row[6] as string | null,
+      createdAt: row[7] as string,
+    };
+  }
+
+  /**
+   * Get the email's xGmMsgId (and accountId) for a given attachment ID.
+   * Used by attachment IPC handlers to locate the source email for on-demand content fetch.
+   */
+  getEmailInfoForAttachment(attachmentId: number): { xGmMsgId: string; accountId: number } | null {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    const result = this.db.exec(
+      `SELECT e.x_gm_msgid, e.account_id
+       FROM attachments a
+       JOIN emails e ON e.id = a.email_id
+       WHERE a.id = :attachmentId`,
+      { ':attachmentId': attachmentId }
+    );
+    if (result.length === 0 || result[0].values.length === 0) {
+      return null;
+    }
+    const row = result[0].values[0];
+    return {
+      xGmMsgId: row[0] as string,
+      accountId: row[1] as number,
+    };
   }
 
   // ---- Close ----

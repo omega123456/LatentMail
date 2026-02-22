@@ -149,6 +149,11 @@
               }
             </div>
 
+            <!-- Attachment list (shown when message has attachments) -->
+            @if (message.hasAttachments || (message.attachments && message.attachments.length > 0)) {
+              <app-message-attachments [message]="message" />
+            }
+
             <!-- Per-message action ribbon (compact variant) -->
             <app-email-action-ribbon
               [context]="messageActionContext(message)"

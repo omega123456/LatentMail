@@ -25,6 +25,8 @@ export interface Email {
   labels?: string;
   /** Folders this message appears in (from email_folders). Set when loading a thread so UI can show e.g. Draft badge. */
   folders?: string[];
+  /** Attachment metadata for this message (populated when loading a thread). */
+  attachments?: Attachment[];
 }
 
 export interface Thread {
@@ -41,6 +43,8 @@ export interface Thread {
   isStarred: boolean;
   folders?: string[];
   hasDraft?: boolean;
+  /** Whether any message in the thread has attachments. Derived from thread query. */
+  hasAttachments?: boolean;
   messages?: Email[];
   label?: { id: number; name: string; color?: string };
 }

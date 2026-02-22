@@ -75,6 +75,11 @@ export class EmailListItemComponent {
     return getBadgeForFolderId('[Gmail]/Drafts');
   });
 
+  /** True when any message in the thread has attachments. */
+  readonly hasAttachments = computed<boolean>(() => {
+    return this.thread().hasAttachments === true;
+  });
+
   getSenderName(): string {
     const participants = this.thread().participants;
     if (participants) {

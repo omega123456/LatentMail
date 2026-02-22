@@ -672,11 +672,18 @@ export class MailQueueService {
     if (payload.attachments) {
       for (const att of payload.attachments) {
         if (att.data) {
+          const buf = Buffer.from(att.data, 'base64');
+          log.debug(`[MailQueue] draft-create (${item.queueId}): attachment "${att.filename}" decoded to ${buf.length} bytes`);
+          if (buf.length === 0) {
+            log.warn(`[MailQueue] draft-create (${item.queueId}): attachment "${att.filename}" decoded to 0 bytes — base64 data may be invalid`);
+          }
           attachments.push({
             filename: att.filename,
-            content: Buffer.from(att.data, 'base64'),
-            contentType: att.mimeType,
+            content: buf,
+            contentType: att.mimeType || 'application/octet-stream',
           });
+        } else {
+          log.warn(`[MailQueue] draft-create (${item.queueId}): skipping attachment "${att.filename}" — data field is missing`);
         }
       }
     }
@@ -850,11 +857,18 @@ export class MailQueueService {
     if (payload.attachments) {
       for (const att of payload.attachments) {
         if (att.data) {
+          const buf = Buffer.from(att.data, 'base64');
+          log.debug(`[MailQueue] draft-update (${item.queueId}): attachment "${att.filename}" decoded to ${buf.length} bytes`);
+          if (buf.length === 0) {
+            log.warn(`[MailQueue] draft-update (${item.queueId}): attachment "${att.filename}" decoded to 0 bytes — base64 data may be invalid`);
+          }
           attachments.push({
             filename: att.filename,
-            content: Buffer.from(att.data, 'base64'),
-            contentType: att.mimeType,
+            content: buf,
+            contentType: att.mimeType || 'application/octet-stream',
           });
+        } else {
+          log.warn(`[MailQueue] draft-update (${item.queueId}): skipping attachment "${att.filename}" — data field is missing`);
         }
       }
     }
@@ -1239,12 +1253,25 @@ export class MailQueueService {
     // so nodemailer handles it as binary data, not UTF-8 text.
     // Filter out entries with missing content to avoid sending 0-byte attachments.
     const attachments = payload.attachments
-      ?.filter((att) => att.content)
-      .map((att) => ({
-        filename: att.filename,
-        content: Buffer.from(att.content, 'base64'),
-        contentType: att.contentType,
-      }));
+      ?.filter((att) => {
+        if (!att.content) {
+          log.warn(`[MailQueue] send (${item.queueId}): skipping attachment "${att.filename}" — content is missing or empty`);
+          return false;
+        }
+        return true;
+      })
+      .map((att) => {
+        const buf = Buffer.from(att.content, 'base64');
+        log.debug(`[MailQueue] send (${item.queueId}): attachment "${att.filename}" decoded to ${buf.length} bytes`);
+        if (buf.length === 0) {
+          log.warn(`[MailQueue] send (${item.queueId}): attachment "${att.filename}" decoded to 0 bytes — base64 data may be invalid`);
+        }
+        return {
+          filename: att.filename,
+          content: buf,
+          contentType: att.contentType || 'application/octet-stream',
+        };
+      });
 
     // Send the email via SMTP
     const result = await smtpService.sendEmail(String(item.accountId), {

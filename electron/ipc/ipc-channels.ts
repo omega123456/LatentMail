@@ -71,6 +71,12 @@ export const IPC_CHANNELS = {
   SYSTEM_CLOSE: 'system:close',
   SYSTEM_IS_MAXIMIZED: 'system:is-maximized',
   SYSTEM_GET_PLATFORM: 'system:get-platform',
+
+  // Attachment operations
+  ATTACHMENT_DOWNLOAD: 'attachment:download',
+  ATTACHMENT_GET_FOR_EMAIL: 'attachment:get-for-email',
+  ATTACHMENT_GET_CONTENT: 'attachment:get-content',
+  ATTACHMENT_FETCH_DRAFT_ATTACHMENTS: 'attachment:fetch-draft-attachments',
 } as const;
 
 // Main → Renderer (push events)

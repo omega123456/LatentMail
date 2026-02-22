@@ -149,6 +149,18 @@ const electronAPI = {
     getPlatform: () => ipcRenderer.invoke('system:get-platform') as Promise<string>,
   },
 
+  // Attachment operations
+  attachments: {
+    getForEmail: (accountId: string, xGmMsgId: string) =>
+      ipcRenderer.invoke('attachment:get-for-email', accountId, xGmMsgId) as Promise<IpcResponse>,
+    getContent: (attachmentId: number) =>
+      ipcRenderer.invoke('attachment:get-content', attachmentId) as Promise<IpcResponse>,
+    download: (attachmentId: number) =>
+      ipcRenderer.invoke('attachment:download', attachmentId) as Promise<IpcResponse>,
+    fetchDraftAttachments: (accountId: string, xGmMsgId: string) =>
+      ipcRenderer.invoke('attachment:fetch-draft-attachments', accountId, xGmMsgId) as Promise<IpcResponse>,
+  },
+
   // Event listeners (for push events from main process)
   on: (channel: string, callback: IpcCallback) => {
     const validChannels = [

@@ -10,6 +10,7 @@ import { registerComposeIpcHandlers } from './compose-ipc';
 import { registerQueueIpcHandlers } from './queue-ipc';
 import { registerFilterIpcHandlers } from './filter-ipc';
 import { registerLoggerIpcHandlers } from './logger-ipc';
+import { registerAttachmentIpcHandlers } from './attachment-ipc';
 
 export function registerAllIpcHandlers(): void {
   log.info('Registering IPC handlers...');
@@ -23,6 +24,7 @@ export function registerAllIpcHandlers(): void {
   registerQueueIpcHandlers();
   registerFilterIpcHandlers();
   registerLoggerIpcHandlers();
+  registerAttachmentIpcHandlers();
 
   log.info('All IPC handlers registered');
 }

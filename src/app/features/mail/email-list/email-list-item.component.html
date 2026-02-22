@@ -62,6 +62,11 @@
             <span class="label-chip-text">{{ lbl.name }}</span>
           </span>
         }
+        @if (hasAttachments()) {
+          <span class="attachment-indicator" aria-label="Has attachments">
+            <span class="material-symbols-outlined attachment-icon" aria-hidden="true">attach_file</span>
+          </span>
+        }
       </div>
     </div>
     @if (density() !== 'compact') {

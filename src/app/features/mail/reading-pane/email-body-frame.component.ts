@@ -54,6 +54,9 @@ export class EmailBodyFrameComponent implements AfterViewInit {
       ADD_ATTR: ['target'],
       FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
       FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
+      // Allow data:image/* URIs so that inline images (CID-replaced) render correctly.
+      // All other data: URIs (e.g. data:text/html) remain blocked.
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|sms|callto|cid):|data:image\/[a-z+]+;base64,|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
     }) ?? '';
     return SRCDOC_SHELL_HEAD + sanitized + SRCDOC_SHELL_TAIL;
   }

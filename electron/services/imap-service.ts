@@ -6,6 +6,14 @@ const log = LoggerService.getInstance();
 import { OAuthService } from './oauth-service';
 import { DatabaseService } from './database-service';
 
+/** Parsed attachment metadata from simpleParser (non-inline attachments). */
+export interface ParsedAttachmentMeta {
+  filename: string;
+  mimeType: string | null;
+  size: number | null;
+  contentId: string | null;
+}
+
 interface FetchedEmail {
   uid: number;
   /** Gmail X-GM-MSGID (globally unique message identifier, returned as string by ImapFlow) */
@@ -36,6 +44,8 @@ interface FetchedEmail {
   rawLabels: string[];
   /** CONDSTORE modseq value (string, from BigInt). Only present on CONDSTORE fetches. */
   modseq?: string;
+  /** Parsed attachment metadata (non-inline). Populated when source is fetched. */
+  attachments?: ParsedAttachmentMeta[];
 }
 
 interface MailboxInfo {
@@ -295,17 +305,85 @@ export class ImapService {
         source: true,
       }, { uid: true });
 
-      if (!msg || !msg.source) return null;
+      if (!msg || !msg.source) {
+        return null;
+      }
 
       const sourceBuffer = Buffer.isBuffer(msg.source) ? msg.source : Buffer.from(msg.source);
       const parsed = await simpleParser(sourceBuffer);
+      const { htmlBody } = this.resolveInlineImages(parsed.html || '', parsed.attachments || []);
       return {
         textBody: (parsed.text || '').trim(),
-        htmlBody: (parsed.html || '').trim(),
+        htmlBody: htmlBody.trim(),
       };
     } finally {
       lock.release();
     }
+  }
+
+  /**
+   * Resolve inline CID image references in HTML body by replacing cid: URLs with
+   * base64 data URIs, and extract non-inline attachment metadata.
+   *
+   * @param rawHtml - Raw HTML body from simpleParser
+   * @param parsedAttachments - Attachment list from simpleParser
+   * @returns Resolved HTML body and array of non-inline attachment metadata
+   */
+  resolveInlineImages(
+    rawHtml: string,
+    parsedAttachments: Array<{
+      filename?: string;
+      contentType: string;
+      size: number;
+      contentId?: string | null;
+      content: Buffer;
+      contentDisposition?: string | null;
+      headers?: unknown;
+    }>
+  ): { htmlBody: string; attachments: ParsedAttachmentMeta[] } {
+    let htmlBody = rawHtml;
+    const attachments: ParsedAttachmentMeta[] = [];
+
+    // Build a map of contentId → base64 data URI for inline images
+    const cidMap = new Map<string, string>();
+    for (const att of parsedAttachments) {
+      if (att.contentId) {
+        // Normalize: strip angle brackets from content IDs (RFC 2392)
+        const cid = att.contentId.replace(/^<|>$/g, '');
+        if (cid && att.content && att.content.length > 0) {
+          const mimeType = att.contentType || 'application/octet-stream';
+          const base64 = att.content.toString('base64');
+          cidMap.set(cid, `data:${mimeType};base64,${base64}`);
+        }
+      }
+    }
+
+    // Replace cid: references in HTML with data URIs
+    if (cidMap.size > 0 && htmlBody) {
+      htmlBody = htmlBody.replace(/cid:([^\s"'>]+)/gi, (_match, cidRef) => {
+        const resolved = cidMap.get(cidRef);
+        return resolved || `cid:${cidRef}`;
+      });
+    }
+
+    // Collect non-inline attachment metadata
+    for (const att of parsedAttachments) {
+      // Skip inline images that are referenced in the HTML body
+      const isInline = att.contentId && cidMap.has(att.contentId.replace(/^<|>$/g, ''));
+      if (isInline) {
+        continue;
+      }
+      // Skip attachments with no filename (usually inline content-type parts)
+      const filename = att.filename || att.contentType?.split('/').pop() || 'attachment';
+      attachments.push({
+        filename,
+        mimeType: att.contentType || null,
+        size: att.size || (att.content ? att.content.length : null),
+        contentId: att.contentId ? att.contentId.replace(/^<|>$/g, '') : null,
+      });
+    }
+
+    return { htmlBody, attachments };
   }
 
   /**
@@ -348,8 +426,13 @@ export class ImapService {
             ? fetchMsg.source
             : Buffer.from(fetchMsg.source);
           const parsed = await simpleParser(sourceBuffer);
+          const { htmlBody, attachments } = this.resolveInlineImages(
+            parsed.html || '',
+            parsed.attachments || []
+          );
           email.textBody = (parsed.text || '').trim();
-          email.htmlBody = (parsed.html || '').trim();
+          email.htmlBody = htmlBody.trim();
+          email.attachments = attachments;
         } catch (err) {
           log.warn('fetchMessageByUid: failed to parse message body:', err);
         }
@@ -414,21 +497,26 @@ export class ImapService {
           if (!msg) continue;
           const fetchMsg = msg as FetchMessageObject;
           const email = this.parseMessage(fetchMsg, folder);
-          if (email) {
-            if (fetchMsg.source) {
-              try {
-                const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
-                  ? fetchMsg.source
-                  : Buffer.from(fetchMsg.source);
-                const parsed = await simpleParser(sourceBuffer);
-                email.textBody = (parsed.text || '').trim();
-                email.htmlBody = (parsed.html || '').trim();
-              } catch (err) {
-                log.warn('Failed to parse thread message body:', err);
+            if (email) {
+              if (fetchMsg.source) {
+                try {
+                  const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
+                    ? fetchMsg.source
+                    : Buffer.from(fetchMsg.source);
+                  const parsed = await simpleParser(sourceBuffer);
+                  const { htmlBody, attachments } = this.resolveInlineImages(
+                    parsed.html || '',
+                    parsed.attachments || []
+                  );
+                  email.textBody = (parsed.text || '').trim();
+                  email.htmlBody = htmlBody.trim();
+                  email.attachments = attachments;
+                } catch (err) {
+                  log.warn('Failed to parse thread message body:', err);
+                }
               }
+              byMessageId.set(email.xGmMsgId, email);
             }
-            byMessageId.set(email.xGmMsgId, email);
-          }
         }
       } finally {
         lock.release();

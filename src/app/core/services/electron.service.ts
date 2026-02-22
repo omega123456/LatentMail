@@ -90,6 +90,12 @@ interface ElectronAPI {
   filter: {
     applyAll: (accountId: number) => Promise<IpcResponse>;
   };
+  attachments: {
+    getForEmail: (accountId: string, xGmMsgId: string) => Promise<IpcResponse>;
+    getContent: (attachmentId: number) => Promise<IpcResponse>;
+    download: (attachmentId: number) => Promise<IpcResponse>;
+    fetchDraftAttachments: (accountId: string, xGmMsgId: string) => Promise<IpcResponse>;
+  };
   logger: {
     getRecentEntries: () => Promise<IpcResponse>;
   };
@@ -331,6 +337,24 @@ export class ElectronService {
 
   async applyFilters(accountId: number): Promise<IpcResponse> {
     return this.invoke(() => this.api!.filter.applyAll(accountId));
+  }
+
+  // ---- Attachment operations ----
+
+  async getAttachmentsForEmail(accountId: string, xGmMsgId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.attachments.getForEmail(accountId, xGmMsgId));
+  }
+
+  async getAttachmentContent(attachmentId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.attachments.getContent(attachmentId));
+  }
+
+  async downloadAttachment(attachmentId: number): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.attachments.download(attachmentId));
+  }
+
+  async fetchDraftAttachments(accountId: string, xGmMsgId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.attachments.fetchDraftAttachments(accountId, xGmMsgId));
   }
 
   // ---- Logger operations ----

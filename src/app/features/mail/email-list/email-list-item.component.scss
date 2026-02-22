@@ -253,3 +253,14 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+.attachment-indicator {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.attachment-icon {
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+}

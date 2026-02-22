@@ -1,17 +1,30 @@
-@if (attachments().length > 0) {
-  <div class="attachment-bar">
-    @for (att of attachments(); track att.filename; let i = $index) {
-      <div class="attachment-chip">
-        <span class="material-symbols-outlined att-icon">attach_file</span>
-        <span class="att-name">{{ att.filename }}</span>
-        <span class="att-size">({{ att.size | fileSize }})</span>
-        <button class="att-remove" (click)="remove.emit(i)">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-    }
-  </div>
-}
+<div
+  class="attachment-drop-zone"
+  (drop)="handleDrop($event)"
+  (dragover)="handleDragOver($event)"
+>
+  @if (attachments().length > 0) {
+    <div class="attachment-bar">
+      @for (att of attachments(); track att.id ?? att.filename; let i = $index) {
+        <div class="attachment-chip" [class.has-preview]="isImageMime(att.mimeType) && getPreview(att)">
+          <!-- Image thumbnail or generic icon -->
+          @if (isImageMime(att.mimeType) && getPreview(att); as previewUrl) {
+            <img class="att-thumbnail" [src]="previewUrl" [alt]="att.filename" />
+          } @else {
+            <span class="material-symbols-outlined att-icon">{{ getMimeIcon(att.mimeType) }}</span>
+          }
+          <div class="att-meta">
+            <span class="att-name" [title]="att.filename">{{ att.filename }}</span>
+            <span class="att-size">({{ att.size | fileSize }})</span>
+          </div>
+          <button class="att-remove" (click)="removeAttachment(i)" [title]="'Remove ' + att.filename">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      }
+    </div>
+  }
+</div>
 
 <input
   #fileInput

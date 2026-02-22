@@ -126,6 +126,30 @@ export const ComposeStore = signalStore(
     /** Subscription cleanup for queue:update events. */
     let queueUpdateUnsub: (() => void) | null = null;
 
+    /**
+     * Fetches attachment content from the server for a server draft and patches compose state.
+     * Called after opening a server draft to restore attachment data for re-send.
+     */
+    async function fetchAndRestoreAttachments(): Promise<void> {
+      const xGmMsgId = store.serverXGmMsgId();
+      const accountId = store.accountId();
+      if (!xGmMsgId || !accountId) {
+        return;
+      }
+      try {
+        const response = await electronService.fetchDraftAttachments(String(accountId), xGmMsgId);
+        if (response.success && response.data) {
+          const restored = response.data as DraftAttachment[];
+          if (restored.length > 0) {
+            // Merge with any attachments the user may have already added in this session
+            patchState(store, state => ({ attachments: [...state.attachments, ...restored] }));
+          }
+        }
+      } catch {
+        // Non-critical — user can re-attach manually
+      }
+    }
+
     function clearAutoSave(): void {
       if (autoSaveTimer) {
         clearTimeout(autoSaveTimer);
@@ -339,13 +363,18 @@ export const ComposeStore = signalStore(
             textBody: d.textBody,
             inReplyTo: d.inReplyTo || '',
             references: d.references || '',
-            attachments: d.attachments || [],
+          attachments: d.attachments || [],
             showCc: !!d.cc,
             showBcc: !!d.bcc,
             error: null,
             quotedHtml: splitQuotedHtml,
             quotedText: splitQuotedText,
           });
+
+          // Restore attachments from server if this is a server draft (fire-and-forget background fetch)
+          if (context.serverDraftXGmMsgId) {
+            void fetchAndRestoreAttachments();
+          }
           return;
         }
 
@@ -490,6 +519,15 @@ export const ComposeStore = signalStore(
           });
           return false;
         }
+      },
+
+      /**
+       * Restores draft attachments from the server when opening a server draft.
+       * Called automatically after openCompose() when serverDraftXGmMsgId is present.
+       * Can also be invoked manually to retry restoration after a failure.
+       */
+      async restoreDraftAttachments(): Promise<void> {
+        await fetchAndRestoreAttachments();
       },
 
       async loadSignatures(): Promise<void> {

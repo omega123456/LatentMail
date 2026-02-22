@@ -766,6 +766,15 @@ export class SyncService {
           labels: fetched.labels,
           messageId: fetched.messageId,
         });
+
+        // Persist attachment metadata if extracted during body parse
+        if (fetched.attachments && fetched.attachments.length > 0) {
+          try {
+            db.upsertAttachmentsForEmail(numAccountId, fetched.xGmMsgId, fetched.attachments);
+          } catch (attErr) {
+            log.warn(`[SyncService] syncThread: failed to persist attachments for ${fetched.xGmMsgId}:`, attErr);
+          }
+        }
       }
     }
 

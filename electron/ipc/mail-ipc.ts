@@ -15,7 +15,7 @@ export function registerMailIpcHandlers(): void {
   const db = DatabaseService.getInstance();
 
   /**
-   * Build thread response object (thread metadata + messages with folders).
+   * Build thread response object (thread metadata + messages with folders + attachments).
    * Shared by MAIL_FETCH_THREAD and MAIL_GET_THREAD_FROM_DB.
    */
   function buildThreadResponse(
@@ -24,10 +24,19 @@ export function registerMailIpcHandlers(): void {
     pendingIds: Set<string>,
     numAccountId: number
   ): Record<string, unknown> {
+    // Batch-fetch attachment metadata for all messages in the thread
+    const xGmMsgIds = messages
+      .map((m) => String(m['xGmMsgId'] ?? ''))
+      .filter((id) => id.length > 0);
+    const attachmentMap = xGmMsgIds.length > 0
+      ? db.getAttachmentsForEmails(numAccountId, xGmMsgIds)
+      : new Map<string, unknown[]>();
+
     const messagesWithFolders: Array<Record<string, unknown>> = messages.map((m) => {
       const xGmMsgId = String(m['xGmMsgId'] ?? '');
       const folders = xGmMsgId ? db.getFoldersForEmail(numAccountId, xGmMsgId) : [];
-      return { ...m, folders };
+      const attachments = xGmMsgId ? (attachmentMap.get(xGmMsgId) ?? []) : [];
+      return { ...m, folders, attachments };
     });
     let threadResponse: Record<string, unknown> = { ...thread };
     if (pendingIds.size > 0 && messagesWithFolders.length > 0) {

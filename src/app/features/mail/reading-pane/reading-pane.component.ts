@@ -9,6 +9,7 @@ import { AiStreamEvent } from '../../../core/models/ai.model';
 import { ElectronService } from '../../../core/services/electron.service';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 import { EmailBodyFrameComponent } from './email-body-frame.component';
+import { MessageAttachmentsComponent } from './message-attachments.component';
 import { EmailActionRibbonComponent } from '../../../shared/components/email-actions/email-action-ribbon.component';
 import { EmailActionContext, EmailActionEvent } from '../../../shared/components/email-actions/email-action.model';
 import { getOrderedFolderBadges } from '../../../shared/constants/folder-badges';
@@ -16,7 +17,7 @@ import { getOrderedFolderBadges } from '../../../shared/constants/folder-badges'
 @Component({
   selector: 'app-reading-pane',
   standalone: true,
-  imports: [CommonModule, RelativeTimePipe, EmailBodyFrameComponent, EmailActionRibbonComponent],
+  imports: [CommonModule, RelativeTimePipe, EmailBodyFrameComponent, MessageAttachmentsComponent, EmailActionRibbonComponent],
   templateUrl: './reading-pane.component.html',
   styleUrl: './reading-pane.component.scss',
 })

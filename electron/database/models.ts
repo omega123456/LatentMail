@@ -135,6 +135,19 @@ export interface UpsertFolderStateInput {
   lastReconciledAt?: string | null;
 }
 
+// ---- Attachment ----
+
+export interface AttachmentRecord {
+  id: number;
+  emailId: number;
+  filename: string;
+  mimeType: string | null;
+  size: number | null;
+  contentId: string | null;
+  localPath: string | null;
+  createdAt: string;
+}
+
 // ---- Payload for folder-updated event ----
 
 export interface FolderUpdatedPayload {
