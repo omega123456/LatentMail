@@ -78,7 +78,10 @@
 
       <!-- Toolbar (only bind when editor exists to avoid NG0100) -->
       @if (editor) {
-        <app-compose-toolbar [editor]="editor" />
+        <app-compose-toolbar
+          [editor]="editor"
+          (insertImageRequest)="openInlineImagePicker()"
+        />
       }
 
       <!-- Editor (reduced height when quoted message is shown below) -->
@@ -93,6 +96,17 @@
       @if (composeStore.quotedHtml()) {
         <div class="quoted-block-wrapper" [innerHTML]="sanitizedQuotedHtml"></div>
       }
+
+      <!-- Hidden input for inline image (toolbar "Insert image") -->
+      <input
+        #inlineImageInput
+        type="file"
+        accept="image/*"
+        multiple
+        class="inline-image-input"
+        style="display: none"
+        (change)="onInlineImageSelected($event)"
+      />
 
       <!-- Attachments -->
       <app-attachment-upload

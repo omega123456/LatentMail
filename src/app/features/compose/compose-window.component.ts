@@ -44,6 +44,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
 
   @ViewChild('editorContainer') editorContainer!: ElementRef<HTMLElement>;
   @ViewChild('subjectInput') subjectInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('inlineImageInput') inlineImageInput?: ElementRef<HTMLInputElement>;
 
   editor: Editor | null = null;
   private openWatchTimer: ReturnType<typeof setInterval> | null = null;
@@ -118,6 +119,39 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
           attributes: {
             class: 'tiptap',
           },
+          handleDrop: (view, event) => {
+            const files = event.dataTransfer?.files;
+            if (!files?.length) {
+              return false;
+            }
+            const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'));
+            if (imageFiles.length === 0) {
+              return false;
+            }
+            const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+            if (pos == null) {
+              return false;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            let insertPos = pos;
+            const insertNext = (index: number): void => {
+              if (index >= imageFiles.length) {
+                return;
+              }
+              const file = imageFiles[index];
+              const reader = new FileReader();
+              reader.onload = () => {
+                const dataUrl = reader.result as string;
+                ed.chain().focus().insertContentAt(insertPos, { type: 'image', attrs: { src: dataUrl } }).run();
+                insertPos += 1;
+                insertNext(index + 1);
+              };
+              reader.readAsDataURL(file);
+            };
+            insertNext(0);
+            return true;
+          },
         },
       });
       // Assign outside Angular zone so CD doesn't see the change mid-cycle (avoids NG0100)
@@ -171,10 +205,48 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   }
 
   openAttachPicker(): void {
+    // Target the attachment upload file input, not the inline-image input
     const input = this.editorContainer?.nativeElement
       ?.closest('.compose-window')
-      ?.querySelector('input[type="file"]') as HTMLInputElement;
+      ?.querySelector('input[type="file"]:not(.inline-image-input)') as HTMLInputElement;
     input?.click();
+  }
+
+  /** Open the file picker for inserting an inline image (toolbar button). */
+  openInlineImagePicker(): void {
+    this.inlineImageInput?.nativeElement?.click();
+  }
+
+  /** Insert selected image file(s) into the editor at the current cursor. */
+  onInlineImageSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const files = input.files;
+    if (!files?.length || !this.editor) {
+      input.value = '';
+      return;
+    }
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
+      input.value = '';
+      return;
+    }
+    let inserted = 0;
+    const insertNext = (index: number): void => {
+      if (index >= imageFiles.length) {
+        input.value = '';
+        return;
+      }
+      const file = imageFiles[index];
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        this.editor?.chain().focus().setImage({ src: dataUrl }).run();
+        inserted += 1;
+        insertNext(index + 1);
+      };
+      reader.readAsDataURL(file);
+    };
+    insertNext(0);
   }
 
   onDragOver(event: DragEvent): void {
@@ -184,14 +256,16 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
 
   onDrop(event: DragEvent): void {
     event.preventDefault();
-    // Delegate to attachment upload component
-    const uploadComponent = this.editorContainer?.nativeElement
-      ?.closest('.compose-window')
-      ?.querySelector('app-attachment-upload');
-    if (uploadComponent) {
-      // Use the component instance via a workaround — or handle directly
-      this.handleFileDrop(event);
+    // When drop is on the editor, the editor's handleDrop inserts inline images; do not add as attachments.
+    if (this.editorContainer?.nativeElement?.contains(event.target as Node)) {
+      return;
     }
+    // When drop is on the attachment zone, the attachment component handles it; avoid double-add.
+    const win = this.editorContainer?.nativeElement?.closest('.compose-window');
+    if (win?.querySelector('app-attachment-upload')?.contains(event.target as Node)) {
+      return;
+    }
+    this.handleFileDrop(event);
   }
 
   private handleFileDrop(event: DragEvent): void {

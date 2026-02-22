@@ -38,6 +38,9 @@
   <button class="tb-btn" [class.active]="isActive('link')" (click)="insertLink()" title="Insert Link">
     <span class="material-symbols-outlined">link</span>
   </button>
+  <button class="tb-btn" (click)="requestInsertImage()" title="Insert image">
+    <span class="material-symbols-outlined">image</span>
+  </button>
   <button class="tb-btn" (click)="exec('undo')" title="Undo (Ctrl+Z)">
     <span class="material-symbols-outlined">undo</span>
   </button>

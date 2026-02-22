@@ -15,6 +15,9 @@ export class ComposeToolbarComponent {
   readonly editor = input<Editor | null>(null);
   readonly aiStore = inject(AiStore);
 
+  /** Emitted when the user requests to insert an inline image (parent opens file picker). */
+  readonly insertImageRequest = output<void>();
+
   /** AI compose prompt dialog state */
   readonly showAiPrompt = signal(false);
   readonly aiPromptText = signal('');
@@ -51,6 +54,11 @@ export class ComposeToolbarComponent {
     if (url) {
       ed.chain().focus().setLink({ href: url }).run();
     }
+  }
+
+  /** Request to open the inline image picker (handled by parent). */
+  requestInsertImage(): void {
+    this.insertImageRequest.emit();
   }
 
   toggleAiMenu(): void {
