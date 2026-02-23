@@ -241,10 +241,10 @@ export class DatabaseService {
     this.db.run(
       `INSERT INTO emails (account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
-        is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels)
+        is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels, updated_at)
        VALUES (:accountId, :xGmMsgId, :xGmThrid, :messageId, :fromAddress, :fromName,
         :toAddresses, :ccAddresses, :bccAddresses, :subject, :textBody, :htmlBody, :date,
-        :isRead, :isStarred, :isImportant, :isDraft, :snippet, :size, :hasAttachments, :labels)
+        :isRead, :isStarred, :isImportant, :isDraft, :snippet, :size, :hasAttachments, :labels, datetime('now'))
        ON CONFLICT(account_id, x_gm_msgid) DO UPDATE SET
         x_gm_thrid = excluded.x_gm_thrid,
         message_id = COALESCE(NULLIF(excluded.message_id, ''), message_id),
@@ -257,7 +257,8 @@ export class DatabaseService {
         is_read = excluded.is_read, is_starred = excluded.is_starred, is_important = excluded.is_important,
         is_draft = MAX(is_draft, excluded.is_draft),
         snippet = excluded.snippet, size = excluded.size, has_attachments = excluded.has_attachments,
-        labels = excluded.labels`,
+        labels = excluded.labels,
+        updated_at = datetime('now')`,
       {
         ':accountId': email.accountId,
         ':xGmMsgId': email.xGmMsgId,
@@ -407,6 +408,8 @@ export class DatabaseService {
     }
 
     if (updates.length === 0) return;
+
+    updates.push("updated_at = datetime('now')");
 
     this.db.run(
       `UPDATE emails SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
@@ -604,6 +607,8 @@ export class DatabaseService {
     }
 
     if (updates.length === 0) return;
+
+    updates.push("updated_at = datetime('now')");
 
     this.db.run(
       `UPDATE threads SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
@@ -1034,17 +1039,26 @@ export class DatabaseService {
     this.scheduleSave();
   }
 
-  removeOrphanedEmails(accountId: number): Array<{ xGmMsgId: string; xGmThrid: string }> {
+  removeOrphanedEmails(accountId: number, bypassGracePeriod: boolean = false): Array<{ xGmMsgId: string; xGmThrid: string }> {
     if (!this.db) throw new Error('Database not initialized');
 
     const removed: Array<{ xGmMsgId: string; xGmThrid: string }> = [];
+
+    // Grace period clause: skip rows touched within the last hour so that
+    // recently-discovered archived emails (no folder links) survive until the
+    // next periodic cleanup cycle. bypassGracePeriod=true is used by wipeFolderData
+    // for intentional UIDVALIDITY-triggered wipes that need immediate cleanup.
+    const gracePeriodClause = bypassGracePeriod
+      ? ''
+      : "AND (updated_at IS NULL OR updated_at < datetime('now', '-1 hour'))";
 
     this.db.run('BEGIN');
     try {
       const selectResult = this.db.exec(
         `SELECT x_gm_msgid, x_gm_thrid FROM emails
          WHERE account_id = :accountId
-           AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)`,
+           AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)
+           ${gracePeriodClause}`,
         { ':accountId': accountId }
       );
 
@@ -1061,7 +1075,8 @@ export class DatabaseService {
         this.db.run(
           `DELETE FROM emails
            WHERE account_id = :accountId
-             AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)`,
+             AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)
+             ${gracePeriodClause}`,
           { ':accountId': accountId }
         );
       }
@@ -1078,11 +1093,25 @@ export class DatabaseService {
     return removed;
   }
 
-  removeOrphanedThreads(accountId: number): number {
+  removeOrphanedThreads(accountId: number, bypassGracePeriod: boolean = false): number {
     if (!this.db) throw new Error('Database not initialized');
+
+    // Grace period clauses: skip threads touched within the last hour so that
+    // recently-discovered archived threads (no folder links) survive cleanup.
+    // bypassGracePeriod=true is used by wipeFolderData for intentional wipes.
+    // Two variants are needed: one for the aliased SELECT (t.updated_at) and
+    // one for the non-aliased DELETE (threads.updated_at).
+    const countGracePeriodClause = bypassGracePeriod
+      ? ''
+      : "AND (t.updated_at IS NULL OR t.updated_at < datetime('now', '-1 hour'))";
+    const deleteGracePeriodClause = bypassGracePeriod
+      ? ''
+      : "AND (threads.updated_at IS NULL OR threads.updated_at < datetime('now', '-1 hour'))";
+
     const countResult = this.db.exec(
       `SELECT COUNT(*) FROM threads t WHERE t.account_id = :accountId
-       AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = t.account_id AND tf.x_gm_thrid = t.x_gm_thrid)`,
+       AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = t.account_id AND tf.x_gm_thrid = t.x_gm_thrid)
+       ${countGracePeriodClause}`,
       { ':accountId': accountId }
     );
     const count = (countResult.length > 0 && countResult[0].values.length > 0)
@@ -1091,7 +1120,8 @@ export class DatabaseService {
     if (count > 0) {
       this.db.run(
         `DELETE FROM threads WHERE account_id = :accountId
-         AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = threads.account_id AND tf.x_gm_thrid = threads.x_gm_thrid)`,
+         AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = threads.account_id AND tf.x_gm_thrid = threads.x_gm_thrid)
+         ${deleteGracePeriodClause}`,
         { ':accountId': accountId }
       );
       this.scheduleSave();
@@ -1387,8 +1417,10 @@ export class DatabaseService {
       throw err;
     }
 
-    // Remove newly orphaned emails and track their affected threads
-    const orphanedEmails = this.removeOrphanedEmails(accountId);
+    // Remove newly orphaned emails and track their affected threads.
+    // Pass bypassGracePeriod=true: this is an intentional wipe (UIDVALIDITY reset),
+    // so immediate cleanup is correct — no grace period needed.
+    const orphanedEmails = this.removeOrphanedEmails(accountId, true);
     for (const orphan of orphanedEmails) {
       if (orphan.xGmThrid) {
         affectedThreadIds.add(orphan.xGmThrid);
@@ -1404,8 +1436,9 @@ export class DatabaseService {
       }
     }
 
-    // Remove threads that no longer belong to any folder
-    this.removeOrphanedThreads(accountId);
+    // Remove threads that no longer belong to any folder.
+    // Pass bypassGracePeriod=true for the same reason as removeOrphanedEmails above.
+    this.removeOrphanedThreads(accountId, true);
 
     this.scheduleSave();
   }
@@ -2132,7 +2165,7 @@ export class DatabaseService {
           params[`:eid${j}`] = batch[j];
         }
         this.db.run(
-          `UPDATE emails SET is_filtered = 1 WHERE id IN (${placeholders.join(', ')})`,
+          `UPDATE emails SET is_filtered = 1, updated_at = datetime('now') WHERE id IN (${placeholders.join(', ')})`,
           params
         );
       }

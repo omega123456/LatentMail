@@ -787,7 +787,6 @@ export class SyncService {
     }
 
     db.recomputeThreadMetadata(numAccountId, xGmThrid);
-    db.removeOrphanedThreads(numAccountId);
   }
 
   // -----------------------------------------------------------------------
