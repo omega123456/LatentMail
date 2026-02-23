@@ -134,6 +134,17 @@
   color: var(--color-text-tertiary);
 }
 
+.attachment-indicator {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.attachment-icon {
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+}
+
 .message-body {
   padding: 0 16px 16px 64px;
 }

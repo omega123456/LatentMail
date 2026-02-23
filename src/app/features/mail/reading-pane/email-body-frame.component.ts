@@ -53,12 +53,22 @@ export class EmailBodyFrameComponent implements AfterViewInit {
     const sanitized = DOMPurify.sanitize(body, {
       ADD_ATTR: ['target'],
       FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
-      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
+      FORBID_ATTR: [
+        'onerror', 'onload', 'onclick', 'onmouseover', 'onmouseout', 'onmouseenter', 'onmouseleave',
+        'onmousedown', 'onmouseup', 'ondblclick', 'onkeydown', 'onkeyup', 'onkeypress',
+        'onsubmit', 'onreset', 'onfocus', 'onblur', 'onchange', 'oninput', 'onselect',
+        'onabort', 'oncanplay', 'oncanplaythrough', 'ondurationchange', 'onemptied', 'onended',
+        'onloadeddata', 'onloadedmetadata', 'onloadstart', 'onpause', 'onplay', 'onplaying',
+        'onprogress', 'onratechange', 'onreadystatechange', 'onseeked', 'onseeking',
+        'onstalled', 'onsuspend', 'ontimeupdate', 'onvolumechange', 'onwaiting',
+      ],
       // Allow data:image/* URIs so that inline images (CID-replaced) render correctly.
       // All other data: URIs (e.g. data:text/html) remain blocked.
       ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|sms|callto|cid):|data:image\/[a-z+]+;base64,|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
     }) ?? '';
-    return SRCDOC_SHELL_HEAD + sanitized + SRCDOC_SHELL_TAIL;
+    // Remove any remaining script tags and content (defense in depth; avoids "Blocked script execution" console noise)
+    const noScript = sanitized.replace(/<script\b[\s\S]*?<\/script>/gi, '');
+    return SRCDOC_SHELL_HEAD + noScript + SRCDOC_SHELL_TAIL;
   }
 
   private writeSrcdoc(iframe: HTMLIFrameElement, rawBody: string | undefined): void {

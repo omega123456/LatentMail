@@ -1,6 +1,7 @@
 import { ipcMain, dialog, app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as iconv from 'iconv-lite';
 import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
@@ -123,6 +124,64 @@ export function registerAttachmentIpcHandlers(): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to get attachment content';
       log.error('[AttachmentIPC] get-content failed:', err);
+      return ipcError('ATTACHMENT_CONTENT_FAILED', message);
+    }
+  });
+
+  /**
+   * Get attachment content decoded as text (UTF-8 with Latin-1 fallback).
+   * Uses iconv-lite for reliable decoding. For text preview only.
+   */
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENT_GET_CONTENT_AS_TEXT, async (
+    _event,
+    attachmentId: number
+  ) => {
+    try {
+      const att = db.getAttachmentById(attachmentId);
+      if (!att) {
+        return ipcError('ATTACHMENT_NOT_FOUND', `Attachment ${attachmentId} not found`);
+      }
+
+      let content: Buffer;
+      if (att.localPath && fs.existsSync(att.localPath)) {
+        try {
+          content = fs.readFileSync(att.localPath);
+        } catch (cacheErr) {
+          log.warn(`[AttachmentIPC] get-content-as-text: cache read failed for ${att.localPath}:`, cacheErr);
+          const emailInfo = db.getEmailInfoForAttachment(attachmentId);
+          if (!emailInfo) {
+            return ipcError('ATTACHMENT_EMAIL_NOT_FOUND', `Email for attachment ${attachmentId} not found`);
+          }
+          const fetched = await fetchAttachmentContent(emailInfo.accountId, emailInfo.xGmMsgId, att.filename, att.contentId);
+          if (!fetched) {
+            return ipcError('ATTACHMENT_CONTENT_NOT_FOUND', `Could not fetch content for attachment "${att.filename}"`);
+          }
+          content = fetched;
+        }
+      } else {
+        const emailInfo = db.getEmailInfoForAttachment(attachmentId);
+        if (!emailInfo) {
+          return ipcError('ATTACHMENT_EMAIL_NOT_FOUND', `Email for attachment ${attachmentId} not found`);
+        }
+        const fetched = await fetchAttachmentContent(emailInfo.accountId, emailInfo.xGmMsgId, att.filename, att.contentId);
+        if (!fetched) {
+          return ipcError('ATTACHMENT_CONTENT_NOT_FOUND', `Could not fetch content for attachment "${att.filename}"`);
+        }
+        content = fetched;
+      }
+
+      let text = iconv.decode(content, 'utf8');
+      if (text.includes('\uFFFD')) {
+        text = iconv.decode(content, 'latin1');
+      }
+      return ipcSuccess({
+        filename: att.filename,
+        mimeType: att.mimeType || 'application/octet-stream',
+        text,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to get attachment text';
+      log.error('[AttachmentIPC] get-content-as-text failed:', err);
       return ipcError('ATTACHMENT_CONTENT_FAILED', message);
     }
   });

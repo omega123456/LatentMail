@@ -6,8 +6,28 @@
     </div>
     <div class="attachments-list">
       @for (att of attachments(); track att.id) {
-        <div class="attachment-chip" [class.downloading]="isDownloading(att.id)">
-          <span class="material-symbols-outlined att-type-icon">{{ getMimeIcon(att.mimeType) }}</span>
+        <div
+          class="attachment-chip"
+          [class.downloading]="isDownloading(att.id)"
+          (click)="openPreview(att)"
+          role="button"
+          tabindex="0"
+          (keydown.enter)="openPreview(att)"
+          (keydown.space)="openPreview(att); $event.preventDefault()"
+        >
+          @if (isImageAttachment(att)) {
+            <div class="att-thumbnail-wrap">
+              @if (getThumbnailUrl(att); as url) {
+                <img class="att-thumbnail" [src]="url" [alt]="att.filename" />
+              } @else if (isThumbnailLoading(att.id)) {
+                <span class="material-symbols-outlined att-thumbnail-placeholder spinning">sync</span>
+              } @else {
+                <span class="material-symbols-outlined att-thumbnail-placeholder">{{ getMimeIcon(att.mimeType) }}</span>
+              }
+            </div>
+          } @else {
+            <span class="material-symbols-outlined att-type-icon">{{ getMimeIcon(att.mimeType) }}</span>
+          }
           <div class="att-info">
             <span class="att-filename" [title]="att.filename">{{ att.filename }}</span>
             @if (att.size != null) {
@@ -18,7 +38,7 @@
             class="att-download-btn"
             [disabled]="isDownloading(att.id)"
             [title]="isDownloading(att.id) ? 'Downloading…' : 'Download ' + att.filename"
-            (click)="downloadAttachment(att)"
+            (click)="downloadAttachment(att); $event.stopPropagation()"
           >
             @if (isDownloading(att.id)) {
               <span class="material-symbols-outlined spinning">sync</span>

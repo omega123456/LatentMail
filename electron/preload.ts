@@ -155,6 +155,8 @@ const electronAPI = {
       ipcRenderer.invoke('attachment:get-for-email', accountId, xGmMsgId) as Promise<IpcResponse>,
     getContent: (attachmentId: number) =>
       ipcRenderer.invoke('attachment:get-content', attachmentId) as Promise<IpcResponse>,
+    getContentAsText: (attachmentId: number) =>
+      ipcRenderer.invoke('attachment:get-content-as-text', attachmentId) as Promise<IpcResponse>,
     download: (attachmentId: number) =>
       ipcRenderer.invoke('attachment:download', attachmentId) as Promise<IpcResponse>,
     fetchDraftAttachments: (accountId: string, xGmMsgId: string) =>

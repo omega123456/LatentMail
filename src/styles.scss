@@ -219,3 +219,21 @@ html {
     'GRAD' 0,
     'opsz' 24;
 }
+
+// Attachment preview dialog: auto-size to content, centered (panelClass is on overlay pane)
+.cdk-overlay-pane.attachment-preview-dialog {
+  width: auto;
+  max-width: 90vw;
+  height: auto;
+  max-height: 90vh;
+  margin: auto;
+  overflow-x: hidden;
+
+  .mat-mdc-dialog-container {
+    min-width: 0;
+    width: auto;
+    min-height: 0;
+    height: auto;
+    overflow-x: hidden;
+  }
+}

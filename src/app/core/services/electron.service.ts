@@ -17,6 +17,21 @@ interface IpcResponse<T = unknown> {
   };
 }
 
+/** Response data from attachment:get-content IPC (filename, mimeType, size, base64 content). */
+export interface AttachmentContentData {
+  filename: string;
+  mimeType?: string;
+  size?: number;
+  content: string;
+}
+
+/** Response data from attachment:get-content-as-text IPC (decoded text via iconv-lite in main). */
+export interface AttachmentTextContentData {
+  filename: string;
+  mimeType?: string;
+  text: string;
+}
+
 /** Payload for mail:fetch-older-done event (success: threads/hasMore/nextBeforeDate; error: error string). */
 export interface MailFetchOlderDonePayload {
   queueId: string;
@@ -92,7 +107,8 @@ interface ElectronAPI {
   };
   attachments: {
     getForEmail: (accountId: string, xGmMsgId: string) => Promise<IpcResponse>;
-    getContent: (attachmentId: number) => Promise<IpcResponse>;
+    getContent: (attachmentId: number) => Promise<IpcResponse<AttachmentContentData>>;
+    getContentAsText: (attachmentId: number) => Promise<IpcResponse<AttachmentTextContentData>>;
     download: (attachmentId: number) => Promise<IpcResponse>;
     fetchDraftAttachments: (accountId: string, xGmMsgId: string) => Promise<IpcResponse>;
   };
@@ -350,8 +366,16 @@ export class ElectronService {
     return this.invoke(() => this.api!.attachments.getForEmail(accountId, xGmMsgId));
   }
 
-  async getAttachmentContent(attachmentId: number): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.attachments.getContent(attachmentId));
+  async getAttachmentContent(attachmentId: number): Promise<IpcResponse<AttachmentContentData>> {
+    return this.invoke(() => this.api!.attachments.getContent(attachmentId)) as Promise<
+      IpcResponse<AttachmentContentData>
+    >;
+  }
+
+  async getAttachmentContentAsText(attachmentId: number): Promise<IpcResponse<AttachmentTextContentData>> {
+    return this.invoke(() => this.api!.attachments.getContentAsText(attachmentId)) as Promise<
+      IpcResponse<AttachmentTextContentData>
+    >;
   }
 
   async downloadAttachment(attachmentId: number): Promise<IpcResponse> {

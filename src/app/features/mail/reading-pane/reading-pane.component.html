@@ -135,6 +135,11 @@
                     <span class="folder-badge-text">{{ badge.displayName }}</span>
                   </span>
                 }
+                @if (message.hasAttachments || (message.attachments && message.attachments.length > 0)) {
+                  <span class="attachment-indicator" aria-label="Has attachments">
+                    <span class="material-symbols-outlined attachment-icon" aria-hidden="true">attach_file</span>
+                  </span>
+                }
                 <span class="message-date">{{ message.date | relativeTime }}</span>
               </div>
               <div class="header-bottom">

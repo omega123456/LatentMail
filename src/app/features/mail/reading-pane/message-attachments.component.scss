@@ -36,6 +36,7 @@
   min-width: 0;
   max-width: 280px;
   transition: background 0.15s ease;
+  cursor: pointer;
 
   &:hover {
     background: var(--color-surface-hover, var(--color-surface-variant));
@@ -50,6 +51,32 @@
   font-size: 20px;
   color: var(--color-text-secondary);
   flex-shrink: 0;
+}
+
+.att-thumbnail-wrap {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.att-thumbnail {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.att-thumbnail-placeholder {
+  font-size: 24px;
+  color: var(--color-text-tertiary);
 }
 
 .att-info {

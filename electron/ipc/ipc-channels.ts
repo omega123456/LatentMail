@@ -76,6 +76,7 @@ export const IPC_CHANNELS = {
   ATTACHMENT_DOWNLOAD: 'attachment:download',
   ATTACHMENT_GET_FOR_EMAIL: 'attachment:get-for-email',
   ATTACHMENT_GET_CONTENT: 'attachment:get-content',
+  ATTACHMENT_GET_CONTENT_AS_TEXT: 'attachment:get-content-as-text',
   ATTACHMENT_FETCH_DRAFT_ATTACHMENTS: 'attachment:fetch-draft-attachments',
 
   // Label CRUD operations

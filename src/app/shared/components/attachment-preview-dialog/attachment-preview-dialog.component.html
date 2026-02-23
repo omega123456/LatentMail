@@ -1,0 +1,58 @@
+<div class="preview-dialog">
+  <div class="preview-header">
+    <h2 mat-dialog-title class="preview-title">{{ data.filename }}</h2>
+    <div class="preview-actions">
+      <button mat-button color="primary" (click)="download()">
+        <span class="material-symbols-outlined">download</span>
+        Download
+      </button>
+      <button mat-icon-button (click)="close()" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+  </div>
+  <mat-dialog-content class="preview-content">
+    @if (loading()) {
+      <div class="preview-loading">
+        <mat-spinner diameter="40"></mat-spinner>
+        <p>Loading preview...</p>
+      </div>
+    } @else if (hasError()) {
+      <div class="preview-error">
+        <span class="material-symbols-outlined">error_outline</span>
+        <p>{{ error() }}</p>
+        <p class="preview-fallback-hint">Use Download to save the file.</p>
+      </div>
+    } @else if (isImage() && contentUrl()) {
+      <div class="preview-image-wrap">
+        <img class="preview-image" [src]="contentUrl()" [alt]="data.filename" />
+      </div>
+    } @else if (isPdf() && pdfSrc()) {
+      <div class="preview-pdf-wrap">
+        <ng2-pdfjs-viewer [pdfSrc]="pdfSrc()!" [showSpinner]="true"></ng2-pdfjs-viewer>
+      </div>
+    } @else if (isText() && textContent()) {
+      <pre class="preview-text">{{ textContent() }}</pre>
+    } @else if (isWord() && wordHtml()) {
+      <div class="preview-word" [innerHTML]="wordHtml()"></div>
+    } @else if (isCsv() && csvTableData()) {
+      <div class="preview-csv-wrap">
+        <table class="preview-csv-table">
+          @for (row of csvTableData(); track $index) {
+            <tr>
+              @for (cell of row; track $index) {
+                <td>{{ cell }}</td>
+              }
+            </tr>
+          }
+        </table>
+      </div>
+    } @else if (isFallback()) {
+      <div class="preview-fallback">
+        <span class="material-symbols-outlined">insert_drive_file</span>
+        <p>Preview not available for this file type.</p>
+        <p class="preview-fallback-hint">Use Download to save the file.</p>
+      </div>
+    }
+  </mat-dialog-content>
+</div>
