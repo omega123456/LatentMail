@@ -71,7 +71,8 @@
   border-bottom: 1px solid var(--color-border);
 
   .ribbon-btn,
-  :host ::ng-deep .move-to-trigger {
+  :host ::ng-deep .move-to-trigger,
+  :host ::ng-deep .labels-trigger {
     padding: 6px 10px;
     font-size: 13px;
 
@@ -92,7 +93,8 @@
   border-top: 1px solid var(--color-border);
 
   .ribbon-btn,
-  :host ::ng-deep .move-to-trigger {
+  :host ::ng-deep .move-to-trigger,
+  :host ::ng-deep .labels-trigger {
     padding: 4px 8px;
     font-size: 12px;
 

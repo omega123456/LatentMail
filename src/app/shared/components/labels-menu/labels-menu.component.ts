@@ -5,6 +5,7 @@ import {
   output,
   signal,
   computed,
+  effect,
   ElementRef,
   inject,
   OnDestroy,
@@ -43,11 +44,17 @@ export class LabelsMenuComponent implements OnDestroy {
   readonly folders = input.required<Folder[]>();
   /** Current folder IDs the selected thread belongs to — used to pre-check labels. */
   readonly currentFolderIds = input<string[]>([]);
+  /** When set by the parent, close this menu if another menu is the open one. */
+  readonly openMenuId = input<string | null>(null);
 
   /** Emits the gmailLabelId of a label that was checked. */
   readonly labelAdded = output<string>();
   /** Emits the gmailLabelId of a label that was unchecked. */
   readonly labelRemoved = output<string>();
+  /** Emits when the menu opens (so parent can close other menus). */
+  readonly menuOpened = output<void>();
+  /** Emits when the menu closes. */
+  readonly menuClosed = output<void>();
 
   readonly isOpen = signal(false);
   readonly searchText = signal('');
@@ -79,6 +86,14 @@ export class LabelsMenuComponent implements OnDestroy {
 
   /** Whether the search input is shown (threshold: ≥10 user labels). */
   readonly showSearch = computed(() => this.userLabels().length >= 10);
+
+  /** Close this menu when the parent reports another menu is open. */
+  private readonly closeWhenOtherMenuOpens = effect(() => {
+    const current = this.openMenuId();
+    if (current !== null && current !== 'labels' && this.isOpen()) {
+      this.close();
+    }
+  });
 
   /** Whether a label is in the pending selection (shown as checked in the dropdown). */
   isLabelChecked(gmailLabelId: string): boolean {
@@ -132,6 +147,7 @@ export class LabelsMenuComponent implements OnDestroy {
     this.overlayRef.attach(
       new TemplatePortal(panelTpl, this.viewContainerRef)
     );
+    this.menuOpened.emit();
 
     setTimeout(() => {
       if (!this.overlayRef?.overlayElement) {
@@ -159,6 +175,7 @@ export class LabelsMenuComponent implements OnDestroy {
       this.isOpen.set(false);
       this.searchText.set('');
       this.focusedIndex.set(-1);
+      this.menuClosed.emit();
     }
   }
 

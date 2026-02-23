@@ -5,6 +5,7 @@ import {
   output,
   signal,
   computed,
+  effect,
   ElementRef,
   inject,
   OnDestroy,
@@ -71,11 +72,15 @@ export class MoveToMenuComponent implements OnDestroy {
   readonly folders = input.required<Folder[]>();
   /** The currently active folder ID (to exclude from the list). */
   readonly activeFolderId = input<string | null>(null);
+  /** When set by the parent, close this menu if another menu is the open one. */
+  readonly openMenuId = input<string | null>(null);
 
   /** Emits the gmailLabelId of the selected destination folder. */
   readonly folderSelected = output<string>();
   /** Emits when the menu closes. */
   readonly menuClosed = output<void>();
+  /** Emits when the menu opens (so parent can close other menus). */
+  readonly menuOpened = output<void>();
 
   /** Whether the dropdown is open. */
   readonly isOpen = signal(false);
@@ -119,6 +124,14 @@ export class MoveToMenuComponent implements OnDestroy {
 
   /** Whether to show the search input. */
   readonly showSearch = computed(() => this.totalVisible() >= 10);
+
+  /** Close this menu when the parent reports another menu is open. */
+  private readonly closeWhenOtherMenuOpens = effect(() => {
+    const current = this.openMenuId();
+    if (current !== null && current !== 'move-to' && this.isOpen()) {
+      this.close();
+    }
+  });
 
   /** Get the icon for a folder. */
   getFolderIcon(folder: Folder): string {
@@ -167,6 +180,7 @@ export class MoveToMenuComponent implements OnDestroy {
     this.overlayRef.attach(
       new TemplatePortal(panelTpl, this.viewContainerRef)
     );
+    this.menuOpened.emit();
 
     setTimeout(() => {
       if (!this.overlayRef?.overlayElement) {

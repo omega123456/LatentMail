@@ -11,7 +11,10 @@
         [class]="getActionClass(action)"
         [folders]="folders()"
         [activeFolderId]="context().activeFolderId"
+        [openMenuId]="openMenuId()"
         (folderSelected)="onMoveToFolderSelected($event)"
+        (menuOpened)="openMenuId.set('move-to')"
+        (menuClosed)="openMenuId.set(null)"
       />
     } @else if (action.id === 'move-to' && !isEnabled(action)) {
       <!-- Move To rendered as disabled button when not enabled -->
@@ -30,8 +33,11 @@
         [class]="getActionClass(action)"
         [folders]="folders()"
         [currentFolderIds]="context().currentFolderIds ?? []"
+        [openMenuId]="openMenuId()"
         (labelAdded)="onLabelAdded($event)"
         (labelRemoved)="onLabelRemoved($event)"
+        (menuOpened)="openMenuId.set('labels')"
+        (menuClosed)="openMenuId.set(null)"
       />
     } @else if (action.id === 'labels' && !isEnabled(action)) {
       <button
