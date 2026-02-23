@@ -97,7 +97,7 @@ function isSearchIntent(value: unknown): value is SearchIntent {
     return false;
   }
   const candidate = value as Record<string, unknown>;
-  if (!isStringArray(candidate['keywords']) || candidate['keywords'].length === 0) {
+  if (!isStringArray(candidate['keywords'])) {
     return false;
   }
   if (!isStringArray(candidate['synonyms'])) {

@@ -668,8 +668,8 @@ export class OllamaService {
     }
 
     const normalizedIntent = this.normalizeSearchIntent(parsed);
-    if (normalizedIntent.keywords.length === 0) {
-      throw new Error('AI returned SearchIntent without keywords');
+    if (!this.hasMeaningfulConstraints(normalizedIntent)) {
+      throw new Error('AI returned SearchIntent without any search constraints');
     }
 
     this.setCachedResult('search-intent', cacheKey, JSON.stringify(normalizedIntent));
@@ -681,7 +681,7 @@ export class OllamaService {
       return false;
     }
     const candidate = value as Record<string, unknown>;
-    if (!this.isStringArray(candidate['keywords']) || candidate['keywords'].length === 0) {
+    if (!this.isStringArray(candidate['keywords'])) {
       return false;
     }
     if (!this.isStringArray(candidate['synonyms'])) {
@@ -712,6 +712,20 @@ export class OllamaService {
       return false;
     }
     return true;
+  }
+
+  private hasMeaningfulConstraints(intent: SearchIntent): boolean {
+    if (intent.keywords.length > 0 || intent.exactPhrases.length > 0) {
+      return true;
+    }
+    const flags = intent.flags;
+    if (flags.unread === true || flags.starred === true || flags.important === true || flags.hasAttachment === true) {
+      return true;
+    }
+    if (intent.folder != null || intent.sender != null || intent.recipient != null || intent.dateRange != null) {
+      return true;
+    }
+    return false;
   }
 
   private isStringArray(value: unknown): value is string[] {

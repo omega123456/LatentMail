@@ -701,6 +701,12 @@ export function registerMailIpcHandlers(): void {
       results = attachThreadDraftStatus(results);
       results = attachThreadLabels(results, numAccountId);
 
+      // When searching for has:attachment, only return threads that have attachments (avoids stale/wrong DB data)
+      const isHasAttachmentQuery = queries.some((query) => query.trim().toLowerCase() === 'has:attachment');
+      if (isHasAttachmentQuery) {
+        results = results.filter((thread) => thread.hasAttachments === true);
+      }
+
       log.info(`[MAIL_SEARCH] Found ${results.length} merged thread result(s) for account ${accountId}`);
       return ipcSuccess(results);
     } catch (err) {
@@ -849,6 +855,7 @@ export function registerMailIpcHandlers(): void {
         const anyStarred = uniqueEmails.some((email) => email.isStarred);
 
         const existingThread = db.getThreadById(numAccountId, threadId);
+        const hasAttachments = uniqueEmails.some((email) => email.hasAttachments === true);
 
         threads.push({
           id: existingThread?.['id'] || 0,
@@ -862,6 +869,7 @@ export function registerMailIpcHandlers(): void {
           folder: 'search',
           isRead: allRead,
           isStarred: anyStarred,
+          hasAttachments,
         });
       }
 
