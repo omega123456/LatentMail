@@ -167,10 +167,8 @@ export function registerQueueIpcHandlers(): void {
           }
         }
         (operation.payload as unknown as RemoveLabelsPayload).resolvedEmails = resolvedEmails;
-        if (resolvedEmails.length === 0 && removePayload.xGmMsgIds.length > 0) {
-          log.warn(`[QUEUE_ENQUEUE] remove-labels: no UIDs resolved for labels ${removePayload.targetLabels.join(', ')} — skipping`);
-          return ipcSuccess({ queueId: 'skipped' });
-        }
+        // Do not skip when resolvedEmails is empty: label folders often have no UID stored
+        // (e.g. after add-labels only folder is written). The worker will resolve UIDs dynamically.
       }
 
       const description = operation.description || `${operation.type} operation`;

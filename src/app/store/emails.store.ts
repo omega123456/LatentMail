@@ -535,6 +535,7 @@ export const EmailsStore = signalStore(
 
       /**
        * Add labels to emails — enqueues an add-labels queue operation.
+       * Thread is reloaded from the server when the operation completes (mail:folder-updated).
        * UIDs are resolved at enqueue time via the IPC handler on the backend.
        */
       async addLabels(
@@ -560,6 +561,7 @@ export const EmailsStore = signalStore(
 
       /**
        * Remove labels from emails — enqueues a remove-labels queue operation.
+       * Thread is reloaded from the server when the operation completes (mail:folder-updated).
        * UIDs are resolved at enqueue time via the IPC handler on the backend.
        */
       async removeLabels(
@@ -925,11 +927,17 @@ export const EmailsStore = signalStore(
         // Reload the open thread whenever an operation mutates its messages.
         // draft-update always emits [Gmail]/Drafts so it never matches touchesActiveFolder
         // when viewing INBOX; delete/move/send do touch the active folder but also need
-        // the thread messages refreshed, not just the list.
+        // the thread messages refreshed, not just the list. add-labels/remove-labels change
+        // which folders the messages appear in, so we reload the thread from the server.
         const messagesMutatingReasons: MailFolderUpdatedPayload['reason'][] = [
-          'draft-create', 'draft-update', 'delete', 'move', 'send',
+          'draft-create', 'draft-update', 'delete', 'move', 'send', 'add-labels', 'remove-labels',
         ];
         if (sameAccount && messagesMutatingReasons.includes(event.reason)) {
+          // Refresh the thread list so list rows show updated labels (add-labels/remove-labels
+          // emit only the label folders in event.folders, so touchesActiveFolder is often false).
+          if (event.reason === 'add-labels' || event.reason === 'remove-labels') {
+            store.refreshThreads();
+          }
           const selectedId = store.selectedThreadId();
           if (selectedId) {
             store.loadThread(activeAccountId!, selectedId);

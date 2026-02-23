@@ -69,6 +69,8 @@ export class LabelManagerComponent implements OnDestroy {
     }
     return this.foldersStore.userLabels().find((label) => label.gmailLabelId === editingId) ?? null;
   });
+  /** Pending color in the color-edit popover (updated on every change; applied on Apply or backdrop click). */
+  readonly pendingColor = signal<string | null>(null);
 
   private readonly colorPopoverRef = viewChild<TemplateRef<unknown>>('colorPopover');
 
@@ -160,6 +162,7 @@ export class LabelManagerComponent implements OnDestroy {
 
     this.disposeColorOverlay();
     this.editingColorLabelId.set(label.gmailLabelId);
+    this.pendingColor.set(label.color ?? null);
 
     const positionStrategy = this.overlay
       .position()
@@ -182,15 +185,26 @@ export class LabelManagerComponent implements OnDestroy {
       new TemplatePortal(popoverTpl, this.viewContainerRef)
     );
 
-    // Close on backdrop click
+    // Apply and close on backdrop click
     this.colorEditOverlayRef.backdropClick().subscribe(() => {
-      this.disposeColorOverlay();
+      this.applyColorEditAndClose();
     });
+  }
+
+  /** Apply pending color to the label being edited and close the popover. */
+  applyColorEditAndClose(): void {
+    const labelId = this.editingColorLabelId();
+    if (labelId !== null) {
+      this.onColorEditCommitted(this.pendingColor(), labelId);
+    } else {
+      this.disposeColorOverlay();
+    }
   }
 
   async onColorEditCommitted(color: string | null, gmailLabelId: string): Promise<void> {
     const account = this.accountsStore.activeAccount();
     if (!account) {
+      this.disposeColorOverlay();
       return;
     }
     await this.foldersStore.updateLabelColor(account.id, gmailLabelId, color);

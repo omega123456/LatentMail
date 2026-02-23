@@ -13,6 +13,7 @@ import { MessageAttachmentsComponent } from './message-attachments.component';
 import { EmailActionRibbonComponent } from '../../../shared/components/email-actions/email-action-ribbon.component';
 import { EmailActionContext, EmailActionEvent } from '../../../shared/components/email-actions/email-action.model';
 import { getOrderedFolderBadges } from '../../../shared/constants/folder-badges';
+import { DEFAULT_LABEL_COLOR } from '../../../shared/constants/label-colors';
 
 @Component({
   selector: 'app-reading-pane',
@@ -67,12 +68,25 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
 
   /**
    * Returns ordered folder badges for a message (all folders the message appears in).
-   * Used to show every folder label on each mail item in thread view.
+   * User labels include a color so the existing badge can be styled with the label colour.
    */
-  getMessageFolderBadges(message: Email): Array<{ displayName: string; cssClass: string; icon: string; title: string }> {
+  getMessageFolderBadges(message: Email): Array<{ displayName: string; cssClass: string; icon: string; title: string; folderId?: string; color?: string }> {
     const folders = message.folders;
     const nameLookup = this.foldersStore.folders();
-    return getOrderedFolderBadges(folders ?? [], nameLookup);
+    const badges = getOrderedFolderBadges(folders ?? [], nameLookup);
+    const allFolders = this.foldersStore.folders();
+    return badges.map((badge) => {
+      if (!badge.folderId) {
+        return badge;
+      }
+      const folder = allFolders.find(
+        (f) => f.type === 'user' && f.gmailLabelId.toLowerCase() === badge.folderId!.toLowerCase()
+      );
+      if (!folder) {
+        return badge;
+      }
+      return { ...badge, color: folder.color ?? DEFAULT_LABEL_COLOR };
+    });
   }
 
   getInitial(email: Email): string {
@@ -115,6 +129,11 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       // but return a safe default
       return this.buildDefaultContext();
     }
+    const messages = this.emailsStore.selectedMessages();
+    const threadFolderIds =
+      thread.folders && thread.folders.length > 0
+        ? thread.folders
+        : [...new Set(messages.flatMap((m) => m.folders ?? []))];
     return {
       message: null,
       thread,
@@ -126,7 +145,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       summaryLoading: this.aiStore.summaryLoading(),
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
-      currentFolderIds: thread.folders ?? [],
+      currentFolderIds: threadFolderIds,
     };
   }
 
@@ -149,7 +168,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       summaryLoading: this.aiStore.summaryLoading(),
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
-      currentFolderIds: thread.folders ?? [],
+      currentFolderIds: message.folders ?? [],
     };
   }
 
@@ -265,6 +284,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       summaryLoading: false,
       replyLoading: false,
       followUpLoading: false,
+      currentFolderIds: [],
     };
   }
 }

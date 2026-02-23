@@ -8,6 +8,8 @@ export interface FolderBadgeInfo {
   cssClass: string;
   icon: string;
   title: string;
+  /** Folder id (e.g. gmailLabelId) when this badge is for a custom/user label; used to look up color. */
+  folderId?: string;
 }
 
 export const PRIMARY_SYSTEM_PRIORITY = [
@@ -113,6 +115,7 @@ export function getBadgeForFolderId(
     cssClass: 'folder-badge--custom',
     icon: 'label',
     title: displayName,
+    folderId,
   };
 }
 

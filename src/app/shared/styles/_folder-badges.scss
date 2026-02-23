@@ -66,8 +66,10 @@
 }
 
 .folder-badge--custom {
-  background-color: #F5F5F5;
-  color: #666666;
+  /* When --badge-color is set (user label), use it; otherwise default gray */
+  background-color: color-mix(in srgb, var(--badge-color, #666666) 12%, transparent);
+  color: var(--badge-color, #666666);
+  border: 1px solid color-mix(in srgb, var(--badge-color, #666666) 25%, transparent);
 }
 
 :host-context([data-theme='dark']) .folder-badge--inbox {
@@ -111,6 +113,7 @@
 }
 
 :host-context([data-theme='dark']) .folder-badge--custom {
-  background-color: #1E1E1E;
-  color: #B0B0B0;
+  background-color: color-mix(in srgb, var(--badge-color, #B0B0B0) 18%, transparent);
+  color: color-mix(in srgb, var(--badge-color, #B0B0B0) 60%, white);
+  border-color: color-mix(in srgb, var(--badge-color, #B0B0B0) 30%, transparent);
 }

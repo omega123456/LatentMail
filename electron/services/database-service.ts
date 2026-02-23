@@ -1426,7 +1426,7 @@ export class DatabaseService {
       `INSERT INTO labels (account_id, gmail_label_id, name, type, color, unread_count, total_count)
        VALUES (:accountId, :gmailLabelId, :name, :type, :color, :unreadCount, :totalCount)
        ON CONFLICT(account_id, gmail_label_id) DO UPDATE SET
-        name = excluded.name, type = excluded.type, color = excluded.color,
+        name = excluded.name, type = excluded.type, color = COALESCE(excluded.color, labels.color),
         unread_count = excluded.unread_count, total_count = excluded.total_count`,
       {
         ':accountId': label.accountId,

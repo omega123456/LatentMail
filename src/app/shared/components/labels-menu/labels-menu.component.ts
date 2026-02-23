@@ -52,6 +52,10 @@ export class LabelsMenuComponent implements OnDestroy {
   readonly isOpen = signal(false);
   readonly searchText = signal('');
   readonly focusedIndex = signal(-1);
+  /** Snapshot of currentFolderIds when dropdown opened — used to compute diff on Apply. */
+  private initialCheckedIds = signal<string[]>([]);
+  /** Pending selection (user toggles checkboxes without emitting until Apply). */
+  readonly pendingCheckedIds = signal<Set<string>>(new Set());
 
   readonly defaultColor = DEFAULT_LABEL_COLOR;
 
@@ -76,9 +80,9 @@ export class LabelsMenuComponent implements OnDestroy {
   /** Whether the search input is shown (threshold: ≥10 user labels). */
   readonly showSearch = computed(() => this.userLabels().length >= 10);
 
-  /** Whether a label is currently applied to the selected thread. */
+  /** Whether a label is in the pending selection (shown as checked in the dropdown). */
   isLabelChecked(gmailLabelId: string): boolean {
-    return this.currentFolderIds().includes(gmailLabelId);
+    return this.pendingCheckedIds().has(gmailLabelId);
   }
 
   getLabelColor(label: Folder): string {
@@ -102,6 +106,9 @@ export class LabelsMenuComponent implements OnDestroy {
     }
 
     this.disposeOverlay();
+    const ids = this.currentFolderIds();
+    this.initialCheckedIds.set([...ids]);
+    this.pendingCheckedIds.set(new Set(ids));
     this.isOpen.set(true);
     this.searchText.set('');
     this.focusedIndex.set(-1);
@@ -163,12 +170,30 @@ export class LabelsMenuComponent implements OnDestroy {
     }
   }
 
+  /** Toggle label in pending selection only (no emit until Apply). */
   toggleLabel(label: Folder): void {
-    if (this.isLabelChecked(label.gmailLabelId)) {
-      this.labelRemoved.emit(label.gmailLabelId);
+    const next = new Set(this.pendingCheckedIds());
+    if (next.has(label.gmailLabelId)) {
+      next.delete(label.gmailLabelId);
     } else {
-      this.labelAdded.emit(label.gmailLabelId);
+      next.add(label.gmailLabelId);
     }
+    this.pendingCheckedIds.set(next);
+  }
+
+  /** Emit add/remove for each changed label and close. */
+  apply(): void {
+    const initial = this.initialCheckedIds();
+    const pending = this.pendingCheckedIds();
+    const added = [...pending].filter((id) => !initial.includes(id));
+    const removed = initial.filter((id) => !pending.has(id));
+    for (const id of added) {
+      this.labelAdded.emit(id);
+    }
+    for (const id of removed) {
+      this.labelRemoved.emit(id);
+    }
+    this.close();
   }
 
   onMenuKeydown(event: KeyboardEvent): void {
@@ -186,8 +211,15 @@ export class LabelsMenuComponent implements OnDestroy {
         this.focusedIndex.set(current > 0 ? current - 1 : items.length - 1);
         break;
       case 'Enter':
+        event.preventDefault();
+        if (current >= 0 && current < items.length && !isSearchInput) {
+          this.toggleLabel(items[current]);
+        } else if (isSearchInput || current < 0) {
+          this.apply();
+        }
+        break;
       case ' ':
-        if (isSearchInput && event.key === ' ') {
+        if (isSearchInput) {
           return;
         }
         event.preventDefault();

@@ -113,8 +113,16 @@
         <div class="color-edit-popover">
           <app-color-picker
             [selectedColor]="label.color || null"
-            (colorCommitted)="onColorEditCommitted($event, label.gmailLabelId)"
+            [commitOnSelect]="false"
+            (colorChanged)="pendingColor.set($event)"
           />
+          <div class="color-edit-actions">
+            <button
+              type="button"
+              class="color-edit-apply-btn"
+              (click)="applyColorEditAndClose()"
+            >Apply</button>
+          </div>
         </div>
       }
     </ng-template>

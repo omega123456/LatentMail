@@ -31,9 +31,13 @@ export class ColorPickerComponent implements OnInit {
   readonly selectedColor = input<string | null>(null);
   /** Optional override for the preset swatch list. */
   readonly paletteColors = input<LabelColor[]>(LABEL_PRESET_COLORS);
+  /** When false, swatch/no-color and drag do not emit colorCommitted; parent uses Apply or backdrop to commit. */
+  readonly commitOnSelect = input<boolean>(true);
 
-  /** Emits the committed hex color (#RRGGBB) or null. */
+  /** Emits the committed hex color (#RRGGBB) or null (when user explicitly applies, e.g. Apply button). */
   readonly colorCommitted = output<string | null>();
+  /** Emits on every color change (swatch, no-color, drag end, hex blur) so parent can track pending value. */
+  readonly colorChanged = output<string | null>();
 
   /** References to draggable elements */
   private readonly sbSquareRef = viewChild<ElementRef<HTMLElement>>('sbSquare');
@@ -128,7 +132,7 @@ export class ColorPickerComponent implements OnInit {
     }
     this.isDraggingSb = false;
     this.updateSbFromPointer(event);
-    this.commitCurrentColor();
+    this.notifyColorChange();
   }
 
   private updateSbFromPointer(event: PointerEvent): void {
@@ -170,7 +174,7 @@ export class ColorPickerComponent implements OnInit {
     }
     this.hexInputValue.set(this.liveHex().slice(1));
     this.hexInputError.set(false);
-    this.commitCurrentColor();
+    this.notifyColorChange();
   }
 
   // ---- Hue slider pointer events ----
@@ -196,7 +200,7 @@ export class ColorPickerComponent implements OnInit {
     }
     this.isDraggingHue = false;
     this.updateHueFromPointer(event);
-    this.commitCurrentColor();
+    this.notifyColorChange();
   }
 
   private updateHueFromPointer(event: PointerEvent): void {
@@ -228,7 +232,7 @@ export class ColorPickerComponent implements OnInit {
     }
     this.hexInputValue.set(this.liveHex().slice(1));
     this.hexInputError.set(false);
-    this.commitCurrentColor();
+    this.notifyColorChange();
   }
 
   // ---- Hex input ----
@@ -253,7 +257,10 @@ export class ColorPickerComponent implements OnInit {
       this.hexInputValue.set(normalized.slice(1));
       this.applyHexToState(normalized);
       this.committedColor.set(normalized);
-      this.colorCommitted.emit(normalized);
+      this.colorChanged.emit(normalized);
+      if (this.commitOnSelect()) {
+        this.colorCommitted.emit(normalized);
+      }
     } else {
       this.hexInputError.set(true);
     }
@@ -279,7 +286,10 @@ export class ColorPickerComponent implements OnInit {
     this.committedColor.set(null);
     this.hexInputValue.set('');
     this.hexInputError.set(false);
-    this.colorCommitted.emit(null);
+    this.colorChanged.emit(null);
+    if (this.commitOnSelect()) {
+      this.colorCommitted.emit(null);
+    }
   }
 
   selectSwatch(color: LabelColor): void {
@@ -291,7 +301,10 @@ export class ColorPickerComponent implements OnInit {
     this.committedColor.set(normalized);
     this.hexInputValue.set(normalized.slice(1));
     this.hexInputError.set(false);
-    this.colorCommitted.emit(normalized);
+    this.colorChanged.emit(normalized);
+    if (this.commitOnSelect()) {
+      this.colorCommitted.emit(normalized);
+    }
   }
 
   isSwatchSelected(hex: string): boolean {
@@ -301,9 +314,13 @@ export class ColorPickerComponent implements OnInit {
 
   // ---- Internal helpers ----
 
-  private commitCurrentColor(): void {
+  /** Update committed state and emit colorChanged; emit colorCommitted only when commitOnSelect is true. */
+  private notifyColorChange(): void {
     const hexValue = this.liveHex();
     this.committedColor.set(hexValue);
-    this.colorCommitted.emit(hexValue);
+    this.colorChanged.emit(hexValue);
+    if (this.commitOnSelect()) {
+      this.colorCommitted.emit(hexValue);
+    }
   }
 }

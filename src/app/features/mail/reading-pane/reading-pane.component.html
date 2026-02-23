@@ -124,7 +124,13 @@
               <div class="header-top">
                 <span class="sender-name">{{ message.fromName || message.fromAddress }}</span>
                 @for (badge of getMessageFolderBadges(message); track $index) {
-                  <span class="folder-badge" [ngClass]="badge.cssClass" [title]="badge.title" [attr.aria-label]="badge.displayName">
+                  <span
+                    class="folder-badge"
+                    [ngClass]="badge.cssClass"
+                    [title]="badge.title"
+                    [attr.aria-label]="badge.displayName"
+                    [style.--badge-color]="badge.color"
+                  >
                     <span class="material-symbols-outlined folder-badge-icon" aria-hidden="true">{{ badge.icon }}</span>
                     <span class="folder-badge-text">{{ badge.displayName }}</span>
                   </span>
