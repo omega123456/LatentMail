@@ -18,6 +18,9 @@ export class ComposeToolbarComponent {
   /** Emitted when the user requests to insert an inline image (parent opens file picker). */
   readonly insertImageRequest = output<void>();
 
+  /** Emitted when the user requests to insert a link (parent opens link URL dialog). */
+  readonly openLinkDialogRequest = output<void>();
+
   /** AI compose prompt dialog state */
   readonly showAiPrompt = signal(false);
   readonly aiPromptText = signal('');
@@ -40,20 +43,7 @@ export class ComposeToolbarComponent {
   }
 
   insertLink(): void {
-    const ed = this.editor();
-    if (!ed) {
-      return;
-    }
-
-    if (ed.isActive('link')) {
-      ed.chain().focus().unsetLink().run();
-      return;
-    }
-
-    const url = prompt('Enter URL:');
-    if (url) {
-      ed.chain().focus().setLink({ href: url }).run();
-    }
+    this.openLinkDialogRequest.emit();
   }
 
   /** Request to open the inline image picker (handled by parent). */

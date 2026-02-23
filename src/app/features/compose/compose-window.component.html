@@ -5,7 +5,7 @@
       class="compose-window"
       [style.width.px]="composeWidth()"
       [style.height]="composeHeight() === null ? 'auto' : composeHeight() + 'px'"
-      (click)="$event.stopPropagation()"
+      (click)="onComposeWindowClick($event)"
       (dragover)="onDragOver($event)"
       (drop)="onDrop($event)"
     >
@@ -84,6 +84,7 @@
         <app-compose-toolbar
           [editor]="editor"
           (insertImageRequest)="openInlineImagePicker()"
+          (openLinkDialogRequest)="handleLinkRequest()"
         />
       }
 
@@ -93,6 +94,7 @@
         [class.editor-container--with-quoted]="composeStore.quotedHtml()"
         #editorContainer
         (click)="focusEditor($event)"
+        (contextmenu)="onEditorContextMenu($event)"
       ></div>
 
       <!-- Quoted message (read-only, preserves full HTML; not parsed by TipTap) -->
@@ -176,6 +178,127 @@
         title="Resize"
         (mousedown)="startResize('northwest', $event)"
       ></div>
+
+      <!-- Editor right-click context menu -->
+      @if (showEditorContextMenu()) {
+        <div
+          class="editor-context-menu"
+          [style.left.px]="contextMenuX()"
+          [style.top.px]="contextMenuY()"
+          (click)="$event.stopPropagation()"
+        >
+          <button
+            type="button"
+            class="ctx-item"
+            [disabled]="!hasContextMenuSelection()"
+            (click)="contextMenuCut()"
+          >
+            <span class="material-symbols-outlined">content_cut</span>
+            <span>Cut</span>
+          </button>
+          <button
+            type="button"
+            class="ctx-item"
+            [disabled]="!hasContextMenuSelection()"
+            (click)="contextMenuCopy()"
+          >
+            <span class="material-symbols-outlined">content_copy</span>
+            <span>Copy</span>
+          </button>
+          <button
+            type="button"
+            class="ctx-item"
+            (click)="contextMenuPaste()"
+          >
+            <span class="material-symbols-outlined">content_paste</span>
+            <span>Paste</span>
+          </button>
+          <div class="ctx-divider"></div>
+          <button
+            type="button"
+            class="ctx-item"
+            [class.active]="contextMenuActiveFormats().bold"
+            (click)="contextMenuFormat('toggleBold')"
+          >
+            <span class="material-symbols-outlined">format_bold</span>
+            <span>Bold</span>
+          </button>
+          <button
+            type="button"
+            class="ctx-item"
+            [class.active]="contextMenuActiveFormats().italic"
+            (click)="contextMenuFormat('toggleItalic')"
+          >
+            <span class="material-symbols-outlined">format_italic</span>
+            <span>Italic</span>
+          </button>
+          <button
+            type="button"
+            class="ctx-item"
+            [class.active]="contextMenuActiveFormats().underline"
+            (click)="contextMenuFormat('toggleUnderline')"
+          >
+            <span class="material-symbols-outlined">format_underlined</span>
+            <span>Underline</span>
+          </button>
+          <button
+            type="button"
+            class="ctx-item"
+            [class.active]="contextMenuActiveFormats().strike"
+            (click)="contextMenuFormat('toggleStrike')"
+          >
+            <span class="material-symbols-outlined">format_strikethrough</span>
+            <span>Strikethrough</span>
+          </button>
+          <div class="ctx-divider"></div>
+          <button
+            type="button"
+            class="ctx-item"
+            [class.active]="contextMenuActiveFormats().link"
+            (click)="contextMenuLink()"
+          >
+            <span class="material-symbols-outlined">link</span>
+            <span>Link</span>
+          </button>
+        </div>
+      }
+
+      <!-- Link URL dialog (replaces prompt(); not supported in Electron) -->
+      @if (showLinkUrlDialog()) {
+        <div class="link-url-overlay" (click)="closeLinkUrlDialog()">
+          <div class="link-url-dialog" (click)="$event.stopPropagation()">
+            <div class="link-url-header">
+              <span class="material-symbols-outlined">link</span>
+              <span>Insert link</span>
+              <button type="button" class="link-url-close" (click)="closeLinkUrlDialog()">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div class="link-url-body">
+              <input
+                #linkUrlInputRef
+                type="url"
+                class="link-url-input"
+                placeholder="https://..."
+                [ngModel]="linkUrlInput()"
+                (ngModelChange)="linkUrlInput.set($event)"
+                (keydown.enter)="$event.preventDefault(); confirmLinkUrl()"
+              />
+            </div>
+            <div class="link-url-footer">
+              <button type="button" class="link-url-cancel" (click)="closeLinkUrlDialog()">Cancel</button>
+              <button
+                type="button"
+                class="link-url-ok"
+                [disabled]="!linkUrlInput().trim()"
+                (click)="confirmLinkUrl()"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      }
     </div>
   </div>
 }

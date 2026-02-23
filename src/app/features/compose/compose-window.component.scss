@@ -382,3 +382,182 @@
 
   .material-symbols-outlined { font-size: 16px; }
 }
+
+/* Editor right-click context menu (fixed at cursor) */
+.editor-context-menu {
+  position: fixed;
+  z-index: 1100;
+  min-width: 180px;
+  padding: 6px 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  list-style: none;
+  margin: 0;
+
+  .ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    border: none;
+    background: none;
+    font-size: 13px;
+    font-family: inherit;
+    color: var(--color-text-primary);
+    text-align: left;
+    cursor: pointer;
+    box-sizing: border-box;
+
+    &:hover:not(:disabled) {
+      background-color: var(--color-surface-variant);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &.active {
+      font-weight: 600;
+      color: var(--color-primary);
+    }
+
+    .material-symbols-outlined {
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+  }
+
+  .ctx-divider {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--color-border);
+  }
+}
+
+/* Link URL dialog (replaces prompt(); not supported in Electron) */
+.link-url-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+
+.link-url-dialog {
+  width: 400px;
+  max-width: 90vw;
+  background-color: var(--color-surface);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.link-url-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+
+  .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--color-primary);
+  }
+}
+
+.link-url-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+    color: var(--color-text-primary);
+  }
+
+  .material-symbols-outlined {
+    font-size: 18px;
+  }
+}
+
+.link-url-body {
+  padding: 16px;
+}
+
+.link-url-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+
+  &::placeholder {
+    color: var(--color-text-tertiary);
+  }
+}
+
+.link-url-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.link-url-cancel {
+  padding: 8px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+  }
+}
+
+.link-url-ok {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background-color: var(--color-primary);
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}

@@ -67,10 +67,31 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   @ViewChild('composeWindowEl') composeWindowEl?: ElementRef<HTMLElement>;
   @ViewChild('subjectInput') subjectInput?: ElementRef<HTMLInputElement>;
   @ViewChild('inlineImageInput') inlineImageInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('linkUrlInputRef') linkUrlInputRef?: ElementRef<HTMLInputElement>;
 
   editor: Editor | null = null;
   private openWatchTimer: ReturnType<typeof setInterval> | null = null;
   private resizeState: ResizeState | null = null;
+
+  /** Right-click context menu on the editor */
+  readonly showEditorContextMenu = signal(false);
+  readonly contextMenuX = signal(0);
+  readonly contextMenuY = signal(0);
+  readonly savedContextMenuSelection = signal<{ from: number; to: number } | null>(null);
+  /** Snapshot of active formatting when the context menu was opened */
+  readonly contextMenuActiveFormats = signal<{
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
+    strike: boolean;
+    link: boolean;
+  }>({ bold: false, italic: false, underline: false, strike: false, link: false });
+
+  /** Link URL dialog (prompt() not supported in Electron) */
+  readonly showLinkUrlDialog = signal(false);
+  readonly linkUrlInput = signal('');
+  /** Selection to apply link to when dialog is confirmed (from context menu). */
+  readonly pendingLinkSelection = signal<{ from: number; to: number } | null>(null);
 
   ngOnInit(): void {
     this.composeStore.loadSignatures();
@@ -214,10 +235,176 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   }
 
   private destroyEditor(): void {
+    this.closeEditorContextMenu();
+    this.closeLinkUrlDialog();
     if (this.editor) {
       this.editor.destroy();
       this.editor = null;
     }
+  }
+
+  /** Close the editor context menu and clear stored selection. */
+  closeEditorContextMenu(): void {
+    this.showEditorContextMenu.set(false);
+    this.savedContextMenuSelection.set(null);
+  }
+
+  /**
+   * Call from compose-window (click): close context menu when clicking outside it.
+   * Clicks inside the compose window don't reach document due to stopPropagation.
+   */
+  onComposeWindowClick(event: MouseEvent): void {
+    if (this.showEditorContextMenu()) {
+      const target = event.target as Element | null;
+      if (!target?.closest?.('.editor-context-menu')) {
+        this.closeEditorContextMenu();
+      }
+    }
+    event.stopPropagation();
+  }
+
+  onEditorContextMenu(event: MouseEvent): void {
+    const editor = this.editor;
+    if (!editor) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const selection = editor.state.selection;
+    this.contextMenuX.set(event.clientX);
+    this.contextMenuY.set(event.clientY);
+    this.savedContextMenuSelection.set({ from: selection.from, to: selection.to });
+    this.contextMenuActiveFormats.set({
+      bold: editor.isActive('bold'),
+      italic: editor.isActive('italic'),
+      underline: editor.isActive('underline'),
+      strike: editor.isActive('strike'),
+      link: editor.isActive('link'),
+    });
+    this.showEditorContextMenu.set(true);
+  }
+
+  /** True when the stored selection is non-empty (for Cut/Copy). */
+  hasContextMenuSelection(): boolean {
+    const sel = this.savedContextMenuSelection();
+    return sel != null && sel.from !== sel.to;
+  }
+
+  contextMenuCut(): void {
+    const editor = this.editor;
+    const sel = this.savedContextMenuSelection();
+    if (!editor || !sel) {
+      this.closeEditorContextMenu();
+      return;
+    }
+    editor.chain().focus().setTextSelection({ from: sel.from, to: sel.to }).run();
+    document.execCommand('cut');
+    this.closeEditorContextMenu();
+  }
+
+  contextMenuCopy(): void {
+    const editor = this.editor;
+    const sel = this.savedContextMenuSelection();
+    if (!editor || !sel) {
+      this.closeEditorContextMenu();
+      return;
+    }
+    editor.chain().focus().setTextSelection({ from: sel.from, to: sel.to }).run();
+    document.execCommand('copy');
+    this.closeEditorContextMenu();
+  }
+
+  contextMenuPaste(): void {
+    const editor = this.editor;
+    const sel = this.savedContextMenuSelection();
+    if (!editor) {
+      this.closeEditorContextMenu();
+      return;
+    }
+    editor.chain().focus().run();
+    if (sel) {
+      editor.commands.setTextSelection({ from: sel.to, to: sel.to });
+    }
+    document.execCommand('paste');
+    this.closeEditorContextMenu();
+  }
+
+  contextMenuFormat(command: string): void {
+    const editor = this.editor;
+    const sel = this.savedContextMenuSelection();
+    if (!editor) {
+      this.closeEditorContextMenu();
+      return;
+    }
+    let chain = editor.chain().focus();
+    if (sel && sel.from !== sel.to) {
+      chain = chain.setTextSelection({ from: sel.from, to: sel.to });
+    }
+    const chainAny = chain as Record<string, unknown>;
+    if (typeof chainAny[command] === 'function') {
+      (chainAny[command] as () => { run: () => void })().run();
+    }
+    this.closeEditorContextMenu();
+  }
+
+  contextMenuLink(): void {
+    const savedSelection = this.savedContextMenuSelection();
+    this.closeEditorContextMenu();
+    this.handleLinkRequest(savedSelection ?? undefined);
+  }
+
+  /**
+   * Single entry point for link action: toolbar or context menu.
+   * If cursor is on a link, unsets it; otherwise opens the link URL dialog.
+   * @param selection Optional selection to apply the link to (e.g. from context menu); uses current selection if omitted.
+   */
+  handleLinkRequest(selection?: { from: number; to: number } | null): void {
+    const editor = this.editor;
+    if (!editor) {
+      return;
+    }
+    if (editor.isActive('link')) {
+      editor.chain().focus().unsetLink().run();
+      return;
+    }
+    this.openLinkUrlDialog(selection);
+  }
+
+  /** Close the link URL dialog and clear pending selection. */
+  closeLinkUrlDialog(): void {
+    this.showLinkUrlDialog.set(false);
+    this.linkUrlInput.set('');
+    this.pendingLinkSelection.set(null);
+  }
+
+  /** Open the link URL dialog (from toolbar or context menu). Uses current editor selection unless one is passed. */
+  openLinkUrlDialog(selection?: { from: number; to: number } | null): void {
+    const editor = this.editor;
+    if (!editor) {
+      return;
+    }
+    const sel = editor.state.selection;
+    this.pendingLinkSelection.set(selection ?? { from: sel.from, to: sel.to });
+    this.linkUrlInput.set('');
+    this.showLinkUrlDialog.set(true);
+    setTimeout(() => this.linkUrlInputRef?.nativeElement?.focus(), 50);
+  }
+
+  /** Apply the URL from the link dialog and close it. */
+  confirmLinkUrl(): void {
+    const editor = this.editor;
+    const url = this.linkUrlInput().trim();
+    if (!editor || !url) {
+      this.closeLinkUrlDialog();
+      return;
+    }
+    const pending = this.pendingLinkSelection();
+    editor.chain().focus();
+    if (pending) {
+      editor.commands.setTextSelection({ from: pending.from, to: pending.to });
+    }
+    editor.chain().focus().setLink({ href: url }).run();
+    this.closeLinkUrlDialog();
   }
 
   async close(): Promise<void> {
@@ -281,6 +468,22 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   onDocumentMouseUp(): void {
     if (this.resizeState) {
       this.resizeState = null;
+    }
+  }
+
+  @HostListener('document:click')
+  onDocumentClick(): void {
+    if (this.showEditorContextMenu()) {
+      this.closeEditorContextMenu();
+    }
+  }
+
+  @HostListener('document:keydown.escape')
+  onDocumentEscape(): void {
+    if (this.showLinkUrlDialog()) {
+      this.closeLinkUrlDialog();
+    } else if (this.showEditorContextMenu()) {
+      this.closeEditorContextMenu();
     }
   }
 
