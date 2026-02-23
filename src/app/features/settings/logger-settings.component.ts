@@ -1,8 +1,9 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatSelectModule } from '@angular/material/select';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatButtonModule } from '@angular/material/button';
+import { MatInputModule } from '@angular/material/input';
 import { SettingsStore } from '../../store/settings.store';
 import { ElectronService } from '../../core/services/electron.service';
 
@@ -20,6 +21,7 @@ export interface LogEntry {
     MatSelectModule,
     MatFormFieldModule,
     MatButtonModule,
+    MatInputModule,
   ],
   templateUrl: './logger-settings.component.html',
   styleUrl: './logger-settings.component.scss',
@@ -31,6 +33,21 @@ export class LoggerSettingsComponent implements OnInit {
   readonly logEntries = signal<LogEntry[]>([]);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
+
+  readonly searchQuery = signal('');
+
+  readonly filteredLogEntries = computed(() => {
+    const entries = this.logEntries();
+    const query = this.searchQuery().trim().toLowerCase();
+    if (query === '') {
+      return entries;
+    }
+    return entries.filter(
+      (entry) =>
+        entry.message.toLowerCase().includes(query) ||
+        entry.level.toLowerCase().includes(query)
+    );
+  });
 
   ngOnInit(): void {
     this.settingsStore.loadSettings();

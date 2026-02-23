@@ -20,9 +20,25 @@
   <h3>Recent log entries</h3>
   <p class="subtitle">Last 100 log entries from the main process, newest first.</p>
   <div class="log-actions">
-    <button mat-stroked-button (click)="loadLogEntries()" [disabled]="loading()">
+    <mat-form-field appearance="outline" class="log-search-field">
+      <input
+        matInput
+        type="text"
+        placeholder="Search log entries…"
+        aria-label="Search log entries"
+        [value]="searchQuery()"
+        (input)="searchQuery.set($any($event.target).value)"
+      />
+    </mat-form-field>
+    <button
+      class="refresh-icon-btn"
+      mat-icon-button
+      (click)="loadLogEntries()"
+      [disabled]="loading()"
+      aria-label="Refresh log entries"
+      title="Refresh log entries"
+    >
       <span class="material-symbols-outlined">refresh</span>
-      Refresh
     </button>
   </div>
   @if (error()) {
@@ -34,9 +50,12 @@
   @if (!loading() && !error() && logEntries().length === 0) {
     <div class="log-empty">No log entries found.</div>
   }
-  @if (!loading() && logEntries().length > 0) {
+  @if (!loading() && logEntries().length > 0 && filteredLogEntries().length === 0) {
+    <div class="log-empty">No entries match your search.</div>
+  }
+  @if (!loading() && filteredLogEntries().length > 0) {
     <div class="log-list">
-      @for (entry of logEntries(); track $index) {
+      @for (entry of filteredLogEntries(); track $index) {
         <div class="log-entry" [class]="'level-' + entry.level">
           <span class="log-date">{{ entry.date }}</span>
           <span class="log-level" [class]="'badge-' + entry.level">{{ entry.level }}</span>
