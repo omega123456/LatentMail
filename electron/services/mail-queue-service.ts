@@ -25,6 +25,8 @@ export type QueueOperationType =
   | 'move'
   | 'flag'
   | 'delete'
+  | 'add-labels'
+  | 'remove-labels'
   | 'sync-folder'
   | 'sync-thread'
   | 'sync-allmail'
@@ -99,6 +101,34 @@ export interface DeletePayload {
   runtimeResolvedUids?: number[];
 }
 
+export interface AddLabelsPayload {
+  /** X-GM-MSGID values of the messages to label. */
+  xGmMsgIds: string[];
+  /** gmailLabelId values of the target label folders. */
+  targetLabels: string[];
+  /** Thread ID — used for DB updates and folder-updated event. */
+  threadId: string;
+  /**
+   * Pre-resolved source folder + UID for each message (resolved at enqueue time).
+   * { xGmMsgId, sourceFolder, uid }
+   */
+  resolvedEmails: Array<{ xGmMsgId: string; sourceFolder: string; uid: number }>;
+}
+
+export interface RemoveLabelsPayload {
+  /** X-GM-MSGID values of the messages to unlabel. */
+  xGmMsgIds: string[];
+  /** gmailLabelId values of the label folders to remove from. */
+  targetLabels: string[];
+  /** Thread ID — used for DB updates and folder-updated event. */
+  threadId: string;
+  /**
+   * Pre-resolved UID per label folder per message (resolved at enqueue time).
+   * { xGmMsgId, labelFolder, uid }
+   */
+  resolvedEmails: Array<{ xGmMsgId: string; labelFolder: string; uid: number }>;
+}
+
 export interface SyncFolderPayload {
   /** IMAP folder path to sync (e.g. 'INBOX', '[Gmail]/Sent Mail'). */
   folder: string;
@@ -140,6 +170,8 @@ export type QueuePayload =
   | MovePayload
   | FlagPayload
   | DeletePayload
+  | AddLabelsPayload
+  | RemoveLabelsPayload
   | SyncFolderPayload
   | SyncThreadPayload
   | SyncAllMailPayload
@@ -175,7 +207,7 @@ export type QueueItemSnapshot = Omit<QueueItem, 'payload'>;
 export interface MailFolderUpdatedPayload {
   accountId: number;
   folders: string[];
-  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync';
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync' | 'add-labels' | 'remove-labels';
   changeType?: 'new_messages' | 'flag_changes' | 'deletions' | 'mixed';
   count?: number;
 }
@@ -514,6 +546,12 @@ export class MailQueueService {
         case 'fetch-older':
           await this.processFetchOlder(item);
           break;
+        case 'add-labels':
+          await this.processAddLabels(item);
+          break;
+        case 'remove-labels':
+          await this.processRemoveLabels(item);
+          break;
         default:
           throw new Error(`Unknown operation type: ${(item as QueueItem).type}`);
       }
@@ -521,7 +559,7 @@ export class MailQueueService {
       // Best-effort post-operation fetch: confirm server state and update local DB.
       // Failures are logged as warnings — the IMAP action already succeeded.
       // Sync and fetch-older operations handle their own post-processing inside their worker methods.
-      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older') {
+      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older' && item.type !== 'add-labels' && item.type !== 'remove-labels') {
         try {
           await this.postOpFetch(item);
         } catch (fetchErr) {
@@ -543,7 +581,7 @@ export class MailQueueService {
 
       // Sync and fetch-older operations fail immediately on any error — no retry/backoff.
       // Rationale: network blips are transient; the next timer tick or user scroll re-enqueues.
-      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older') {
+      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older' || item.type === 'add-labels' || item.type === 'remove-labels') {
         item.status = 'failed';
         item.error = errMsg;
         item.completedAt = new Date().toISOString();
@@ -2052,6 +2090,160 @@ export class MailQueueService {
     // Exclude payload from the snapshot (may contain large base64 data)
     const { payload: _payload, ...rest } = item;
     return rest;
+  }
+
+  // -----------------------------------------------------------------------
+  // Add Labels worker
+  // -----------------------------------------------------------------------
+
+  private async processAddLabels(item: QueueItem): Promise<void> {
+    const payload = item.payload as AddLabelsPayload;
+    const imapService = ImapService.getInstance();
+    const db = DatabaseService.getInstance();
+    const win = BrowserWindow.getAllWindows()[0];
+
+    let copiedCount = 0;
+
+    let anyFailed = false;
+
+    for (const labelFolder of payload.targetLabels) {
+      let labelCopyCount = 0;
+      for (const resolved of payload.resolvedEmails) {
+        try {
+          await imapService.copyMessages(
+            String(item.accountId),
+            resolved.sourceFolder,
+            [resolved.uid],
+            labelFolder
+          );
+          copiedCount++;
+          labelCopyCount++;
+
+          // Only update DB after IMAP COPY succeeds
+          db.addEmailFolderAssociation(item.accountId, resolved.xGmMsgId, labelFolder);
+        } catch (copyErr) {
+          anyFailed = true;
+          log.warn(`[MailQueue] add-labels: failed to copy ${resolved.xGmMsgId} to ${labelFolder}: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`);
+        }
+      }
+
+      // Update thread_folders for this label only if at least one COPY succeeded
+      if (payload.threadId && labelCopyCount > 0) {
+        db.upsertThreadFolder(item.accountId, payload.threadId, labelFolder);
+      }
+    }
+
+    // If every single operation failed, throw so queue item is marked failed/retried
+    if (anyFailed && copiedCount === 0 && payload.resolvedEmails.length > 0) {
+      throw new Error(`add-labels: all IMAP COPY operations failed for ${payload.targetLabels.join(', ')}`);
+    }
+
+    // Emit folder-updated so the renderer refreshes the thread list
+    if (win) {
+      const affectedFolders = [...payload.targetLabels];
+      win.webContents.send(IPC_EVENTS.MAIL_FOLDER_UPDATED, {
+        accountId: item.accountId,
+        folders: affectedFolders,
+        reason: 'add-labels',
+      });
+    }
+
+    log.info(`[MailQueue] add-labels (${item.queueId}): copied to ${payload.targetLabels.length} label(s), ${copiedCount} message copies`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Remove Labels worker
+  // -----------------------------------------------------------------------
+
+  private async processRemoveLabels(item: QueueItem): Promise<void> {
+    const payload = item.payload as RemoveLabelsPayload;
+    const imapService = ImapService.getInstance();
+    const db = DatabaseService.getInstance();
+    const win = BrowserWindow.getAllWindows()[0];
+
+    let removedCount = 0;
+    let anyFailed = false;
+
+    for (const labelFolder of payload.targetLabels) {
+      // Use pre-resolved UIDs if available; fall back to IMAP resolution for labels added
+      // without UIDs (e.g. added before sync populated the uid column).
+      let uidsForLabel = payload.resolvedEmails
+        .filter((resolved) => resolved.labelFolder === labelFolder)
+        .map((resolved) => resolved.uid);
+
+      if (uidsForLabel.length === 0) {
+        // Fall back: resolve UIDs dynamically by searching the label folder
+        log.info(`[MailQueue] remove-labels: no pre-resolved UIDs for ${labelFolder}, resolving dynamically`);
+        try {
+          const xGmMsgIdsForLabel = payload.xGmMsgIds;
+          const resolved = await imapService.resolveUidsByXGmMsgId(
+            String(item.accountId),
+            labelFolder,
+            xGmMsgIdsForLabel
+          );
+          uidsForLabel = Array.from(resolved.values());
+        } catch (resolveErr) {
+          log.warn(`[MailQueue] remove-labels: dynamic UID resolution failed for ${labelFolder}: ${resolveErr instanceof Error ? resolveErr.message : String(resolveErr)}`);
+          anyFailed = true;
+          continue;
+        }
+      }
+
+      if (uidsForLabel.length === 0) {
+        log.warn(`[MailQueue] remove-labels: no UIDs found for label folder ${labelFolder} — messages may already be removed`);
+        // Clean up DB associations even if no UIDs found on server
+        for (const xGmMsgId of payload.xGmMsgIds) {
+          db.removeEmailFolderAssociation(item.accountId, xGmMsgId, labelFolder);
+        }
+        continue;
+      }
+
+      try {
+        await imapService.removeFromLabel(
+          String(item.accountId),
+          labelFolder,
+          uidsForLabel
+        );
+        removedCount += uidsForLabel.length;
+
+        // Update DB only after IMAP success
+        for (const xGmMsgId of payload.xGmMsgIds) {
+          db.removeEmailFolderAssociation(item.accountId, xGmMsgId, labelFolder);
+        }
+
+        // Update thread_folders — remove if no messages remain in this label
+        if (payload.threadId) {
+          const remainingEmails = db.getEmailsByThreadId(item.accountId, payload.threadId);
+          const stillInLabel = remainingEmails.some((email) => {
+            const emailFolders = db.getFoldersForEmail(item.accountId, String(email['xGmMsgId'] ?? ''));
+            return emailFolders.includes(labelFolder);
+          });
+          if (!stillInLabel) {
+            db.removeThreadFolderAssociation(item.accountId, payload.threadId, labelFolder);
+          }
+        }
+      } catch (removeErr) {
+        anyFailed = true;
+        log.warn(`[MailQueue] remove-labels: failed to remove from ${labelFolder}: ${removeErr instanceof Error ? removeErr.message : String(removeErr)}`);
+      }
+    }
+
+    // If every operation failed, throw so queue item is marked failed/retried
+    if (anyFailed && removedCount === 0 && payload.targetLabels.length > 0) {
+      throw new Error(`remove-labels: all IMAP operations failed for ${payload.targetLabels.join(', ')}`);
+    }
+
+    // Emit folder-updated so the renderer refreshes
+    if (win) {
+      const affectedFolders = [...payload.targetLabels];
+      win.webContents.send(IPC_EVENTS.MAIL_FOLDER_UPDATED, {
+        accountId: item.accountId,
+        folders: affectedFolders,
+        reason: 'remove-labels',
+      });
+    }
+
+    log.info(`[MailQueue] remove-labels (${item.queueId}): removed from ${payload.targetLabels.length} label(s), ${removedCount} message(s)`);
   }
 
   // -----------------------------------------------------------------------

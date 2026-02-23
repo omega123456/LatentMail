@@ -161,6 +161,16 @@ const electronAPI = {
       ipcRenderer.invoke('attachment:fetch-draft-attachments', accountId, xGmMsgId) as Promise<IpcResponse>,
   },
 
+  // Label CRUD operations
+  labels: {
+    create: (accountId: string, name: string, color: string | null) =>
+      ipcRenderer.invoke('label:create', accountId, name, color) as Promise<IpcResponse>,
+    delete: (accountId: string, gmailLabelId: string) =>
+      ipcRenderer.invoke('label:delete', accountId, gmailLabelId) as Promise<IpcResponse>,
+    updateColor: (accountId: string, gmailLabelId: string, color: string | null) =>
+      ipcRenderer.invoke('label:update-color', accountId, gmailLabelId, color) as Promise<IpcResponse>,
+  },
+
   // Event listeners (for push events from main process)
   on: (channel: string, callback: IpcCallback) => {
     const validChannels = [

@@ -30,6 +30,11 @@ export interface EmailActionContext {
   replyLoading: boolean;
   /** Whether the AI follow-up detection is currently loading. */
   followUpLoading: boolean;
+  /**
+   * The selected thread's current folder IDs (from thread.folders).
+   * Used by the labels menu to pre-check which labels are already applied.
+   */
+  currentFolderIds?: string[];
 }
 
 /**
@@ -72,4 +77,8 @@ export interface EmailActionEvent {
   message?: Email;
   /** Optional target folder gmailLabelId — present only for 'move-to' action. */
   targetFolder?: string;
+  /**
+   * Array of gmailLabelId values for 'add-labels' and 'remove-labels' actions.
+   */
+  targetLabels?: string[];
 }

@@ -23,6 +23,26 @@
         <span class="material-symbols-outlined">{{ getIcon(action) }}</span>
         <span>{{ getLabel(action) }}</span>
       </button>
+
+    <!-- Labels: renders a child LabelsMenuComponent -->
+    } @else if (action.id === 'labels' && isEnabled(action)) {
+      <app-labels-menu
+        [class]="getActionClass(action)"
+        [folders]="folders()"
+        [currentFolderIds]="context().currentFolderIds ?? []"
+        (labelAdded)="onLabelAdded($event)"
+        (labelRemoved)="onLabelRemoved($event)"
+      />
+    } @else if (action.id === 'labels' && !isEnabled(action)) {
+      <button
+        [class]="getActionClass(action)"
+        [disabled]="true"
+        [title]="getTooltip(action)"
+      >
+        <span class="material-symbols-outlined">{{ getIcon(action) }}</span>
+        <span>{{ getLabel(action) }}</span>
+      </button>
+
     } @else {
       <!-- Regular action button -->
       <button

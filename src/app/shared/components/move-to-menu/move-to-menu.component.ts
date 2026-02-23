@@ -102,28 +102,16 @@ export class MoveToMenuComponent implements OnDestroy {
       });
   });
 
-  /** Filtered user label folders (excluding active). */
-  readonly filteredUserLabels = computed(() => {
-    const active = this.activeFolderId();
-    const search = this.searchText().toLowerCase();
-    return this.folders()
-      .filter(f =>
-        f.type === 'user' &&
-        f.gmailLabelId !== active &&
-        (search === '' || f.name.toLowerCase().includes(search))
-      )
-      .sort((a, b) => a.name.localeCompare(b.name));
-  });
-
-  /** All visible items in a flat list (for keyboard navigation). */
+  /** All visible items in a flat list (for keyboard navigation — system folders only). */
   readonly flatItems = computed(() => {
-    return [...this.filteredSystemFolders(), ...this.filteredUserLabels()];
+    return [...this.filteredSystemFolders()];
   });
 
-  /** Total visible folder count (to determine if search input is shown). */
+  /** Total visible folder count (system folders only, to determine if search input is shown). */
   readonly totalVisible = computed(() => {
     const active = this.activeFolderId();
     return this.folders().filter(f =>
+      f.type === 'system' &&
       !EXCLUDED_FOLDER_IDS.includes(f.gmailLabelId) &&
       f.gmailLabelId !== active
     ).length;

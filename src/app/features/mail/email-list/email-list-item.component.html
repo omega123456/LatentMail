@@ -56,10 +56,20 @@
             <span class="folder-badge-text">{{ badge.displayName }}</span>
           </span>
         }
-        @if (labelBadge(); as lbl) {
-          <span class="label-chip" [title]="lbl.name" [attr.aria-label]="lbl.name">
+        @for (lbl of labelBadges().slice(0, 2); track lbl.gmailLabelId) {
+          <span
+            class="label-chip"
+            [title]="lbl.name"
+            [attr.aria-label]="lbl.name"
+            [style.--chip-color]="lbl.color"
+          >
             <span class="material-symbols-outlined label-chip-icon" aria-hidden="true">sell</span>
             <span class="label-chip-text">{{ lbl.name }}</span>
+          </span>
+        }
+        @if (labelBadges().length > 2) {
+          <span class="label-chip label-chip-overflow" [title]="labelBadges().length - 2 + ' more labels'">
+            +{{ labelBadges().length - 2 }}
           </span>
         }
         @if (hasAttachments()) {

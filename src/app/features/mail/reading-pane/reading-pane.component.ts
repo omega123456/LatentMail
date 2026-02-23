@@ -126,6 +126,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       summaryLoading: this.aiStore.summaryLoading(),
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
+      currentFolderIds: thread.folders ?? [],
     };
   }
 
@@ -148,6 +149,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       summaryLoading: this.aiStore.summaryLoading(),
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
+      currentFolderIds: thread.folders ?? [],
     };
   }
 

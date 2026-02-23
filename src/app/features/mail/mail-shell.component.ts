@@ -186,6 +186,45 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'read', !thread.isRead, thread.xGmThrid);
         break;
       }
+      case 'add-labels': {
+        if (!event.targetLabels || event.targetLabels.length === 0) {
+          break;
+        }
+        // Use the specific message if triggered per-message; otherwise use all thread messages.
+        // Always use actual xGmMsgIds — never use xGmThrid as a message ID.
+        let addXGmMsgIds: string[];
+        if (event.message?.xGmMsgId) {
+          addXGmMsgIds = [event.message.xGmMsgId];
+        } else {
+          const addMessages = this.emailsStore.selectedMessages();
+          addXGmMsgIds = addMessages.length > 0
+            ? addMessages.map(message => message.xGmMsgId)
+            : (this.emailsStore.selectedThread()?.messages ?? []).map(message => message.xGmMsgId);
+        }
+        if (addXGmMsgIds.length > 0) {
+          this.emailsStore.addLabels(activeAccount.id, addXGmMsgIds, event.targetLabels, thread.xGmThrid);
+        }
+        break;
+      }
+      case 'remove-labels': {
+        if (!event.targetLabels || event.targetLabels.length === 0) {
+          break;
+        }
+        // Use the specific message if triggered per-message; otherwise use all thread messages.
+        let removeXGmMsgIds: string[];
+        if (event.message?.xGmMsgId) {
+          removeXGmMsgIds = [event.message.xGmMsgId];
+        } else {
+          const removeMessages = this.emailsStore.selectedMessages();
+          removeXGmMsgIds = removeMessages.length > 0
+            ? removeMessages.map(message => message.xGmMsgId)
+            : (this.emailsStore.selectedThread()?.messages ?? []).map(message => message.xGmMsgId);
+        }
+        if (removeXGmMsgIds.length > 0) {
+          this.emailsStore.removeLabels(activeAccount.id, removeXGmMsgIds, event.targetLabels, thread.xGmThrid);
+        }
+        break;
+      }
       case 'edit-draft':
         this.openDraftForEditing(event.message);
         break;

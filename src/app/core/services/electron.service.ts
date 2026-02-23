@@ -96,6 +96,11 @@ interface ElectronAPI {
     download: (attachmentId: number) => Promise<IpcResponse>;
     fetchDraftAttachments: (accountId: string, xGmMsgId: string) => Promise<IpcResponse>;
   };
+  labels: {
+    create: (accountId: string, name: string, color: string | null) => Promise<IpcResponse>;
+    delete: (accountId: string, gmailLabelId: string) => Promise<IpcResponse>;
+    updateColor: (accountId: string, gmailLabelId: string, color: string | null) => Promise<IpcResponse>;
+  };
   logger: {
     getRecentEntries: () => Promise<IpcResponse>;
   };
@@ -355,6 +360,20 @@ export class ElectronService {
 
   async fetchDraftAttachments(accountId: string, xGmMsgId: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.attachments.fetchDraftAttachments(accountId, xGmMsgId));
+  }
+
+  // ---- Label CRUD operations ----
+
+  async createLabel(accountId: string, name: string, color: string | null): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.labels.create(accountId, name, color));
+  }
+
+  async deleteLabel(accountId: string, gmailLabelId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.labels.delete(accountId, gmailLabelId));
+  }
+
+  async updateLabelColor(accountId: string, gmailLabelId: string, color: string | null): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.labels.updateColor(accountId, gmailLabelId, color));
   }
 
   // ---- Logger operations ----

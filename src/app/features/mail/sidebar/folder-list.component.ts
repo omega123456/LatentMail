@@ -1,11 +1,12 @@
 import { Component, inject, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FoldersStore } from '../../../store/folders.store';
+import { LabelManagerComponent } from './label-manager.component';
 
 @Component({
   selector: 'app-folder-list',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LabelManagerComponent],
   templateUrl: './folder-list.component.html',
   styleUrl: './folder-list.component.scss',
 })
@@ -31,5 +32,9 @@ export class FolderListComponent {
   onDismissSearch(event: Event): void {
     event.stopPropagation();
     this.searchDismissed.emit();
+  }
+
+  onLabelFolderSelected(folderId: string): void {
+    this.folderSelected.emit(folderId);
   }
 }

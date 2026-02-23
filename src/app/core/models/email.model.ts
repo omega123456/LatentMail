@@ -46,7 +46,7 @@ export interface Thread {
   /** Whether any message in the thread has attachments. Derived from thread query. */
   hasAttachments?: boolean;
   messages?: Email[];
-  label?: { id: number; name: string; color?: string };
+  labels?: Array<{ id: number; name: string; color?: string | null; gmailLabelId: string }>;
 }
 
 export interface Attachment {

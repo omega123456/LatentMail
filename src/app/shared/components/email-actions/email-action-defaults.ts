@@ -70,6 +70,14 @@ export function getDefaultEmailActions(): EmailAction[] {
       isVisible: () => true,
       isEnabled: () => true,
     },
+    {
+      id: 'labels',
+      icon: 'label',
+      label: 'Labels',
+      group: 'manage',
+      isVisible: () => true,
+      isEnabled: () => true,
+    },
 
     // ─── State Group ───
     {

@@ -200,6 +200,43 @@ export const FoldersStore = signalStore(
       setSearchImapError(error: string | null): void {
         patchState(store, { searchImapError: error, searchingImap: false });
       },
+
+      /** Create a new user label on IMAP and in the local DB, then reload folders. */
+      async createLabel(accountId: number, name: string, color: string | null): Promise<void> {
+        const response = await electronService.createLabel(String(accountId), name, color);
+        if (!response.success) {
+          throw new Error(response.error?.message || 'Failed to create label');
+        }
+        await this.loadFolders(accountId);
+      },
+
+      /** Delete a user label from IMAP and local DB, then reload folders. */
+      async deleteLabel(accountId: number, gmailLabelId: string): Promise<void> {
+        const response = await electronService.deleteLabel(String(accountId), gmailLabelId);
+        if (!response.success) {
+          throw new Error(response.error?.message || 'Failed to delete label');
+        }
+        await this.loadFolders(accountId);
+      },
+
+      /**
+       * Update the color for a label.
+       * Optimistically patches the in-memory folders array without a full reload.
+       */
+      async updateLabelColor(accountId: number, gmailLabelId: string, color: string | null): Promise<void> {
+        const response = await electronService.updateLabelColor(String(accountId), gmailLabelId, color);
+        if (!response.success) {
+          throw new Error(response.error?.message || 'Failed to update label color');
+        }
+        // Optimistic patch: update the color in the current folders signal
+        const updatedFolders = store.folders().map((folder) => {
+          if (folder.gmailLabelId === gmailLabelId) {
+            return { ...folder, color: color ?? undefined };
+          }
+          return folder;
+        });
+        patchState(store, { folders: updatedFolders });
+      },
     };
   })
 );

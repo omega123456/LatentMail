@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron';
 import { LoggerService } from '../services/logger-service';
-import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
+import { IPC_CHANNELS, ipcSuccess, ipcError, IpcResponse } from './ipc-channels';
 
 const log = LoggerService.getInstance();
 import { DatabaseService } from '../services/database-service';
@@ -92,6 +92,32 @@ export function registerMailIpcHandlers(): void {
     return [];
   };
 
+  /**
+   * Enrich threads with user label data.
+   * Batch-queries email_folders → labels (type='user') for all supplied threads.
+   * Attaches a `labels` array to each thread (empty array when no labels).
+   */
+  const attachThreadLabels = (threads: Array<Record<string, unknown>>, accountId: number): Array<Record<string, unknown>> => {
+    const xGmThrids = threads
+      .map((thread) => {
+        const rawId = thread['xGmThrid'];
+        return typeof rawId === 'string' ? rawId : null;
+      })
+      .filter((identifier): identifier is string => identifier != null && identifier.length > 0);
+
+    if (xGmThrids.length === 0) {
+      return threads.map((thread) => ({ ...thread, labels: [] }));
+    }
+
+    const labelMap = db.getLabelsForThreadBatch(accountId, xGmThrids);
+
+    return threads.map((thread) => {
+      const xGmThrid = typeof thread['xGmThrid'] === 'string' ? thread['xGmThrid'] : '';
+      const labels = xGmThrid ? (labelMap.get(xGmThrid) ?? []) : [];
+      return { ...thread, labels };
+    });
+  };
+
   const attachThreadFolders = (threads: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
     const threadIds = threads
       .map((thread) => {
@@ -139,7 +165,8 @@ export function registerMailIpcHandlers(): void {
     const effectiveOffset = threadId != null && threadId !== '' ? 0 : offset;
     let threads = db.getThreadsByFolder(numAccountId, folderId, effectiveLimit, effectiveOffset, threadId);
     threads = attachThreadFolders(threads);
-    return attachThreadDraftStatus(threads);
+    threads = attachThreadDraftStatus(threads);
+    return attachThreadLabels(threads, numAccountId);
   }
 
   /**
@@ -672,6 +699,7 @@ export function registerMailIpcHandlers(): void {
         : db.searchEmailsMulti(numAccountId, queries);
       let results = attachThreadFolders(rawResults);
       results = attachThreadDraftStatus(results);
+      results = attachThreadLabels(results, numAccountId);
 
       log.info(`[MAIL_SEARCH] Found ${results.length} merged thread result(s) for account ${accountId}`);
       return ipcSuccess(results);
@@ -843,6 +871,7 @@ export function registerMailIpcHandlers(): void {
 
       let threadsWithFolders = attachThreadFolders(threads);
       threadsWithFolders = attachThreadDraftStatus(threadsWithFolders);
+      threadsWithFolders = attachThreadLabels(threadsWithFolders, numAccountId);
       log.info(
         `[MAIL_SEARCH_IMAP] IMAP search found ${emails.length} emails, ${threadMap.size} threads, returning ${threadsWithFolders.length} thread results`
       );
@@ -924,6 +953,139 @@ export function registerMailIpcHandlers(): void {
     } catch (err) {
       log.error('Failed to get folders:', err);
       return ipcError('MAIL_GET_FOLDERS_FAILED', 'Failed to get folders');
+    }
+  });
+
+  // ---- Label CRUD handlers ----
+
+  /** Validation: hex color must be null or match #RRGGBB */
+  function isValidColor(color: unknown): boolean {
+    if (color === null || color === undefined) {
+      return true;
+    }
+    if (typeof color !== 'string') {
+      return false;
+    }
+    return /^#[0-9A-Fa-f]{6}$/.test(color);
+  }
+
+  ipcMain.handle(IPC_CHANNELS.LABEL_CREATE, async (_event, accountId: string, name: string, color: string | null): Promise<IpcResponse> => {
+    try {
+      const numAccountId = Number(accountId);
+      if (!Number.isFinite(numAccountId) || numAccountId <= 0) {
+        return ipcError('LABEL_INVALID_ACCOUNT', 'Invalid accountId');
+      }
+
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return ipcError('LABEL_INVALID_NAME', 'Label name must be a non-empty string');
+      }
+      const trimmedName = name.trim();
+      if (trimmedName.length > 100) {
+        return ipcError('LABEL_INVALID_NAME', 'Label name must not exceed 100 characters');
+      }
+      if (trimmedName.toLowerCase().startsWith('[gmail]/')) {
+        return ipcError('LABEL_INVALID_NAME', 'Label name must not start with [Gmail]/');
+      }
+      // Reject IMAP-invalid characters: backslash, asterisk, percent
+      if (/[\\*%]/.test(trimmedName)) {
+        return ipcError('LABEL_INVALID_NAME', 'Label name must not contain \\, *, or %');
+      }
+      if (!isValidColor(color)) {
+        return ipcError('LABEL_INVALID_COLOR', 'Color must be null or a valid hex string (#RRGGBB)');
+      }
+
+      // Check uniqueness (case-insensitive) within the account
+      const existingLabels = db.getLabelsByAccount(numAccountId);
+      const lowerName = trimmedName.toLowerCase();
+      const alreadyExists = existingLabels.some(
+        (existing) => String(existing['name']).toLowerCase() === lowerName
+      );
+      if (alreadyExists) {
+        return ipcError('LABEL_DUPLICATE_NAME', `A label named "${trimmedName}" already exists`);
+      }
+
+      // Create IMAP mailbox
+      const imapService = ImapService.getInstance();
+      await imapService.createMailbox(accountId, trimmedName);
+
+      // Persist to local DB
+      const newId = db.createLabel(numAccountId, trimmedName, trimmedName, color);
+
+      const newLabel = {
+        id: newId,
+        accountId: numAccountId,
+        gmailLabelId: trimmedName,
+        name: trimmedName,
+        type: 'user',
+        color,
+        unreadCount: 0,
+        totalCount: 0,
+      };
+
+      log.info(`[LABEL_CREATE] Created label "${trimmedName}" for account ${accountId}`);
+      return ipcSuccess(newLabel);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create label';
+      log.error('[LABEL_CREATE] Failed:', err);
+      return ipcError('LABEL_CREATE_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.LABEL_DELETE, async (_event, accountId: string, gmailLabelId: string): Promise<IpcResponse> => {
+    try {
+      const numAccountId = Number(accountId);
+      if (!Number.isFinite(numAccountId) || numAccountId <= 0) {
+        return ipcError('LABEL_INVALID_ACCOUNT', 'Invalid accountId');
+      }
+      if (typeof gmailLabelId !== 'string' || gmailLabelId.trim().length === 0) {
+        return ipcError('LABEL_INVALID_ID', 'gmailLabelId must be a non-empty string');
+      }
+
+      const existing = db.getLabelByGmailId(numAccountId, gmailLabelId);
+      if (!existing) {
+        return ipcError('LABEL_NOT_FOUND', `Label "${gmailLabelId}" not found`);
+      }
+      if (existing['type'] !== 'user') {
+        return ipcError('LABEL_NOT_USER', 'Only user-defined labels can be deleted');
+      }
+
+      // Delete IMAP mailbox
+      const imapService = ImapService.getInstance();
+      await imapService.deleteMailbox(accountId, gmailLabelId);
+
+      // Clean up local DB (transactional)
+      db.deleteLabel(numAccountId, gmailLabelId);
+
+      log.info(`[LABEL_DELETE] Deleted label "${gmailLabelId}" for account ${accountId}`);
+      return ipcSuccess(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete label';
+      log.error('[LABEL_DELETE] Failed:', err);
+      return ipcError('LABEL_DELETE_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.LABEL_UPDATE_COLOR, async (_event, accountId: string, gmailLabelId: string, color: string | null): Promise<IpcResponse> => {
+    try {
+      const numAccountId = Number(accountId);
+      if (!Number.isFinite(numAccountId) || numAccountId <= 0) {
+        return ipcError('LABEL_INVALID_ACCOUNT', 'Invalid accountId');
+      }
+      if (typeof gmailLabelId !== 'string' || gmailLabelId.trim().length === 0) {
+        return ipcError('LABEL_INVALID_ID', 'gmailLabelId must be a non-empty string');
+      }
+      if (!isValidColor(color)) {
+        return ipcError('LABEL_INVALID_COLOR', 'Color must be null or a valid hex string (#RRGGBB)');
+      }
+
+      db.updateLabelColor(numAccountId, gmailLabelId, color);
+
+      log.info(`[LABEL_UPDATE_COLOR] Updated color for "${gmailLabelId}" to ${color} for account ${accountId}`);
+      return ipcSuccess({ gmailLabelId, color });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update label color';
+      log.error('[LABEL_UPDATE_COLOR] Failed:', err);
+      return ipcError('LABEL_UPDATE_COLOR_FAILED', message);
     }
   });
 }

@@ -784,6 +784,19 @@ export class DatabaseService {
 
   // ---- Email-Folder association management (keyed by X-GM-MSGID) ----
 
+  /**
+   * Add an email-folder association (e.g. after IMAP COPY places a message in a label folder).
+   * Idempotent — uses INSERT OR IGNORE.
+   */
+  addEmailFolderAssociation(accountId: number, xGmMsgId: string, folder: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
+      { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
+    );
+    this.scheduleSave();
+  }
+
   removeEmailFolderAssociation(accountId: number, xGmMsgId: string, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
@@ -1465,6 +1478,143 @@ export class DatabaseService {
       unreadCount: row[6] as number,
       totalCount: row[7] as number,
     }));
+  }
+
+  /**
+   * Insert a new user-defined label (gmail_label_id = label name used as IMAP mailbox path).
+   * Returns the new row's id.
+   */
+  createLabel(accountId: number, gmailLabelId: string, name: string, color: string | null): number {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      `INSERT INTO labels (account_id, gmail_label_id, name, type, color, unread_count, total_count)
+       VALUES (:accountId, :gmailLabelId, :name, 'user', :color, 0, 0)`,
+      { ':accountId': accountId, ':gmailLabelId': gmailLabelId, ':name': name, ':color': color }
+    );
+    const result = this.db.exec(
+      'SELECT id FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
+      { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
+    );
+    const newId = result[0]?.values[0]?.[0] as number;
+    this.scheduleSave();
+    return newId;
+  }
+
+  /**
+   * Delete a user label and clean up email_folders / thread_folders associations.
+   * All three deletions run in a single transaction.
+   */
+  deleteLabel(accountId: number, gmailLabelId: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run('BEGIN');
+    try {
+      this.db.run(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND folder = :gmailLabelId',
+        { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
+      );
+      this.db.run(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND folder = :gmailLabelId',
+        { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
+      );
+      this.db.run(
+        'DELETE FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
+        { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
+      );
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleSave();
+  }
+
+  /**
+   * Update the color column of a label. Pass null to clear the color.
+   */
+  updateLabelColor(accountId: number, gmailLabelId: string, color: string | null): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.run(
+      'UPDATE labels SET color = :color WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
+      { ':accountId': accountId, ':gmailLabelId': gmailLabelId, ':color': color }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Look up a single label row by account + gmailLabelId. Returns null if not found.
+   */
+  getLabelByGmailId(accountId: number, gmailLabelId: string): Record<string, unknown> | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const result = this.db.exec(
+      `SELECT id, account_id, gmail_label_id, name, type, color
+       FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId`,
+      { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
+    );
+    if (result.length === 0 || result[0].values.length === 0) {
+      return null;
+    }
+    const row = result[0].values[0];
+    return {
+      id: row[0] as number,
+      accountId: row[1] as number,
+      gmailLabelId: row[2] as string,
+      name: row[3] as string,
+      type: row[4] as string,
+      color: row[5] as string | null,
+    };
+  }
+
+  /**
+   * Batch-fetch user labels for a set of thread IDs.
+   * Returns a Map keyed by xGmThrid → array of label objects.
+   */
+  getLabelsForThreadBatch(
+    accountId: number,
+    xGmThrids: string[]
+  ): Map<string, Array<{ id: number; name: string; color: string | null; gmailLabelId: string }>> {
+    if (!this.db) throw new Error('Database not initialized');
+    if (xGmThrids.length === 0) {
+      return new Map();
+    }
+
+    // Build a quoted, comma-separated list for the IN clause (no parameterised arrays in sql.js)
+    const sanitized = xGmThrids
+      .map((identifier) => identifier.replace(/'/g, "''"))
+      .map((identifier) => `'${identifier}'`)
+      .join(', ');
+
+    const sql = `
+      SELECT DISTINCT e.x_gm_thrid, l.id, l.name, l.color, l.gmail_label_id
+      FROM emails e
+      JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
+      JOIN labels l ON l.account_id = e.account_id AND l.gmail_label_id = ef.folder
+      WHERE e.account_id = :accountId
+        AND l.type = 'user'
+        AND e.x_gm_thrid IN (${sanitized})
+    `;
+
+    const result = this.db.exec(sql, { ':accountId': accountId });
+    const map = new Map<string, Array<{ id: number; name: string; color: string | null; gmailLabelId: string }>>();
+
+    if (result.length === 0) {
+      return map;
+    }
+
+    for (const row of result[0].values) {
+      const xGmThrid = row[0] as string;
+      const labelEntry = {
+        id: row[1] as number,
+        name: row[2] as string,
+        color: row[3] as string | null,
+        gmailLabelId: row[4] as string,
+      };
+      if (!map.has(xGmThrid)) {
+        map.set(xGmThrid, []);
+      }
+      map.get(xGmThrid)!.push(labelEntry);
+    }
+
+    return map;
   }
 
   updateLabelCounts(accountId: number, gmailLabelId: string, unreadCount: number, totalCount: number): void {

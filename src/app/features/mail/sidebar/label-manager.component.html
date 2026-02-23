@@ -1,0 +1,123 @@
+@if (!collapsed()) {
+  <div class="label-manager">
+
+    <!-- Header row: "LABELS" title + add button -->
+    <div class="labels-header">
+      <span class="labels-title">Labels</span>
+      <button
+        class="add-label-btn"
+        type="button"
+        title="Add label"
+        aria-label="Add label"
+        (click)="openAddForm()"
+      >
+        <span class="material-symbols-outlined">add</span>
+      </button>
+    </div>
+
+    <!-- Inline add form (slides down when showAddForm() is true) -->
+    @if (showAddForm()) {
+      <div class="add-form">
+        <input
+          type="text"
+          class="label-name-input"
+          placeholder="New label"
+          aria-label="New label name"
+          [value]="newLabelName()"
+          (input)="onNewLabelNameInput($event)"
+          (keydown.enter)="createLabel()"
+          (keydown.escape)="cancelAddForm()"
+          autofocus
+        />
+
+        @if (createError()) {
+          <div class="create-error">{{ createError() }}</div>
+        }
+
+        <app-color-picker
+          [selectedColor]="newLabelColor()"
+          (colorCommitted)="onNewLabelColorCommitted($event)"
+        />
+
+        <div class="add-form-actions">
+          <button
+            type="button"
+            class="form-btn cancel-btn"
+            (click)="cancelAddForm()"
+          >Cancel</button>
+          <button
+            type="button"
+            class="form-btn create-btn"
+            [disabled]="isCreating()"
+            (click)="createLabel()"
+          >{{ isCreating() ? 'Creating…' : 'Create' }}</button>
+        </div>
+      </div>
+    }
+
+    <!-- Label list -->
+    @for (label of foldersStore.userLabels(); track label.gmailLabelId) {
+      <div
+        class="label-item folder-item"
+        [class.active]="!foldersStore.searchActive() && label.gmailLabelId === foldersStore.activeFolderId()"
+        (click)="onLabelClick(label.gmailLabelId)"
+        role="button"
+        tabindex="0"
+        (keydown.enter)="onLabelClick(label.gmailLabelId)"
+      >
+        @if (pendingDeleteLabelId() === label.gmailLabelId) {
+          <!-- Delete confirmation row -->
+          <span class="delete-confirm-text">Remove?</span>
+          <button
+            type="button"
+            class="confirm-btn yes-btn"
+            [disabled]="isDeleting()"
+            (click)="$event.stopPropagation(); confirmDelete(label.gmailLabelId)"
+          >Yes</button>
+          <button
+            type="button"
+            class="confirm-btn no-btn"
+            (click)="$event.stopPropagation(); cancelDelete()"
+          >No</button>
+        } @else {
+          <!-- Normal label row -->
+          <button
+            type="button"
+            class="color-dot-btn"
+            [style.background-color]="getLabelColor(label)"
+            [title]="'Edit color for ' + label.name"
+            [attr.aria-label]="'Edit color for ' + label.name"
+            (click)="openColorEdit($event, label)"
+          ></button>
+          <span class="material-symbols-outlined label-icon">label</span>
+          <span class="folder-name label-name">{{ label.name }}</span>
+          @if (label.unreadCount > 0) {
+            <span class="unread-count">{{ label.unreadCount }}</span>
+          }
+          <button
+            type="button"
+            class="delete-btn"
+            [title]="'Delete ' + label.name"
+            [attr.aria-label]="'Delete label ' + label.name"
+            (click)="showDeleteConfirm($event, label.gmailLabelId)"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        }
+      </div>
+    }
+
+    <!-- Color edit popover template -->
+    <ng-template #colorPopover>
+      @if (editingLabel(); as label) {
+        <div class="color-edit-popover">
+          <app-color-picker
+            [selectedColor]="label.color || null"
+            (colorCommitted)="onColorEditCommitted($event, label.gmailLabelId)"
+          />
+        </div>
+      }
+    </ng-template>
+
+  </div>
+}

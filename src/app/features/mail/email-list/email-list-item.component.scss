@@ -213,19 +213,35 @@
   display: none;
 }
 
-// Label chip (filter-assigned label)
+// Label chip — colored dynamically via --chip-color CSS custom property
 .label-chip {
+  --chip-color: #607D8B; // Default Slate fallback
+
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm, 4px);
   padding: 2px 6px;
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  background-color: #E8F5E9;
-  color: #2E7D32;
+  background-color: color-mix(in srgb, var(--chip-color) 12%, transparent);
+  color: var(--chip-color);
+  border: 1px solid color-mix(in srgb, var(--chip-color) 25%, transparent);
+
+  &.label-chip-overflow {
+    background-color: var(--color-surface-variant, #f5f5f5);
+    color: var(--color-text-secondary);
+    border-color: transparent;
+    font-weight: 400;
+  }
+}
+
+:host-context([data-theme='dark']) .label-chip {
+  background-color: color-mix(in srgb, var(--chip-color) 18%, transparent);
+  color: color-mix(in srgb, var(--chip-color) 60%, white);
+  border-color: color-mix(in srgb, var(--chip-color) 30%, transparent);
 }
 
 .label-chip-icon {
@@ -237,11 +253,6 @@
 // Label chip text hidden by default; shown in spacious via override above
 .label-chip-text {
   display: none;
-}
-
-:host-context([data-theme='dark']) .label-chip {
-  background-color: #1B3A1F;
-  color: #66BB6A;
 }
 
 .message-count {

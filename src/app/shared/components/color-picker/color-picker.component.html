@@ -1,0 +1,123 @@
+<div class="color-picker" role="group" aria-label="Color picker">
+
+  <!-- Saturation/Brightness square + Hue slider row -->
+  <div class="picker-main">
+    <!-- SB square -->
+    <div
+      #sbSquare
+      class="sb-square"
+      [style.background-color]="sbSquareHueColor()"
+      tabindex="0"
+      role="slider"
+      aria-label="Saturation and brightness"
+      [attr.aria-valuenow]="liveHex()"
+      (pointerdown)="onSbPointerDown($event)"
+      (pointermove)="onSbPointerMove($event)"
+      (pointerup)="onSbPointerUp($event)"
+      (keydown)="onSbKeydown($event)"
+    >
+      <div class="sb-white-overlay"></div>
+      <div class="sb-black-overlay"></div>
+      <!-- Draggable cursor -->
+      <div
+        class="sb-cursor"
+        [style.left.%]="cursorLeft()"
+        [style.top.%]="cursorTop()"
+        [style.background-color]="liveHex()"
+      ></div>
+    </div>
+
+    <!-- Hue slider -->
+    <div
+      #hueSlider
+      class="hue-slider"
+      tabindex="0"
+      role="slider"
+      aria-label="Hue"
+      [attr.aria-valuenow]="hue()"
+      aria-valuemin="0"
+      aria-valuemax="360"
+      (pointerdown)="onHuePointerDown($event)"
+      (pointermove)="onHuePointerMove($event)"
+      (pointerup)="onHuePointerUp($event)"
+      (keydown)="onHueKeydown($event)"
+    >
+      <div class="hue-gradient"></div>
+      <!-- Draggable handle -->
+      <div
+        class="hue-handle"
+        [style.top.%]="hueHandleTop()"
+      ></div>
+    </div>
+  </div>
+
+  <!-- Hex input row -->
+  <div class="hex-row">
+    <div class="hex-input-wrapper" [class.error]="hexInputError()">
+      <span class="hex-prefix">#</span>
+      <input
+        type="text"
+        class="hex-input"
+        maxlength="6"
+        placeholder="RRGGBB"
+        aria-label="Hex color value"
+        [value]="hexInputValue()"
+        (input)="onHexInput($any($event.target).value)"
+        (blur)="onHexBlur()"
+        (keydown)="onHexKeydown($event)"
+      />
+    </div>
+    <!-- Live preview dot -->
+    <div
+      class="color-preview-dot"
+      [style.background-color]="noColorSelected() ? 'transparent' : liveHex()"
+      [class.no-color]="noColorSelected()"
+      aria-hidden="true"
+    ></div>
+  </div>
+
+  <!-- Swatch row -->
+  <div
+    class="swatch-row"
+    role="radiogroup"
+    aria-label="Suggested colors"
+  >
+    <!-- "No color" swatch -->
+    <button
+      class="swatch no-color-swatch"
+      type="button"
+      role="radio"
+      [attr.aria-checked]="noColorSelected()"
+      [class.selected]="noColorSelected()"
+      title="No color"
+      aria-label="No color"
+      (click)="selectNoColor()"
+    >
+      <span class="no-color-slash" aria-hidden="true"></span>
+    </button>
+
+    <!-- Preset swatches -->
+    @for (color of paletteColors(); track color.hex) {
+      <button
+        class="swatch preset-swatch"
+        type="button"
+        role="radio"
+        [attr.aria-checked]="isSwatchSelected(color.hex)"
+        [class.selected]="isSwatchSelected(color.hex)"
+        [style.background-color]="color.hex"
+        [title]="color.name"
+        [attr.aria-label]="color.name"
+        (click)="selectSwatch(color)"
+      >
+        @if (isSwatchSelected(color.hex)) {
+          <span class="material-symbols-outlined swatch-check" aria-hidden="true">check</span>
+        }
+      </button>
+    }
+  </div>
+
+  <!-- ARIA live region for screen reader announcements -->
+  <div class="sr-only" aria-live="polite" aria-atomic="true">
+    {{ noColorSelected() ? 'No color' : liveHex() }}
+  </div>
+</div>

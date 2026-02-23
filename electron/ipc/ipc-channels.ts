@@ -77,6 +77,11 @@ export const IPC_CHANNELS = {
   ATTACHMENT_GET_FOR_EMAIL: 'attachment:get-for-email',
   ATTACHMENT_GET_CONTENT: 'attachment:get-content',
   ATTACHMENT_FETCH_DRAFT_ATTACHMENTS: 'attachment:fetch-draft-attachments',
+
+  // Label CRUD operations
+  LABEL_CREATE: 'label:create',
+  LABEL_DELETE: 'label:delete',
+  LABEL_UPDATE_COLOR: 'label:update-color',
 } as const;
 
 // Main → Renderer (push events)

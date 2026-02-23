@@ -8,6 +8,7 @@ import {
   getBadgeForFolderId,
   getOrderedFolderBadges,
 } from '../../../shared/constants/folder-badges';
+import { DEFAULT_LABEL_COLOR } from '../../../shared/constants/label-colors';
 
 @Component({
   selector: 'app-email-list-item',
@@ -26,15 +27,16 @@ export class EmailListItemComponent {
   readonly clicked = output<Thread>();
   readonly starToggled = output<Thread>();
 
-  readonly labelBadge = computed(() => {
-    const label = this.thread().label;
-    if (!label) {
-      return null;
+  readonly labelBadges = computed(() => {
+    const labels = this.thread().labels;
+    if (!labels || labels.length === 0) {
+      return [];
     }
-    return {
+    return labels.map((label) => ({
       name: label.name,
-      color: label.color,
-    };
+      color: label.color || DEFAULT_LABEL_COLOR,
+      gmailLabelId: label.gmailLabelId,
+    }));
   });
 
   readonly folderBadge = computed<FolderBadgeInfo | null>(() => {

@@ -59,20 +59,8 @@
     </div>
   }
 
-  @if (!collapsed() && foldersStore.userLabels().length > 0) {
-    <div class="labels-header">Labels</div>
-    @for (label of foldersStore.userLabels(); track label.gmailLabelId) {
-      <div
-        class="folder-item"
-        [class.active]="!foldersStore.searchActive() && label.gmailLabelId === foldersStore.activeFolderId()"
-        (click)="onFolderClick(label.gmailLabelId)"
-      >
-        <span class="material-symbols-outlined">label</span>
-        <span class="folder-name">{{ label.name }}</span>
-        @if (label.unreadCount > 0) {
-          <span class="unread-count">{{ label.unreadCount }}</span>
-        }
-      </div>
-    }
-  }
+  <app-label-manager
+    [collapsed]="collapsed()"
+    (folderSelected)="onLabelFolderSelected($event)"
+  />
 </nav>

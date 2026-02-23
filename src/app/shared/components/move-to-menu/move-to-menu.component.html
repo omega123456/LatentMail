@@ -40,7 +40,7 @@
       }
 
       <div class="move-to-list">
-        <!-- System folders -->
+        <!-- System folders only -->
         @for (folder of filteredSystemFolders(); track folder.gmailLabelId; let i = $index) {
           <button
             class="folder-item"
@@ -52,30 +52,6 @@
             <span class="material-symbols-outlined folder-icon">{{ getFolderIcon(folder) }}</span>
             <span class="folder-name">{{ folder.name }}</span>
           </button>
-        }
-
-        <!-- Separator + Labels header (only if we have user labels) -->
-        @if (filteredUserLabels().length > 0) {
-          @if (filteredSystemFolders().length > 0) {
-            <div class="folder-divider"></div>
-          }
-          <div class="labels-header">Labels</div>
-          @for (folder of filteredUserLabels(); track folder.gmailLabelId; let j = $index) {
-            <button
-              class="folder-item"
-              role="menuitem"
-              [class.focused]="focusedIndex() === filteredSystemFolders().length + j"
-              (click)="selectFolder(folder)"
-              (mouseenter)="focusedIndex.set(filteredSystemFolders().length + j)"
-            >
-              <span
-                class="label-color-dot"
-                [style.background-color]="folder.color || 'var(--color-text-tertiary)'"
-              ></span>
-              <span class="material-symbols-outlined folder-icon">label</span>
-              <span class="folder-name">{{ folder.name }}</span>
-            </button>
-          }
         }
 
         <!-- Empty state -->

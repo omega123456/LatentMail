@@ -10,6 +10,7 @@ import { CommonModule } from '@angular/common';
 import { EmailAction, EmailActionContext, EmailActionEvent } from './email-action.model';
 import { getDefaultEmailActions } from './email-action-defaults';
 import { MoveToMenuComponent } from '../move-to-menu/move-to-menu.component';
+import { LabelsMenuComponent } from '../labels-menu/labels-menu.component';
 import { Folder } from '../../../core/models/account.model';
 
 /**
@@ -20,7 +21,7 @@ import { Folder } from '../../../core/models/account.model';
 @Component({
   selector: 'app-email-action-ribbon',
   standalone: true,
-  imports: [CommonModule, MoveToMenuComponent],
+  imports: [CommonModule, MoveToMenuComponent, LabelsMenuComponent],
   templateUrl: './email-action-ribbon.component.html',
   styleUrl: './email-action-ribbon.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -121,6 +122,26 @@ export class EmailActionRibbonComponent {
       action: 'move-to',
       message: ctx.message ?? undefined,
       targetFolder: folderId,
+    });
+  }
+
+  /** Handle a label being checked (added) from the Labels menu. */
+  onLabelAdded(gmailLabelId: string): void {
+    const ctx = this.context();
+    this.actionTriggered.emit({
+      action: 'add-labels',
+      message: ctx.message ?? undefined,
+      targetLabels: [gmailLabelId],
+    });
+  }
+
+  /** Handle a label being unchecked (removed) from the Labels menu. */
+  onLabelRemoved(gmailLabelId: string): void {
+    const ctx = this.context();
+    this.actionTriggered.emit({
+      action: 'remove-labels',
+      message: ctx.message ?? undefined,
+      targetLabels: [gmailLabelId],
     });
   }
 }

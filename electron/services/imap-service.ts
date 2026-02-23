@@ -5,6 +5,7 @@ import { simpleParser } from 'mailparser';
 const log = LoggerService.getInstance();
 import { OAuthService } from './oauth-service';
 import { DatabaseService } from './database-service';
+import { FolderLockManager } from './folder-lock-manager';
 
 /** Parsed attachment metadata from simpleParser (non-inline attachments). */
 export interface ParsedAttachmentMeta {
@@ -207,6 +208,38 @@ export class ImapService {
     }
 
     return mailboxes;
+  }
+
+  /**
+   * Create a new IMAP mailbox (Gmail label).
+   * Uses FolderLockManager to serialize against other operations for this account.
+   */
+  async createMailbox(accountId: string, name: string): Promise<void> {
+    const lockManager = FolderLockManager.getInstance();
+    const release = await lockManager.acquire('__label_mgmt', accountId);
+    try {
+      const client = await this.connect(accountId);
+      await client.mailboxCreate(name);
+      log.info(`[IMAP] Created mailbox "${name}" for account ${accountId}`);
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Delete an IMAP mailbox (Gmail label).
+   * Uses FolderLockManager to serialize against other operations for this account.
+   */
+  async deleteMailbox(accountId: string, name: string): Promise<void> {
+    const lockManager = FolderLockManager.getInstance();
+    const release = await lockManager.acquire('__label_mgmt', accountId);
+    try {
+      const client = await this.connect(accountId);
+      await client.mailboxDelete(name);
+      log.info(`[IMAP] Deleted mailbox "${name}" for account ${accountId}`);
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -729,6 +762,49 @@ export class ImapService {
     try {
       const uidRange = uids.join(',');
       await client.messageMove(uidRange, targetFolder, { uid: true });
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Copy messages (by UID) from a source folder to a target folder.
+   * Used for Gmail label assignment — COPY places the message in the target label without
+   * removing it from the source folder.
+   */
+  async copyMessages(
+    accountId: string,
+    sourceFolder: string,
+    uids: number[],
+    targetFolder: string
+  ): Promise<void> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(sourceFolder);
+    try {
+      const uidRange = uids.join(',');
+      await client.messageCopy(uidRange, targetFolder, { uid: true });
+      log.info(`[IMAP] Copied ${uids.length} message(s) from ${sourceFolder} to ${targetFolder} for account ${accountId}`);
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Remove messages from a label folder via STORE \Deleted + EXPUNGE.
+   * In Gmail IMAP, this removes the label without deleting the message (which stays in All Mail).
+   */
+  async removeFromLabel(
+    accountId: string,
+    labelFolder: string,
+    uids: number[]
+  ): Promise<void> {
+    const client = await this.connect(accountId);
+    const lock = await client.getMailboxLock(labelFolder);
+    try {
+      const uidRange = uids.join(',');
+      await client.messageFlagsAdd(uidRange, ['\\Deleted'], { uid: true });
+      await client.messageDelete(uidRange, { uid: true });
+      log.info(`[IMAP] Removed label "${labelFolder}" from ${uids.length} message(s) for account ${accountId}`);
     } finally {
       lock.release();
     }

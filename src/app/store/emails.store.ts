@@ -11,7 +11,7 @@ import { FoldersStore } from './folders.store';
 interface MailFolderUpdatedPayload {
   accountId: number;
   folders: string[];
-  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync';
+  reason: 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter' | 'sync' | 'add-labels' | 'remove-labels';
   changeType?: 'new_messages' | 'flag_changes' | 'deletions' | 'mixed';
   count?: number;
 }
@@ -530,6 +530,56 @@ export const EmailsStore = signalStore(
           patchState(store, {
             error: err instanceof Error ? err.message : 'Failed to delete emails',
           });
+        }
+      },
+
+      /**
+       * Add labels to emails — enqueues an add-labels queue operation.
+       * UIDs are resolved at enqueue time via the IPC handler on the backend.
+       */
+      async addLabels(
+        accountId: number,
+        xGmMsgIds: string[],
+        targetLabels: string[],
+        threadId: string
+      ): Promise<void> {
+        try {
+          const response = await electronService.enqueueOperation({
+            type: 'add-labels',
+            accountId,
+            payload: { xGmMsgIds, targetLabels, threadId, resolvedEmails: [] },
+            description: `Add ${targetLabels.length} label(s) to ${xGmMsgIds.length} message(s)`,
+          });
+          if (!response.success) {
+            patchState(store, { error: response.error?.message || 'Failed to add labels' });
+          }
+        } catch (err: unknown) {
+          patchState(store, { error: err instanceof Error ? err.message : 'Failed to add labels' });
+        }
+      },
+
+      /**
+       * Remove labels from emails — enqueues a remove-labels queue operation.
+       * UIDs are resolved at enqueue time via the IPC handler on the backend.
+       */
+      async removeLabels(
+        accountId: number,
+        xGmMsgIds: string[],
+        targetLabels: string[],
+        threadId: string
+      ): Promise<void> {
+        try {
+          const response = await electronService.enqueueOperation({
+            type: 'remove-labels',
+            accountId,
+            payload: { xGmMsgIds, targetLabels, threadId, resolvedEmails: [] },
+            description: `Remove ${targetLabels.length} label(s) from ${xGmMsgIds.length} message(s)`,
+          });
+          if (!response.success) {
+            patchState(store, { error: response.error?.message || 'Failed to remove labels' });
+          }
+        } catch (err: unknown) {
+          patchState(store, { error: err instanceof Error ? err.message : 'Failed to remove labels' });
         }
       },
 

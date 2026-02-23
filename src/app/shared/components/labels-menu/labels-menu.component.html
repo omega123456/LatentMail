@@ -1,0 +1,81 @@
+<div class="labels-menu">
+  <!-- Trigger button -->
+  <button
+    #trigger
+    class="labels-trigger"
+    (click)="toggle(); $event.stopPropagation()"
+    [attr.aria-haspopup]="true"
+    [attr.aria-expanded]="isOpen()"
+    title="Assign labels"
+  >
+    <span class="material-symbols-outlined">label</span>
+    <span class="trigger-label">Labels</span>
+  </button>
+
+  <!-- Dropdown panel (attached to overlay when open) -->
+  <ng-template #dropdownPanel>
+    <div
+      class="labels-dropdown"
+      role="menu"
+      aria-label="Assign labels"
+      tabindex="-1"
+      (keydown)="onMenuKeydown($event)"
+      (click)="$event.stopPropagation()"
+    >
+      <!-- Search input (shown when ≥10 labels) -->
+      @if (showSearch()) {
+        <div class="labels-search">
+          <span class="material-symbols-outlined search-icon">search</span>
+          <input
+            type="text"
+            class="labels-search-input"
+            placeholder="Find label..."
+            aria-label="Filter labels"
+            [ngModel]="searchText()"
+            (ngModelChange)="searchText.set($event); focusedIndex.set(-1)"
+            (keydown)="onMenuKeydown($event)"
+            (click)="$event.stopPropagation()"
+          />
+        </div>
+      }
+
+      <div class="labels-list">
+        @if (filteredLabels().length === 0) {
+          @if (userLabels().length === 0) {
+            <div class="labels-empty">
+              <span>No labels yet</span>
+              <span class="labels-empty-hint">Create one in the sidebar</span>
+            </div>
+          } @else {
+            <div class="labels-empty">No matching labels</div>
+          }
+        } @else {
+          @for (label of filteredLabels(); track label.gmailLabelId; let i = $index) {
+            <button
+              class="label-item"
+              type="button"
+              role="menuitem"
+              [class.focused]="focusedIndex() === i"
+              (click)="toggleLabel(label)"
+              (mouseenter)="focusedIndex.set(i)"
+            >
+              <!-- Checkbox -->
+              <span
+                class="label-checkbox material-symbols-outlined"
+                [class.checked]="isLabelChecked(label.gmailLabelId)"
+                aria-hidden="true"
+              >{{ isLabelChecked(label.gmailLabelId) ? 'check_box' : 'check_box_outline_blank' }}</span>
+              <!-- Color dot -->
+              <span
+                class="label-color-dot"
+                [style.background-color]="getLabelColor(label)"
+              ></span>
+              <!-- Name -->
+              <span class="label-item-name">{{ label.name }}</span>
+            </button>
+          }
+        }
+      </div>
+    </div>
+  </ng-template>
+</div>

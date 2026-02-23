@@ -3,7 +3,9 @@ import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 
 const log = LoggerService.getInstance();
-import { MailQueueService, QueueOperationType, QueuePayload } from '../services/mail-queue-service';
+import { MailQueueService, QueueOperationType, QueuePayload, AddLabelsPayload, RemoveLabelsPayload } from '../services/mail-queue-service';
+import { DatabaseService } from '../services/database-service';
+import { ALL_MAIL_PATH } from '../services/sync-service';
 
 export function registerQueueIpcHandlers(): void {
   const queueService = MailQueueService.getInstance();
@@ -25,7 +27,7 @@ export function registerQueueIpcHandlers(): void {
       }
 
       // Validate operation type
-      const validTypes: QueueOperationType[] = ['draft-create', 'draft-update', 'send', 'move', 'flag', 'delete'];
+      const validTypes: QueueOperationType[] = ['draft-create', 'draft-update', 'send', 'move', 'flag', 'delete', 'add-labels', 'remove-labels'];
       if (!validTypes.includes(operation.type)) {
         return ipcError('QUEUE_INVALID_TYPE', `Invalid operation type: ${operation.type}`);
       }
@@ -89,6 +91,85 @@ export function registerQueueIpcHandlers(): void {
         }
         if (!payload.folder || typeof payload.folder !== 'string') {
           return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires folder string in payload');
+        }
+      }
+
+      // Validate add-labels payload shape
+      if (operation.type === 'add-labels') {
+        const addCheck = operation.payload as unknown as Record<string, unknown>;
+        if (!Array.isArray(addCheck['xGmMsgIds']) || (addCheck['xGmMsgIds'] as unknown[]).length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'add-labels requires non-empty xGmMsgIds array');
+        }
+        if (!Array.isArray(addCheck['targetLabels']) || (addCheck['targetLabels'] as unknown[]).length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'add-labels requires non-empty targetLabels array');
+        }
+        if (typeof addCheck['threadId'] !== 'string') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'add-labels requires threadId string');
+        }
+      }
+
+      // Validate remove-labels payload shape
+      if (operation.type === 'remove-labels') {
+        const removeCheck = operation.payload as unknown as Record<string, unknown>;
+        if (!Array.isArray(removeCheck['xGmMsgIds']) || (removeCheck['xGmMsgIds'] as unknown[]).length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'remove-labels requires non-empty xGmMsgIds array');
+        }
+        if (!Array.isArray(removeCheck['targetLabels']) || (removeCheck['targetLabels'] as unknown[]).length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'remove-labels requires non-empty targetLabels array');
+        }
+        if (typeof removeCheck['threadId'] !== 'string') {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'remove-labels requires threadId string');
+        }
+      }
+
+      // For add-labels: resolve source UIDs at enqueue time (prefer [Gmail]/All Mail)
+      if (operation.type === 'add-labels') {
+        const db = DatabaseService.getInstance();
+        const addPayload = operation.payload as unknown as AddLabelsPayload;
+        const resolvedEmails: AddLabelsPayload['resolvedEmails'] = [];
+        for (const xGmMsgId of addPayload.xGmMsgIds) {
+          const folderUids = db.getFolderUidsForEmail(operation.accountId, xGmMsgId);
+          if (folderUids.length === 0) {
+            continue;
+          }
+          // Prefer All Mail as source; fall back to first available folder
+          const allMailEntry = folderUids.find((entry) => entry.folder === ALL_MAIL_PATH);
+          const source = allMailEntry ?? folderUids[0];
+          resolvedEmails.push({
+            xGmMsgId,
+            sourceFolder: source.folder,
+            uid: source.uid,
+          });
+        }
+        (operation.payload as unknown as AddLabelsPayload).resolvedEmails = resolvedEmails;
+        if (resolvedEmails.length === 0 && addPayload.xGmMsgIds.length > 0) {
+          log.warn(`[QUEUE_ENQUEUE] add-labels: no UIDs resolved for ${addPayload.xGmMsgIds.join(', ')} — skipping`);
+          return ipcSuccess({ queueId: 'skipped' });
+        }
+      }
+
+      // For remove-labels: resolve UIDs from each specific target label folder
+      if (operation.type === 'remove-labels') {
+        const db = DatabaseService.getInstance();
+        const removePayload = operation.payload as unknown as RemoveLabelsPayload;
+        const resolvedEmails: RemoveLabelsPayload['resolvedEmails'] = [];
+        for (const xGmMsgId of removePayload.xGmMsgIds) {
+          const folderUids = db.getFolderUidsForEmail(operation.accountId, xGmMsgId);
+          for (const labelFolder of removePayload.targetLabels) {
+            const entry = folderUids.find((folderEntry) => folderEntry.folder === labelFolder);
+            if (entry) {
+              resolvedEmails.push({
+                xGmMsgId,
+                labelFolder,
+                uid: entry.uid,
+              });
+            }
+          }
+        }
+        (operation.payload as unknown as RemoveLabelsPayload).resolvedEmails = resolvedEmails;
+        if (resolvedEmails.length === 0 && removePayload.xGmMsgIds.length > 0) {
+          log.warn(`[QUEUE_ENQUEUE] remove-labels: no UIDs resolved for labels ${removePayload.targetLabels.join(', ')} — skipping`);
+          return ipcSuccess({ queueId: 'skipped' });
         }
       }
 
