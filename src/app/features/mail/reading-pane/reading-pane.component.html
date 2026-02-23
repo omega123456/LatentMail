@@ -122,7 +122,14 @@
             <div class="sender-avatar">{{ getInitial(message) }}</div>
             <div class="header-content">
               <div class="header-top">
-                <span class="sender-name">{{ message.fromName || message.fromAddress }}</span>
+                <button
+                  type="button"
+                  class="sender-link"
+                  [title]="message.fromName ? message.fromAddress : null"
+                  (click)="$event.stopPropagation(); openComposeTo(message.fromAddress)"
+                >
+                  {{ message.fromName || message.fromAddress }}
+                </button>
                 @for (badge of getMessageFolderBadges(message); track $index) {
                   <span
                     class="folder-badge"
@@ -143,7 +150,14 @@
                 <span class="message-date">{{ message.date | relativeTime }}</span>
               </div>
               <div class="header-bottom">
-                <span class="recipients">to {{ getRecipients(message) }}</span>
+                <button
+                  type="button"
+                  class="recipients-link"
+                  [title]="getRecipientsTooltip(message)"
+                  (click)="$event.stopPropagation(); openComposeTo(message.toAddresses)"
+                >
+                  to {{ getRecipients(message) }}
+                </button>
               </div>
             </div>
           </div>

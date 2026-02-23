@@ -343,6 +343,10 @@ export const ComposeStore = signalStore(
           quotedText = msg.textBody || (msg.htmlBody ? msg.htmlBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '');
         }
 
+        if (context.mode === 'new' && context.to != null && context.to !== '') {
+          to = context.to;
+        }
+
         if (context.draft) {
           const d = context.draft;
           const { editableHtml, quotedHtml: splitQuotedHtml, quotedText: splitQuotedText } = splitDraftBody(d.htmlBody);

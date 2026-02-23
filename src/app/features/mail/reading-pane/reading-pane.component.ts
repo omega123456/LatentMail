@@ -4,6 +4,8 @@ import { Subscription } from 'rxjs';
 import { EmailsStore } from '../../../store/emails.store';
 import { FoldersStore } from '../../../store/folders.store';
 import { AiStore } from '../../../store/ai.store';
+import { ComposeStore } from '../../../store/compose.store';
+import { AccountsStore } from '../../../store/accounts.store';
 import { Email } from '../../../core/models/email.model';
 import { AiStreamEvent } from '../../../core/models/ai.model';
 import { ElectronService } from '../../../core/services/electron.service';
@@ -27,6 +29,8 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   readonly foldersStore = inject(FoldersStore);
   readonly aiStore = inject(AiStore);
   private readonly electronService = inject(ElectronService);
+  private readonly composeStore = inject(ComposeStore);
+  private readonly accountsStore = inject(AccountsStore);
 
   /** Emits EmailActionEvent to the parent (mail-shell). */
   readonly actionClicked = output<EmailActionEvent>();
@@ -101,6 +105,40 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       return addresses.join(', ');
     }
     return `${addresses[0]} and ${addresses.length - 1} others`;
+  }
+
+  /**
+   * Tooltip for the "to" row when the display is truncated (e.g. "X and N others").
+   * Returns the full comma-separated list so hover shows all addresses.
+   */
+  getRecipientsTooltip(message: Email): string | null {
+    const to = message.toAddresses || '';
+    const addresses = to.split(',').map(a => a.trim()).filter(a => a);
+    if (addresses.length <= 2) {
+      return null;
+    }
+    return to.trim() || null;
+  }
+
+  /**
+   * Open compose with the given address(es) pre-filled in TO.
+   */
+  openComposeTo(address: string): void {
+    const trimmed = address?.trim();
+    if (!trimmed) {
+      return;
+    }
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+    this.composeStore.openCompose({
+      mode: 'new',
+      accountId: activeAccount.id,
+      accountEmail: activeAccount.email,
+      accountDisplayName: activeAccount.displayName,
+      to: trimmed,
+    });
   }
 
   getSnippet(email: Email): string {

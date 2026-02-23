@@ -108,4 +108,6 @@ export interface ComposeContext {
   serverDraftXGmMsgId?: string;
   /** Pre-fill the compose body with this text (e.g. AI smart reply suggestion) */
   prefillBody?: string;
+  /** Pre-fill the TO field when opening a new compose (e.g. from thread view address click) */
+  to?: string;
 }
