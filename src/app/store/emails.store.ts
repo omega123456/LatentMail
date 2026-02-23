@@ -374,7 +374,8 @@ export const EmailsStore = signalStore(
             });
           }
           // Response has same list-row shape as folder fetch when folderId was passed; reuse for list update.
-          const { messages: _m, ...listRow } = thread;
+          // Exclude subject so we keep the list item's subject (do not overwrite from thread response).
+          const { messages: _m, subject: _subject, ...listRow } = thread;
           const updatedThreads = store.threads().map((t) =>
             t.xGmThrid === threadId ? { ...t, ...listRow } : t
           );
