@@ -880,6 +880,13 @@ export function registerMailIpcHandlers(): void {
       let threadsWithFolders = attachThreadFolders(threads);
       threadsWithFolders = attachThreadDraftStatus(threadsWithFolders);
       threadsWithFolders = attachThreadLabels(threadsWithFolders, numAccountId);
+
+      // When searching for has:attachment, only return threads that have attachments (align with MAIL_SEARCH behavior)
+      const isHasAttachmentQuery = queries.some((query) => String(query).trim().toLowerCase() === 'has:attachment');
+      if (isHasAttachmentQuery) {
+        threadsWithFolders = threadsWithFolders.filter((thread) => (thread.hasAttachments as boolean) === true);
+      }
+
       log.info(
         `[MAIL_SEARCH_IMAP] IMAP search found ${emails.length} emails, ${threadMap.size} threads, returning ${threadsWithFolders.length} thread results`
       );
