@@ -195,6 +195,42 @@ html {
   ));
 }
 
+// ============================================================
+// Form fields — Outline appearance (match design tokens)
+// ============================================================
+// So dropdowns and inputs don’t blend into the background:
+// surface background, clear border, primary on focus.
+
+.mat-mdc-form-field.mat-form-field-appearance-outline {
+  .mat-mdc-text-field-wrapper {
+    background-color: var(--color-surface);
+    border-radius: var(--radius-md);
+  }
+
+  .mdc-notched-outline .mdc-notched-outline__leading,
+  .mdc-notched-outline .mdc-notched-outline__notch,
+  .mdc-notched-outline .mdc-notched-outline__trailing {
+    border-color: var(--color-border);
+    border-width: 1px;
+  }
+
+  .mdc-text-field--focused .mdc-notched-outline__leading,
+  .mdc-text-field--focused .mdc-notched-outline__notch,
+  .mdc-text-field--focused .mdc-notched-outline__trailing {
+    border-color: var(--color-primary);
+  }
+
+  .mdc-text-field:hover:not(.mdc-text-field--disabled) .mdc-notched-outline__leading,
+  .mdc-text-field:hover:not(.mdc-text-field--disabled) .mdc-notched-outline__notch,
+  .mdc-text-field:hover:not(.mdc-text-field--disabled) .mdc-notched-outline__trailing {
+    border-color: var(--color-text-secondary);
+  }
+
+  .mat-mdc-form-field-focus-overlay {
+    background-color: transparent;
+  }
+}
+
 // Material Symbols font
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
 
