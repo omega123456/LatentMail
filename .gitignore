@@ -22,6 +22,7 @@ yarn-error.log
 dist
 dist-electron
 .env
+.agent
 
 # Visual Studio Code
 .vscode/*

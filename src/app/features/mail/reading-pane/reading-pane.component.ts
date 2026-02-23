@@ -1,4 +1,4 @@
-import { Component, inject, output, OnInit, OnDestroy, effect } from '@angular/core';
+import { Component, inject, output, OnInit, OnDestroy, effect, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { EmailsStore } from '../../../store/emails.store';
@@ -35,11 +35,14 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   /** Emits EmailActionEvent to the parent (mail-shell). */
   readonly actionClicked = output<EmailActionEvent>();
 
+  /** Shared open-menu key for all ribbon instances within this thread view. */
+  readonly threadOpenMenuKey = signal<string | null>(null);
+
   readonly expandedMessages = new Set<string>();
   private aiStreamSub?: Subscription;
 
   constructor() {
-    // Clear AI panels when switching to a different thread so previous thread's data is not shown
+    // Clear AI panels and reset open-menu state when switching to a different thread
     effect(() => {
       const currentId = this.emailsStore.selectedThreadId();
       const summaryForId = this.aiStore.summaryThreadId();
@@ -54,6 +57,9 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       if (followUpForId != null && followUpForId !== currentId) {
         this.aiStore.clearFollowUp();
       }
+      // Reset any open ribbon menu state so a stale key from the previous thread
+      // does not suppress close effects when the same menu position is opened on the new thread.
+      this.threadOpenMenuKey.set(null);
     });
   }
 
@@ -230,6 +236,15 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
         this.actionClicked.emit(event);
         break;
     }
+  }
+
+  /**
+   * Update the shared open-menu key when any ribbon in this thread opens or closes a menu.
+   * Setting the same key again (same ribbon + same type) is a no-op; a different key correctly
+   * triggers close effects in all other menu component instances.
+   */
+  onThreadOpenMenuChanged(key: string | null): void {
+    this.threadOpenMenuKey.set(key);
   }
 
   /** Use a reply suggestion (emit it to the parent to open compose) */

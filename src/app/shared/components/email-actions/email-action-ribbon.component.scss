@@ -7,15 +7,19 @@
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
+  color: var(--color-text-secondary);
 }
 
 .ribbon-btn {
   display: flex;
   align-items: center;
   gap: 4px;
+  height: var(--ribbon-btn-h, 28px);
+  padding: 0 var(--ribbon-btn-px, 10px);
+  font-size: var(--ribbon-btn-fs, 13px);
   border: none;
   background: none;
-  border-radius: 6px;
+  border-radius: var(--ribbon-btn-radius, 6px);
   cursor: pointer;
   color: var(--color-text-secondary);
   transition: background-color 120ms ease;
@@ -33,6 +37,10 @@
       background: none;
       color: var(--color-text-secondary);
     }
+  }
+
+  .material-symbols-outlined {
+    font-size: var(--ribbon-icon-size, 18px);
   }
 
   .starred {
@@ -62,49 +70,40 @@
 
 .ribbon-separator {
   width: 1px;
+  height: var(--ribbon-separator-h, 20px);
   background-color: var(--color-border);
 }
 
 // ─── Standard variant (thread-level toolbar) ───
 :host.ribbon-standard {
+  --ribbon-btn-h: 28px;
+  --ribbon-btn-px: 10px;
+  --ribbon-btn-fs: 13px;
+  --ribbon-icon-size: 18px;
+  --ribbon-btn-radius: 6px;
+  --ribbon-separator-h: 20px;
+
   padding: 8px 16px;
   border-bottom: 1px solid var(--color-border);
 
-  .ribbon-btn,
-  :host ::ng-deep .move-to-trigger,
-  :host ::ng-deep .labels-trigger {
-    padding: 6px 10px;
-    font-size: 13px;
-
-    .material-symbols-outlined {
-      font-size: 18px;
-    }
-  }
-
   .ribbon-separator {
-    height: 24px;
     margin: 0 4px;
   }
 }
 
 // ─── Compact variant (per-message ribbon) ───
 :host.ribbon-compact {
+  --ribbon-btn-h: 24px;
+  --ribbon-btn-px: 8px;
+  --ribbon-btn-fs: 12px;
+  --ribbon-icon-size: 16px;
+  --ribbon-btn-radius: 6px;
+  --ribbon-separator-h: 16px;
+
   padding: 6px 16px 6px 64px;
   border-top: 1px solid var(--color-border);
 
-  .ribbon-btn,
-  :host ::ng-deep .move-to-trigger,
-  :host ::ng-deep .labels-trigger {
-    padding: 4px 8px;
-    font-size: 12px;
-
-    .material-symbols-outlined {
-      font-size: 16px;
-    }
-  }
-
   .ribbon-separator {
-    height: 20px;
     margin: 0 2px;
   }
 }

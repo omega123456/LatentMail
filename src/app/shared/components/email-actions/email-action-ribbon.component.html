@@ -8,13 +8,13 @@
     <!-- Move To: renders a child MoveToMenuComponent instead of a plain button -->
     @if (action.id === 'move-to' && isEnabled(action)) {
       <app-move-to-menu
-        [class]="getActionClass(action)"
         [folders]="folders()"
         [activeFolderId]="context().activeFolderId"
         [openMenuId]="openMenuId()"
+        [myKey]="ribbonId() + ':move-to'"
         (folderSelected)="onMoveToFolderSelected($event)"
-        (menuOpened)="openMenuId.set('move-to')"
-        (menuClosed)="openMenuId.set(null)"
+        (menuOpened)="openMenuChanged.emit(ribbonId() + ':move-to')"
+        (menuClosed)="openMenuChanged.emit(null)"
       />
     } @else if (action.id === 'move-to' && !isEnabled(action)) {
       <!-- Move To rendered as disabled button when not enabled -->
@@ -30,14 +30,14 @@
     <!-- Labels: renders a child LabelsMenuComponent -->
     } @else if (action.id === 'labels' && isEnabled(action)) {
       <app-labels-menu
-        [class]="getActionClass(action)"
         [folders]="folders()"
         [currentFolderIds]="context().currentFolderIds ?? []"
         [openMenuId]="openMenuId()"
+        [myKey]="ribbonId() + ':labels'"
         (labelAdded)="onLabelAdded($event)"
         (labelRemoved)="onLabelRemoved($event)"
-        (menuOpened)="openMenuId.set('labels')"
-        (menuClosed)="openMenuId.set(null)"
+        (menuOpened)="openMenuChanged.emit(ribbonId() + ':labels')"
+        (menuClosed)="openMenuChanged.emit(null)"
       />
     } @else if (action.id === 'labels' && !isEnabled(action)) {
       <button

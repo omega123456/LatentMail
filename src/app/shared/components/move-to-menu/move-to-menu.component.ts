@@ -74,6 +74,8 @@ export class MoveToMenuComponent implements OnDestroy {
   readonly activeFolderId = input<string | null>(null);
   /** When set by the parent, close this menu if another menu is the open one. */
   readonly openMenuId = input<string | null>(null);
+  /** Unique instance key for this menu component (e.g. "standard:move-to", "msg123:move-to"). */
+  readonly myKey = input<string>('');
 
   /** Emits the gmailLabelId of the selected destination folder. */
   readonly folderSelected = output<string>();
@@ -128,7 +130,11 @@ export class MoveToMenuComponent implements OnDestroy {
   /** Close this menu when the parent reports another menu is open. */
   private readonly closeWhenOtherMenuOpens = effect(() => {
     const current = this.openMenuId();
-    if (current !== null && current !== 'move-to' && this.isOpen()) {
+    const myKey = this.myKey();
+    if (!myKey) {
+      return;
+    }
+    if (current !== null && current !== myKey && this.isOpen()) {
       this.close();
     }
   });

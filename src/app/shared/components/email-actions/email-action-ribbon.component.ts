@@ -4,7 +4,6 @@ import {
   input,
   output,
   computed,
-  signal,
   HostBinding,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -36,9 +35,13 @@ export class EmailActionRibbonComponent {
   readonly variant = input<'standard' | 'compact'>('standard');
   /** The full list of folders (needed for the Move To menu). */
   readonly folders = input<Folder[]>([]);
+  /** Unique identifier for this ribbon instance (provided by reading pane). */
+  readonly ribbonId = input.required<string>();
+  /** The currently open menu key from the thread-level shared state (null = none open). */
+  readonly openMenuId = input<string | null>(null);
 
-  /** Which dropdown menu is currently open (used to close the other when one opens). */
-  readonly openMenuId = signal<'move-to' | 'labels' | null>(null);
+  /** Notifies parent when a menu opens (emits the unique key) or closes (emits null). */
+  readonly openMenuChanged = output<string | null>();
 
   /** Emits when an action is triggered. */
   readonly actionTriggered = output<EmailActionEvent>();

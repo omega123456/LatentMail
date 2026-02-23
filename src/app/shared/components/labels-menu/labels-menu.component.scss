@@ -5,30 +5,42 @@
 .labels-trigger {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  height: var(--ribbon-btn-h, 28px);
+  padding: 0 var(--ribbon-btn-px, 10px);
   gap: 4px;
-  padding: 0;
   border: none;
   background: none;
-  border-radius: 6px;
+  border-radius: var(--ribbon-btn-radius, 6px);
+  font-size: var(--ribbon-btn-fs, 13px);
+  font-family: inherit;
+  font-weight: inherit;
   cursor: pointer;
   color: inherit;
-  font: inherit;
-  line-height: 1;
-  transition: background-color 120ms ease;
   white-space: nowrap;
-
-  .material-symbols-outlined {
-    font-size: inherit;
-  }
+  transition: background-color 120ms ease, color 120ms ease;
 
   &:hover {
     background-color: var(--color-surface-variant);
     color: var(--color-text-primary);
   }
 
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+
+    &:hover {
+      background: none;
+    }
+  }
+
   &:focus-visible {
     outline: 2px solid var(--color-border);
     outline-offset: 2px;
+  }
+
+  .material-symbols-outlined {
+    font-size: var(--ribbon-icon-size, 18px);
   }
 }
 

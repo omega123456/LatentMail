@@ -46,6 +46,8 @@ export class LabelsMenuComponent implements OnDestroy {
   readonly currentFolderIds = input<string[]>([]);
   /** When set by the parent, close this menu if another menu is the open one. */
   readonly openMenuId = input<string | null>(null);
+  /** Unique instance key for this menu component (e.g. "standard:labels", "msg123:labels"). */
+  readonly myKey = input<string>('');
 
   /** Emits the gmailLabelId of a label that was checked. */
   readonly labelAdded = output<string>();
@@ -90,7 +92,11 @@ export class LabelsMenuComponent implements OnDestroy {
   /** Close this menu when the parent reports another menu is open. */
   private readonly closeWhenOtherMenuOpens = effect(() => {
     const current = this.openMenuId();
-    if (current !== null && current !== 'labels' && this.isOpen()) {
+    const myKey = this.myKey();
+    if (!myKey) {
+      return;
+    }
+    if (current !== null && current !== myKey && this.isOpen()) {
       this.close();
     }
   });

@@ -7,10 +7,13 @@
   <div class="reading-pane-content">
     <!-- Top-level thread toolbar (standard variant) -->
     <app-email-action-ribbon
+      [ribbonId]="'standard'"
       [context]="threadActionContext()"
       [variant]="'standard'"
       [folders]="foldersStore.folders()"
+      [openMenuId]="threadOpenMenuKey()"
       (actionTriggered)="onRibbonAction($event)"
+      (openMenuChanged)="onThreadOpenMenuChanged($event)"
     />
 
     <!-- AI Summary Panel (shown below toolbar when active) -->
@@ -181,10 +184,13 @@
 
             <!-- Per-message action ribbon (compact variant) -->
             <app-email-action-ribbon
+              [ribbonId]="message.xGmMsgId"
               [context]="messageActionContext(message)"
               [variant]="'compact'"
               [folders]="foldersStore.folders()"
+              [openMenuId]="threadOpenMenuKey()"
               (actionTriggered)="onRibbonAction($event)"
+              (openMenuChanged)="onThreadOpenMenuChanged($event)"
             />
           } @else {
             <div class="message-snippet">{{ message.snippet || getSnippet(message) }}</div>

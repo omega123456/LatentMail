@@ -4,19 +4,39 @@
 }
 
 .move-to-trigger {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  height: var(--ribbon-btn-h, 28px);
+  padding: 0 var(--ribbon-btn-px, 10px);
   gap: 4px;
   border: none;
   background: none;
+  border-radius: var(--ribbon-btn-radius, 6px);
+  font-size: var(--ribbon-btn-fs, 13px);
+  font-family: inherit;
+  font-weight: inherit;
   cursor: pointer;
   color: inherit;
-  font: inherit;
-  padding: 0;
-  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease;
+
+  &:hover {
+    background-color: var(--color-surface-variant);
+    color: var(--color-text-primary);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+
+    &:hover {
+      background: none;
+    }
+  }
 
   .material-symbols-outlined {
-    font-size: inherit;
+    font-size: var(--ribbon-icon-size, 18px);
   }
 
   .trigger-label {
