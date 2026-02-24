@@ -17,6 +17,7 @@ import { EmailsStore } from '../../store/emails.store';
 import { ComposeStore } from '../../store/compose.store';
 import { UiStore } from '../../store/ui.store';
 import { ElectronService } from '../../core/services/electron.service';
+import { CommandRegistryService } from '../../core/services/command-registry.service';
 import { Thread, ComposeMode, Draft, Email } from '../../core/models/email.model';
 import { AiStore } from '../../store/ai.store';
 import { AiCategory } from '../../core/models/ai.model';
@@ -43,9 +44,11 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly composeStore = inject(ComposeStore);
   readonly uiStore = inject(UiStore);
   private readonly electronService = inject(ElectronService);
+  private readonly commandRegistry = inject(CommandRegistryService);
   private readonly aiStore = inject(AiStore);
   private readonly cdr = inject(ChangeDetectorRef);
   private syncSub?: Subscription;
+  private commandSub?: Subscription;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
   // Search active state is now managed by FoldersStore
@@ -81,10 +84,19 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         }
       }
     });
+
+    // Subscribe to command registry events for shell-level actions.
+    // Folder navigation (go-inbox/sent/drafts) is handled here when mail-shell
+    // is already mounted; the CommandRegistry action also pre-sets the folder so
+    // cross-route navigation from settings works even before mail-shell mounts.
+    this.commandSub = this.commandRegistry.commandTriggered$.subscribe(commandId => {
+      this.handleShellCommand(commandId);
+    });
   }
 
   ngOnDestroy(): void {
     this.syncSub?.unsubscribe();
+    this.commandSub?.unsubscribe();
   }
 
   onFolderSelected(folderId: string): void {
@@ -252,6 +264,70 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     if (container) {
       const percent = (height / container.clientHeight) * 100;
       this.uiStore.setReadingPaneHeight(percent);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shell-level command handling
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handle command registry events that require shell-level context:
+   * folder navigation, compose actions, search focus, and selection management.
+   *
+   * Commands that operate on the email list items (nav-next, archive, etc.)
+   * are handled by EmailListComponent via the same commandTriggered$ observable.
+   */
+  private handleShellCommand(commandId: string): void {
+    switch (commandId) {
+      case 'go-inbox':
+        this.onFolderSelected('INBOX');
+        break;
+      case 'go-sent':
+        this.onFolderSelected('[Gmail]/Sent Mail');
+        break;
+      case 'go-drafts':
+        this.onFolderSelected('[Gmail]/Drafts');
+        break;
+      case 'reply':
+        this.openComposeForAction('reply');
+        break;
+      case 'reply-all':
+        this.openComposeForAction('reply-all');
+        break;
+      case 'forward':
+        this.openComposeForAction('forward');
+        break;
+      case 'search-focus':
+        // Focus the search bar input — works because KeyboardService skips
+        // inputs, so `/` lands here and not in SearchBarComponent's own listener.
+        // SearchBarComponent handles Ctrl+F itself, making this a secondary path.
+        this.focusSearchBar();
+        break;
+      case 'select-all':
+        // Multi-select is not yet implemented in EmailsStore (single-thread selection
+        // only). This is intentionally a no-op stub; a future phase will add
+        // selectedThreadIds[] to the store and hook it up here.
+        break;
+      case 'escape':
+        // Clear the current thread selection. The command palette (if open) already
+        // closes itself via its own host listener before this subscription fires.
+        this.emailsStore.clearSelection();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Focus the search bar input element.
+   * Uses a direct DOM query because SearchBarComponent manages its own focus
+   * state and does not expose a public `focus()` method.
+   */
+  private focusSearchBar(): void {
+    const searchInput = document.querySelector('.search-bar-input') as HTMLInputElement | null;
+    if (searchInput) {
+      searchInput.focus();
     }
   }
 

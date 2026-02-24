@@ -1,6 +1,7 @@
-import { Component, viewChild, inject, output, effect, signal, computed } from '@angular/core';
+import { Component, viewChild, inject, output, effect, signal, computed, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CdkVirtualScrollViewport, ScrollingModule } from '@angular/cdk/scrolling';
+import { Subscription } from 'rxjs';
 import { EmailsStore } from '../../../store/emails.store';
 import { UiStore } from '../../../store/ui.store';
 import { AiStore } from '../../../store/ai.store';
@@ -9,6 +10,7 @@ import { Thread } from '../../../core/models/email.model';
 import { AiCategory } from '../../../core/models/ai.model';
 import { FoldersStore } from '../../../store/folders.store';
 import { AccountsStore } from '../../../store/accounts.store';
+import { CommandRegistryService } from '../../../core/services/command-registry.service';
 
 @Component({
   selector: 'app-email-list',
@@ -17,7 +19,7 @@ import { AccountsStore } from '../../../store/accounts.store';
   templateUrl: './email-list.component.html',
   styleUrl: './email-list.component.scss',
 })
-export class EmailListComponent {
+export class EmailListComponent implements OnDestroy {
   // Signal-based ViewChild — reactive, works correctly with @if/@else control flow.
   // Angular updates this signal whenever the viewport enters or leaves the DOM,
   // which re-runs any effects that read it (enabling clean setup/teardown).
@@ -28,6 +30,8 @@ export class EmailListComponent {
   readonly accountsStore = inject(AccountsStore);
   readonly uiStore = inject(UiStore);
   readonly aiStore = inject(AiStore);
+  private readonly commandRegistry = inject(CommandRegistryService);
+
   readonly threadSelected = output<Thread>();
 
   /** Active category filter from the header */
@@ -45,10 +49,19 @@ export class EmailListComponent {
   });
 
   /**
+   * The thread ID currently highlighted by J/K keyboard navigation.
+   * Separate from emailsStore.selectedThreadId() (the opened/reading thread) so
+   * that navigating with the keyboard does NOT auto-open the reading pane.
+   */
+  readonly keyboardCursorId = signal<string | null>(null);
+
+  /**
    * Thread IDs from the previous render cycle, used for detecting prepended threads
    * during merge-mode background refreshes so scroll position can be compensated.
    */
   private previousThreadIds: string[] = [];
+
+  private commandSub?: Subscription;
 
   constructor() {
     // Reset scroll to top when folder/account switches trigger a fresh thread load.
@@ -57,6 +70,8 @@ export class EmailListComponent {
       const preserve = this.emailsStore.preserveListPosition();
       if (!preserve) {
         this.viewport()?.scrollToIndex(0);
+        // Also clear the keyboard cursor on folder/account switch.
+        this.keyboardCursorId.set(null);
       }
     });
 
@@ -154,7 +169,216 @@ export class EmailListComponent {
 
       onCleanup(() => subscription.unsubscribe());
     });
+
+    // Subscribe to command registry events for vim-style keyboard navigation.
+    // All actions that operate on the email list are delegated here so that the
+    // command registry stubs remain thin and context-agnostic.
+    this.commandSub = this.commandRegistry.commandTriggered$.subscribe(commandId => {
+      this.handleCommand(commandId);
+    });
   }
+
+  ngOnDestroy(): void {
+    this.commandSub?.unsubscribe();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Keyboard navigation (vim-style)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Route incoming command IDs to the appropriate handler.
+   * Only processes commands relevant to the email list; all others are silently ignored.
+   */
+  private handleCommand(commandId: string): void {
+    switch (commandId) {
+      case 'nav-next':
+        this.moveKeyboardCursor(1);
+        break;
+      case 'nav-prev':
+        this.moveKeyboardCursor(-1);
+        break;
+      case 'open-thread':
+        this.openKeyboardCursorThread();
+        break;
+      case 'archive':
+        this.archiveKeyboardCursorThread();
+        break;
+      case 'delete':
+        this.deleteKeyboardCursorThread();
+        break;
+      case 'star':
+        this.toggleStarKeyboardCursorThread();
+        break;
+      case 'mark-read':
+        this.markKeyboardCursorThread(true);
+        break;
+      case 'mark-unread':
+        this.markKeyboardCursorThread(false);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Move the keyboard cursor by `delta` rows (+1 = down, -1 = up).
+   * Clamps to the list boundaries (no wrapping).
+   * Also scrolls the cursor item into view inside the CDK viewport.
+   */
+  private moveKeyboardCursor(delta: 1 | -1): void {
+    const threads = this.filteredThreads();
+    if (threads.length === 0) {
+      return;
+    }
+
+    const currentId = this.keyboardCursorId() ?? this.emailsStore.selectedThreadId();
+    const currentIndex = currentId ? threads.findIndex(thread => thread.xGmThrid === currentId) : -1;
+
+    let nextIndex: number;
+    if (currentIndex < 0) {
+      nextIndex = delta > 0 ? 0 : threads.length - 1;
+    } else {
+      nextIndex = currentIndex + delta;
+      if (nextIndex < 0) {
+        nextIndex = 0;
+      }
+      if (nextIndex >= threads.length) {
+        nextIndex = threads.length - 1;
+      }
+    }
+
+    const nextThread = threads[nextIndex];
+    if (nextThread) {
+      this.keyboardCursorId.set(nextThread.xGmThrid);
+      this.scrollCursorIntoView(nextIndex);
+    }
+  }
+
+  /**
+   * Ensure the item at `index` is visible in the CDK virtual scroll viewport.
+   * Scrolls minimally: only moves when the item is outside the current visible range.
+   */
+  private scrollCursorIntoView(index: number): void {
+    const vp = this.viewport();
+    if (!vp) {
+      return;
+    }
+
+    const itemSize = this.uiStore.densityHeight();
+    const currentOffset = vp.measureScrollOffset();
+    const viewportSize = vp.getViewportSize();
+
+    const itemTop = index * itemSize;
+    const itemBottom = itemTop + itemSize;
+    const viewTop = currentOffset;
+    const viewBottom = currentOffset + viewportSize;
+
+    if (itemTop < viewTop) {
+      vp.scrollToOffset(itemTop);
+    } else if (itemBottom > viewBottom) {
+      vp.scrollToOffset(itemBottom - viewportSize);
+    }
+  }
+
+  /**
+   * Open (emit `threadSelected`) for the thread under the keyboard cursor.
+   * Falls back to the store's selected thread if no keyboard cursor is set.
+   */
+  private openKeyboardCursorThread(): void {
+    const cursorId = this.keyboardCursorId() ?? this.emailsStore.selectedThreadId();
+    if (!cursorId) {
+      return;
+    }
+    const thread = this.filteredThreads().find(t => t.xGmThrid === cursorId);
+    if (thread) {
+      this.threadSelected.emit(thread);
+    }
+  }
+
+  /**
+   * Return the thread under the keyboard cursor (or the opened thread as fallback).
+   * Returns `null` if neither cursor nor selection is set.
+   */
+  private getKeyboardCursorThread(): Thread | null {
+    const cursorId = this.keyboardCursorId() ?? this.emailsStore.selectedThreadId();
+    if (!cursorId) {
+      return null;
+    }
+    return this.filteredThreads().find(thread => thread.xGmThrid === cursorId) ?? null;
+  }
+
+  /** Archive (move to All Mail) the thread under the keyboard cursor. */
+  private archiveKeyboardCursorThread(): void {
+    const thread = this.getKeyboardCursorThread();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!thread || !activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+    this.emailsStore.moveEmails(
+      activeAccount.id,
+      [thread.xGmThrid],
+      '[Gmail]/All Mail',
+      thread.xGmThrid,
+      currentFolder,
+    );
+    this.keyboardCursorId.set(null);
+  }
+
+  /** Delete (move to Trash) the thread under the keyboard cursor. */
+  private deleteKeyboardCursorThread(): void {
+    const thread = this.getKeyboardCursorThread();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!thread || !activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+    this.emailsStore.moveEmails(
+      activeAccount.id,
+      [thread.xGmThrid],
+      '[Gmail]/Trash',
+      thread.xGmThrid,
+      currentFolder,
+    );
+    this.keyboardCursorId.set(null);
+  }
+
+  /** Toggle the starred flag on the thread under the keyboard cursor. */
+  private toggleStarKeyboardCursorThread(): void {
+    const thread = this.getKeyboardCursorThread();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!thread || !activeAccount) {
+      return;
+    }
+    this.emailsStore.flagEmails(
+      activeAccount.id,
+      [thread.xGmThrid],
+      'starred',
+      !thread.isStarred,
+      thread.xGmThrid,
+    );
+  }
+
+  /** Mark the thread under the keyboard cursor as read (`asRead = true`) or unread. */
+  private markKeyboardCursorThread(asRead: boolean): void {
+    const thread = this.getKeyboardCursorThread();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!thread || !activeAccount) {
+      return;
+    }
+    this.emailsStore.flagEmails(
+      activeAccount.id,
+      [thread.xGmThrid],
+      'read',
+      asRead,
+      thread.xGmThrid,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Existing helpers
+  // ---------------------------------------------------------------------------
 
   /**
    * Checks if the current scroll position is within the prefetch threshold of the bottom
@@ -188,6 +412,8 @@ export class EmailListComponent {
   }
 
   onThreadClick(thread: Thread): void {
+    // Sync keyboard cursor to the clicked thread so J/K navigation continues from here.
+    this.keyboardCursorId.set(thread.xGmThrid);
     this.threadSelected.emit(thread);
   }
 

@@ -1,0 +1,126 @@
+<h2>Keyboard Shortcuts</h2>
+<p class="page-description">
+  Customize keyboard bindings for any command. Click <strong>Edit</strong> to
+  enter capture mode, then press the desired key combination.
+</p>
+
+@if (hasAnyCustomBindings()) {
+  <div class="global-actions">
+    <button
+      mat-stroked-button
+      color="warn"
+      class="reset-all-btn"
+      (click)="resetAllBindings()"
+    >
+      <span class="material-symbols-outlined btn-icon">restart_alt</span>
+      Reset all to defaults
+    </button>
+  </div>
+}
+
+<div class="commands-list">
+  @for (row of commandRows(); track row.id) {
+    <div class="command-row" [class.is-capturing]="capturingCommandId() === row.id">
+      <!-- Left: icon + label + description -->
+      <div class="command-info">
+        <span class="material-symbols-outlined command-icon">{{ row.icon }}</span>
+        <div class="command-text">
+          <span class="command-label">{{ row.label }}</span>
+          @if (row.description) {
+            <span class="command-desc">{{ row.description }}</span>
+          }
+        </div>
+      </div>
+
+      <!-- Right: binding display or capture mode -->
+      <div class="command-binding">
+        @if (capturingCommandId() === row.id) {
+          <!-- Capture mode ------------------------------------------------->
+          <div class="capture-area">
+            <input
+              type="text"
+              readonly
+              class="capture-input"
+              [value]="pendingKeys() ? commandRegistry.formatKeyCombo(pendingKeys()) : ''"
+              placeholder="Press a key combination…"
+              (keydown)="onCaptureKeydown($event)"
+              (blur)="cancelCapture()"
+              aria-label="Press key combination for {{ row.label }}"
+            />
+
+            @if (conflictWarning()) {
+              <div class="conflict-warning" role="alert">
+                <span class="material-symbols-outlined conflict-icon">warning</span>
+                <span class="conflict-message">
+                  Conflicts with <strong>{{ conflictWarning()!.conflictingCommandLabel }}</strong>
+                </span>
+                <button
+                  mat-stroked-button
+                  color="warn"
+                  class="reassign-btn"
+                  [disabled]="saving()"
+                  (mousedown)="$event.preventDefault()"
+                  (click)="reassignAndApply()"
+                >
+                  Reassign
+                </button>
+              </div>
+            }
+
+            <div class="capture-actions">
+              <button
+                mat-flat-button
+                color="primary"
+                [disabled]="!pendingKeys() || saving() || !!conflictWarning()"
+                (mousedown)="$event.preventDefault()"
+                (click)="applyCapture()"
+              >
+                Apply
+              </button>
+              <button
+                mat-stroked-button
+                (mousedown)="$event.preventDefault()"
+                (click)="cancelCapture()"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        } @else {
+          <!-- Display mode ------------------------------------------------->
+          <div class="binding-display">
+            <kbd class="key-badge" [class.custom]="row.hasCustomBinding">
+              {{ row.formattedPrimaryKey }}
+            </kbd>
+            @if (row.hasCustomBinding) {
+              <span class="custom-tag">custom</span>
+            }
+          </div>
+
+          <div class="binding-actions">
+            <button
+              mat-stroked-button
+              class="edit-btn"
+              (click)="startCapture(row.id)"
+              [attr.aria-label]="'Edit binding for ' + row.label"
+            >
+              Edit
+            </button>
+            @if (row.hasCustomBinding) {
+              <button
+                mat-stroked-button
+                color="warn"
+                class="reset-btn"
+                (click)="resetBinding(row.id)"
+                [matTooltip]="'Reset to: ' + commandRegistry.formatKeyCombo(row.defaultKeys[0] ?? '')"
+                [attr.aria-label]="'Reset ' + row.label + ' to default'"
+              >
+                Reset
+              </button>
+            }
+          </div>
+        }
+      </div>
+    </div>
+  }
+</div>

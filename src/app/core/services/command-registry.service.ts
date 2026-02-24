@@ -356,8 +356,11 @@ export class CommandRegistryService {
       defaultKeys: ['g i'],
       context: 'global',
       action: () => {
+        // Pre-set the active folder so that when mail-shell initialises it loads
+        // the correct folder immediately (covers the cross-route case from settings).
+        this.foldersStore.setActiveFolder('INBOX');
         void this.router.navigate(['/mail']);
-        // Mail-shell sets the active folder via commandTriggered$ (Part 3)
+        // Mail-shell's commandTriggered$ subscription also handles the in-shell case.
       },
     });
 
@@ -369,8 +372,8 @@ export class CommandRegistryService {
       defaultKeys: ['g s'],
       context: 'global',
       action: () => {
+        this.foldersStore.setActiveFolder('[Gmail]/Sent Mail');
         void this.router.navigate(['/mail']);
-        // Mail-shell sets the active folder via commandTriggered$ (Part 3)
       },
     });
 
@@ -382,8 +385,8 @@ export class CommandRegistryService {
       defaultKeys: ['g d'],
       context: 'global',
       action: () => {
+        this.foldersStore.setActiveFolder('[Gmail]/Drafts');
         void this.router.navigate(['/mail']);
-        // Mail-shell sets the active folder via commandTriggered$ (Part 3)
       },
     });
 

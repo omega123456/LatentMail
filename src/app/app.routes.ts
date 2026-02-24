@@ -66,6 +66,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/settings/logger-settings.component').then(m => m.LoggerSettingsComponent),
       },
+      {
+        path: 'keyboard',
+        loadComponent: () =>
+          import('./features/settings/keyboard-settings.component').then(m => m.KeyboardSettingsComponent),
+      },
     ],
   },
   {

@@ -19,7 +19,7 @@
       <app-email-list-item
         *cdkVirtualFor="let thread of filteredThreads(); trackBy: trackByThreadId"
         [thread]="thread"
-        [isSelected]="thread.xGmThrid === emailsStore.selectedThreadId()"
+        [isSelected]="thread.xGmThrid === emailsStore.selectedThreadId() || thread.xGmThrid === keyboardCursorId()"
         [density]="uiStore.density()"
         [showFolderBadge]="foldersStore.searchActive()"
         [activeFolderId]="foldersStore.activeFolderId()"

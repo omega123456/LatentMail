@@ -169,6 +169,15 @@ export const SettingsStore = signalStore(
         patchState(store, { customKeyBindings: updated });
         await electronService.setSettings({ customKeyBindings: JSON.stringify(updated) });
       },
+
+      /**
+       * Clear ALL custom keybinding overrides in one operation,
+       * restoring every command to its default binding.
+       */
+      async resetAllKeyBindings(): Promise<void> {
+        patchState(store, { customKeyBindings: {} });
+        await electronService.setSettings({ customKeyBindings: '{}' });
+      },
     };
   })
 );
