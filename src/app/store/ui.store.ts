@@ -8,6 +8,8 @@ export interface UiState {
   emailListWidth: number;
   readingPaneHeight: number; // percentage for bottom-preview
   commandPaletteOpen: boolean;
+  /** IDs of the last 5 executed commands (most recent first). */
+  recentCommandIds: string[];
   layout: LayoutMode;
   density: DensityMode;
 }
@@ -18,6 +20,7 @@ const initialState: UiState = {
   emailListWidth: 320,
   readingPaneHeight: 45,
   commandPaletteOpen: false,
+  recentCommandIds: [],
   layout: 'three-column',
   density: 'comfortable',
 };
@@ -91,6 +94,16 @@ export const UiStore = signalStore(
     },
     closeCommandPalette(): void {
       patchState(store, { commandPaletteOpen: false });
+    },
+    /**
+     * Record an executed command ID in the recent-commands list.
+     * Keeps the list at most 5 items, with the most recent first.
+     * Duplicate entries are moved to the front rather than appended.
+     */
+    trackCommandExecution(commandId: string): void {
+      const filtered = store.recentCommandIds().filter(id => id !== commandId);
+      const updated = [commandId, ...filtered].slice(0, 5);
+      patchState(store, { recentCommandIds: updated });
     },
   }))
 );

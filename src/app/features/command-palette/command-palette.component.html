@@ -1,0 +1,110 @@
+@if (uiStore.commandPaletteOpen()) {
+  <div
+    class="palette-backdrop"
+    (click)="closeOnBackdrop($event)"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Command Palette"
+  >
+    <div class="palette-panel">
+      <!-- Search input -->
+      <div class="palette-search">
+        <span class="material-symbols-outlined search-icon">search</span>
+        <input
+          #searchInput
+          type="text"
+          class="palette-input"
+          placeholder="Search commands…"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          role="combobox"
+          aria-expanded="true"
+          aria-haspopup="listbox"
+          aria-controls="palette-listbox"
+          [attr.aria-activedescendant]="activeItemId()"
+          [value]="searchQuery()"
+          (input)="onSearchInput($any($event.target).value)"
+          aria-label="Search commands"
+          aria-autocomplete="list"
+        />
+        <span class="palette-shortcut-hint">Esc to close</span>
+      </div>
+
+      <!-- Divider -->
+      <div class="palette-divider"></div>
+
+      <!-- Results -->
+      <div id="palette-listbox" class="palette-results" role="listbox" aria-label="Commands">
+
+        <!-- Recent commands (shown when query is empty) -->
+        @if (showRecentSection()) {
+          <div class="palette-section-label" role="presentation">Recent</div>
+          @for (cmd of recentCommands(); track cmd.id; let index = $index) {
+            <button
+              type="button"
+              class="palette-item"
+              [id]="'palette-item-' + index"
+              [class.focused]="isRecentFocused(index)"
+              (click)="executeCommand(cmd)"
+              (mouseenter)="focusedIndex.set(index)"
+              role="option"
+              [attr.aria-selected]="isRecentFocused(index)"
+            >
+              <span class="material-symbols-outlined palette-item-icon" aria-hidden="true">{{ cmd.icon }}</span>
+              <span class="palette-item-label">{{ cmd.label }}</span>
+              @if (cmd.description) {
+                <span class="palette-item-description">{{ cmd.description }}</span>
+              }
+              <span class="palette-item-spacer" aria-hidden="true"></span>
+              @if (cmd.defaultKeys.length) {
+                <kbd class="palette-key-badge" aria-label="shortcut {{ formatCommandKeys(cmd) }}">{{ formatCommandKeys(cmd) }}</kbd>
+              }
+            </button>
+          }
+
+          <!-- Divider between recent and all commands -->
+          @if (filteredCommands().length) {
+            <div class="palette-section-label" role="presentation">All Commands</div>
+          }
+        }
+
+        <!-- Filtered / all commands -->
+        @for (cmd of filteredCommands(); track cmd.id; let index = $index) {
+          <button
+            type="button"
+            class="palette-item"
+            [id]="'palette-item-' + (showRecentSection() ? recentCommands().length + index : index)"
+            [class.focused]="isFilteredFocused(index)"
+            (click)="executeCommand(cmd)"
+            (mouseenter)="focusedIndex.set((showRecentSection() ? recentCommands().length : 0) + index)"
+            role="option"
+            [attr.aria-selected]="isFilteredFocused(index)"
+          >
+            <span class="material-symbols-outlined palette-item-icon" aria-hidden="true">{{ cmd.icon }}</span>
+            <span class="palette-item-label">{{ cmd.label }}</span>
+            @if (cmd.description) {
+              <span class="palette-item-description">{{ cmd.description }}</span>
+            }
+            <span class="palette-item-spacer" aria-hidden="true"></span>
+            @if (cmd.defaultKeys.length) {
+              <kbd class="palette-key-badge" aria-label="shortcut {{ formatCommandKeys(cmd) }}">{{ formatCommandKeys(cmd) }}</kbd>
+            }
+          </button>
+        }
+
+        @if (filteredCommands().length === 0 && !showRecentSection()) {
+          <div class="palette-empty" role="status">No commands found</div>
+        }
+      </div>
+
+      <!-- Footer -->
+      <div class="palette-footer" aria-hidden="true">
+        <span><kbd>↵</kbd> to run</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span>
+        <span><kbd>Esc</kbd> to close</span>
+      </div>
+    </div>
+  </div>
+}

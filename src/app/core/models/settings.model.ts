@@ -14,6 +14,8 @@ export interface AppSettings {
   showAvatars: boolean;
   ollamaUrl: string;
   ollamaModel: string;
+  /** Map of command ID → custom key combo string (e.g. `{ 'compose-new': 'ctrl+m' }`). */
+  customKeyBindings: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -29,4 +31,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showAvatars: true,
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: '',
+  customKeyBindings: {},
 };

@@ -19,6 +19,8 @@ export interface SettingsState {
   blockRemoteImages: boolean;
   showAvatars: boolean;
   logLevel: LogLevel;
+  /** Custom keybinding overrides: command ID → normalized key combo string. */
+  customKeyBindings: Record<string, string>;
   loading: boolean;
   error: string | null;
 }
@@ -34,6 +36,7 @@ const initialState: SettingsState = {
   blockRemoteImages: true,
   showAvatars: true,
   logLevel: 'info',
+  customKeyBindings: {},
   loading: false,
   error: null,
 };
@@ -60,6 +63,15 @@ export const SettingsStore = signalStore(
           const logLevel: LogLevel = (VALID_LOG_LEVELS as readonly string[]).includes(storedLogLevel)
             ? (storedLogLevel as LogLevel)
             : 'info';
+          let customKeyBindings: Record<string, string> = {};
+          const rawKeyBindings = data['customKeyBindings'];
+          if (rawKeyBindings) {
+            try {
+              customKeyBindings = JSON.parse(rawKeyBindings) as Record<string, string>;
+            } catch {
+              customKeyBindings = {};
+            }
+          }
           patchState(store, {
             theme: (data['theme'] as ThemeMode) || store.theme(),
             layout: (data['layout'] as LayoutMode) || store.layout(),
@@ -71,6 +83,7 @@ export const SettingsStore = signalStore(
             blockRemoteImages: data['blockRemoteImages'] !== undefined ? data['blockRemoteImages'] === 'true' : store.blockRemoteImages(),
             showAvatars: data['showAvatars'] !== undefined ? data['showAvatars'] === 'true' : store.showAvatars(),
             logLevel,
+            customKeyBindings,
             loading: false,
           });
         } else {
@@ -135,6 +148,26 @@ export const SettingsStore = signalStore(
         if (response.success) {
           patchState(store, { logLevel: level });
         }
+      },
+
+      /**
+       * Override the keybinding for a command.
+       * Persists the full customKeyBindings map as JSON in the settings DB.
+       */
+      async setKeyBinding(commandId: string, keys: string): Promise<void> {
+        const updated = { ...store.customKeyBindings(), [commandId]: keys };
+        patchState(store, { customKeyBindings: updated });
+        await electronService.setSettings({ customKeyBindings: JSON.stringify(updated) });
+      },
+
+      /**
+       * Remove a custom keybinding override, restoring the command's default.
+       */
+      async resetKeyBinding(commandId: string): Promise<void> {
+        const updated = { ...store.customKeyBindings() };
+        delete updated[commandId];
+        patchState(store, { customKeyBindings: updated });
+        await electronService.setSettings({ customKeyBindings: JSON.stringify(updated) });
       },
     };
   })
