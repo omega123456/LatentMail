@@ -43,47 +43,122 @@ mat-radio-group {
   width: 200px;
 }
 
-// ── Allowed image senders ───────────────────────────────────────────────────
+// ── Remote image whitelist ──────────────────────────────────────────────────
 
-.allowed-senders-section {
-  margin-top: 16px;
+.remote-images-section {
+  margin-top: 20px;
 
   h4 {
     font-size: 13px;
     font-weight: 600;
-    margin: 0 0 4px 0;
+    margin: 0 0 12px 0;
     color: var(--color-text-primary);
-  }
-
-  .allowed-senders-hint {
-    font-size: 12px;
-    color: var(--color-text-secondary, #666);
-    margin: 0 0 10px 0;
   }
 }
 
-.allowed-sender-row {
+.remote-images-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary, #666);
+  margin: 4px 0 16px 0;
+}
+
+.whitelist-container {
+  margin-top: 12px;
+  transition: opacity 200ms ease-in-out;
+}
+
+.whitelist-disabled {
+  opacity: 0.5;
+  user-select: none;
+}
+
+// Match logger-settings .log-actions: same width as table, no side padding
+.whitelist-actions {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--color-outline-variant, #eee);
+  margin-bottom: 12px;
+
+  .whitelist-search-field {
+    width: 100%;
+    min-width: 200px;
+  }
+}
+
+// Table box: white background, log-table look (matches logger-settings .log-list)
+.whitelist-table-box {
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.sender-list {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+}
+
+.sender-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--color-border, #e0e0e0);
 
   &:last-child {
     border-bottom: none;
   }
 
-  .sender-icon {
+  &:hover {
+    background-color: var(--color-surface-variant, #f5f5f5);
+  }
+
+  .row-icon {
     font-size: 18px;
-    color: var(--color-on-surface-variant, #888);
+    color: var(--color-text-secondary, #666);
     flex-shrink: 0;
   }
 
-  .sender-address {
-    flex: 1;
-    font-size: 13px;
+  .sender-email {
+    min-width: 0;
     color: var(--color-text-primary);
-    word-break: break-all;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
+mat-paginator.whitelist-paginator {
+  border-top: 1px solid var(--color-border, #e0e0e0);
+  background: #fff;
+  display: block;
+}
+
+.whitelist-empty-state {
+  text-align: center;
+  padding: 32px 16px;
+
+  .empty-icon {
+    font-size: 40px;
+    color: var(--color-text-tertiary, #aaa);
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  .empty-primary {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    margin: 0 0 4px;
+  }
+
+  .empty-secondary {
+    font-size: 12px;
+    color: var(--color-text-secondary, #666);
+    margin: 0;
+  }
+}

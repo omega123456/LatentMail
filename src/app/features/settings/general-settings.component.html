@@ -70,38 +70,79 @@
   <h3>Privacy</h3>
   <div class="toggle-row">
     <mat-slide-toggle
-      [checked]="settingsStore.blockRemoteImages()"
-      (change)="settingsStore.toggleSetting('blockRemoteImages')"
-    >Block remote images by default</mat-slide-toggle>
-  </div>
-  <div class="toggle-row">
-    <mat-slide-toggle
       [checked]="settingsStore.showAvatars()"
       (change)="settingsStore.toggleSetting('showAvatars')"
     >Show sender avatars</mat-slide-toggle>
   </div>
 
-  @if (settingsStore.allowedImageSenders().length > 0) {
-    <div class="allowed-senders-section">
-      <h4>Allowed image senders</h4>
-      <p class="allowed-senders-hint">
-        Remote images are always loaded from these addresses.
-      </p>
-      @for (senderAddress of settingsStore.allowedImageSenders(); track senderAddress) {
-        <div class="allowed-sender-row">
-          <span class="material-symbols-outlined sender-icon" aria-hidden="true">person</span>
-          <span class="sender-address">{{ senderAddress }}</span>
-          <button
-            type="button"
-            mat-icon-button
-            (click)="settingsStore.removeAllowedImageSender(senderAddress)"
-            [attr.aria-label]="'Remove ' + senderAddress + ' from allowed senders'"
-            title="Remove"
+  <div class="remote-images-section">
+    <h4>Remote images</h4>
+    <div class="toggle-row">
+      <mat-slide-toggle
+        [checked]="alwaysAllowImages()"
+        (change)="onAlwaysAllowToggle($event)"
+      >Always allow remote images from all senders</mat-slide-toggle>
+    </div>
+    <p class="remote-images-hint">When on, remote images load everywhere regardless of the sender whitelist below.</p>
+
+    <div
+      class="whitelist-container"
+      [class.whitelist-disabled]="alwaysAllowImages()"
+      [inert]="alwaysAllowImages() || null"
+    >
+      <div class="whitelist-actions">
+        <mat-form-field appearance="outline" subscriptSizing="dynamic" class="whitelist-search-field">
+          <input
+            matInput
+            type="text"
+            placeholder="Filter allowed senders…"
+            aria-label="Filter allowed senders"
+            [value]="filterText()"
+            (input)="onFilterChange($event.target['value'])"
           >
-            <span class="material-symbols-outlined">close</span>
-          </button>
+        </mat-form-field>
+      </div>
+
+      @if (filteredSenders().length > 0) {
+        <div class="whitelist-table-box">
+          <div class="sender-list">
+            @for (senderAddress of paginatedSenders(); track senderAddress) {
+              <div class="sender-row">
+                <span class="material-symbols-outlined row-icon" aria-hidden="true">person</span>
+                <span class="sender-email">{{ senderAddress }}</span>
+                <button
+                  type="button"
+                  mat-icon-button
+                  (click)="settingsStore.removeAllowedImageSender(senderAddress)"
+                  [attr.aria-label]="'Remove ' + senderAddress + ' from allowed senders'"
+                  title="Remove"
+                >
+                  <span class="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            }
+          </div>
+          <mat-paginator
+            class="whitelist-paginator"
+            [length]="filteredSenders().length"
+            [pageSize]="pageSize()"
+            [pageIndex]="pageIndex()"
+            [pageSizeOptions]="pageSizeOptions"
+            (page)="onPage($event)"
+          ></mat-paginator>
+        </div>
+      } @else {
+        <div class="whitelist-empty-state">
+          <span class="material-symbols-outlined empty-icon" aria-hidden="true">person_off</span>
+          @if (settingsStore.allowedImageSenders().length === 0) {
+            <p class="empty-primary">No allowed senders yet</p>
+            <p class="empty-secondary">Remote images will be blocked from all senders by default.</p>
+          } @else {
+            <p class="empty-primary">No senders match your filter</p>
+            <p class="empty-secondary">Try a different search term.</p>
+          }
         </div>
       }
     </div>
-  }
+  </div>
 </section>
