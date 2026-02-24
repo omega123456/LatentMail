@@ -201,9 +201,6 @@ export class EmailListComponent implements OnDestroy {
       case 'open-thread':
         this.openKeyboardCursorThread();
         break;
-      case 'archive':
-        this.archiveKeyboardCursorThread();
-        break;
       case 'delete':
         this.deleteKeyboardCursorThread();
         break;
@@ -306,24 +303,6 @@ export class EmailListComponent implements OnDestroy {
       return null;
     }
     return this.filteredThreads().find(thread => thread.xGmThrid === cursorId) ?? null;
-  }
-
-  /** Archive (move to All Mail) the thread under the keyboard cursor. */
-  private archiveKeyboardCursorThread(): void {
-    const thread = this.getKeyboardCursorThread();
-    const activeAccount = this.accountsStore.activeAccount();
-    if (!thread || !activeAccount) {
-      return;
-    }
-    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
-    this.emailsStore.moveEmails(
-      activeAccount.id,
-      [thread.xGmThrid],
-      '[Gmail]/All Mail',
-      thread.xGmThrid,
-      currentFolder,
-    );
-    this.keyboardCursorId.set(null);
   }
 
   /** Delete (move to Trash) the thread under the keyboard cursor. */

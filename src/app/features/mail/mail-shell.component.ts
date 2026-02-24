@@ -275,7 +275,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
    * Handle command registry events that require shell-level context:
    * folder navigation, compose actions, search focus, and selection management.
    *
-   * Commands that operate on the email list items (nav-next, archive, etc.)
+   * Commands that operate on the email list items (nav-next, delete, etc.)
    * are handled by EmailListComponent via the same commandTriggered$ observable.
    */
   private handleShellCommand(commandId: string): void {

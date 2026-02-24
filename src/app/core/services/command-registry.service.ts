@@ -429,23 +429,11 @@ export class CommandRegistryService {
     });
 
     this.registerCommand({
-      id: 'archive',
-      label: 'Archive',
-      description: 'Archive the selected email or thread',
-      icon: 'archive',
-      defaultKeys: ['e'],
-      context: 'email-selected',
-      action: () => {
-        // Delegated to mail-shell / email-list via commandTriggered$ (Part 3)
-      },
-    });
-
-    this.registerCommand({
       id: 'delete',
       label: 'Delete',
       description: 'Move the selected email or thread to Trash',
       icon: 'delete',
-      defaultKeys: ['#'],
+      defaultKeys: ['delete'],
       context: 'email-selected',
       action: () => {
         // Delegated to mail-shell / email-list via commandTriggered$ (Part 3)
