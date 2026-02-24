@@ -1,4 +1,4 @@
-# MailClient
+# LatentMail
 
 A cross-platform desktop email client built with Electron 40 and Angular 21, featuring Gmail integration via IMAP/OAuth2 and local AI through Ollama.
 
@@ -54,7 +54,7 @@ yarn electron:start
 ## Project Structure
 
 ```
-mailclient/
+latentmail/
 ├── electron/               # Electron main process
 │   ├── main.ts            # App entry point, window management
 │   ├── preload.ts         # Context bridge (IPC API)

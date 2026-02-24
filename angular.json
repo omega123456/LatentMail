@@ -6,7 +6,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "mailclient-app": {
+    "latentmail-app": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -107,10 +107,10 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "mailclient-app:build:production"
+              "buildTarget": "latentmail-app:build:production"
             },
             "development": {
-              "buildTarget": "mailclient-app:build:development"
+              "buildTarget": "latentmail-app:build:development"
             }
           },
           "defaultConfiguration": "development"

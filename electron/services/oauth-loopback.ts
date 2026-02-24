@@ -137,7 +137,7 @@ export class OAuthLoopbackServer {
     return `<!DOCTYPE html>
 <html>
 <head>
-  <title>MailClient — Authentication Successful</title>
+  <title>LatentMail — Authentication Successful</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #fafafa; color: #212121; }
     .card { text-align: center; padding: 48px; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); max-width: 400px; }
@@ -148,7 +148,7 @@ export class OAuthLoopbackServer {
 <body>
   <div class="card">
     <h1>Authentication Successful</h1>
-    <p>You can close this tab and return to MailClient.</p>
+    <p>You can close this tab and return to LatentMail.</p>
   </div>
 </body>
 </html>`;
@@ -158,7 +158,7 @@ export class OAuthLoopbackServer {
     return `<!DOCTYPE html>
 <html>
 <head>
-  <title>MailClient — Authentication Failed</title>
+  <title>LatentMail — Authentication Failed</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #fafafa; color: #212121; }
     .card { text-align: center; padding: 48px; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); max-width: 400px; }
@@ -171,7 +171,7 @@ export class OAuthLoopbackServer {
   <div class="card">
     <h1>Authentication Failed</h1>
     <p>Error: <code>${error}</code></p>
-    <p>Please close this tab and try again in MailClient.</p>
+    <p>Please close this tab and try again in LatentMail.</p>
   </div>
 </body>
 </html>`;

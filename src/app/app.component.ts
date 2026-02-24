@@ -19,7 +19,7 @@ import { EmailsStore } from './store/emails.store';
   styleUrl: './app.component.scss'
 })
 export class AppComponent implements OnInit, OnDestroy {
-  title = 'MailClient';
+  title = 'LatentMail';
 
   /** Injected so QueueStore is created at app startup and subscribes to queue:update for toasts. */
   private readonly queueStore = inject(QueueStore);

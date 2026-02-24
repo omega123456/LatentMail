@@ -6,16 +6,16 @@ import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-nati
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    name: 'MailClient',
-    executableName: 'mailclient',
+    name: 'LatentMail',
+    executableName: 'latentmail',
     icon: './assets/icons/icon',
   },
   makers: [
     new MakerSquirrel({
-      name: 'MailClient',
+      name: 'LatentMail',
     }),
     new MakerDMG({
-      name: 'MailClient',
+      name: 'LatentMail',
     }),
   ],
   plugins: [

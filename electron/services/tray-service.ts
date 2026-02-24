@@ -7,12 +7,28 @@ import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 const log = LoggerService.getInstance();
 
+// sharp is loaded lazily so the app still starts if it hasn't been rebuilt
+// for Electron yet. Run `npx @electron/rebuild` to enable badge icons.
+let sharp: typeof import('sharp') | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  sharp = require('sharp') as typeof import('sharp');
+} catch {
+  log.warn('TrayService: sharp not available — badge numbers disabled. Run: npx @electron/rebuild');
+}
+
 export class TrayService {
   private static instance: TrayService;
   private tray: Tray | null = null;
   private mainWindowRef: BrowserWindow | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private currentUnreadCount = 0;
+
+  /** Base 32×32 PNG buffer used for compositing badge overlays at runtime. */
+  private baseTrayBuffer: Buffer | null = null;
+
+  /** Cached dot-overlay NativeImage (generated once, reused for all non-zero counts). */
+  private dotImage: Electron.NativeImage | null = null;
 
   private constructor() {}
 
@@ -29,9 +45,10 @@ export class TrayService {
    */
   initialize(mainWindow: BrowserWindow): void {
     this.mainWindowRef = mainWindow;
+    this.loadBaseTrayBuffer();
 
     try {
-      const trayIcon = this.loadTrayIcon();
+      const trayIcon = this.loadTrayIconImage('default');
       this.tray = new Tray(trayIcon);
     } catch (err) {
       log.error('TrayService: failed to create tray:', err);
@@ -50,11 +67,11 @@ export class TrayService {
     // Query initial unread count
     this.refreshUnreadCount();
 
-    // Poll every 60 seconds so the badge stays accurate even when the user reads
-    // or archives messages from another client.
+    // Poll every 30 seconds to catch external changes (e.g. read on another device).
+    // In-app actions (mark read, move, delete) trigger refreshUnreadCount() immediately.
     this.pollInterval = setInterval(() => {
       this.refreshUnreadCount();
-    }, 60_000);
+    }, 30_000);
 
     // Clear the stored reference when the window is destroyed so that
     // resolveMainWindow() falls back to getAllWindows() correctly.
@@ -82,7 +99,9 @@ export class TrayService {
       }
       if (totalUnread !== this.currentUnreadCount) {
         this.currentUnreadCount = totalUnread;
-        this.updateBadge(totalUnread);
+        this.updateBadge(totalUnread).catch((err) => {
+          log.warn('TrayService: failed to update badge:', err);
+        });
       }
     } catch (err) {
       log.warn('TrayService: failed to refresh unread count:', err);
@@ -115,35 +134,123 @@ export class TrayService {
   // ── Private helpers ─────────────────────────────────────────────────────
 
   /**
-   * Locate a tray icon on disk.  Tries common paths in order:
-   *   1. assets/icons/icon.png   (same path used by createMainWindow)
-   *   2. assets/icons/icon.ico   (Windows packaged)
-   *   3. public/favicon.ico      (dev fallback)
-   *   4. dist .../favicon.ico    (production Angular build output)
-   *
-   * Falls back to an empty native image when none is found — the tray will
-   * still be functional, just without a visible icon until real assets are added.
+   * Try to load assets/icons/tray-icon.png into memory as the base buffer for
+   * badge compositing.  Does nothing if the file doesn't exist (falls back to
+   * separate default/unread icons).
    */
-  private loadTrayIcon(): string | Electron.NativeImage {
-    const candidatePaths: string[] = [
-      path.join(__dirname, '../assets/icons/icon.png'),
-      path.join(__dirname, '../assets/icons/icon.ico'),
-      path.join(__dirname, '../public/favicon.ico'),
-      path.join(__dirname, '../dist/mailclient-app/browser/favicon.ico'),
-    ];
+  private loadBaseTrayBuffer(): void {
+    const trayIconPath = path.join(app.getAppPath(), 'assets', 'icons', 'tray-icon.png');
+    if (fs.existsSync(trayIconPath)) {
+      this.baseTrayBuffer = fs.readFileSync(trayIconPath);
+      log.info('TrayService: loaded base tray buffer for badge mode');
+    }
+  }
 
-    for (const iconPath of candidatePaths) {
-      if (fs.existsSync(iconPath)) {
-        log.info(`TrayService: using icon at ${iconPath}`);
-        return iconPath;
+  /**
+   * Load a tray icon NativeImage for the given state.
+   *
+   * When tray-icon.png is present (generated from tray-icon.ico), this is used
+   * as the base for all states — the runtime badge overlay takes over for
+   * non-zero unread counts.
+   *
+   * Falls back to separate tray-default / tray-unread PNG pairs, or the main
+   * app icon, or an empty NativeImage as a last resort.
+   */
+  private loadTrayIconImage(type: 'default' | 'unread'): Electron.NativeImage {
+    const appPath = app.getAppPath();
+
+    // Badge mode: single tray-icon.png base
+    const unifiedPath = path.join(appPath, 'assets', 'icons', 'tray-icon.png');
+    if (fs.existsSync(unifiedPath)) {
+      const image = nativeImage.createFromPath(unifiedPath);
+      if (process.platform === 'darwin') {
+        image.setTemplateImage(true);
+      }
+      return image;
+    }
+
+    // Separate icon mode: tray-default.png / tray-unread.png
+    const baseName = type === 'unread' ? 'tray-unread' : 'tray-default';
+    const path1x = path.join(appPath, 'assets', 'icons', `${baseName}.png`);
+    const path2x = path.join(appPath, 'assets', 'icons', `${baseName}@2x.png`);
+
+    if (fs.existsSync(path1x)) {
+      const image = nativeImage.createFromPath(path1x);
+      if (fs.existsSync(path2x)) {
+        const buffer2x = fs.readFileSync(path2x);
+        image.addRepresentation({ scaleFactor: 2.0, buffer: buffer2x });
+      }
+      if (process.platform === 'darwin') {
+        image.setTemplateImage(true);
+      }
+      log.info(`TrayService: using ${baseName} icon`);
+      return image;
+    }
+
+    // Fallback: main app icon or empty
+    const fallbackPaths: string[] = [
+      path.join(appPath, 'assets', 'icons', 'icon.png'),
+      path.join(appPath, 'assets', 'icons', 'icon.ico'),
+      path.join(appPath, 'public', 'favicon.ico'),
+      path.join(appPath, 'dist', 'latentmail-app', 'browser', 'favicon.ico'),
+    ];
+    for (const fallbackPath of fallbackPaths) {
+      if (fs.existsSync(fallbackPath)) {
+        log.info(`TrayService: falling back to ${fallbackPath}`);
+        return nativeImage.createFromPath(fallbackPath);
       }
     }
 
-    log.warn('TrayService: no tray icon file found — using empty image. Add assets/icons/icon.png for a proper icon.');
+    log.warn('TrayService: no tray icon found — using empty image. Run yarn build:icons.');
     return nativeImage.createEmpty();
   }
 
-  private updateBadge(count: number): void {
+  /**
+   * Composite a small blue dot onto the base tray icon to indicate unread mail.
+   * The result is generated once and cached in `dotImage`.
+   * Returns the plain base icon when sharp is unavailable or count is 0.
+   */
+  private async loadTrayIconWithBadge(count: number): Promise<Electron.NativeImage> {
+    if (count === 0 || !this.baseTrayBuffer || !sharp) {
+      return this.loadTrayIconImage(count > 0 ? 'unread' : 'default');
+    }
+
+    if (this.dotImage !== null) {
+      return this.dotImage;
+    }
+
+    // Work at the image's native size to avoid any upscaling blur.
+    const meta = await sharp!(this.baseTrayBuffer).metadata();
+    const size = meta.width ?? 16;
+
+    // Dot: ~25% of icon width, anchored to the top-right corner with 1px inset.
+    const radius = Math.max(2, Math.round(size * 0.25));
+    const cx = size - radius - 1;
+    const cy = radius + 1;
+
+    const dotSvg = Buffer.from(
+      `<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">` +
+      `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="#0078D4"/>` +
+      `</svg>`,
+    );
+
+    const composited = await sharp!(this.baseTrayBuffer)
+      .composite([{ input: dotSvg }])
+      .png()
+      .toBuffer();
+
+    const image = nativeImage.createFromBuffer(composited);
+
+    if (process.platform === 'darwin') {
+      image.setTemplateImage(false); // dot must stay coloured, not template
+    }
+
+    this.dotImage = image;
+    log.info('TrayService: generated unread dot icon');
+    return image;
+  }
+
+  private async updateBadge(count: number): Promise<void> {
     // macOS: update Dock badge count
     if (process.platform === 'darwin') {
       try {
@@ -153,15 +260,18 @@ export class TrayService {
       }
     }
 
-    // All platforms: update tray tooltip and rebuild the context menu so the
-    // unread count label at the top of the menu stays in sync.
-    if (this.tray !== null && !this.tray.isDestroyed()) {
-      const tooltip = count > 0
-        ? `Mail Client — ${count} unread message${count === 1 ? '' : 's'}`
-        : 'Mail Client';
-      this.tray.setToolTip(tooltip);
-      this.buildContextMenu();
+    if (this.tray === null || this.tray.isDestroyed()) {
+      return;
     }
+
+    const icon = await this.loadTrayIconWithBadge(count);
+    this.tray.setImage(icon);
+
+    const tooltip = count > 0
+      ? `Mail Client — ${count} unread message${count === 1 ? '' : 's'}`
+      : 'Mail Client';
+    this.tray.setToolTip(tooltip);
+    this.buildContextMenu();
   }
 
   private buildContextMenu(): void {

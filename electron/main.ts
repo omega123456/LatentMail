@@ -34,7 +34,7 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
-    logger.info('MailClient starting...');
+    logger.info('LatentMail starting...');
 
     // Initialize database, then apply the DB-persisted log level (Phase 2).
     try {
@@ -150,7 +150,7 @@ function createMainWindow(): void {
   if (isDev) {
     mainWindow.loadURL('http://localhost:4200');
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/mailclient-app/browser/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../dist/latentmail-app/browser/index.html'));
   }
 
   logger.info('Main window created');

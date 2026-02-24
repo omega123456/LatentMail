@@ -10,6 +10,7 @@ import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { PendingOpService } from './pending-op-service';
 import { SyncService } from './sync-service';
+import { TrayService } from './tray-service';
 import { buildDraftMime } from './draft-mime';
 import { executeFetchOlder } from './fetch-older-handler';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
@@ -1652,6 +1653,7 @@ export class MailQueueService {
 
     await this.updateFolderStateForFolders(item.accountId, allFolders);
     this.emitFolderUpdated(item.accountId, allFolders, 'move', 'mixed');
+    TrayService.getInstance().refreshUnreadCount();
   }
 
   /**
@@ -1672,6 +1674,7 @@ export class MailQueueService {
       await this.updateFolderStateForFolders(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER]);
       this.emitFolderUpdated(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete', 'deletions');
     }
+    TrayService.getInstance().refreshUnreadCount();
 
     // --- Post-confirmation cleanup (for soft-delete only; permanent delete already wiped DB rows) ---
     if (!isPermanent && payload.emailMeta && payload.emailMeta.length > 0) {
@@ -1742,6 +1745,9 @@ export class MailQueueService {
 
     await this.updateFolderStateForFolders(item.accountId, folders);
     this.emitFolderUpdated(item.accountId, folders, 'flag', 'flag_changes');
+    if (payload.flag === 'read') {
+      TrayService.getInstance().refreshUnreadCount();
+    }
   }
 
   /**

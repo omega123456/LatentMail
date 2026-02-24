@@ -299,7 +299,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 **Recommended workflow**:
 1. `yarn electron:dev` - Starts Angular dev server + Electron with hot-reload
 2. Open DevTools automatically in main window
-3. Check `~/Library/Logs/MailClient/main.log` (macOS) or `%USERPROFILE%\AppData\Roaming\MailClient\logs\main.log` (Windows) for main process logs
+3. Check `~/Library/Logs/LatentMail/main.log` (macOS) or `%USERPROFILE%\AppData\Roaming\LatentMail\logs\main.log` (Windows) for main process logs
 
 ### Debugging Main Process
 
@@ -316,9 +316,9 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 ### Database Inspection
 
 SQLite database location:
-- **macOS**: `~/Library/Application Support/MailClient/mailclient.db`
-- **Windows**: `%APPDATA%\MailClient\mailclient.db`
-- **Linux**: `~/.config/MailClient/mailclient.db`
+- **macOS**: `~/Library/Application Support/LatentMail/latentmail.db`
+- **Windows**: `%APPDATA%\LatentMail\latentmail.db`
+- **Linux**: `~/.config/LatentMail/latentmail.db`
 
 Use `sqlite3` CLI or DB Browser for SQLite to inspect.
 

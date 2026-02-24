@@ -30,7 +30,7 @@ export class DatabaseService {
       return process.env['DATABASE_PATH'];
     }
     const userDataPath = app.getPath('userData');
-    return path.join(userDataPath, 'mailclient.db');
+    return path.join(userDataPath, 'latentmail.db');
   }
 
   async initialize(): Promise<void> {
