@@ -1,0 +1,13 @@
+<div [class]="avatarClass()" class="sender-avatar-wrapper">
+  @if (gravatarAvailable()) {
+    <img
+      class="sender-avatar-img"
+      [src]="gravatarUrl()"
+      [alt]="''"
+      referrerPolicy="no-referrer"
+    />
+  }
+  @if (showInitial()) {
+    <span class="sender-avatar-initial" aria-hidden="true">{{ initial() }}</span>
+  }
+</div>

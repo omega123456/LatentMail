@@ -16,11 +16,20 @@ import { EmailActionRibbonComponent } from '../../../shared/components/email-act
 import { EmailActionContext, EmailActionEvent } from '../../../shared/components/email-actions/email-action.model';
 import { getOrderedFolderBadges } from '../../../shared/constants/folder-badges';
 import { DEFAULT_LABEL_COLOR } from '../../../shared/constants/label-colors';
+import { SettingsStore } from '../../../store/settings.store';
+import { SenderAvatarComponent } from '../../../shared/components/sender-avatar/sender-avatar.component';
 
 @Component({
   selector: 'app-reading-pane',
   standalone: true,
-  imports: [CommonModule, RelativeTimePipe, EmailBodyFrameComponent, MessageAttachmentsComponent, EmailActionRibbonComponent],
+  imports: [
+    CommonModule,
+    RelativeTimePipe,
+    EmailBodyFrameComponent,
+    MessageAttachmentsComponent,
+    EmailActionRibbonComponent,
+    SenderAvatarComponent,
+  ],
   templateUrl: './reading-pane.component.html',
   styleUrl: './reading-pane.component.scss',
 })
@@ -28,6 +37,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
   readonly aiStore = inject(AiStore);
+  readonly settingsStore = inject(SettingsStore);
   private readonly electronService = inject(ElectronService);
   private readonly composeStore = inject(ComposeStore);
   private readonly accountsStore = inject(AccountsStore);

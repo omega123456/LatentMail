@@ -6,9 +6,13 @@
   [class.spacious]="density() === 'spacious'"
   (click)="clicked.emit(thread())"
 >
-  <div class="email-avatar">
-    {{ getInitial() }}
-  </div>
+  @if (settingsStore.showAvatars()) {
+    <app-sender-avatar
+      [email]="getSenderEmail()"
+      [displayName]="getSenderName()"
+      [avatarClass]="'email-avatar'"
+    />
+  }
   <div class="email-content">
     <div class="email-top-row">
       <div class="email-top-left">

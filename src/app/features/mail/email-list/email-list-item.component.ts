@@ -1,4 +1,4 @@
-import { Component, computed, input, output } from '@angular/core';
+import { Component, computed, inject, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Thread } from '../../../core/models/email.model';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
@@ -9,15 +9,18 @@ import {
   getOrderedFolderBadges,
 } from '../../../shared/constants/folder-badges';
 import { DEFAULT_LABEL_COLOR } from '../../../shared/constants/label-colors';
+import { SettingsStore } from '../../../store/settings.store';
+import { SenderAvatarComponent } from '../../../shared/components/sender-avatar/sender-avatar.component';
 
 @Component({
   selector: 'app-email-list-item',
   standalone: true,
-  imports: [CommonModule, RelativeTimePipe],
+  imports: [CommonModule, RelativeTimePipe, SenderAvatarComponent],
   templateUrl: './email-list-item.component.html',
   styleUrl: './email-list-item.component.scss',
 })
 export class EmailListItemComponent {
+  readonly settingsStore = inject(SettingsStore);
   readonly thread = input.required<Thread>();
   readonly isSelected = input<boolean>(false);
   readonly density = input<DensityMode>('comfortable');
@@ -90,6 +93,16 @@ export class EmailListItemComponent {
       return nameMatch?.[1] || first;
     }
     return 'Unknown';
+  }
+
+  getSenderEmail(): string | null {
+    const participants = this.thread().participants;
+    if (!participants) {
+      return null;
+    }
+    const first = participants.split(',')[0].trim();
+    const angleMatch = first.match(/<([^>]+)>/);
+    return angleMatch ? angleMatch[1].trim() : first;
   }
 
   getInitial(): string {

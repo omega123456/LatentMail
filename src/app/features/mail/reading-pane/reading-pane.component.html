@@ -122,7 +122,13 @@
             class="message-header"
             (click)="toggleExpand(message.xGmMsgId)"
           >
-            <div class="sender-avatar">{{ getInitial(message) }}</div>
+            @if (settingsStore.showAvatars()) {
+              <app-sender-avatar
+                [email]="message.fromAddress"
+                [displayName]="message.fromName || message.fromAddress"
+                [avatarClass]="'sender-avatar'"
+              />
+            }
             <div class="header-content">
               <div class="header-top">
                 <button

@@ -82,20 +82,21 @@
   }
 }
 
-.email-avatar {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  border-radius: 50%;
-  background-color: var(--color-primary);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+// Sender avatar (app-sender-avatar) size and font; encapsulation prevents .email-avatar from applying inside the component
+.email-item app-sender-avatar {
+  --sender-avatar-size: 36px;
   font-size: 14px;
-  font-weight: 500;
   margin-top: 2px;
-  flex-shrink: 0;
+}
+
+.email-item.compact app-sender-avatar {
+  --sender-avatar-size: 28px;
+  font-size: 11px;
+}
+
+.email-item.spacious app-sender-avatar {
+  --sender-avatar-size: 40px;
+  font-size: 16px;
 }
 
 .email-content {
