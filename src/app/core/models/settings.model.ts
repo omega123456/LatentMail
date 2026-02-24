@@ -16,6 +16,11 @@ export interface AppSettings {
   ollamaModel: string;
   /** Map of command ID → custom key combo string (e.g. `{ 'compose-new': 'ctrl+m' }`). */
   customKeyBindings: Record<string, string>;
+  /**
+   * Email addresses whose remote images are always loaded, even when
+   * `blockRemoteImages` is `true`.  Comparison is case-insensitive.
+   */
+  allowedImageSenders: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -32,4 +37,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: '',
   customKeyBindings: {},
+  allowedImageSenders: [],
 };

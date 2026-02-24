@@ -10,6 +10,7 @@ import { SyncQueueBridge } from './services/sync-queue-bridge';
 import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
 import { NativeDropService } from './services/native-drop-service';
+import { TrayService } from './services/tray-service';
 
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
@@ -70,6 +71,15 @@ if (!gotTheLock) {
 
     // Create the main window
     createMainWindow();
+
+    // Initialize system tray after the main window exists
+    if (mainWindow) {
+      try {
+        TrayService.getInstance().initialize(mainWindow);
+      } catch (err) {
+        logger.warn('Failed to initialize TrayService:', err);
+      }
+    }
   });
 }
 
@@ -217,6 +227,7 @@ app.on('before-quit', async (event) => {
     SyncService.getInstance().stopAllIdle().catch(() => {});
     MailQueueService.getInstance().cancelAllRetries();
     ImapService.getInstance().disconnectAll().catch(() => {});
+    TrayService.getInstance().cleanup();
   } catch {
     // Ignore cleanup errors
   }

@@ -169,7 +169,10 @@
           @if (last || expandedMessages.has(message.xGmMsgId)) {
             <div class="message-body">
               @if (message.htmlBody) {
-                <app-email-body-frame [htmlBody]="message.htmlBody" />
+                <app-email-body-frame
+                  [htmlBody]="message.htmlBody"
+                  [senderEmail]="message.fromAddress"
+                />
               } @else if (message.textBody) {
                 <pre class="text-body">{{ message.textBody }}</pre>
               } @else {

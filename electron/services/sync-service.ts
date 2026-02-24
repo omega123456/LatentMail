@@ -1,6 +1,7 @@
 import { BrowserWindow, Notification } from 'electron';
 import { LoggerService } from './logger-service';
 import { ImapService } from './imap-service';
+import { TrayService } from './tray-service';
 
 const log = LoggerService.getInstance();
 import { DatabaseService } from './database-service';
@@ -1086,6 +1087,13 @@ export class SyncService {
 
     // Emit to renderer
     this.emitToRenderer(IPC_EVENTS.MAIL_NEW_EMAIL, payload);
+
+    // Refresh tray badge so the unread count stays current after new mail arrives
+    try {
+      TrayService.getInstance().refreshUnreadCount();
+    } catch {
+      // TrayService may not be initialized (e.g. during tests)
+    }
 
     // Show desktop notification
     this.showDesktopNotification(numAccountId, folder, deduped);

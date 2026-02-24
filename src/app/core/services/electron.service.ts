@@ -78,6 +78,11 @@ export interface MailFetchOlderDonePayload {
   error?: string;
 }
 
+/** Payload for system:tray-action event (compose, sync, etc.). */
+export interface TrayActionPayload {
+  action: string;
+}
+
 interface ElectronAPI {
   mail: {
     fetchEmails: (accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => Promise<IpcResponse>;
@@ -489,6 +494,11 @@ export class ElectronService {
   /** Fires when files from OS (Explorer) are dropped on the window. */
   onOsFileDrop(): Observable<OsFileDropPayload> {
     return this.onEvent<OsFileDropPayload>('os-file:drop');
+  }
+
+  /** Fires when the user chooses an action from the system tray context menu (e.g. compose, sync). */
+  onTrayAction(): Observable<TrayActionPayload> {
+    return this.onEvent<TrayActionPayload>('system:tray-action');
   }
 
   onEvent<T = unknown>(channel: string): Observable<T> {

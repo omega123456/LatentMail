@@ -21,6 +21,11 @@ export interface SettingsState {
   logLevel: LogLevel;
   /** Custom keybinding overrides: command ID → normalized key combo string. */
   customKeyBindings: Record<string, string>;
+  /**
+   * Email addresses whose remote images are always loaded, even when
+   * `blockRemoteImages` is true.  Comparison is case-insensitive.
+   */
+  allowedImageSenders: string[];
   loading: boolean;
   error: string | null;
 }
@@ -37,6 +42,7 @@ const initialState: SettingsState = {
   showAvatars: true,
   logLevel: 'info',
   customKeyBindings: {},
+  allowedImageSenders: [],
   loading: false,
   error: null,
 };
@@ -72,6 +78,20 @@ export const SettingsStore = signalStore(
               customKeyBindings = {};
             }
           }
+          let allowedImageSenders: string[] = [];
+          const rawAllowedSenders = data['allowedImageSenders'];
+          if (rawAllowedSenders) {
+            try {
+              const parsed = JSON.parse(rawAllowedSenders);
+              if (Array.isArray(parsed)) {
+                allowedImageSenders = parsed.filter(
+                  (entry): entry is string => typeof entry === 'string',
+                );
+              }
+            } catch {
+              allowedImageSenders = [];
+            }
+          }
           patchState(store, {
             theme: (data['theme'] as ThemeMode) || store.theme(),
             layout: (data['layout'] as LayoutMode) || store.layout(),
@@ -84,6 +104,7 @@ export const SettingsStore = signalStore(
             showAvatars: data['showAvatars'] !== undefined ? data['showAvatars'] === 'true' : store.showAvatars(),
             logLevel,
             customKeyBindings,
+            allowedImageSenders,
             loading: false,
           });
         } else {
@@ -177,6 +198,36 @@ export const SettingsStore = signalStore(
       async resetAllKeyBindings(): Promise<void> {
         patchState(store, { customKeyBindings: {} });
         await electronService.setSettings({ customKeyBindings: '{}' });
+      },
+
+      /**
+       * Add an email address to the remote-image allowlist.
+       * Images from this sender will always load even when `blockRemoteImages` is true.
+       */
+      async addAllowedImageSender(email: string): Promise<void> {
+        const normalized = email.trim().toLowerCase();
+        if (!normalized) {
+          return;
+        }
+        const current = store.allowedImageSenders();
+        if (current.some((s) => s.toLowerCase() === normalized)) {
+          return; // already in the list
+        }
+        const updated = [...current, normalized];
+        patchState(store, { allowedImageSenders: updated });
+        await electronService.setSettings({ allowedImageSenders: JSON.stringify(updated) });
+      },
+
+      /**
+       * Remove an email address from the remote-image allowlist.
+       */
+      async removeAllowedImageSender(email: string): Promise<void> {
+        const normalized = email.trim().toLowerCase();
+        const updated = store.allowedImageSenders().filter(
+          (s) => s.toLowerCase() !== normalized,
+        );
+        patchState(store, { allowedImageSenders: updated });
+        await electronService.setSettings({ allowedImageSenders: JSON.stringify(updated) });
       },
     };
   })

@@ -80,4 +80,28 @@
       (change)="settingsStore.toggleSetting('showAvatars')"
     >Show sender avatars</mat-slide-toggle>
   </div>
+
+  @if (settingsStore.allowedImageSenders().length > 0) {
+    <div class="allowed-senders-section">
+      <h4>Allowed image senders</h4>
+      <p class="allowed-senders-hint">
+        Remote images are always loaded from these addresses.
+      </p>
+      @for (senderAddress of settingsStore.allowedImageSenders(); track senderAddress) {
+        <div class="allowed-sender-row">
+          <span class="material-symbols-outlined sender-icon" aria-hidden="true">person</span>
+          <span class="sender-address">{{ senderAddress }}</span>
+          <button
+            type="button"
+            mat-icon-button
+            (click)="settingsStore.removeAllowedImageSender(senderAddress)"
+            [attr.aria-label]="'Remove ' + senderAddress + ' from allowed senders'"
+            title="Remove"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      }
+    </div>
+  }
 </section>

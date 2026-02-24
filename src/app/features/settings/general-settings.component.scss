@@ -42,3 +42,48 @@ mat-radio-group {
 .sync-select {
   width: 200px;
 }
+
+// ── Allowed image senders ───────────────────────────────────────────────────
+
+.allowed-senders-section {
+  margin-top: 16px;
+
+  h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    color: var(--color-text-primary);
+  }
+
+  .allowed-senders-hint {
+    font-size: 12px;
+    color: var(--color-text-secondary, #666);
+    margin: 0 0 10px 0;
+  }
+}
+
+.allowed-sender-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-outline-variant, #eee);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  .sender-icon {
+    font-size: 18px;
+    color: var(--color-on-surface-variant, #888);
+    flex-shrink: 0;
+  }
+
+  .sender-address {
+    flex: 1;
+    font-size: 13px;
+    color: var(--color-text-primary);
+    word-break: break-all;
+  }
+}
+

@@ -5,6 +5,7 @@ import { MatRadioModule } from '@angular/material/radio';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatSelectModule } from '@angular/material/select';
 import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatButtonModule } from '@angular/material/button';
 import { ThemeService, ThemeMode } from '../../core/services/theme.service';
 import { UiStore } from '../../store/ui.store';
 import { SettingsStore } from '../../store/settings.store';
@@ -17,6 +18,7 @@ import { LayoutMode, DensityMode } from '../../core/services/layout.service';
     CommonModule, FormsModule,
     MatRadioModule, MatSlideToggleModule,
     MatSelectModule, MatFormFieldModule,
+    MatButtonModule,
   ],
   templateUrl: './general-settings.component.html',
   styleUrl: './general-settings.component.scss',
