@@ -83,6 +83,9 @@ export const IPC_CHANNELS = {
   LABEL_CREATE: 'label:create',
   LABEL_DELETE: 'label:delete',
   LABEL_UPDATE_COLOR: 'label:update-color',
+
+  // Gravatar (main-process check so 404s don't appear in renderer console)
+  GRAVATAR_CHECK: 'gravatar:check',
 } as const;
 
 // Main → Renderer (push events)

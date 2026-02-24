@@ -173,6 +173,11 @@ const electronAPI = {
       ipcRenderer.invoke('label:update-color', accountId, gmailLabelId, color) as Promise<IpcResponse>,
   },
 
+  // Gravatar (main-process check so 404s don't log in renderer console)
+  gravatar: {
+    check: (url: string) => ipcRenderer.invoke('gravatar:check', url) as Promise<IpcResponse>,
+  },
+
   // Event listeners (for push events from main process)
   on: (channel: string, callback: IpcCallback) => {
     const validChannels = [

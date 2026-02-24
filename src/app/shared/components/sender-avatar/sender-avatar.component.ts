@@ -1,6 +1,7 @@
-import { Component, input, signal, computed, effect } from '@angular/core';
+import { Component, input, signal, computed, effect, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { getGravatarUrl } from '../../utils/gravatar.util';
+import { ElectronService } from '../../../core/services/electron.service';
 
 @Component({
   selector: 'app-sender-avatar',
@@ -10,6 +11,8 @@ import { getGravatarUrl } from '../../utils/gravatar.util';
   styleUrl: './sender-avatar.component.scss',
 })
 export class SenderAvatarComponent {
+  private readonly electronService = inject(ElectronService);
+
   readonly email = input<string | null>(null);
   readonly displayName = input<string>('');
   readonly avatarClass = input<string>('sender-avatar');
@@ -36,18 +39,32 @@ export class SenderAvatarComponent {
       }
       this.checkId += 1;
       const id = this.checkId;
-      const img = new Image();
-      img.onload = () => {
-        if (id === this.checkId) {
-          this.gravatarAvailable.set(true);
-        }
-      };
-      img.onerror = () => {
-        if (id === this.checkId) {
-          this.gravatarFailed.set(true);
-        }
-      };
-      img.src = url;
+
+      if (this.electronService.isElectron) {
+        this.electronService.checkGravatar(url).then((result) => {
+          if (id !== this.checkId) {
+            return;
+          }
+          if (result.success && result.data?.available) {
+            this.gravatarAvailable.set(true);
+          } else {
+            this.gravatarFailed.set(true);
+          }
+        });
+      } else {
+        const img = new Image();
+        img.onload = () => {
+          if (id === this.checkId) {
+            this.gravatarAvailable.set(true);
+          }
+        };
+        img.onerror = () => {
+          if (id === this.checkId) {
+            this.gravatarFailed.set(true);
+          }
+        };
+        img.src = url;
+      }
     });
   }
 

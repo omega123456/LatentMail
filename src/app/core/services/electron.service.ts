@@ -157,6 +157,9 @@ interface ElectronAPI {
     delete: (accountId: string, gmailLabelId: string) => Promise<IpcResponse>;
     updateColor: (accountId: string, gmailLabelId: string, color: string | null) => Promise<IpcResponse>;
   };
+  gravatar: {
+    check: (url: string) => Promise<IpcResponse<{ available: boolean; url?: string }>>;
+  };
   logger: {
     getRecentEntries: () => Promise<IpcResponse>;
   };
@@ -438,6 +441,13 @@ export class ElectronService {
 
   async updateLabelColor(accountId: string, gmailLabelId: string, color: string | null): Promise<IpcResponse> {
     return this.invoke(() => this.api!.labels.updateColor(accountId, gmailLabelId, color));
+  }
+
+  /** Check if a Gravatar URL returns 200 (main process does the fetch so 404s don't log in renderer console). */
+  async checkGravatar(url: string): Promise<IpcResponse<{ available: boolean; url?: string }>> {
+    return this.invoke(() => this.api!.gravatar.check(url)) as Promise<
+      IpcResponse<{ available: boolean; url?: string }>
+    >;
   }
 
   // ---- Logger operations ----
