@@ -9,6 +9,7 @@ import { SyncService } from './services/sync-service';
 import { SyncQueueBridge } from './services/sync-queue-bridge';
 import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
+import { NativeDropService } from './services/native-drop-service';
 
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
@@ -105,6 +106,18 @@ function createMainWindow(): void {
     }
   });
 
+  // Initialize Win32 native drag-and-drop after page loads (Chromium's render widget
+  // child HWND and its IDropTarget only exist after the content has rendered)
+  mainWindow.webContents.once('did-finish-load', () => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        NativeDropService.getInstance().initialize(mainWindow);
+      }
+    } catch (err) {
+      logger.warn('Failed to initialize NativeDropService:', err);
+    }
+  });
+
   // Open external links in system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -119,6 +132,7 @@ function createMainWindow(): void {
   });
 
   mainWindow.on('closed', () => {
+    NativeDropService.getInstance().cleanup();
     mainWindow = null;
   });
 

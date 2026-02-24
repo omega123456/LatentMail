@@ -99,6 +99,11 @@ export const IPC_EVENTS = {
   MAIL_FETCH_OLDER_DONE: 'mail:fetch-older-done',
   SYSTEM_NOTIFICATION: 'system:notification',
   SYSTEM_TRAY_ACTION: 'system:tray-action',
+
+  // OS file drag-and-drop (Win32 native addon → renderer)
+  OS_FILE_DRAG_ENTER: 'os-file:drag-enter',
+  OS_FILE_DRAG_LEAVE: 'os-file:drag-leave',
+  OS_FILE_DROP: 'os-file:drop',
 } as const;
 
 // IPC response envelope

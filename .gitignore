@@ -23,6 +23,7 @@ dist
 dist-electron
 .env
 .agent
+.ignore
 
 # Visual Studio Code
 .vscode/*
@@ -45,6 +46,9 @@ __screenshots__/
 .claude
 CONTEXT.md
 .vscode
+
+# Native addon build artifacts
+native/win32-drop-target/build/
 
 # System files
 .DS_Store

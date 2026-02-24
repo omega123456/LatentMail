@@ -47,6 +47,53 @@ After installing dependencies or updating Electron, rebuild native modules:
 npx @electron/rebuild
 ```
 
+### Native Drag-and-Drop Addon (Windows Only)
+
+The app includes a C++ NAPI addon (`native/win32-drop-target/`) that fixes OS file drag-and-drop on Windows (broken by a Chromium regression in Electron 28+). The addon uses `DragAcceptFiles` + window subclassing to intercept `WM_DROPFILES` messages, bypassing Chromium's broken OLE handler.
+
+**Building the addon (Windows only):**
+
+```bash
+# Requires: Visual Studio Build Tools with "Desktop development with C++" workload, Python 3.x
+yarn build:native
+```
+
+This compiles the `.node` binary to `native/win32-drop-target/build/Release/win32_drop_target.node`, targeting the correct Electron ABI. The addon is loaded automatically by `NativeDropService` on app startup.
+
+**Development workflow (Windows):**
+
+```bash
+yarn build:native      # One-time build (or after C++ changes)
+yarn electron:dev      # Start dev mode — addon loads automatically
+```
+
+**Development workflow (macOS/Linux):**
+
+No native addon needed — drag-and-drop works natively through Chromium on these platforms. `yarn build:native` is a no-op on non-Windows. `NativeDropService` skips initialization on non-Windows platforms.
+
+```bash
+yarn electron:dev      # Just works — no addon build needed
+```
+
+**Production / Packaging:**
+
+The addon binary is included automatically when packaging on Windows. The `AutoUnpackNativesPlugin` in `forge.config.ts` extracts `.node` files from the ASAR archive. `NativeDropService` tries the production path (`app.asar.unpacked/native/...`) first, then falls back to the dev path.
+
+```bash
+# Windows
+yarn build:native && yarn package   # or: yarn build:native && yarn make
+
+# macOS/Linux
+yarn package   # or: yarn make (no native build needed)
+```
+
+**When to rebuild:**
+- After changing C++ source files in `native/win32-drop-target/src/`
+- After upgrading Electron (the addon must match the Electron ABI)
+- After `yarn install` (if `node_modules` changed)
+
+**Graceful degradation:** If the addon is not built or fails to load, the app runs normally — OS file drops simply don't work on Windows (same as the current Electron bug behavior). A warning is logged at startup.
+
 ## Architecture Overview
 
 ### Dual-Process Architecture

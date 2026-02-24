@@ -162,6 +162,25 @@
         </div>
       }
 
+      <!-- OS file drag overlay (shown when files from Explorer hover over the window) -->
+      @if (osDragActive() && composeStore.isOpen()) {
+        <div
+          class="os-drag-overlay"
+          role="region"
+          [attr.aria-label]="osDragOnlyImages() ? 'File drop zone — drop images to insert inline' : 'File drop zone — drop files to attach'"
+          aria-live="polite"
+        >
+          <div class="os-drag-overlay-content">
+            <span class="material-symbols-outlined os-drag-icon">
+              {{ osDragOnlyImages() ? 'image' : 'attach_file' }}
+            </span>
+            <span class="os-drag-text">
+              {{ osDragOnlyImages() ? 'Drop images to insert inline' : 'Drop files to attach' }}
+            </span>
+          </div>
+        </div>
+      }
+
       <!-- Resize handles (top, left, top-left — window anchored bottom-right) -->
       <div
         class="resize-handle resize-handle--n"

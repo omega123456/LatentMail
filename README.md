@@ -98,3 +98,49 @@ See [.env.example](.env.example) for all available configuration options.
 | `DATABASE_PATH` | No | Custom SQLite database path |
 | `LOG_LEVEL` | No | Log level: debug/info/warn/error |
 | `SYNC_INTERVAL_MS` | No | Email sync interval (default: 300000ms) |
+
+## Native Drag-and-Drop (Windows)
+
+This project includes an optional native C++ NAPI addon that restores OS file drag-and-drop on Windows (fixes a Chromium regression introduced in later Chromium/Electron versions).
+
+Overview:
+
+- On Windows we use a small native addon located at `native/win32-drop-target/`.
+- It revokes Chromium's OLE drop target and accepts OS file drops, forwarding file paths/content to the Electron main process which then sends IPC push events to the renderer.
+
+Building and running (development):
+
+1. Install prerequisites on Windows:
+   - Visual Studio Build Tools with "Desktop development with C++" workload
+   - Python 3.x (required by node-gyp)
+
+2. Build the native addon (Windows only):
+
+```bash
+yarn build:native
+```
+
+3. Run in development:
+
+```bash
+yarn electron:dev
+# The app will load the .node binary from native/win32-drop-target/build/Release/
+```
+
+macOS / Linux:
+
+- No native addon is required — OS drag-and-drop works natively via Chromium on macOS and Linux. `yarn build:native` is a no-op on those platforms and `NativeDropService` skips initialization.
+
+Packaging for production (Windows):
+
+```bash
+# Build the native addon first (Windows CI or dev machine)
+yarn build:native
+# Then package
+yarn package
+```
+
+Notes:
+
+- If the addon is not built or fails to load, the app runs normally; OS explorer drops on Windows will not work (same as current Chromium behavior). A warning is logged.
+- Rebuild the addon when upgrading Electron (must match Electron ABI) or after modifying any C++ source.

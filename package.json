@@ -15,7 +15,8 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "package": "yarn build:all && electron-forge package",
-    "make": "yarn build:all && electron-forge make"
+    "make": "yarn build:all && electron-forge make",
+    "build:native": "node -e \"if(process.platform==='win32'){const{execSync}=require('child_process');const ev=require('electron/package.json').version;execSync('node-gyp rebuild --target='+ev+' --arch=x64 --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native/win32-drop-target'})}else{console.log('Skipping native addon build (not Windows)')}\""
   },
   "prettier": {
     "printWidth": 100,
@@ -63,6 +64,7 @@
     "sql.js": "^1.14.0",
     "tslib": "^2.3.0",
     "umzug": "^3.8.2",
+    "node-addon-api": "^8.3.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

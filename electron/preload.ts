@@ -188,6 +188,10 @@ const electronAPI = {
       'mail:fetch-older-done',
       'system:notification',
       'system:tray-action',
+      // OS file drag-and-drop (Win32 native addon — canonical defs in ipc-channels.ts)
+      'os-file:drag-enter',
+      'os-file:drag-leave',
+      'os-file:drop',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, callback);

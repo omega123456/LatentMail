@@ -25,6 +25,41 @@ export interface AttachmentContentData {
   content: string;
 }
 
+// --- OS file drag-and-drop payload interfaces (Win32 native addon) ---
+// Canonical channel definitions: electron/ipc/ipc-channels.ts
+
+/** Payload for os-file:drag-enter event. */
+export interface OsDragEnterPayload {
+  fileCount: number;
+  hasImages: boolean;
+  /** True if ALL files are images (no non-image files in the drop). */
+  onlyImages: boolean;
+}
+
+/** An image file from an OS drop, ready for inline insertion. */
+export interface OsDropImage {
+  filename: string;
+  mimeType: string;
+  /** Complete data:image/...;base64,... string ready for TipTap setImage(). */
+  dataUrl: string;
+}
+
+/** A non-image file from an OS drop, compatible with DraftAttachment shape. */
+export interface OsDropAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  /** Base64-encoded file content. */
+  data: string;
+}
+
+/** Payload for os-file:drop event. */
+export interface OsFileDropPayload {
+  images: OsDropImage[];
+  attachments: OsDropAttachment[];
+}
+
 /** Response data from attachment:get-content-as-text IPC (decoded text via iconv-lite in main). */
 export interface AttachmentTextContentData {
   filename: string;
@@ -436,6 +471,24 @@ export class ElectronService {
   /** Payload for mail:fetch-older-done (success or error from queue worker). */
   onFetchOlderDone(): Observable<MailFetchOlderDonePayload> {
     return this.onEvent<MailFetchOlderDonePayload>('mail:fetch-older-done');
+  }
+
+  // --- OS file drag-and-drop events (Win32 native addon → renderer) ---
+  // Channel strings match canonical definitions in electron/ipc/ipc-channels.ts
+
+  /** Fires when files are dragged from OS (Explorer) over the window. */
+  onOsFileDragEnter(): Observable<OsDragEnterPayload> {
+    return this.onEvent<OsDragEnterPayload>('os-file:drag-enter');
+  }
+
+  /** Fires when the OS file drag leaves the window. */
+  onOsFileDragLeave(): Observable<void> {
+    return this.onEvent<void>('os-file:drag-leave');
+  }
+
+  /** Fires when files from OS (Explorer) are dropped on the window. */
+  onOsFileDrop(): Observable<OsFileDropPayload> {
+    return this.onEvent<OsFileDropPayload>('os-file:drop');
   }
 
   onEvent<T = unknown>(channel: string): Observable<T> {

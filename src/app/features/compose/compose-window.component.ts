@@ -4,6 +4,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -13,6 +14,7 @@ import Underline from '@tiptap/extension-underline';
 import Image from '@tiptap/extension-image';
 import { ComposeStore } from '../../store/compose.store';
 import { AccountsStore } from '../../store/accounts.store';
+import { ElectronService, OsFileDropPayload } from '../../core/services/electron.service';
 import { RecipientInputComponent } from './recipient-input.component';
 import { ComposeToolbarComponent } from './compose-toolbar.component';
 import { AttachmentUploadComponent } from './attachment-upload.component';
@@ -49,6 +51,7 @@ interface ResizeState {
 export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy {
   readonly composeStore = inject(ComposeStore);
   private readonly accountsStore = inject(AccountsStore);
+  private readonly electronService = inject(ElectronService);
   private readonly ngZone = inject(NgZone);
   private readonly cdr = inject(ChangeDetectorRef);
   private readonly sanitizer = inject(DomSanitizer);
@@ -72,6 +75,12 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   editor: Editor | null = null;
   private openWatchTimer: ReturnType<typeof setInterval> | null = null;
   private resizeState: ResizeState | null = null;
+  private readonly osDropSubscriptions = new Subscription();
+
+  /** Whether an OS file drag is currently active over the window. */
+  readonly osDragActive = signal(false);
+  /** Whether the current OS drag contains ONLY image files (for overlay state). */
+  readonly osDragOnlyImages = signal(false);
 
   /** Right-click context menu on the editor */
   readonly showEditorContextMenu = signal(false);
@@ -95,6 +104,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
 
   ngOnInit(): void {
     this.composeStore.loadSignatures();
+    this.subscribeToOsDropEvents();
   }
 
   ngAfterViewInit(): void {
@@ -113,6 +123,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   }
 
   ngOnDestroy(): void {
+    this.osDropSubscriptions.unsubscribe();
     if (this.openWatchTimer) {
       clearInterval(this.openWatchTimer);
       this.openWatchTimer = null;
@@ -552,9 +563,11 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   }
 
   private handleFileDrop(event: DragEvent): void {
-    if (!event.dataTransfer?.files) return;
-    for (let i = 0; i < event.dataTransfer.files.length; i++) {
-      const file = event.dataTransfer.files[i];
+    if (!event.dataTransfer?.files) {
+      return;
+    }
+    for (let index = 0; index < event.dataTransfer.files.length; index++) {
+      const file = event.dataTransfer.files[index];
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = (reader.result as string).split(',')[1];
@@ -567,6 +580,73 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
         });
       };
       reader.readAsDataURL(file);
+    }
+  }
+
+  // --- OS file drag-and-drop (Win32 native addon) ---
+
+  /**
+   * Subscribe to OS-level file drag/drop IPC events from the native Win32 addon.
+   * These events are window-level (not compose-specific), so we check composeStore.isOpen()
+   * before acting. Subscriptions live for the component's lifetime.
+   */
+  private subscribeToOsDropEvents(): void {
+    this.osDropSubscriptions.add(
+      this.electronService.onOsFileDragEnter().subscribe((meta) => {
+        if (this.composeStore.isOpen()) {
+          this.osDragActive.set(true);
+          this.osDragOnlyImages.set(meta.onlyImages);
+        }
+      })
+    );
+
+    this.osDropSubscriptions.add(
+      this.electronService.onOsFileDragLeave().subscribe(() => {
+        this.osDragActive.set(false);
+      })
+    );
+
+    this.osDropSubscriptions.add(
+      this.electronService.onOsFileDrop().subscribe((payload) => {
+        this.handleOsFileDrop(payload);
+      })
+    );
+  }
+
+  /**
+   * Handle files dropped from the OS (Windows Explorer) via the native addon.
+   * Images are inserted inline into the TipTap editor; non-images become attachments.
+   */
+  private handleOsFileDrop(payload: OsFileDropPayload): void {
+    // Always clear overlay
+    this.osDragActive.set(false);
+    this.osDragOnlyImages.set(false);
+
+    // Guard: compose must be open and editor available
+    if (!this.composeStore.isOpen() || !this.editor) {
+      return;
+    }
+
+    // Insert images inline into the TipTap editor
+    for (const image of payload.images) {
+      if (this.editor.isFocused) {
+        // Insert at current cursor position
+        this.editor.chain().focus().setImage({ src: image.dataUrl }).run();
+      } else {
+        // Insert at end of document
+        this.editor.chain().focus('end').setImage({ src: image.dataUrl }).run();
+      }
+    }
+
+    // Add non-image files as attachments
+    for (const attachment of payload.attachments) {
+      this.composeStore.addAttachment({
+        id: attachment.id,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        data: attachment.data,
+      });
     }
   }
 }
