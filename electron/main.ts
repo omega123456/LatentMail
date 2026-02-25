@@ -141,7 +141,12 @@ function createMainWindow(): void {
     if (process.platform === 'win32' && !quitting) {
       try {
         const dbService = DatabaseService.getInstance();
-        if (dbService.getSetting('closeToTray') === 'true') {
+        const closeToTrayRaw = dbService.getSetting('closeToTray');
+        // Default to true when unset (matches settings store default); only explicit 'false' closes the app
+        const closeToTray = closeToTrayRaw === null || closeToTrayRaw === undefined
+          ? true
+          : closeToTrayRaw === 'true';
+        if (closeToTray) {
           event.preventDefault();
           mainWindow?.hide();
         }
