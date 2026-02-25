@@ -5,7 +5,6 @@ import * as path from 'path';
 import { app, ipcMain } from 'electron';
 import psl from 'psl';
 import { IPC_CHANNELS, ipcSuccess, type IpcResponse } from './ipc-channels';
-import { DatabaseService } from '../services/database-service';
 
 const DNS_TIMEOUT_MS = 5000;
 const DOH_TIMEOUT_MS = 8000;
@@ -14,9 +13,6 @@ const DISK_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /** Cloudflare DoH JSON API (used when system DNS fails e.g. ECONNREFUSED). */
 const DOH_URL = 'https://cloudflare-dns.com/dns-query';
-
-/** Set to true to skip cache and always resolve from DNS (for debugging). */
-const BIMI_CACHE_DISABLED = false;
 
 export interface BimiGetLogoResult {
   logoUrl: string | null;
@@ -187,17 +183,6 @@ export function registerBimiIpcHandlers(): void {
         return ipcSuccess({ logoUrl: null });
       }
 
-      const db = DatabaseService.getInstance();
-      if (!BIMI_CACHE_DISABLED) {
-        const cached = db.getBimiCachedLogo(domain);
-        if (cached !== null && cached !== '') {
-          const logoUrl = await ensureLogoCached(cached);
-          return ipcSuccess({
-            logoUrl,
-          });
-        }
-      }
-
       const toTry = domainsToTry(domain);
       for (const tryDomain of toTry) {
         const hostname = `default._bimi.${tryDomain}`;
@@ -220,15 +205,9 @@ export function registerBimiIpcHandlers(): void {
 
         const remoteLogoUrl = parseBimiLogoUrl(records);
         if (remoteLogoUrl) {
-          if (!BIMI_CACHE_DISABLED) {
-            db.setBimiCachedLogo(domain, remoteLogoUrl);
-          }
           const logoUrl = await ensureLogoCached(remoteLogoUrl);
           return ipcSuccess({ logoUrl });
         }
-      }
-      if (!BIMI_CACHE_DISABLED) {
-        db.setBimiCachedLogo(domain, '');
       }
       return ipcSuccess({ logoUrl: null });
     }

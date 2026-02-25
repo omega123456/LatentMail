@@ -160,42 +160,6 @@ export class DatabaseService {
     return settings;
   }
 
-  // ---- BIMI logo cache (sender avatar) ----
-
-  /** Returns cached logo_url if not expired; null = cache miss. Empty string = cached "no logo". */
-  getBimiCachedLogo(domain: string): string | null {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-    const result = this.db.exec('SELECT logo_url, cached_at FROM bimi_logo_cache WHERE domain = :domain', {
-      ':domain': domain,
-    });
-    if (result.length === 0 || result[0].values.length === 0) {
-      return null;
-    }
-    const row = result[0].values[0];
-    const logoUrl = row[0] as string;
-    const cachedAt = row[1] as string;
-    const cachedTime = new Date(cachedAt).getTime();
-    const now = Date.now();
-    const ttlMs = logoUrl !== '' ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
-    if (now - cachedTime > ttlMs) {
-      return null;
-    }
-    return logoUrl;
-  }
-
-  setBimiCachedLogo(domain: string, logoUrl: string): void {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-    this.db.run(
-      'INSERT INTO bimi_logo_cache (domain, logo_url, cached_at) VALUES (:domain, :logoUrl, datetime(\'now\')) ON CONFLICT(domain) DO UPDATE SET logo_url = excluded.logo_url, cached_at = datetime(\'now\')',
-      { ':domain': domain, ':logoUrl': logoUrl }
-    );
-    this.scheduleSave();
-  }
-
   // ---- Account operations ----
 
   getAccounts(): Array<{ id: number; email: string; display_name: string; avatar_url: string | null; is_active: number; needs_reauth: number }> {
