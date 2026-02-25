@@ -1,17 +1,22 @@
+import * as crypto from 'crypto';
 import { promises as dns } from 'dns';
-import { ipcMain } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
+import { app, ipcMain } from 'electron';
 import psl from 'psl';
 import { IPC_CHANNELS, ipcSuccess, type IpcResponse } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 
 const DNS_TIMEOUT_MS = 5000;
 const DOH_TIMEOUT_MS = 8000;
+const IMAGE_FETCH_TIMEOUT_MS = 10000;
+const DISK_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /** Cloudflare DoH JSON API (used when system DNS fails e.g. ECONNREFUSED). */
 const DOH_URL = 'https://cloudflare-dns.com/dns-query';
 
 /** Set to true to skip cache and always resolve from DNS (for debugging). */
-const BIMI_CACHE_DISABLED = true;
+const BIMI_CACHE_DISABLED = false;
 
 export interface BimiGetLogoResult {
   logoUrl: string | null;
@@ -116,6 +121,60 @@ async function resolveTxtViaDoh(hostname: string): Promise<string[][]> {
   return out;
 }
 
+export function getBimiCacheDir(): string {
+  return path.join(app.getPath('userData'), 'bimi-cache');
+}
+
+/** Safe filename: hash of URL (hex). */
+function hashRemoteUrl(remoteUrl: string): string {
+  return crypto.createHash('sha256').update(remoteUrl).digest('hex').slice(0, 32);
+}
+
+/**
+ * Ensure the logo image is on disk; return bimi-logo:// URL for fast loading.
+ * Fetches from remote if missing or older than DISK_CACHE_TTL_MS.
+ */
+async function ensureLogoCached(remoteUrl: string): Promise<string> {
+  const cacheDir = getBimiCacheDir();
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
+  const hash = hashRemoteUrl(remoteUrl);
+  const now = Date.now();
+  const extensions = ['.svg', '.png'] as const;
+  for (const ext of extensions) {
+    const filePath = path.join(cacheDir, hash + ext);
+    try {
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs < DISK_CACHE_TTL_MS) {
+        return `bimi-logo://${hash}${ext}`;
+      }
+    } catch {
+      // file missing or unreadable
+    }
+  }
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+    const response = await fetch(remoteUrl, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      return remoteUrl;
+    }
+    const contentType = response.headers.get('content-type') ?? '';
+    const ext = contentType.includes('png') ? '.png' : '.svg';
+    const filePath = path.join(cacheDir, hash + ext);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(filePath, buffer);
+    return `bimi-logo://${hash}${ext}`;
+  } catch {
+    return remoteUrl;
+  }
+}
+
 export function registerBimiIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.BIMI_GET_LOGO,
@@ -131,9 +190,10 @@ export function registerBimiIpcHandlers(): void {
       const db = DatabaseService.getInstance();
       if (!BIMI_CACHE_DISABLED) {
         const cached = db.getBimiCachedLogo(domain);
-        if (cached !== null) {
+        if (cached !== null && cached !== '') {
+          const logoUrl = await ensureLogoCached(cached);
           return ipcSuccess({
-            logoUrl: cached === '' ? null : cached,
+            logoUrl,
           });
         }
       }
@@ -158,11 +218,12 @@ export function registerBimiIpcHandlers(): void {
           }
         }
 
-        const logoUrl = parseBimiLogoUrl(records);
-        if (logoUrl) {
+        const remoteLogoUrl = parseBimiLogoUrl(records);
+        if (remoteLogoUrl) {
           if (!BIMI_CACHE_DISABLED) {
-            db.setBimiCachedLogo(domain, logoUrl);
+            db.setBimiCachedLogo(domain, remoteLogoUrl);
           }
+          const logoUrl = await ensureLogoCached(remoteLogoUrl);
           return ipcSuccess({ logoUrl });
         }
       }

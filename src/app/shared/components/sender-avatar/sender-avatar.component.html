@@ -2,7 +2,7 @@
   @if (bimiLogoUrl()) {
     <img
       class="sender-avatar-img"
-      [src]="bimiLogoUrl()"
+      [src]="sanitizedLogoUrl()"
       [alt]="''"
       referrerPolicy="no-referrer"
     />

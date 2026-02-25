@@ -1,5 +1,6 @@
 import { Component, input, signal, computed, effect, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { DomSanitizer } from '@angular/platform-browser';
 import { ElectronService } from '../../../core/services/electron.service';
 
 @Component({
@@ -11,12 +12,22 @@ import { ElectronService } from '../../../core/services/electron.service';
 })
 export class SenderAvatarComponent {
   private readonly electronService = inject(ElectronService);
+  private readonly sanitizer = inject(DomSanitizer);
 
   readonly email = input<string | null>(null);
   readonly displayName = input<string>('');
   readonly avatarClass = input<string>('sender-avatar');
 
   readonly bimiLogoUrl = signal<string | null>(null);
+
+  /** Sanitized for img src so custom schemes (e.g. bimi-logo://) are allowed. */
+  readonly sanitizedLogoUrl = computed(() => {
+    const url = this.bimiLogoUrl();
+    if (!url) {
+      return null;
+    }
+    return this.sanitizer.bypassSecurityTrustResourceUrl(url);
+  });
 
   private requestId = 0;
 

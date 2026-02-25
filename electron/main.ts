@@ -1,7 +1,9 @@
-import { app, BrowserWindow, shell, dialog, Notification } from 'electron';
+import { app, BrowserWindow, shell, dialog, Notification, protocol } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import { LoggerService } from './services/logger-service';
 import { registerAllIpcHandlers } from './ipc';
+import { getBimiCacheDir } from './ipc/bimi-ipc';
 import { DatabaseService } from './services/database-service';
 import { OAuthService } from './services/oauth-service';
 import { SyncService } from './services/sync-service';
@@ -13,6 +15,11 @@ import { TrayService } from './services/tray-service';
 
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
+
+// Register custom scheme before app is ready (required for bimi-logo:// to load in renderer)
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'bimi-logo', privileges: { bypassCSP: true, standard: true } },
+]);
 
 // Phase 1: Initialize logging with env-based defaults (no DB dependency yet).
 const logger = LoggerService.getInstance();
@@ -50,6 +57,25 @@ if (!gotTheLock) {
 
     // Register IPC handlers
     registerAllIpcHandlers();
+
+    // Serve cached BIMI logos from disk (bimi-logo://hash.ext)
+    protocol.handle('bimi-logo', (request) => {
+      const url = new URL(request.url);
+      const filename = url.hostname;
+      if (!/^[a-f0-9]{32}\.(svg|png)$/.test(filename)) {
+        return new Response('Forbidden', { status: 403 });
+      }
+      const filePath = path.join(getBimiCacheDir(), filename);
+      try {
+        const data = fs.readFileSync(filePath);
+        const contentType = filename.endsWith('.png') ? 'image/png' : 'image/svg+xml';
+        return new Response(data, {
+          headers: { 'Content-Type': contentType },
+        });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      }
+    });
 
     // Initialize OAuth token refresh timers for existing accounts
     try {
