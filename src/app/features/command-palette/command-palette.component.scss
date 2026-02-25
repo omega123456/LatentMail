@@ -70,12 +70,17 @@
   margin: 0;
 }
 
-// Scrollable results list
+// Scrollable results list — fixed viewport height so only ~8 rows visible;
+// full list is in the DOM for arrow-key cycling and mouse scroll
+$palette-row-height: 40px;
+$palette-visible-rows: 8;
+
 .palette-results {
   overflow-y: auto;
   flex: 1;
   padding: 4px 0;
   min-height: 0;
+  max-height: $palette-visible-rows * $palette-row-height;
 }
 
 .palette-section-label {

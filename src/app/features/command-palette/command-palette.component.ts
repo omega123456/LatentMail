@@ -8,7 +8,6 @@ import {
   ViewChild,
   ElementRef,
   ChangeDetectionStrategy,
-  HostListener,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -17,8 +16,8 @@ import { CommandRegistryService, Command } from '../../core/services/command-reg
 
 /** Maximum number of recent commands displayed above the search results. */
 const MAX_RECENT_DISPLAY = 5;
-/** Maximum number of search results shown in the main list. */
-const MAX_RESULTS_DISPLAY = 8;
+/** Maximum number of search results when filtering by query (no cap when query is empty). */
+const MAX_SEARCH_RESULTS = 50;
 
 @Component({
   selector: 'app-command-palette',
@@ -77,26 +76,25 @@ export class CommandPaletteComponent implements OnDestroy {
   });
 
   /**
-   * All commands filtered by the current search query.
-   * When the query is empty, commands already shown in the Recent section are
-   * excluded to avoid duplicate entries in the combined list.
+   * All commands filtered by the current search query. Full list is always
+   * rendered so the user can cycle through everything with arrow keys or
+   * mouse scroll; the results container has a fixed max-height so only a
+   * few rows are visible at once.
    */
   readonly filteredCommands = computed<Command[]>(() => {
     const query = this.searchQuery().trim().toLowerCase();
     const all = this.commandRegistry.getAllCommands();
     if (!query) {
-      // Remove commands that appear in the recent section to avoid duplicates.
       const recentIds = new Set(this.recentCommands().map(cmd => cmd.id));
-      const remaining = recentIds.size > 0
+      return recentIds.size > 0
         ? all.filter(cmd => !recentIds.has(cmd.id))
         : all;
-      return remaining.slice(0, MAX_RESULTS_DISPLAY);
     }
     return all
       .filter(cmd =>
         this.fuzzyMatch(query, cmd.label) || this.fuzzyMatch(query, cmd.description ?? '')
       )
-      .slice(0, MAX_RESULTS_DISPLAY);
+      .slice(0, MAX_SEARCH_RESULTS);
   });
 
   /** Show the "Recent" section only when the query is empty and there are recents. */
@@ -126,22 +124,23 @@ export class CommandPaletteComponent implements OnDestroy {
   });
 
   // -------------------------------------------------------------------------
-  // Keyboard handling (captured at the overlay host level)
+  // Keyboard handling (bound on the search input only to avoid double-handling)
   // -------------------------------------------------------------------------
 
-  @HostListener('keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
     switch (event.key) {
       case 'ArrowDown': {
         event.preventDefault();
         const total = Math.max(1, this.totalItems());
         this.focusedIndex.set((this.focusedIndex() + 1) % total);
+        this.scrollFocusedIntoView();
         break;
       }
       case 'ArrowUp': {
         event.preventDefault();
         const total = Math.max(1, this.totalItems());
         this.focusedIndex.set((this.focusedIndex() - 1 + total) % total);
+        this.scrollFocusedIntoView();
         break;
       }
       case 'Enter': {
@@ -217,6 +216,25 @@ export class CommandPaletteComponent implements OnDestroy {
   // -------------------------------------------------------------------------
   // Private
   // -------------------------------------------------------------------------
+
+  /** Scroll the list so the focused item is visible; minimal scroll only when needed. */
+  private scrollFocusedIntoView(): void {
+    setTimeout(() => {
+      const id = this.activeItemId();
+      const listbox = document.getElementById('palette-listbox');
+      const item = id ? document.getElementById(id) : null;
+      if (!listbox || !item) {
+        return;
+      }
+      const listboxRect = listbox.getBoundingClientRect();
+      const itemRect = item.getBoundingClientRect();
+      if (itemRect.top < listboxRect.top) {
+        listbox.scrollTop += itemRect.top - listboxRect.top;
+      } else if (itemRect.bottom > listboxRect.bottom) {
+        listbox.scrollTop += itemRect.bottom - listboxRect.bottom;
+      }
+    }, 0);
+  }
 
   private executeFocused(): void {
     const index = this.focusedIndex();
