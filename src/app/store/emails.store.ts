@@ -375,7 +375,8 @@ export const EmailsStore = signalStore(
           }
           // Response has same list-row shape as folder fetch when folderId was passed; reuse for list update.
           // Exclude subject so we keep the list item's subject (do not overwrite from thread response).
-          const { messages: _m, subject: _subject, ...listRow } = thread;
+          // Exclude isRead so we do not overwrite optimistic mark-as-read when reconcile runs before the flag op persists.
+          const { messages: _m, subject: _subject, isRead: _isRead, ...listRow } = thread;
           const updatedThreads = store.threads().map((t) =>
             t.xGmThrid === threadId ? { ...t, ...listRow } : t
           );
