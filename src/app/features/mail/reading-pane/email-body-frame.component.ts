@@ -5,6 +5,7 @@ import {
   effect,
   ElementRef,
   AfterViewInit,
+  OnDestroy,
   signal,
   computed,
   inject,
@@ -34,7 +35,11 @@ const SRCDOC_SHELL_HEAD =
   '</head>' +
   '<body style="margin:0;padding:0;font-size:14px;line-height:1.6;' +
   'font-family:inherit;color:inherit;word-break:break-word;">';
-const SRCDOC_SHELL_TAIL = '</body></html>';
+
+/** Injected into srcdoc to report content height to parent when body size changes (e.g. after images load). */
+const SRCDOC_RESIZE_SCRIPT =
+  '<script>(function(){function sendHeight(){var b=document.body,h=document.documentElement,hgt=Math.max(b.scrollHeight,b.offsetHeight,h.scrollHeight,h.offsetHeight,120);if(window.parent!==window)window.parent.postMessage({type:"email-body-frame-resize",height:hgt},"*")}sendHeight();if(typeof ResizeObserver!=="undefined"){var ro=new ResizeObserver(sendHeight);ro.observe(document.body)}window.addEventListener("load",sendHeight)})();<\/script>';
+const SRCDOC_SHELL_TAIL = SRCDOC_RESIZE_SCRIPT + '</body></html>';
 
 @Component({
   selector: 'app-email-body-frame',
@@ -43,7 +48,7 @@ const SRCDOC_SHELL_TAIL = '</body></html>';
   templateUrl: './email-body-frame.component.html',
   styleUrls: ['./email-body-frame.component.scss'],
 })
-export class EmailBodyFrameComponent implements AfterViewInit {
+export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
   readonly htmlBody = input<string>('');
   /** The sender's email address (used for the per-sender image allowlist). */
   readonly senderEmail = input<string>('');
@@ -115,6 +120,8 @@ export class EmailBodyFrameComponent implements AfterViewInit {
     });
   }
 
+  private readonly boundMessageHandler = (event: MessageEvent): void => this.onMessage(event);
+
   ngAfterViewInit(): void {
     const iframeElement = this.frame()?.nativeElement;
     if (iframeElement) {
@@ -127,6 +134,25 @@ export class EmailBodyFrameComponent implements AfterViewInit {
         this.bypassBlock(),
       );
     }
+    window.addEventListener('message', this.boundMessageHandler);
+  }
+
+  ngOnDestroy(): void {
+    window.removeEventListener('message', this.boundMessageHandler);
+  }
+
+  private onMessage(event: MessageEvent): void {
+    const iframeElement = this.frame()?.nativeElement;
+    if (
+      !iframeElement ||
+      event.source !== iframeElement.contentWindow ||
+      event.data?.type !== 'email-body-frame-resize' ||
+      typeof event.data.height !== 'number'
+    ) {
+      return;
+    }
+    const height = Math.max(120, Math.min(event.data.height, 50_000));
+    iframeElement.style.height = `${height}px`;
   }
 
   onIframeLoad(): void {
