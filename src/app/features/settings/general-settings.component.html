@@ -66,6 +66,19 @@
   </div>
 </section>
 
+@if (isWindows()) {
+  <section class="settings-section">
+    <h3>System</h3>
+    <div class="toggle-row">
+      <mat-slide-toggle
+        [checked]="settingsStore.closeToTray()"
+        (change)="settingsStore.toggleSetting('closeToTray')"
+      >Close to system tray</mat-slide-toggle>
+    </div>
+    <p class="close-to-tray-hint">When enabled, closing the window keeps the app running in the system tray. Right-click the tray icon to quit.</p>
+  </section>
+}
+
 <section class="settings-section">
   <h3>Privacy</h3>
   <div class="toggle-row">

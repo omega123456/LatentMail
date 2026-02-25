@@ -18,6 +18,8 @@ export interface SettingsState {
   showUnreadCounts: boolean;
   blockRemoteImages: boolean;
   showAvatars: boolean;
+  /** When true, closing the main window on Windows hides it to the system tray instead of quitting. */
+  closeToTray: boolean;
   logLevel: LogLevel;
   /** Custom keybinding overrides: command ID → normalized key combo string. */
   customKeyBindings: Record<string, string>;
@@ -40,7 +42,8 @@ const initialState: SettingsState = {
   showUnreadCounts: true,
   blockRemoteImages: true,
   showAvatars: true,
-  logLevel: 'info',
+  closeToTray: true,
+  logLevel: 'error',
   customKeyBindings: {},
   allowedImageSenders: [],
   loading: false,
@@ -68,7 +71,7 @@ export const SettingsStore = signalStore(
           const storedLogLevel = data['logLevel'];
           const logLevel: LogLevel = (VALID_LOG_LEVELS as readonly string[]).includes(storedLogLevel)
             ? (storedLogLevel as LogLevel)
-            : 'info';
+            : 'error';
           let customKeyBindings: Record<string, string> = {};
           const rawKeyBindings = data['customKeyBindings'];
           if (rawKeyBindings) {
@@ -102,6 +105,7 @@ export const SettingsStore = signalStore(
             showUnreadCounts: data['showUnreadCounts'] !== undefined ? data['showUnreadCounts'] === 'true' : store.showUnreadCounts(),
             blockRemoteImages: data['blockRemoteImages'] !== undefined ? data['blockRemoteImages'] === 'true' : store.blockRemoteImages(),
             showAvatars: data['showAvatars'] !== undefined ? data['showAvatars'] === 'true' : store.showAvatars(),
+            closeToTray: data['closeToTray'] !== undefined ? data['closeToTray'] === 'true' : store.closeToTray(),
             logLevel,
             customKeyBindings,
             allowedImageSenders,

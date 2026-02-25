@@ -133,10 +133,21 @@ function createMainWindow(): void {
     return { action: 'deny' };
   });
 
-  // Save window state on close
-  mainWindow.on('close', () => {
+  // Save window state on close; on Windows, hide to tray instead of closing when closeToTray is enabled
+  mainWindow.on('close', (event) => {
     if (mainWindow) {
       saveWindowState(mainWindow);
+    }
+    if (process.platform === 'win32' && !quitting) {
+      try {
+        const dbService = DatabaseService.getInstance();
+        if (dbService.getSetting('closeToTray') === 'true') {
+          event.preventDefault();
+          mainWindow?.hide();
+        }
+      } catch {
+        // If reading the setting fails, fall through to default close behavior
+      }
     }
   });
 
@@ -219,6 +230,9 @@ app.on('before-quit', async (event) => {
       // Ignore errors during shutdown check
     }
   }
+
+  // Mark as quitting so the window close handler does not intercept the close event
+  quitting = true;
 
   // Stop background sync, IDLE, and disconnect IMAP
   try {

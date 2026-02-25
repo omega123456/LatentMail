@@ -416,6 +416,40 @@ export class MailQueueService {
     return count;
   }
 
+  /**
+   * Cancel all pending in-memory queue items for a given account.
+   * Items currently being processed (`'processing'` status) are left to complete
+   * or fail naturally — they cannot be safely interrupted mid-execution.
+   * Returns the number of items cancelled.
+   */
+  cancelAllForAccount(accountId: number): number {
+    let cancelledCount = 0;
+    for (const item of this.items.values()) {
+      if (item.accountId !== accountId) {
+        continue;
+      }
+      if (item.status !== 'pending') {
+        continue;
+      }
+      item.status = 'cancelled';
+      item.error = undefined;
+      item.completedAt = new Date().toISOString();
+      this.cleanupDedupKey(item);
+      this.emitUpdate(item);
+      // Clear any pending retry timer
+      const retryTimer = this.retryTimers.get(item.queueId);
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        this.retryTimers.delete(item.queueId);
+      }
+      cancelledCount++;
+    }
+    if (cancelledCount > 0) {
+      log.info(`[MailQueue] Cancelled ${cancelledCount} pending items for account ${accountId}`);
+    }
+    return cancelledCount;
+  }
+
   /** Cancel a pending (not yet processing) operation. */
   cancel(queueId: string): boolean {
     const item = this.items.get(queueId);

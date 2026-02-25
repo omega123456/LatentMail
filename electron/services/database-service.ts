@@ -214,7 +214,37 @@ export class DatabaseService {
 
   deleteAccount(id: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('DELETE FROM accounts WHERE id = :id', { ':id': id });
+    this.db.run('BEGIN');
+    try {
+      // Delete all account data explicitly — do not rely on FK ON DELETE CASCADE
+      // since foreign_keys enforcement can be unreliable in sql.js across sessions.
+
+      // attachments and search_index reference emails(id) with no account_id column;
+      // delete them via subquery before the emails rows are removed.
+      this.db.run(
+        'DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)',
+        { ':accountId': id }
+      );
+      this.db.run(
+        'DELETE FROM search_index WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)',
+        { ':accountId': id }
+      );
+      // Junction tables have no FK constraint to accounts — must be deleted explicitly.
+      this.db.run('DELETE FROM email_folders WHERE account_id = :accountId', { ':accountId': id });
+      this.db.run('DELETE FROM thread_folders WHERE account_id = :accountId', { ':accountId': id });
+      // Direct account-owned tables.
+      this.db.run('DELETE FROM emails WHERE account_id = :accountId', { ':accountId': id });
+      this.db.run('DELETE FROM threads WHERE account_id = :accountId', { ':accountId': id });
+      this.db.run('DELETE FROM folder_state WHERE account_id = :accountId', { ':accountId': id });
+      this.db.run('DELETE FROM labels WHERE account_id = :accountId', { ':accountId': id });
+      this.db.run('DELETE FROM filters WHERE account_id = :accountId', { ':accountId': id });
+      // Finally remove the accounts row itself.
+      this.db.run('DELETE FROM accounts WHERE id = :id', { ':id': id });
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
     this.scheduleSave();
     log.info(`Deleted account ${id} and all related data`);
   }

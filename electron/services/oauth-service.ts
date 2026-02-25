@@ -163,20 +163,65 @@ export class OAuthService {
   }
 
   /**
-   * Remove an account: revoke tokens, delete from DB, clear credentials.
+   * Remove an account: stop in-memory resources, revoke tokens, delete DB data, clear credentials.
+   *
+   * Cleanup order:
+   *  1. Cancel refresh timer (prevents spurious token refreshes after removal)
+   *  2. Stop IDLE watchers for the account (prevents new sync triggers)
+   *  3. Cancel pending in-memory queue items for the account
+   *  4. Disconnect IMAP connections for the account
+   *  5. Revoke OAuth refresh token with Google
+   *  6. Delete all account data from the database (wrapped in a transaction)
+   *  7. Remove stored credentials from OS secure storage
+   *
+   * Each service cleanup step is individually wrapped in try/catch so that
+   * failure in one step does not prevent the remaining steps from running.
    */
   async logout(accountId: string): Promise<void> {
     const credentialService = CredentialService.getInstance();
     const db = DatabaseService.getInstance();
+    const numericAccountId = Number(accountId);
 
-    // Cancel any pending refresh timer
+    if (!Number.isFinite(numericAccountId)) {
+      log.error(`logout: invalid accountId "${accountId}" — cannot perform account removal`);
+      return;
+    }
+
+    // Step 1: Cancel any pending refresh timer
     const timer = this.refreshTimers.get(accountId);
     if (timer) {
       clearTimeout(timer);
       this.refreshTimers.delete(accountId);
     }
 
-    // Revoke the refresh token with Google
+    // Step 2: Stop IDLE watchers for the account (prevents new sync triggers from its IMAP connection)
+    try {
+      const { SyncService } = require('./sync-service');
+      SyncService.getInstance().stopIdle(numericAccountId);
+      log.info(`Stopped IDLE watchers for account ${accountId}`);
+    } catch (err) {
+      log.warn(`Failed to stop IDLE for account ${accountId} (continuing):`, err);
+    }
+
+    // Step 3: Cancel pending in-memory queue items for the account
+    try {
+      const { MailQueueService } = require('./mail-queue-service');
+      const cancelledCount = MailQueueService.getInstance().cancelAllForAccount(numericAccountId);
+      log.info(`Cancelled ${cancelledCount} pending queue items for account ${accountId}`);
+    } catch (err) {
+      log.warn(`Failed to cancel queue items for account ${accountId} (continuing):`, err);
+    }
+
+    // Step 4: Disconnect IMAP connections for the account
+    try {
+      const { ImapService } = require('./imap-service');
+      await ImapService.getInstance().disconnect(accountId);
+      log.info(`Disconnected IMAP for account ${accountId}`);
+    } catch (err) {
+      log.warn(`Failed to disconnect IMAP for account ${accountId} (continuing):`, err);
+    }
+
+    // Step 5: Revoke the refresh token with Google
     const tokens = credentialService.getTokens(accountId);
     if (tokens?.refreshToken) {
       try {
@@ -187,10 +232,10 @@ export class OAuthService {
       }
     }
 
-    // Delete all account data from the database
-    db.deleteAccount(Number(accountId));
+    // Step 6: Delete all account data from the database (transaction inside deleteAccount)
+    db.deleteAccount(numericAccountId);
 
-    // Remove stored credentials
+    // Step 7: Remove stored credentials from OS secure storage
     credentialService.removeTokens(accountId);
 
     log.info(`Account ${accountId} fully removed`);

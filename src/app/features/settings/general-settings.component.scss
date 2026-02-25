@@ -62,6 +62,12 @@ mat-radio-group {
   margin: 4px 0 16px 0;
 }
 
+.close-to-tray-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary, #666);
+  margin: 4px 0 0 0;
+}
+
 .whitelist-container {
   margin-top: 12px;
   transition: opacity 200ms ease-in-out;

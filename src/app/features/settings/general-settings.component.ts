@@ -12,6 +12,7 @@ import { ThemeService, ThemeMode } from '../../core/services/theme.service';
 import { UiStore } from '../../store/ui.store';
 import { SettingsStore } from '../../store/settings.store';
 import { LayoutMode, DensityMode } from '../../core/services/layout.service';
+import { ElectronService } from '../../core/services/electron.service';
 
 @Component({
   selector: 'app-general-settings',
@@ -31,6 +32,10 @@ export class GeneralSettingsComponent implements OnInit {
   readonly themeService = inject(ThemeService);
   readonly uiStore = inject(UiStore);
   readonly settingsStore = inject(SettingsStore);
+  private readonly electronService = inject(ElectronService);
+
+  /** True when running on Windows — controls visibility of Windows-only settings. */
+  readonly isWindows = signal(false);
 
   readonly pageSizeOptions = [5, 10, 25];
 
@@ -71,6 +76,11 @@ export class GeneralSettingsComponent implements OnInit {
 
   ngOnInit(): void {
     this.settingsStore.loadSettings();
+    this.electronService.getPlatform().then((platform) => {
+      this.isWindows.set(platform === 'win32');
+    }).catch(() => {
+      // Defaults to false — Windows-only section will not render on failure
+    });
   }
 
   onThemeChange(mode: ThemeMode): void {
