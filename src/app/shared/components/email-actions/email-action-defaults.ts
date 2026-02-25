@@ -59,7 +59,7 @@ export function getDefaultEmailActions(): EmailAction[] {
       icon: 'delete',
       label: 'Delete',
       group: 'manage',
-      isVisible: () => true,
+      isVisible: (ctx: EmailActionContext) => ctx.activeFolderId !== '[Gmail]/Trash',
       isEnabled: () => true,
     },
     {

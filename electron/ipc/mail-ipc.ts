@@ -572,14 +572,21 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Delete messages (via queue)
+  // Delete messages (via queue) — always a soft-delete (move to Trash).
+  // Returns no-op success when folder is already [Gmail]/Trash since there
+  // is no meaningful action to take (Trash items cannot be permanently deleted
+  // through this application).
   ipcMain.handle(IPC_CHANNELS.MAIL_DELETE, async (_event, accountId: string, messageIds: string[], folder: string) => {
     try {
       log.info(`Enqueuing delete of ${messageIds.length} messages from ${folder} for account ${accountId}`);
       const numAccountId = Number(accountId);
       const queueService = MailQueueService.getInstance();
 
-      const isPermanent = folder === '[Gmail]/Trash';
+      // No-op: deleting from Trash is not supported — return early with success.
+      if (folder === '[Gmail]/Trash') {
+        log.info(`MAIL_DELETE: folder is [Gmail]/Trash — no-op (permanent delete not supported)`);
+        return ipcSuccess({ queueId: null });
+      }
 
       const resolvedEmails: Array<Record<string, unknown>> = [];
       for (const id of messageIds) {
@@ -607,27 +614,24 @@ export function registerMailIpcHandlers(): void {
         resolvedEmailsMeta.push({ xGmMsgId, xGmThrid });
       }
 
-      // Optimistic DB update
-      if (isPermanent) {
-        for (const email of deduped.values()) {
-          db.removeEmailAndAssociations(numAccountId, String(email['xGmMsgId']));
+      // Optimistic DB update: move email folder associations to Trash immediately
+      // so the UI reflects the deletion before the IMAP queue worker confirms.
+      for (const email of deduped.values()) {
+        const xGmMsgId = String(email['xGmMsgId'] || '');
+        const xGmThrid = String(email['xGmThrid'] || '');
+        if (!xGmMsgId) {
+          continue;
         }
-      } else {
-        for (const email of deduped.values()) {
-          const xGmMsgId = String(email['xGmMsgId'] || '');
-          const xGmThrid = String(email['xGmThrid'] || '');
-          if (!xGmMsgId) continue;
 
-          db.moveEmailFolder(numAccountId, xGmMsgId, folder, '[Gmail]/Trash', null);
+        db.moveEmailFolder(numAccountId, xGmMsgId, folder, '[Gmail]/Trash', null);
 
-          if (xGmThrid) {
-            const internalThreadId = db.getThreadInternalId(numAccountId, xGmThrid);
-            if (internalThreadId != null) {
-              if (!db.threadHasEmailsInFolder(numAccountId, xGmThrid, folder)) {
-                db.moveThreadFolder(numAccountId, xGmThrid, folder, '[Gmail]/Trash');
-              } else {
-                db.upsertThreadFolder(numAccountId, xGmThrid, '[Gmail]/Trash');
-              }
+        if (xGmThrid) {
+          const internalThreadId = db.getThreadInternalId(numAccountId, xGmThrid);
+          if (internalThreadId != null) {
+            if (!db.threadHasEmailsInFolder(numAccountId, xGmThrid, folder)) {
+              db.moveThreadFolder(numAccountId, xGmThrid, folder, '[Gmail]/Trash');
+            } else {
+              db.upsertThreadFolder(numAccountId, xGmThrid, '[Gmail]/Trash');
             }
           }
         }
@@ -641,30 +645,25 @@ export function registerMailIpcHandlers(): void {
           xGmMsgIds: Array.from(deduped.keys()),
           folder,
           emailMeta: resolvedEmailsMeta,
-          permanent: isPermanent,
         },
         description,
       );
 
       // Register pending operations so FETCH_THREAD blocks IMAP re-fetch until the
-      // queue worker confirms the server-side delete. Group by thread.
-      // For permanent deletes the emails are already removed from DB; only register for
-      // soft deletes (moved to Trash) where the email row still exists in the DB.
-      if (!isPermanent) {
-        const pendingOpService = PendingOpService.getInstance();
-        const byThread = new Map<string, string[]>();
-        for (const { xGmMsgId, xGmThrid } of resolvedEmailsMeta) {
-          if (!xGmThrid) {
-            continue;
-          }
-          if (!byThread.has(xGmThrid)) {
-            byThread.set(xGmThrid, []);
-          }
-          byThread.get(xGmThrid)!.push(xGmMsgId);
+      // queue worker confirms the server-side move to Trash. Group by thread.
+      const pendingOpService = PendingOpService.getInstance();
+      const byThread = new Map<string, string[]>();
+      for (const { xGmMsgId, xGmThrid } of resolvedEmailsMeta) {
+        if (!xGmThrid) {
+          continue;
         }
-        for (const [xGmThrid, messageIdList] of byThread) {
-          pendingOpService.register(numAccountId, xGmThrid, messageIdList);
+        if (!byThread.has(xGmThrid)) {
+          byThread.set(xGmThrid, []);
         }
+        byThread.get(xGmThrid)!.push(xGmMsgId);
+      }
+      for (const [xGmThrid, messageIdList] of byThread) {
+        pendingOpService.register(numAccountId, xGmThrid, messageIdList);
       }
 
       return ipcSuccess({ queueId });

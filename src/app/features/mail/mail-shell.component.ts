@@ -158,6 +158,10 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     switch (event.action) {
       case 'delete': {
+        // Silently no-op when viewing Trash — deleting from Trash is not supported.
+        if (currentFolder === '[Gmail]/Trash') {
+          break;
+        }
         // Per-message delete when event.message is set, otherwise whole thread via threadId.
         // For per-message: omit sourceFolder so backend uses each message's actual folder(s).
         const deleteIds = event.message

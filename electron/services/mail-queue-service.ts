@@ -96,8 +96,6 @@ export interface DeletePayload {
   folder: string;
   /** Metadata for DB/pending-op cleanup and renderer refresh. */
   emailMeta?: Array<{ xGmMsgId: string; xGmThrid: string }>;
-  /** Whether this is a permanent delete (from Trash). */
-  permanent?: boolean;
   /** Runtime-only resolved UID list built at execution time (not persisted). */
   runtimeResolvedUids?: number[];
 }
@@ -1202,7 +1200,16 @@ export class MailQueueService {
     const lockManager = FolderLockManager.getInstance();
 
     const folder = payload.folder;
-    const isPermanent = payload.permanent ?? (folder === '[Gmail]/Trash');
+
+    // Defensive guard: if somehow a delete targeting Trash ends up in the queue
+    // (e.g. a race condition between the UI guard and queue enqueue), treat it as
+    // a no-op success. The IPC handler already returns early for Trash folders,
+    // so this should never fire in practice, but prevents a IMAP MOVE Trash→Trash
+    // error if it does.
+    if (folder === GMAIL_TRASH_FOLDER) {
+      log.info(`[MailQueue] delete (${item.queueId}): folder is Trash — no-op (permanent delete not supported)`);
+      return;
+    }
 
     const resolved = await imapService.resolveUidsByXGmMsgId(
       String(item.accountId),
@@ -1223,10 +1230,11 @@ export class MailQueueService {
 
     this.applyResolutionWarning(item, unresolvedCount, totalCount);
 
-    // Perform IMAP delete (with folder lock)
+    // Perform soft-delete: move messages to Trash via IMAP (with folder lock).
+    // Permanent IMAP EXPUNGE is not performed here.
     const release = await lockManager.acquire(folder, item.accountId);
     try {
-      await imapService.deleteMessages(String(item.accountId), folder, uids, isPermanent);
+      await imapService.deleteMessages(String(item.accountId), folder, uids);
     } finally {
       release();
     }
@@ -1235,7 +1243,7 @@ export class MailQueueService {
     // No further DB updates needed here.
 
     const emailCount = payload.emailMeta?.length ?? payload.xGmMsgIds.length;
-    log.info(`[MailQueue] delete (${item.queueId}): ${emailCount} emails deleted from ${folder} (permanent=${isPermanent})`);
+    log.info(`[MailQueue] delete (${item.queueId}): moved ${emailCount} email(s) from ${folder} to Trash`);
   }
 
   private resolveSourceFoldersForMove(
@@ -1691,27 +1699,22 @@ export class MailQueueService {
   }
 
   /**
-   * Post-op fetch for delete: for soft-delete, fetch latest N from Trash.
-   * For permanent delete, skip fetch (message is gone); emit event for source folder.
-   * Also clears PendingOpService entries and recomputes thread metadata.
+   * Post-op fetch for delete: fetch latest N from Trash to pick up newly-trashed
+   * messages, then clear PendingOpService entries and recompute thread metadata.
+   * All deletes are soft-deletes (move to Trash) — permanent EXPUNGE is never used.
    */
   private async postOpFetchDelete(item: QueueItem): Promise<void> {
     const payload = item.payload as DeletePayload;
-    const isPermanent = payload.permanent ?? (payload.folder === GMAIL_TRASH_FOLDER);
 
-    if (isPermanent) {
-      // Permanent delete — nothing to fetch; just notify UI
-      this.emitFolderUpdated(item.accountId, [payload.folder], 'delete', 'deletions');
-    } else {
-      // Soft delete — fetch latest N from Trash to pick up newly-trashed messages
-      await this.fetchLatestAndUpsert(item.accountId, GMAIL_TRASH_FOLDER);
-      await this.updateFolderStateForFolders(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER]);
-      this.emitFolderUpdated(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete', 'deletions');
-    }
+    // Fetch latest N from Trash to pick up newly-trashed messages
+    await this.fetchLatestAndUpsert(item.accountId, GMAIL_TRASH_FOLDER);
+    await this.updateFolderStateForFolders(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER]);
+    this.emitFolderUpdated(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete', 'deletions');
+
     TrayService.getInstance().refreshUnreadCount();
 
-    // --- Post-confirmation cleanup (for soft-delete only; permanent delete already wiped DB rows) ---
-    if (!isPermanent && payload.emailMeta && payload.emailMeta.length > 0) {
+    // --- Post-confirmation cleanup ---
+    if (payload.emailMeta && payload.emailMeta.length > 0) {
       const pendingOpService = PendingOpService.getInstance();
       const db = DatabaseService.getInstance();
 
@@ -1737,7 +1740,7 @@ export class MailQueueService {
           log.warn(`[MailQueue] postOpFetchDelete: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
         }
 
-        // 4. Emit thread-refresh so renderer re-loads if this thread is selected
+        // 3. Emit thread-refresh so renderer re-loads if this thread is selected
         this.emitThreadRefresh(item.accountId, xGmThrid, 'delete');
       }
     }
