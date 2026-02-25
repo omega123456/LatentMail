@@ -33,11 +33,23 @@ export class KeyboardService {
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
-    // Skip if typing in an input/textarea
+    // Skip if typing in an input/textarea — except allow global shortcuts (e.g. Ctrl+K)
     const target = event.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+      const keyCombo = this.getKeyCombo(event);
+      const globalShortcut = this.findShortcut(keyCombo, 'global');
+      if (globalShortcut) {
+        event.preventDefault();
+        this.ngZone.run(() => {
+          globalShortcut.action();
+          this.shortcutTriggered.next(globalShortcut.id);
+        });
+        return;
+      }
       // Allow escape to still work
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape') {
+        return;
+      }
     }
 
     const keyCombo = this.getKeyCombo(event);
@@ -87,8 +99,10 @@ export class KeyboardService {
     }
   }
 
-  private findShortcut(keys: string): KeyboardShortcut | undefined {
-    return Array.from(this.shortcuts.values()).find(s => s.keys === keys);
+  private findShortcut(keys: string, context?: KeyboardShortcut['context']): KeyboardShortcut | undefined {
+    return Array.from(this.shortcuts.values()).find(
+      shortcut => shortcut.keys === keys && (context === undefined || shortcut.context === context)
+    );
   }
 
   private getKeyCombo(event: KeyboardEvent): string {
