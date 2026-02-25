@@ -17,7 +17,6 @@ export const PRIMARY_SYSTEM_PRIORITY = [
   '[Gmail]/Sent Mail',
   '[Gmail]/Drafts',
   '[Gmail]/Starred',
-  '[Gmail]/Important',
 ];
 
 export const SECONDARY_SYSTEM_PRIORITY = [
@@ -33,11 +32,18 @@ export const FOLDER_BADGE_META: Record<string, { displayName: string; cssClass: 
   '[gmail]/trash': { displayName: 'Trash', cssClass: 'folder-badge--trash', icon: 'delete' },
   '[gmail]/spam': { displayName: 'Spam', cssClass: 'folder-badge--spam', icon: 'report' },
   '[gmail]/starred': { displayName: 'Starred', cssClass: 'folder-badge--starred', icon: 'star' },
-  '[gmail]/important': { displayName: 'Important', cssClass: 'folder-badge--important', icon: 'label_important' },
   '[gmail]/all mail': { displayName: 'All Mail', cssClass: 'folder-badge--all-mail', icon: 'mail' },
 };
 
 export const SYSTEM_FOLDER_KEYS = new Set(Object.keys(FOLDER_BADGE_META));
+
+/**
+ * Folder IDs (lowercase) that are always hidden from badge display.
+ * These folders may still exist in email_folders rows (reflecting server state)
+ * but must never be shown as visible badges in the email list or reading pane.
+ * [Gmail]/Important is a Gmail system attribute, not a real user-visible label.
+ */
+export const HIDDEN_FOLDER_IDS = new Set<string>(['[gmail]/important']);
 
 export interface FolderForLookup {
   gmailLabelId: string;
@@ -130,6 +136,8 @@ export function getOrderedFolderBadges(
   if (!folderIds || folderIds.length === 0) {
     return [];
   }
-  const ordered = orderFolderIds(folderIds);
+  // Filter out folders that should never appear as badges (e.g. [Gmail]/Important).
+  const visible = folderIds.filter((folderId) => !HIDDEN_FOLDER_IDS.has(folderId.toLowerCase()));
+  const ordered = orderFolderIds(visible);
   return ordered.map((id) => getBadgeForFolderId(id, nameLookup));
 }

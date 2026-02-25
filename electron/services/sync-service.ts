@@ -27,8 +27,14 @@ export const ALL_MAIL_PATH = '[Gmail]/All Mail';
 /** IMAP parent mailbox for Gmail system folders; not a real folder — exclude from sidebar. */
 export const GMAIL_PARENT_PATH = '[Gmail]';
 
+/**
+ * Gmail Important label path — a system attribute rather than a real user-manageable label.
+ * ImapFlow may not classify it as specialUse; excluding it prevents it from appearing in the sidebar.
+ */
+export const IMPORTANT_PATH = '[Gmail]/Important';
+
 /** Folder paths excluded from sidebar and from label sync (not real selectable folders). */
-export const EXCLUDED_FOLDER_PATHS: readonly string[] = [ALL_MAIL_PATH, GMAIL_PARENT_PATH];
+export const EXCLUDED_FOLDER_PATHS: readonly string[] = [ALL_MAIL_PATH, GMAIL_PARENT_PATH, IMPORTANT_PATH];
 
 /**
  * Gmail X-GM-LABELS system label → IMAP folder path mapping.

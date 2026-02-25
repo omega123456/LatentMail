@@ -41,7 +41,6 @@ const FOLDER_ICON_MAP: Record<string, string> = {
   '[Gmail]/Trash': 'delete',
   '[Gmail]/Spam': 'report',
   '[Gmail]/Starred': 'star',
-  '[Gmail]/Important': 'label_important',
 };
 
 const SYSTEM_FOLDER_ORDER: Record<string, number> = {

@@ -7,6 +7,7 @@ import {
   type FolderBadgeInfo,
   getBadgeForFolderId,
   getOrderedFolderBadges,
+  HIDDEN_FOLDER_IDS,
 } from '../../../shared/constants/folder-badges';
 import { DEFAULT_LABEL_COLOR } from '../../../shared/constants/label-colors';
 import { SettingsStore } from '../../../store/settings.store';
@@ -36,11 +37,13 @@ export class EmailListItemComponent {
     if (!labels || labels.length === 0) {
       return [];
     }
-    return labels.map((label) => ({
-      name: label.name,
-      color: label.color || DEFAULT_LABEL_COLOR,
-      gmailLabelId: label.gmailLabelId,
-    }));
+    return labels
+      .filter((label) => !HIDDEN_FOLDER_IDS.has(label.gmailLabelId.toLowerCase()))
+      .map((label) => ({
+        name: label.name,
+        color: label.color || DEFAULT_LABEL_COLOR,
+        gmailLabelId: label.gmailLabelId,
+      }));
   });
 
   readonly folderBadge = computed<FolderBadgeInfo | null>(() => {

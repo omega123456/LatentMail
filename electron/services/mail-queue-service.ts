@@ -26,6 +26,7 @@ export type QueueOperationType =
   | 'move'
   | 'flag'
   | 'delete'
+  | 'delete-label'
   | 'add-labels'
   | 'remove-labels'
   | 'sync-folder'
@@ -162,6 +163,11 @@ export interface FetchOlderPayload {
   limit: number;
 }
 
+export interface DeleteLabelPayload {
+  /** The IMAP mailbox path / Gmail label ID to delete (e.g. "MyCustomLabel"). */
+  gmailLabelId: string;
+}
+
 export type QueuePayload =
   | DraftPayload
   | DraftUpdatePayload
@@ -169,6 +175,7 @@ export type QueuePayload =
   | MovePayload
   | FlagPayload
   | DeletePayload
+  | DeleteLabelPayload
   | AddLabelsPayload
   | RemoveLabelsPayload
   | SyncFolderPayload
@@ -585,6 +592,9 @@ export class MailQueueService {
         case 'remove-labels':
           await this.processRemoveLabels(item);
           break;
+        case 'delete-label':
+          await this.processDeleteLabel(item);
+          break;
         default:
           throw new Error(`Unknown operation type: ${(item as QueueItem).type}`);
       }
@@ -592,7 +602,7 @@ export class MailQueueService {
       // Best-effort post-operation fetch: confirm server state and update local DB.
       // Failures are logged as warnings — the IMAP action already succeeded.
       // Sync and fetch-older operations handle their own post-processing inside their worker methods.
-      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older' && item.type !== 'add-labels' && item.type !== 'remove-labels') {
+      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older' && item.type !== 'add-labels' && item.type !== 'remove-labels' && item.type !== 'delete-label') {
         try {
           await this.postOpFetch(item);
         } catch (fetchErr) {
@@ -1244,6 +1254,38 @@ export class MailQueueService {
 
     const emailCount = payload.emailMeta?.length ?? payload.xGmMsgIds.length;
     log.info(`[MailQueue] delete (${item.queueId}): moved ${emailCount} email(s) from ${folder} to Trash`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Delete-label worker
+  // -----------------------------------------------------------------------
+
+  /**
+   * Execute the IMAP mailbox deletion for a queued delete-label operation.
+   * The local DB has already been cleaned up optimistically by the IPC handler;
+   * this method only performs the server-side IMAP deletion.
+   * ImapService.deleteMailbox already acquires FolderLockManager('__label_mgmt', accountId)
+   * internally — no additional locking is needed here.
+   */
+  private async processDeleteLabel(item: QueueItem): Promise<void> {
+    const payload = item.payload as DeleteLabelPayload;
+    const imapService = ImapService.getInstance();
+
+    try {
+      await imapService.deleteMailbox(String(item.accountId), payload.gmailLabelId);
+      log.info(`[MailQueue] delete-label (${item.queueId}): deleted IMAP mailbox "${payload.gmailLabelId}" for account ${item.accountId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const lower = message.toLowerCase();
+      // "Mailbox not found" (or equivalent) means the mailbox is already gone — treat as success.
+      // This handles the case where a previous attempt partially succeeded or the label was
+      // deleted via another client. The desired end state (mailbox absent) is already achieved.
+      if (lower.includes('mailbox not found') || lower.includes('mailbox doesn') || lower.includes('no such mailbox') || lower.includes('nonexistent mailbox')) {
+        log.info(`[MailQueue] delete-label (${item.queueId}): mailbox "${payload.gmailLabelId}" already absent on server — treating as success`);
+        return;
+      }
+      throw err;
+    }
   }
 
   private resolveSourceFoldersForMove(

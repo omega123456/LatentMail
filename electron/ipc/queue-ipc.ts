@@ -27,7 +27,7 @@ export function registerQueueIpcHandlers(): void {
       }
 
       // Validate operation type
-      const validTypes: QueueOperationType[] = ['draft-create', 'draft-update', 'send', 'move', 'flag', 'delete', 'add-labels', 'remove-labels'];
+      const validTypes: QueueOperationType[] = ['draft-create', 'draft-update', 'send', 'move', 'flag', 'delete', 'delete-label', 'add-labels', 'remove-labels'];
       if (!validTypes.includes(operation.type)) {
         return ipcError('QUEUE_INVALID_TYPE', `Invalid operation type: ${operation.type}`);
       }
@@ -91,6 +91,14 @@ export function registerQueueIpcHandlers(): void {
         }
         if (!payload.folder || typeof payload.folder !== 'string') {
           return ipcError('QUEUE_INVALID_PAYLOAD', 'delete requires folder string in payload');
+        }
+      }
+
+      // Validate delete-label payload
+      if (operation.type === 'delete-label') {
+        const payload = operation.payload as unknown as Record<string, unknown>;
+        if (!payload.gmailLabelId || typeof payload.gmailLabelId !== 'string' || (payload.gmailLabelId as string).trim().length === 0) {
+          return ipcError('QUEUE_INVALID_PAYLOAD', 'delete-label requires a non-empty gmailLabelId string in payload');
         }
       }
 

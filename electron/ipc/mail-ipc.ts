@@ -1063,14 +1063,25 @@ export function registerMailIpcHandlers(): void {
         return ipcError('LABEL_NOT_USER', 'Only user-defined labels can be deleted');
       }
 
-      // Delete IMAP mailbox
-      const imapService = ImapService.getInstance();
-      await imapService.deleteMailbox(accountId, gmailLabelId);
-
-      // Clean up local DB (transactional)
+      // Optimistic local DB cleanup: remove label, email_folders, and thread_folders rows
+      // before the IMAP operation so the UI updates immediately.
+      // If the queue worker fails, the next sync will re-discover the mailbox and re-insert the label.
       db.deleteLabel(numAccountId, gmailLabelId);
 
-      log.info(`[LABEL_DELETE] Deleted label "${gmailLabelId}" for account ${accountId}`);
+      // Enqueue asynchronous IMAP mailbox deletion with dedup to prevent duplicate operations.
+      const queueService = MailQueueService.getInstance();
+      const labelName = String(existing['name'] ?? gmailLabelId);
+      const dedupKey = `delete-label:${numAccountId}:${gmailLabelId}`;
+      queueService.enqueue(
+        numAccountId,
+        'delete-label',
+        { gmailLabelId },
+        `Delete label "${labelName}"`,
+        undefined,
+        dedupKey,
+      );
+
+      log.info(`[LABEL_DELETE] Queued deletion of label "${gmailLabelId}" for account ${accountId}`);
       return ipcSuccess(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete label';
