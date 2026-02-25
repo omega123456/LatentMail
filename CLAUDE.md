@@ -25,10 +25,10 @@ yarn electron:dev
 # Build everything and run packaged Electron app
 yarn electron:start
 
-# Package the app (creates distributable in out/)
+# Package the app (creates unpacked app in out/)
 yarn package
 
-# Create platform-specific installer
+# Create platform-specific installer (out/)
 yarn make
 ```
 
@@ -77,7 +77,7 @@ yarn electron:dev      # Just works — no addon build needed
 
 **Production / Packaging:**
 
-The addon binary is included automatically when packaging on Windows. The `AutoUnpackNativesPlugin` in `forge.config.ts` extracts `.node` files from the ASAR archive. `NativeDropService` tries the production path (`app.asar.unpacked/native/...`) first, then falls back to the dev path.
+Packaging uses **electron-builder** (config in `package.json` under `"build"`). The native addon is unpacked via `asarUnpack: ["**/native/**/*.node"]` so it is available at `app.asar.unpacked/native/...`. `NativeDropService` tries the production path (`app.asar.unpacked/native/...`) first, then falls back to the dev path.
 
 ```bash
 # Windows

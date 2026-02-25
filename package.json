@@ -1,7 +1,8 @@
 {
-  "name": "latentmail-app",
+  "name": "LatentMail",
   "version": "0.1.0",
   "description": "A cross-platform desktop email client with AI integration",
+  "author": "LatentMail",
   "main": "dist-electron/main.js",
   "scripts": {
     "ng": "ng",
@@ -14,10 +15,11 @@
     "electron:start": "yarn build:all && electron .",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "package": "yarn build:all && electron-forge package",
-    "make": "yarn build:all && electron-forge make",
+    "package": "yarn build:all && electron-builder --dir",
+    "make": "yarn build:all && electron-builder",
     "build:native": "node -e \"if(process.platform==='win32'){const{execSync}=require('child_process');const ev=require('electron/package.json').version;execSync('node-gyp rebuild --target='+ev+' --arch=x64 --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native/win32-drop-target'})}else{console.log('Skipping native addon build (not Windows)')}\"",
-    "build:icons": "node scripts/build-icons.mjs"
+    "build:icons": "node scripts/build-icons.mjs",
+    "postinstall": "node scripts/create-secrets.js"
   },
   "prettier": {
     "printWidth": 100,
@@ -33,6 +35,41 @@
   },
   "private": true,
   "packageManager": "yarn@1.22.22",
+  "build": {
+    "appId": "com.latentmail.app",
+    "productName": "LatentMail",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "dist-electron/**",
+      "dist/**",
+      "assets/**",
+      "native/**"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/native/**/*.node"
+    ],
+    "icon": "assets/icons/icon",
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "executableName": "LatentMail"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "dmg": {}
+  },
   "dependencies": {
     "@angular/animations": "^21.1.4",
     "@angular/cdk": "^21.1.4",
@@ -52,7 +89,6 @@
     "@tiptap/pm": "^3.19.0",
     "@tiptap/starter-kit": "^3.19.0",
     "dompurify": "^3.3.1",
-    "dotenv": "^16.4.5",
     "electron-log": "^5",
     "fastq": "^1.20.1",
     "iconv-lite": "^0.7.2",
@@ -74,11 +110,8 @@
     "@angular/build": "^21.1.4",
     "@angular/cli": "^21.1.4",
     "@angular/compiler-cli": "^21.1.0",
-    "@electron-forge/cli": "^7.11.1",
-    "@electron-forge/maker-dmg": "^7.11.1",
-    "@electron-forge/maker-squirrel": "^7.11.1",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron/rebuild": "^4.0.3",
+    "electron-builder": "^25.1.4",
     "@types/mailparser": "^3.4.5",
     "@types/nodemailer": "^7.0.9",
     "concurrently": "^9.1.2",

@@ -25,6 +25,7 @@ dist-electron
 .agent
 .ignore
 config.json
+out
 
 # Visual Studio Code
 .vscode/*
@@ -47,6 +48,9 @@ __screenshots__/
 .claude
 CONTEXT.md
 .vscode
+
+# Secrets (real values — never commit)
+electron/secrets.ts
 
 # Native addon build artifacts
 native/win32-drop-target/build/

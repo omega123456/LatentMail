@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { app, BrowserWindow, shell, dialog, Notification } from 'electron';
 import * as path from 'path';
 import { LoggerService } from './services/logger-service';

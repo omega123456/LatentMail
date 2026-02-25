@@ -7,6 +7,7 @@ import { OAuthLoopbackServer } from './oauth-loopback';
 const log = LoggerService.getInstance();
 import { CredentialService } from './credential-service';
 import { DatabaseService } from './database-service';
+import { GOOGLE_CLIENT_ID_DESKTOP, GOOGLE_CLIENT_SECRET } from '../config';
 
 // Google OAuth2 endpoints
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -49,13 +50,17 @@ export class OAuthService {
   private refreshTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   private constructor() {
-    this.clientId = process.env['GOOGLE_CLIENT_ID'] || '';
-    this.clientSecret = process.env['GOOGLE_CLIENT_SECRET'] || '';
+    // Prefer baked-in Desktop client ID so env (e.g. .env loaded by IDE) cannot override with an old Web client ID
+    this.clientId = GOOGLE_CLIENT_ID_DESKTOP || process.env['GOOGLE_CLIENT_ID'] || '';
     if (!this.clientId) {
       log.warn('GOOGLE_CLIENT_ID not set — OAuth login will not work');
     }
+    this.clientSecret = GOOGLE_CLIENT_SECRET;
     if (!this.clientSecret) {
-      log.warn('GOOGLE_CLIENT_SECRET not set — required if using a Web application OAuth client; optional for Desktop app client');
+      log.warn(
+        'GOOGLE_CLIENT_SECRET is not set — token exchange will fail. ' +
+        'Fill in the real secret in electron/secrets.ts (see electron/secrets.example.ts for instructions).'
+      );
     }
   }
 
@@ -80,23 +85,19 @@ export class OAuthService {
    */
   async login(): Promise<{ id: number; email: string; displayName: string; avatarUrl: string | null }> {
     if (!this.clientId) {
-      throw new Error('GOOGLE_CLIENT_ID not configured. Set it in .env file.');
+      throw new Error('GOOGLE_CLIENT_ID not configured. Set GOOGLE_CLIENT_ID in the environment or use the built-in Desktop client ID.');
     }
+    log.info(`OAuth login using client ID: ${this.clientId.substring(0, 25)}...`);
 
     // Generate PKCE code verifier and challenge
     const codeVerifier = this.generateCodeVerifier();
     const codeChallenge = this.generateCodeChallenge(codeVerifier);
     const state = crypto.randomBytes(16).toString('hex');
 
-    // Start loopback server to receive the redirect
+    // Start loopback server to receive the redirect; wait until port is bound before building auth URL
     this.loopbackServer = new OAuthLoopbackServer();
-    const callbackPromise = this.loopbackServer.start(state);
-
-    // We need to wait for the server to start listening before we can get the redirect URI
-    // Small delay to ensure the server is ready
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const redirectUri = this.loopbackServer.getRedirectUri();
+    const { port, callbackPromise } = await this.loopbackServer.start(state);
+    const redirectUri = `http://127.0.0.1:${port}/callback`;
 
     // Build the authorization URL
     const authUrl = this.buildAuthUrl(redirectUri, codeChallenge, state);
@@ -354,8 +355,10 @@ export class OAuthService {
       grant_type: 'authorization_code',
       code_verifier: codeVerifier,
     };
+    // Only include client_secret when it is set; if empty, PKCE-only flow is used
+    // (sending an empty string causes Google to reject with invalid_client)
     if (this.clientSecret) {
-      params.client_secret = this.clientSecret;
+      params['client_secret'] = this.clientSecret;
     }
     const body = new URLSearchParams(params).toString();
 
@@ -399,8 +402,9 @@ export class OAuthService {
       client_id: this.clientId,
       grant_type: 'refresh_token',
     };
+    // Only include client_secret when it is set; if empty, PKCE-only flow is used
     if (this.clientSecret) {
-      params.client_secret = this.clientSecret;
+      params['client_secret'] = this.clientSecret;
     }
     const body = new URLSearchParams(params).toString();
 

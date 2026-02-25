@@ -19,15 +19,23 @@ export class OAuthLoopbackServer {
   private port: number = 0;
 
   /**
-   * Start the loopback server and wait for the OAuth callback.
-   * Returns a Promise that resolves with the authorization code and state,
-   * or rejects if the user denies access or an error occurs.
+   * Start the loopback server. Resolves when the server is listening (port is bound);
+   * returns the confirmed port and a separate promise that resolves when the OAuth callback
+   * is received. Build the redirect URI from the returned port before opening the auth URL.
    *
    * @param expectedState - The state parameter to validate against CSRF
    * @param timeoutMs - Timeout in ms before giving up (default: 5 minutes)
+   * @returns Object with bound port and a promise that resolves with the callback result
    */
-  start(expectedState: string, timeoutMs: number = 300_000): Promise<OAuthCallbackResult> {
-    return new Promise((resolve, reject) => {
+  async start(expectedState: string, timeoutMs: number = 300_000): Promise<{ port: number; callbackPromise: Promise<OAuthCallbackResult> }> {
+    let resolveCallback: (value: OAuthCallbackResult) => void;
+    let rejectCallback: (reason: Error) => void;
+    const callbackPromise = new Promise<OAuthCallbackResult>((resolve, reject) => {
+      resolveCallback = resolve;
+      rejectCallback = reject;
+    });
+
+    const port = await new Promise<number>((resolveListen, rejectListen) => {
       this.server = http.createServer((req, res) => {
         if (!req.url) {
           res.writeHead(400);
@@ -55,7 +63,7 @@ export class OAuthLoopbackServer {
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end(this.getErrorHtml(error));
           this.stop();
-          reject(new Error(`OAuth authorization denied: ${error}`));
+          rejectCallback(new Error(`OAuth authorization denied: ${error}`));
           return;
         }
 
@@ -64,7 +72,7 @@ export class OAuthLoopbackServer {
           res.writeHead(400, { 'Content-Type': 'text/html' });
           res.end(this.getErrorHtml('Missing authorization code'));
           this.stop();
-          reject(new Error('OAuth callback missing authorization code'));
+          rejectCallback(new Error('OAuth callback missing authorization code'));
           return;
         }
 
@@ -73,7 +81,7 @@ export class OAuthLoopbackServer {
           res.writeHead(400, { 'Content-Type': 'text/html' });
           res.end(this.getErrorHtml('State mismatch — possible CSRF attack'));
           this.stop();
-          reject(new Error('OAuth state mismatch'));
+          rejectCallback(new Error('OAuth state mismatch'));
           return;
         }
 
@@ -83,7 +91,7 @@ export class OAuthLoopbackServer {
 
         log.info('OAuth callback received authorization code');
         this.stop();
-        resolve({ code, state });
+        resolveCallback({ code, state });
       });
 
       // Listen on a random available port on loopback only
@@ -92,19 +100,23 @@ export class OAuthLoopbackServer {
         if (addr && typeof addr === 'object') {
           this.port = addr.port;
           log.info(`OAuth loopback server listening on http://127.0.0.1:${this.port}`);
+          resolveListen(this.port);
+        } else {
+          rejectListen(new Error('Could not get server address'));
         }
       });
 
       this.server.on('error', (err) => {
         log.error('OAuth loopback server error:', err);
-        reject(err);
+        rejectCallback(err);
+        rejectListen(err);
       });
 
       // Timeout — if the user takes too long, clean up
       const timeout = setTimeout(() => {
         log.warn('OAuth loopback server timed out');
         this.stop();
-        reject(new Error('OAuth flow timed out — user did not complete authorization'));
+        rejectCallback(new Error('OAuth flow timed out — user did not complete authorization'));
       }, timeoutMs);
 
       // Clear timeout if server is closed for other reasons
@@ -112,6 +124,8 @@ export class OAuthLoopbackServer {
         clearTimeout(timeout);
       });
     });
+
+    return { port, callbackPromise };
   }
 
   /** Get the port the server is listening on */

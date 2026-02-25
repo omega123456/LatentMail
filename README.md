@@ -15,9 +15,8 @@ A cross-platform desktop email client built with Electron 40 and Angular 21, fea
 # Install dependencies
 yarn install
 
-# Copy environment config
-cp .env.example .env
-# Edit .env and set your GOOGLE_CLIENT_ID
+# Optional: copy .env.example to .env for local dev overrides (e.g. LOG_LEVEL, DATABASE_PATH)
+# OAuth uses a built-in Desktop client ID; no .env required for packaged or dev runs.
 
 # Optional: rebuild native modules if you add any
 # npx @electron/rebuild
@@ -89,15 +88,15 @@ latentmail/
 
 ## Environment Variables
 
-See [.env.example](.env.example) for all available configuration options.
+The app uses a **built-in Desktop OAuth client ID** (PKCE only, no client secret). For local development you can override it via `GOOGLE_CLIENT_ID` in the environment or in a `.env` file; see [.env.example](.env.example).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GOOGLE_CLIENT_ID` | Yes | Google OAuth2 Desktop Client ID |
-| `OLLAMA_URL` | No | Ollama API URL (default: `http://localhost:11434`) |
-| `DATABASE_PATH` | No | Custom SQLite database path |
-| `LOG_LEVEL` | No | Log level: debug/info/warn/error |
-| `SYNC_INTERVAL_MS` | No | Email sync interval (default: 300000ms) |
+| `GOOGLE_CLIENT_ID` | No | Optional override for OAuth (default: built-in Desktop client ID) |
+| `DATABASE_PATH` | No | Custom SQLite database path (dev override) |
+| `LOG_LEVEL` | No | Log level: debug/info/warn/error (dev override) |
+
+Ollama URL and sync interval are **app settings** (stored in the database and configurable in the UI), not main-process environment variables.
 
 ## Native Drag-and-Drop (Windows)
 

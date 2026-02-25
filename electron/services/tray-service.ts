@@ -55,7 +55,7 @@ export class TrayService {
       return;
     }
 
-    this.tray.setToolTip('Mail Client');
+    this.tray.setToolTip('LatentMail');
     this.buildContextMenu();
 
     // Left-click: show and focus main window (standard behavior on Windows/Linux).
@@ -268,8 +268,8 @@ export class TrayService {
     this.tray.setImage(icon);
 
     const tooltip = count > 0
-      ? `Mail Client — ${count} unread message${count === 1 ? '' : 's'}`
-      : 'Mail Client';
+      ? `LatentMail — ${count} unread message${count === 1 ? '' : 's'}`
+      : 'LatentMail';
     this.tray.setToolTip(tooltip);
     this.buildContextMenu();
   }
@@ -290,7 +290,7 @@ export class TrayService {
 
     menuTemplate.push(
       {
-        label: 'Show Mail Client',
+        label: 'Show LatentMail',
         click: () => { this.showAndFocusMainWindow(); },
       },
       {
