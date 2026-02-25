@@ -121,21 +121,21 @@ export function getBimiCacheDir(): string {
   return path.join(app.getPath('userData'), 'bimi-cache');
 }
 
-/** Safe filename: hash of URL (hex). */
-function hashRemoteUrl(remoteUrl: string): string {
-  return crypto.createHash('sha256').update(remoteUrl).digest('hex').slice(0, 32);
+/** Safe filename: hash of domain (hex, 32 chars). */
+function hashDomain(domain: string): string {
+  return crypto.createHash('sha256').update(domain).digest('hex').slice(0, 32);
 }
 
 /**
- * Ensure the logo image is on disk; return bimi-logo:// URL for fast loading.
- * Fetches from remote if missing or older than DISK_CACHE_TTL_MS.
+ * If we have a valid cached logo for the domain, return its bimi-logo:// URL.
+ * Otherwise return null (caller will do DNS + fetch).
  */
-async function ensureLogoCached(remoteUrl: string): Promise<string> {
+function getCachedLogoUrlForDomain(domain: string): string | null {
   const cacheDir = getBimiCacheDir();
   if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
+    return null;
   }
-  const hash = hashRemoteUrl(remoteUrl);
+  const hash = hashDomain(domain);
   const now = Date.now();
   const extensions = ['.svg', '.png'] as const;
   for (const ext of extensions) {
@@ -149,6 +149,19 @@ async function ensureLogoCached(remoteUrl: string): Promise<string> {
       // file missing or unreadable
     }
   }
+  return null;
+}
+
+/**
+ * Fetch the logo from remoteUrl and save under the domain key; return bimi-logo:// URL.
+ * Caller must have already checked getCachedLogoUrlForDomain (cache hit is handled there).
+ */
+async function ensureLogoCached(domain: string, remoteUrl: string): Promise<string> {
+  const cacheDir = getBimiCacheDir();
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+  }
+  const hash = hashDomain(domain);
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
@@ -165,6 +178,16 @@ async function ensureLogoCached(remoteUrl: string): Promise<string> {
     const filePath = path.join(cacheDir, hash + ext);
     const buffer = Buffer.from(await response.arrayBuffer());
     fs.writeFileSync(filePath, buffer);
+    // Remove the other extension if present so we don't leave a stale file.
+    const otherExt = ext === '.svg' ? '.png' : '.svg';
+    const otherPath = path.join(cacheDir, hash + otherExt);
+    try {
+      if (fs.existsSync(otherPath)) {
+        fs.unlinkSync(otherPath);
+      }
+    } catch {
+      // ignore
+    }
     return `bimi-logo://${hash}${ext}`;
   } catch {
     return remoteUrl;
@@ -185,6 +208,10 @@ export function registerBimiIpcHandlers(): void {
 
       const toTry = domainsToTry(domain);
       for (const tryDomain of toTry) {
+        const cachedLogoUrl = getCachedLogoUrlForDomain(tryDomain);
+        if (cachedLogoUrl !== null) {
+          return ipcSuccess({ logoUrl: cachedLogoUrl });
+        }
         const hostname = `default._bimi.${tryDomain}`;
         let records: string[][];
         try {
@@ -205,7 +232,7 @@ export function registerBimiIpcHandlers(): void {
 
         const remoteLogoUrl = parseBimiLogoUrl(records);
         if (remoteLogoUrl) {
-          const logoUrl = await ensureLogoCached(remoteLogoUrl);
+          const logoUrl = await ensureLogoCached(tryDomain, remoteLogoUrl);
           return ipcSuccess({ logoUrl });
         }
       }
