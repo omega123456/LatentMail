@@ -1,4 +1,4 @@
-import { Component, inject, output, OnInit, OnDestroy, effect, signal } from '@angular/core';
+import { Component, inject, output, OnInit, OnDestroy, effect, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { EmailsStore } from '../../../store/emails.store';
@@ -47,6 +47,11 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
 
   /** Shared open-menu key for all ribbon instances within this thread view. */
   readonly threadOpenMenuKey = signal<string | null>(null);
+
+  /** True when the current folder is Spam (remote images and full DOMPurify apply). */
+  readonly isSpamFolder = computed(() =>
+    this.foldersStore.activeFolderId()?.toLowerCase() === '[gmail]/spam'
+  );
 
   readonly expandedMessages = new Set<string>();
   private aiStreamSub?: Subscription;

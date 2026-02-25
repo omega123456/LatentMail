@@ -178,6 +178,7 @@
                 <app-email-body-frame
                   [htmlBody]="message.htmlBody"
                   [senderEmail]="message.fromAddress"
+                  [isSpamFolder]="isSpamFolder()"
                 />
               } @else if (message.textBody) {
                 <pre class="text-body">{{ message.textBody }}</pre>

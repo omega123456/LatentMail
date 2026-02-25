@@ -3,18 +3,20 @@
     <div class="remote-images-banner" role="alert" aria-live="polite">
       <span class="material-symbols-outlined banner-icon" aria-hidden="true">photo_library</span>
       <span class="banner-text">Remote images are blocked.</span>
-      <button
-        type="button"
-        class="banner-action"
-        (click)="loadImagesOnce()"
-      >Load images</button>
-      @if (senderEmail()) {
+      @if (!isSpamFolder()) {
         <button
           type="button"
           class="banner-action"
-          (click)="alwaysAllowSender()"
-          [title]="'Always load images from ' + senderEmail()"
-        >Always allow from {{ senderEmail() }}</button>
+          (click)="loadImagesOnce()"
+        >Load images</button>
+        @if (senderEmail()) {
+          <button
+            type="button"
+            class="banner-action"
+            (click)="alwaysAllowSender()"
+            [title]="'Always load images from ' + senderEmail()"
+          >Always allow from {{ senderEmail() }}</button>
+        }
       }
     </div>
   }

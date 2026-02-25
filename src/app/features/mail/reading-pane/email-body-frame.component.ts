@@ -11,6 +11,7 @@ import {
   inject,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import DOMPurify from 'dompurify';
 import { SettingsStore } from '../../../store/settings.store';
 
 /** 1×1 grey GIF placeholder URI used while remote images are blocked. */
@@ -51,6 +52,8 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
   readonly htmlBody = input<string>('');
   /** The sender's email address (used for the per-sender image allowlist). */
   readonly senderEmail = input<string>('');
+  /** When true, viewing in Spam folder: always block remote images and use full DOMPurify for body. */
+  readonly isSpamFolder = input<boolean>(false);
 
   private readonly settingsStore = inject(SettingsStore);
 
@@ -60,13 +63,14 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
    * Whether remote images are currently blocked for this message.
    * Drives the "Load images" banner visibility.
    *
-   * True when ALL of the following hold:
-   *  - `blockRemoteImages` is on in settings
-   *  - the user has not clicked "Load once" for this email
-   *  - the sender is not in the per-sender allowlist
-   *  - the HTML body contains at least one remote `<img>` with an http(s) src
+   * For Spam folder: always true when body contains remote images (global toggle and allowlist ignored).
+   * Otherwise true when ALL of: blockRemoteImages on, no bypass, sender not in allowlist, body has remote img.
    */
   readonly imagesBlocked = computed(() => {
+    const hasRemoteImg = /<img\b[^>]+\bsrc\s*=\s*["'](?:https?:)?\/\//i.test(this.htmlBody());
+    if (this.isSpamFolder() && hasRemoteImg) {
+      return true;
+    }
     const blockImages = this.settingsStore.blockRemoteImages();
     const bypass = this.bypassBlock();
     const sender = (this.senderEmail() ?? '').toLowerCase();
@@ -78,9 +82,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
     if (sender && allowedSenders.some((s) => s.toLowerCase() === sender)) {
       return false;
     }
-    // Quick regex check: does the body contain a remote <img> src?
-    // Matches http://, https://, and protocol-relative // URLs.
-    return /<img\b[^>]+\bsrc\s*=\s*["'](?:https?:)?\/\//i.test(this.htmlBody());
+    return hasRemoteImg;
   });
 
   /**
@@ -105,16 +107,17 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
       this.lastBodyForBypassReset = currentBody;
     });
 
-    // Re-render the iframe whenever the body, sender, settings, or bypass change.
+    // Re-render the iframe whenever the body, sender, settings, bypass, or spam folder change.
     effect(() => {
       const body = this.htmlBody();
       const blockImages = this.settingsStore.blockRemoteImages();
       const allowedSenders = this.settingsStore.allowedImageSenders();
       const bypass = this.bypassBlock();
       const sender = this.senderEmail();
+      const spamFolder = this.isSpamFolder();
       const iframeElement = this.frame()?.nativeElement;
       if (iframeElement) {
-        this.writeSrcdoc(iframeElement, body, blockImages, allowedSenders, sender, bypass);
+        this.writeSrcdoc(iframeElement, body, blockImages, allowedSenders, sender, bypass, spamFolder);
       }
     });
   }
@@ -131,6 +134,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
         this.settingsStore.allowedImageSenders(),
         this.senderEmail(),
         this.bypassBlock(),
+        this.isSpamFolder(),
       );
     }
     window.addEventListener('message', this.boundMessageHandler);
@@ -170,6 +174,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
         this.settingsStore.allowedImageSenders(),
         this.senderEmail(),
         true,
+        this.isSpamFolder(),
       );
     }
   }
@@ -188,6 +193,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
           this.settingsStore.allowedImageSenders(),
           this.senderEmail(),
           this.bypassBlock(),
+          this.isSpamFolder(),
         );
       }
     }
@@ -218,27 +224,55 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
     return out;
   }
 
+  /**
+   * Full DOMPurify sanitization (from parent of commit fb7a4a7). Used only for Spam folder body.
+   */
+  private fullSanitizeWithDOMPurify(html: string): string {
+    const sanitized = DOMPurify.sanitize(html, {
+      ADD_ATTR: ['target'],
+      FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
+      FORBID_ATTR: [
+        'onerror', 'onload', 'onclick', 'onmouseover', 'onmouseout', 'onmouseenter', 'onmouseleave',
+        'onmousedown', 'onmouseup', 'ondblclick', 'onkeydown', 'onkeyup', 'onkeypress',
+        'onsubmit', 'onreset', 'onfocus', 'onblur', 'onchange', 'oninput', 'onselect',
+        'onabort', 'oncanplay', 'oncanplaythrough', 'ondurationchange', 'onemptied', 'onended',
+        'onloadeddata', 'onloadedmetadata', 'onloadstart', 'onpause', 'onplay', 'onplaying',
+        'onprogress', 'onratechange', 'onreadystatechange', 'onseeked', 'onseeking',
+        'onstalled', 'onsuspend', 'ontimeupdate', 'onvolumechange', 'onwaiting',
+      ],
+      // Allow data:image/* URIs so that inline images (CID-replaced) render correctly.
+      // All other data: URIs (e.g. data:text/html) remain blocked.
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|sms|callto|cid):|data:image\/[a-z+]+;base64,|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+    }) ?? '';
+    return sanitized.replace(/<script\b[\s\S]*?<\/script>/gi, '');
+  }
+
   private buildSrcdoc(
     rawBody: string,
     blockImages: boolean,
     allowedSenders: string[],
     senderEmailValue: string,
     bypass: boolean,
+    isSpamFolder: boolean,
   ): string {
     const body = rawBody ?? '';
     if (!body.trim()) {
       return SRCDOC_SHELL_HEAD + SRCDOC_SHELL_TAIL;
     }
 
-    const noScript = this.minimalSanitize(body);
+    const noScript = isSpamFolder
+      ? this.fullSanitizeWithDOMPurify(body)
+      : this.minimalSanitize(body);
 
-    // Apply remote-image blocking if the setting is active and the sender is not allowed.
+    // Apply remote-image blocking: always for Spam; otherwise when setting is on and sender not allowed.
     const senderLower = (senderEmailValue ?? '').toLowerCase();
     const senderAllowed = senderLower
       ? allowedSenders.some((s) => s.toLowerCase() === senderLower)
       : false;
+    const shouldBlockImages =
+      isSpamFolder || (blockImages && !bypass && !senderAllowed);
 
-    if (blockImages && !bypass && !senderAllowed) {
+    if (shouldBlockImages) {
       const blocked = this.blockRemoteImagesInHtml(noScript);
       return SRCDOC_SHELL_HEAD + blocked + SRCDOC_SHELL_TAIL;
     }
@@ -280,8 +314,16 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
     allowedSenders: string[],
     senderEmailValue: string,
     bypass: boolean,
+    isSpamFolder: boolean,
   ): void {
-    iframe.srcdoc = this.buildSrcdoc(rawBody, blockImages, allowedSenders, senderEmailValue, bypass);
+    iframe.srcdoc = this.buildSrcdoc(
+      rawBody,
+      blockImages,
+      allowedSenders,
+      senderEmailValue,
+      bypass,
+      isSpamFolder,
+    );
   }
 
   private resizeFrameToContent(): void {
