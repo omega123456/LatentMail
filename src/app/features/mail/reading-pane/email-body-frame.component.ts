@@ -11,7 +11,6 @@ import {
   inject,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import DOMPurify from 'dompurify';
 import { SettingsStore } from '../../../store/settings.store';
 
 /** 1×1 grey GIF placeholder URI used while remote images are blocked. */
@@ -196,6 +195,29 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
 
   // ── Private helpers ─────────────────────────────────────────────────────
 
+  /**
+   * Minimal sanitization for content shown in an iframe: only strip executable
+   * content (scripts and event handlers). We do not use DOMPurify here so that
+   * layout-related HTML/CSS (img dimensions, style attributes, tables, etc.) is
+   * left intact. The iframe is same-origin so we must still remove script and
+   * event handlers to prevent execution.
+   */
+  private minimalSanitize(html: string): string {
+    let out = html;
+    // Remove script tags and their content
+    out = out.replace(/<script\b[\s\S]*?<\/script>/gi, '');
+    // Remove event handler attributes (onclick, onerror, etc.) so no script runs
+    out = out.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '');
+    out = out.replace(/\s+on\w+\s*=\s*[^\s>]+/gi, '');
+    // Remove dangerous tags (content up to closing tag; no nesting)
+    const dangerousTags = ['iframe', 'object', 'embed', 'form'];
+    for (const tag of dangerousTags) {
+      out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi'), '');
+      out = out.replace(new RegExp(`<${tag}\\b[^>]*\\/?>`, 'gi'), '');
+    }
+    return out;
+  }
+
   private buildSrcdoc(
     rawBody: string,
     blockImages: boolean,
@@ -208,25 +230,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
       return SRCDOC_SHELL_HEAD + SRCDOC_SHELL_TAIL;
     }
 
-    const sanitized = DOMPurify.sanitize(body, {
-      ADD_ATTR: ['target'],
-      FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form'],
-      FORBID_ATTR: [
-        'onerror', 'onload', 'onclick', 'onmouseover', 'onmouseout', 'onmouseenter', 'onmouseleave',
-        'onmousedown', 'onmouseup', 'ondblclick', 'onkeydown', 'onkeyup', 'onkeypress',
-        'onsubmit', 'onreset', 'onfocus', 'onblur', 'onchange', 'oninput', 'onselect',
-        'onabort', 'oncanplay', 'oncanplaythrough', 'ondurationchange', 'onemptied', 'onended',
-        'onloadeddata', 'onloadedmetadata', 'onloadstart', 'onpause', 'onplay', 'onplaying',
-        'onprogress', 'onratechange', 'onreadystatechange', 'onseeked', 'onseeking',
-        'onstalled', 'onsuspend', 'ontimeupdate', 'onvolumechange', 'onwaiting',
-      ],
-      // Allow data:image/* URIs so that inline images (CID-replaced) render correctly.
-      // All other data: URIs (e.g. data:text/html) remain blocked.
-      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|sms|callto|cid):|data:image\/[a-z+]+;base64,|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
-    }) ?? '';
-
-    // Remove any remaining script tags and content (defense in depth)
-    const noScript = sanitized.replace(/<script\b[\s\S]*?<\/script>/gi, '');
+    const noScript = this.minimalSanitize(body);
 
     // Apply remote-image blocking if the setting is active and the sender is not allowed.
     const senderLower = (senderEmailValue ?? '').toLowerCase();
