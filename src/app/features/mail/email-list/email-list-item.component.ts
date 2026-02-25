@@ -29,6 +29,7 @@ export class EmailListItemComponent {
   readonly activeFolderId = input<string | null>(null);
   readonly clicked = output<Thread>();
   readonly starToggled = output<Thread>();
+  readonly contextMenuRequested = output<{ thread: Thread; x: number; y: number }>();
 
   readonly labelBadges = computed(() => {
     const labels = this.thread().labels;
@@ -113,5 +114,15 @@ export class EmailListItemComponent {
   onStarClick(event: Event): void {
     event.stopPropagation();
     this.starToggled.emit(this.thread());
+  }
+
+  onContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.contextMenuRequested.emit({
+      thread: this.thread(),
+      x: event.clientX,
+      y: event.clientY,
+    });
   }
 }

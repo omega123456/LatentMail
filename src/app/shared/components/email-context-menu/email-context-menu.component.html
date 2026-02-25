@@ -1,0 +1,129 @@
+@if (isOpen()) {
+  <!--
+    Zero-size hidden div positioned at right-click coordinates by the lifecycle effect.
+    MatMenu anchors its panel to this element's bounding rect and handles viewport
+    clamping internally via FlexibleConnectedPositionStrategy.
+  -->
+  <div
+    #menuTrigger
+    style="position: fixed; width: 0; height: 0; pointer-events: none;"
+    [matMenuTriggerFor]="contextMenu"
+    (menuClosed)="onMatMenuClosed()"
+  ></div>
+
+  <!-- ── Main context menu ──────────────────────────────────────────────── -->
+  <mat-menu #contextMenu="matMenu" panelClass="email-context-menu-panel">
+
+    <!-- Section 0: Draft ────────────────────────────────────────────────── -->
+    @if (isActionVisible('edit-draft')) {
+      @let editDraftAction = getAction('edit-draft');
+      @if (editDraftAction) {
+        <button mat-menu-item type="button" (click)="onActionClick('edit-draft')" (mouseenter)="onItemMouseEnter($event)">
+          <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(editDraftAction) }}</span>
+          <span>{{ getActionLabel(editDraftAction) }}</span>
+        </button>
+      }
+    }
+
+    @if (shouldShowDivider(0)) {
+      <mat-divider />
+    }
+
+    <!-- Section 1: Compose ──────────────────────────────────────────────── -->
+    @for (actionId of ['reply', 'reply-all', 'forward']; track actionId) {
+      @let composeAction = getAction(actionId);
+      @if (composeAction && isActionVisible(actionId)) {
+        <button mat-menu-item type="button" (click)="onActionClick(actionId)" (mouseenter)="onItemMouseEnter($event)">
+          <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(composeAction) }}</span>
+          <span>{{ getActionLabel(composeAction) }}</span>
+        </button>
+      }
+    }
+
+    @if (shouldShowDivider(1)) {
+      <mat-divider />
+    }
+
+    <!-- Section 2: Manage — each item opens a nested mat-menu ───────────── -->
+    <!-- MatMenu appends a right-facing chevron automatically for nested triggers. -->
+    @let moveToAction = getAction('move-to');
+    @if (moveToAction) {
+      <button mat-menu-item type="button" [matMenuTriggerFor]="moveToMenu" (mouseenter)="onItemMouseEnter($event)">
+        <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(moveToAction) }}</span>
+        <span>{{ getActionLabel(moveToAction) }}</span>
+      </button>
+    }
+
+    @let labelsAction = getAction('labels');
+    @if (labelsAction) {
+      <button mat-menu-item type="button" [matMenuTriggerFor]="labelsMenu" (mouseenter)="onItemMouseEnter($event)">
+        <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(labelsAction) }}</span>
+        <span>{{ getActionLabel(labelsAction) }}</span>
+      </button>
+    }
+
+    @if (shouldShowDivider(2)) {
+      <mat-divider />
+    }
+
+    <!-- Section 3: State ────────────────────────────────────────────────── -->
+    @for (actionId of ['star', 'mark-read-unread']; track actionId) {
+      @let stateAction = getAction(actionId);
+      @if (stateAction && isActionVisible(actionId)) {
+        <button mat-menu-item type="button" (click)="onActionClick(actionId)" (mouseenter)="onItemMouseEnter($event)">
+          <span class="material-symbols-outlined context-menu-icon" [class.starred]="actionId === 'star' && actionContext()?.isStarred">{{ getActionIcon(stateAction) }}</span>
+          <span>{{ actionId === 'star' ? 'Star' : getActionLabel(stateAction) }}</span>
+        </button>
+      }
+    }
+
+    @if (shouldShowDivider(3)) {
+      <mat-divider />
+    }
+
+    <!-- Section 4: Delete (destructive) ─────────────────────────────────── -->
+    @if (isActionVisible('delete')) {
+      @let deleteAction = getAction('delete');
+      @if (deleteAction) {
+        <button mat-menu-item type="button" class="context-menu-item--danger" (click)="onActionClick('delete')" (mouseenter)="onItemMouseEnter($event)">
+          <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(deleteAction) }}</span>
+          <span>{{ getActionLabel(deleteAction) }}</span>
+        </button>
+      }
+    }
+
+  </mat-menu>
+
+  <!-- ── Move To submenu ───────────────────────────────────────────────── -->
+  <mat-menu #moveToMenu="matMenu" panelClass="email-context-menu-panel">
+    @for (folder of moveToFolders(); track folder.id) {
+      <button mat-menu-item type="button" (click)="onFolderSelected(folder.gmailLabelId)" (mouseenter)="onItemMouseEnter($event)">
+        <span class="material-symbols-outlined context-menu-icon">{{ getFolderIcon(folder) }}</span>
+        <span>{{ folder.name }}</span>
+      </button>
+    }
+    @if (moveToFolders().length === 0) {
+      <button mat-menu-item disabled type="button">No folders available</button>
+    }
+  </mat-menu>
+
+  <!-- ── Labels submenu ────────────────────────────────────────────────── -->
+  <!--
+    Labels use immediate toggle (no Apply button) — clicking a label
+    emits add-labels or remove-labels immediately and closes the menu.
+  -->
+  <mat-menu #labelsMenu="matMenu" panelClass="email-context-menu-panel">
+    @for (folder of labelFolders(); track folder.id) {
+      <button mat-menu-item type="button" (click)="onLabelToggle(folder)" (mouseenter)="onItemMouseEnter($event)">
+        <span class="label-color-dot" [style.background-color]="getLabelColor(folder)"></span>
+        <span [class.label-active]="isLabelActive(folder)">{{ folder.name }}</span>
+        @if (isLabelActive(folder)) {
+          <span class="material-symbols-outlined label-check-icon">check</span>
+        }
+      </button>
+    }
+    @if (labelFolders().length === 0) {
+      <button mat-menu-item disabled type="button">No labels</button>
+    }
+  </mat-menu>
+}

@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef, signal, ViewChildren, QueryList } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef, signal, computed, ViewChildren, QueryList, WritableSignal, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -11,6 +11,7 @@ import { StatusBarComponent } from './status-bar/status-bar.component';
 import { ResizablePanelDirective } from './resizable-panel.directive';
 import { ComposeWindowComponent } from '../compose/compose-window.component';
 import { SearchBarComponent } from '../../shared/components/search-bar.component';
+import { EmailContextMenuComponent } from '../../shared/components/email-context-menu/email-context-menu.component';
 import { AccountsStore } from '../../store/accounts.store';
 import { FoldersStore } from '../../store/folders.store';
 import { EmailsStore } from '../../store/emails.store';
@@ -32,7 +33,7 @@ import { EmailActionEvent } from '../../shared/components/email-actions/email-ac
     EmailListComponent, EmailListHeaderComponent,
     ReadingPaneComponent, StatusBarComponent,
     ResizablePanelDirective, ComposeWindowComponent,
-    SearchBarComponent,
+    SearchBarComponent, EmailContextMenuComponent,
   ],
   templateUrl: './mail-shell.component.html',
   styleUrl: './mail-shell.component.scss',
@@ -53,6 +54,18 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private lastLoadedFolderId: string | null = null;
   // Search active state is now managed by FoldersStore
   readonly activeCategoryFilter = signal<AiCategory | null>(null);
+
+  // Context menu state — store only thread ID so the menu always shows current store state (isStarred/isRead).
+  readonly contextMenuThreadId: WritableSignal<string | null> = signal(null);
+  readonly contextMenuThread = computed(() => {
+    const id = this.contextMenuThreadId();
+    if (!id) {
+      return null;
+    }
+    return this.emailsStore.threads().find((thread) => thread.xGmThrid === id) ?? null;
+  });
+  readonly contextMenuPosition: WritableSignal<{ x: number; y: number } | null> = signal(null);
+  readonly contextMenuOpen: WritableSignal<boolean> = signal(false);
 
   @ViewChildren(EmailListComponent) emailLists!: QueryList<EmailListComponent>;
 
@@ -471,6 +484,173 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     this.activeCategoryFilter.set(category);
     // Update all email list instances
     this.emailLists?.forEach(list => list.setCategoryFilter(category));
+  }
+
+  /**
+   * Called when any email list item receives a right-click.
+   * Stores the thread and position for the context menu overlay and
+   * simultaneously selects the thread in the reading pane.
+   */
+  onThreadContextMenu(data: { thread: Thread; x: number; y: number }): void {
+    this.contextMenuThreadId.set(data.thread.xGmThrid);
+    this.contextMenuPosition.set({ x: data.x, y: data.y });
+    this.contextMenuOpen.set(true);
+    // Thread selection is handled by EmailListComponent.onItemContextMenu() which calls
+    // onThreadClick() → emits threadSelected → onThreadSelected(). No need to call it again here.
+  }
+
+  /** Called when the context menu closes (action, Escape, or outside click). */
+  onContextMenuClosed(): void {
+    this.contextMenuOpen.set(false);
+    this.contextMenuThreadId.set(null);
+  }
+
+  /**
+   * When the context menu is open, a right-click hits the overlay backdrop instead of the list.
+   * Close the menu and re-dispatch contextmenu at the same coordinates so the element under
+   * the cursor (e.g. another list item) receives it and opens the menu for that thread.
+   */
+  @HostListener('document:contextmenu', ['$event'])
+  onDocumentContextMenu(event: MouseEvent): void {
+    if (!this.contextMenuOpen()) {
+      return;
+    }
+    const panel = document.querySelector('.email-context-menu-panel');
+    if (panel?.contains(event.target as Node)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.onContextMenuClosed();
+    setTimeout(() => {
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      if (target) {
+        target.dispatchEvent(
+          new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            button: event.button,
+            buttons: event.buttons,
+          })
+        );
+      }
+    }, 0);
+  }
+
+  /**
+   * Dispatches an action chosen from the context menu.
+   * Uses contextMenuThread() as the primary thread reference — NOT selectedThread(),
+   * which may still be loading at the moment a fast action (delete, star, etc.) fires.
+   */
+  onContextMenuAction(event: EmailActionEvent): void {
+    // Dismiss the overlay immediately so the UI responds without waiting for the action.
+    this.contextMenuOpen.set(false);
+
+    const thread = this.contextMenuThread();
+    if (!thread) {
+      return;
+    }
+
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+
+    switch (event.action) {
+      case 'delete': {
+        // Silently no-op when viewing Trash — deleting from Trash is not supported.
+        if (currentFolder === '[Gmail]/Trash') {
+          break;
+        }
+        this.emailsStore.moveEmails(
+          activeAccount.id,
+          [thread.xGmThrid],
+          '[Gmail]/Trash',
+          thread.xGmThrid,
+          currentFolder,
+        );
+        this.emailsStore.clearSelection();
+        break;
+      }
+      case 'move-to': {
+        if (!event.targetFolder) {
+          break;
+        }
+        this.emailsStore.moveEmails(
+          activeAccount.id,
+          [thread.xGmThrid],
+          event.targetFolder,
+          thread.xGmThrid,
+          currentFolder,
+        );
+        this.emailsStore.clearSelection();
+        break;
+      }
+      case 'star': {
+        this.emailsStore.flagEmails(
+          activeAccount.id,
+          [thread.xGmThrid],
+          'starred',
+          !thread.isStarred,
+          thread.xGmThrid,
+        );
+        break;
+      }
+      case 'mark-read-unread': {
+        this.emailsStore.flagEmails(
+          activeAccount.id,
+          [thread.xGmThrid],
+          'read',
+          !thread.isRead,
+          thread.xGmThrid,
+        );
+        break;
+      }
+      case 'add-labels': {
+        if (!event.targetLabels || event.targetLabels.length === 0) {
+          break;
+        }
+        // Use actual xGmMsgIds from the loaded thread messages.
+        // No-op if messages are not yet loaded — label operations require real message IDs;
+        // using xGmThrid as a message ID is incorrect and must be avoided.
+        const addMessages = this.emailsStore.selectedMessages();
+        const addXGmMsgIds = addMessages.map(message => message.xGmMsgId);
+        if (addXGmMsgIds.length > 0) {
+          this.emailsStore.addLabels(activeAccount.id, addXGmMsgIds, event.targetLabels, thread.xGmThrid);
+        }
+        break;
+      }
+      case 'remove-labels': {
+        if (!event.targetLabels || event.targetLabels.length === 0) {
+          break;
+        }
+        const removeMessages = this.emailsStore.selectedMessages();
+        const removeXGmMsgIds = removeMessages.map(message => message.xGmMsgId);
+        if (removeXGmMsgIds.length > 0) {
+          this.emailsStore.removeLabels(activeAccount.id, removeXGmMsgIds, event.targetLabels, thread.xGmThrid);
+        }
+        break;
+      }
+      case 'reply':
+      case 'reply-all':
+      case 'forward': {
+        // By the time the user reads and clicks a compose action, selectedThread() will
+        // have loaded (SQLite is near-instantaneous). openComposeForAction() has its own
+        // null guard and silently no-ops if the thread is still null for any reason.
+        this.openComposeForAction(event.action as ComposeMode);
+        break;
+      }
+      case 'edit-draft': {
+        this.openDraftForEditing();
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   private openComposeForAction(mode: ComposeMode, specificMessage?: Email, prefillBody?: string): void {

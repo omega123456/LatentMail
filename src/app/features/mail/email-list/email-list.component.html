@@ -25,6 +25,7 @@
         [activeFolderId]="foldersStore.activeFolderId()"
         (clicked)="onThreadClick(thread)"
         (starToggled)="onStarToggle(thread)"
+        (contextMenuRequested)="onItemContextMenu($event)"
       />
       <!-- End-of-list inline indicator: only shown when all emails are loaded -->
       @if (!emailsStore.hasMore() && !emailsStore.isEmpty()) {

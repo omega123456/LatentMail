@@ -33,6 +33,7 @@ export class EmailListComponent implements OnDestroy {
   private readonly commandRegistry = inject(CommandRegistryService);
 
   readonly threadSelected = output<Thread>();
+  readonly threadContextMenu = output<{ thread: Thread; x: number; y: number }>();
 
   /** Active category filter from the header */
   readonly categoryFilter = signal<AiCategory | null>(null);
@@ -398,6 +399,12 @@ export class EmailListComponent implements OnDestroy {
     // Sync keyboard cursor to the clicked thread so J/K navigation continues from here.
     this.keyboardCursorId.set(thread.xGmThrid);
     this.threadSelected.emit(thread);
+  }
+
+  onItemContextMenu(data: { thread: Thread; x: number; y: number }): void {
+    // Select the thread so the reading pane loads it in parallel with the menu opening.
+    this.onThreadClick(data.thread);
+    this.threadContextMenu.emit(data);
   }
 
   onStarToggle(thread: Thread): void {

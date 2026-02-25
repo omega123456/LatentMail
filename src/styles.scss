@@ -184,6 +184,9 @@ html {
     typography: Inter,
     density: 0,
   ));
+  // Override mat-menu background: Material 3 generates a tinted surface-container
+  // color here. Last declaration in the same block wins, so this beats mat.theme().
+  --mat-menu-container-color: var(--color-surface);
 }
 
 [data-theme='dark'] {
@@ -193,6 +196,7 @@ html {
       primary: mat.$azure-palette,
     ),
   ));
+  --mat-menu-container-color: var(--color-surface);
 }
 
 // ============================================================
@@ -254,6 +258,41 @@ html {
     'wght' 400,
     'GRAD' 0,
     'opsz' 24;
+}
+
+// ============================================================
+// Angular Material MatMenu overrides
+// Applied globally — the app has two mat-menus (email context menu and
+// account switcher) and both benefit from consistent sizing.
+// Global scope avoids relying on panelClass being applied to a specific
+// element in the CDK overlay hierarchy, which varies across Material versions.
+// ============================================================
+
+.mat-mdc-menu-panel {
+  // White/dark surface background — Material 3 default is a tinted
+  // surface-container color. Already overridden at the token level above;
+  // this direct property is a fallback that always wins.
+  background-color: var(--color-surface) !important;
+  // Comfortable minimum width for action menus.
+  min-width: 220px !important;
+}
+
+// 44px item height — comfortably readable without being oversized.
+// Use !important because MDC sets height via its own class selectors.
+.mat-mdc-menu-item {
+  height: 44px !important;
+}
+
+// Layout the item text wrapper as flex so our Material Symbols icon and the
+// label span sit side-by-side with correct vertical alignment.
+// height: 100% makes the flex container fill the parent item's full height
+// so align-items: center actually centers the content vertically.
+.mat-mdc-menu-item .mat-mdc-menu-item-text {
+  display: flex !important;
+  align-items: center;
+  height: 100%;
+  gap: 12px;
+  font-size: 14px;
 }
 
 // Attachment preview dialog: auto-size to content, centered (panelClass is on overlay pane)

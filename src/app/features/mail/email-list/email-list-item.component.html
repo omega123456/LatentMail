@@ -5,6 +5,7 @@
   [class.compact]="density() === 'compact'"
   [class.spacious]="density() === 'spacious'"
   (click)="clicked.emit(thread())"
+  (contextmenu)="onContextMenu($event)"
 >
   @if (settingsStore.showAvatars()) {
     <app-sender-avatar

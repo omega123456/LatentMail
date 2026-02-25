@@ -1,0 +1,52 @@
+// mat-menu-item provides flex layout, padding, gap, and hover/focus states.
+// Only override what Material doesn't cover natively.
+
+// ─── Item Icon ────────────────────────────────────────────────────────────────
+
+.context-menu-icon {
+  font-size: 20px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+
+  &.starred {
+    color: var(--color-accent);
+    font-variation-settings: 'FILL' 1;
+  }
+}
+
+// ─── Danger Item (Delete) ─────────────────────────────────────────────────────
+//
+// Applied as a class on the button[mat-menu-item] for the delete action.
+// Uses the more-specific .mat-mdc-menu-item selector to win over Material's
+// own color rules without needing !important.
+
+.context-menu-item--danger {
+  &.mat-mdc-menu-item {
+    color: var(--color-error);
+  }
+
+  .context-menu-icon {
+    color: var(--color-error);
+  }
+}
+
+// ─── Labels Submenu ───────────────────────────────────────────────────────────
+
+.label-color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.label-active {
+  font-weight: 500;
+}
+
+.label-check-icon {
+  font-size: 16px;
+  color: var(--color-primary);
+  margin-left: auto;
+}
