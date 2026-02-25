@@ -214,6 +214,12 @@ export class EmailListComponent implements OnDestroy {
       case 'mark-unread':
         this.markKeyboardCursorThread(false);
         break;
+      case 'mark-spam':
+        this.markSpamKeyboardCursorThread();
+        break;
+      case 'mark-not-spam':
+        this.markNotSpamKeyboardCursorThread();
+        break;
       default:
         break;
     }
@@ -322,6 +328,48 @@ export class EmailListComponent implements OnDestroy {
       activeAccount.id,
       [thread.xGmThrid],
       '[Gmail]/Trash',
+      thread.xGmThrid,
+      currentFolder,
+    );
+    this.keyboardCursorId.set(null);
+  }
+
+  /** Mark as spam (move to Spam) the thread under the keyboard cursor. */
+  private markSpamKeyboardCursorThread(): void {
+    if (this.foldersStore.activeFolderId() === '[Gmail]/Spam') {
+      return;
+    }
+    const thread = this.getKeyboardCursorThread();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!thread || !activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+    this.emailsStore.moveEmails(
+      activeAccount.id,
+      [thread.xGmThrid],
+      '[Gmail]/Spam',
+      thread.xGmThrid,
+      currentFolder,
+    );
+    this.keyboardCursorId.set(null);
+  }
+
+  /** Not spam (move to Inbox) the thread under the keyboard cursor. Only applies when viewing Spam. */
+  private markNotSpamKeyboardCursorThread(): void {
+    if (this.foldersStore.activeFolderId() !== '[Gmail]/Spam') {
+      return;
+    }
+    const thread = this.getKeyboardCursorThread();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!thread || !activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+    this.emailsStore.moveEmails(
+      activeAccount.id,
+      [thread.xGmThrid],
+      'INBOX',
       thread.xGmThrid,
       currentFolder,
     );

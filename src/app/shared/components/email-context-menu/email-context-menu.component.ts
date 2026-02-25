@@ -30,7 +30,7 @@ import { DEFAULT_LABEL_COLOR } from '../../constants/label-colors';
 const SECTION_ACTION_IDS: ReadonlyArray<ReadonlyArray<string>> = [
   ['edit-draft'],                        // Draft section
   ['reply', 'reply-all', 'forward'],     // Compose section
-  ['move-to', 'labels'],                 // Manage section (nested menu triggers)
+  ['move-to', 'labels', 'mark-spam', 'mark-not-spam'],  // Manage section (nested menus + spam actions)
   ['star', 'mark-read-unread'],          // State section
   ['delete'],                            // Delete section (destructive)
 ];

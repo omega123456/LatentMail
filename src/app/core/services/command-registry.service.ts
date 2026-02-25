@@ -476,6 +476,30 @@ export class CommandRegistryService {
       },
     });
 
+    this.registerCommand({
+      id: 'mark-spam',
+      label: 'Mark as Spam',
+      description: 'Move the selected email or thread to Spam',
+      icon: 'report',
+      defaultKeys: ['shift+j'],
+      context: 'email-selected',
+      action: () => {
+        // Delegated to email-list via commandTriggered$ (Part 3)
+      },
+    });
+
+    this.registerCommand({
+      id: 'mark-not-spam',
+      label: 'Not spam',
+      description: 'Move the selected email or thread out of Spam to Inbox',
+      icon: 'inbox',
+      defaultKeys: ['ctrl+shift+j'],
+      context: 'email-selected',
+      action: () => {
+        // Delegated to email-list via commandTriggered$ (Part 3)
+      },
+    });
+
     // --- Email list navigation ---
 
     this.registerCommand({

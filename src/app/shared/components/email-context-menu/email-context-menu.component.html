@@ -62,6 +62,26 @@
       </button>
     }
 
+    @if (isActionVisible('mark-spam')) {
+      @let markSpamAction = getAction('mark-spam');
+      @if (markSpamAction) {
+        <button mat-menu-item type="button" (click)="onActionClick('mark-spam')" (mouseenter)="onItemMouseEnter($event)">
+          <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(markSpamAction) }}</span>
+          <span>{{ getActionLabel(markSpamAction) }}</span>
+        </button>
+      }
+    }
+
+    @if (isActionVisible('mark-not-spam')) {
+      @let markNotSpamAction = getAction('mark-not-spam');
+      @if (markNotSpamAction) {
+        <button mat-menu-item type="button" (click)="onActionClick('mark-not-spam')" (mouseenter)="onItemMouseEnter($event)">
+          <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(markNotSpamAction) }}</span>
+          <span>{{ getActionLabel(markNotSpamAction) }}</span>
+        </button>
+      }
+    }
+
     @if (shouldShowDivider(2)) {
       <mat-divider />
     }

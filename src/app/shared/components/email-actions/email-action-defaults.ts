@@ -78,6 +78,22 @@ export function getDefaultEmailActions(): EmailAction[] {
       isVisible: () => true,
       isEnabled: () => true,
     },
+    {
+      id: 'mark-spam',
+      icon: 'report',
+      label: 'Mark as spam',
+      group: 'manage',
+      isVisible: (ctx: EmailActionContext) => ctx.activeFolderId !== '[Gmail]/Spam',
+      isEnabled: () => true,
+    },
+    {
+      id: 'mark-not-spam',
+      icon: 'inbox',
+      label: 'Not spam',
+      group: 'manage',
+      isVisible: (ctx: EmailActionContext) => ctx.activeFolderId === '[Gmail]/Spam',
+      isEnabled: () => true,
+    },
 
     // ─── State Group ───
     {

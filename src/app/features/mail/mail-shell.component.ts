@@ -205,6 +205,36 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         }
         break;
       }
+      case 'mark-spam': {
+        if (currentFolder === '[Gmail]/Spam') {
+          break;
+        }
+        const spamIds = event.message
+          ? [event.message.xGmMsgId]
+          : [thread.xGmThrid];
+        const spamPerMsg = event.message?.xGmMsgId;
+        const spamSourceFolder = spamPerMsg ? undefined : currentFolder;
+        this.emailsStore.moveEmails(activeAccount.id, spamIds, '[Gmail]/Spam', thread.xGmThrid, spamSourceFolder, spamPerMsg);
+        if (!spamPerMsg) {
+          this.emailsStore.clearSelection();
+        }
+        break;
+      }
+      case 'mark-not-spam': {
+        if (currentFolder !== '[Gmail]/Spam') {
+          break;
+        }
+        const notSpamIds = event.message
+          ? [event.message.xGmMsgId]
+          : [thread.xGmThrid];
+        const notSpamPerMsg = event.message?.xGmMsgId;
+        const notSpamSourceFolder = notSpamPerMsg ? undefined : currentFolder;
+        this.emailsStore.moveEmails(activeAccount.id, notSpamIds, 'INBOX', thread.xGmThrid, notSpamSourceFolder, notSpamPerMsg);
+        if (!notSpamPerMsg) {
+          this.emailsStore.clearSelection();
+        }
+        break;
+      }
       case 'star': {
         // Always thread-level — use threadId to flag all messages in thread
         this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'starred', !thread.isStarred, thread.xGmThrid);
@@ -608,6 +638,34 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
           !thread.isRead,
           thread.xGmThrid,
         );
+        break;
+      }
+      case 'mark-spam': {
+        if (currentFolder === '[Gmail]/Spam') {
+          break;
+        }
+        this.emailsStore.moveEmails(
+          activeAccount.id,
+          [thread.xGmThrid],
+          '[Gmail]/Spam',
+          thread.xGmThrid,
+          currentFolder,
+        );
+        this.emailsStore.clearSelection();
+        break;
+      }
+      case 'mark-not-spam': {
+        if (currentFolder !== '[Gmail]/Spam') {
+          break;
+        }
+        this.emailsStore.moveEmails(
+          activeAccount.id,
+          [thread.xGmThrid],
+          'INBOX',
+          thread.xGmThrid,
+          currentFolder,
+        );
+        this.emailsStore.clearSelection();
         break;
       }
       case 'add-labels': {
