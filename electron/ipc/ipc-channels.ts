@@ -84,8 +84,8 @@ export const IPC_CHANNELS = {
   LABEL_DELETE: 'label:delete',
   LABEL_UPDATE_COLOR: 'label:update-color',
 
-  // Gravatar (main-process check so 404s don't appear in renderer console)
-  GRAVATAR_CHECK: 'gravatar:check',
+  // BIMI sender avatar (logo from domain BIMI DNS record)
+  BIMI_GET_LOGO: 'bimi:get-logo',
 } as const;
 
 // Main → Renderer (push events)

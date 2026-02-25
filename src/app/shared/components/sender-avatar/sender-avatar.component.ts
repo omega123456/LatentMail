@@ -1,6 +1,5 @@
 import { Component, input, signal, computed, effect, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { getGravatarUrl } from '../../utils/gravatar.util';
 import { ElectronService } from '../../../core/services/electron.service';
 
 @Component({
@@ -17,63 +16,31 @@ export class SenderAvatarComponent {
   readonly displayName = input<string>('');
   readonly avatarClass = input<string>('sender-avatar');
 
-  readonly gravatarFailed = signal(false);
-  /** True only after we've confirmed the Gravatar image loads (avoids 404 console noise). */
-  readonly gravatarAvailable = signal(false);
+  readonly bimiLogoUrl = signal<string | null>(null);
 
-  private checkId = 0;
-
-  readonly gravatarUrl = computed(() => {
-    this.gravatarFailed();
-    this.gravatarAvailable();
-    return getGravatarUrl(this.email());
-  });
+  private requestId = 0;
 
   constructor() {
     effect(() => {
-      const url = this.gravatarUrl();
-      this.gravatarAvailable.set(false);
-      this.gravatarFailed.set(false);
-      if (!url) {
+      const address = this.email();
+      this.bimiLogoUrl.set(null);
+      if (!address?.trim() || !this.electronService.isElectron) {
         return;
       }
-      this.checkId += 1;
-      const id = this.checkId;
-
-      if (this.electronService.isElectron) {
-        this.electronService.checkGravatar(url).then((result) => {
-          if (id !== this.checkId) {
-            return;
-          }
-          if (result.success && result.data?.available) {
-            this.gravatarAvailable.set(true);
-          } else {
-            this.gravatarFailed.set(true);
-          }
-        });
-      } else {
-        const img = new Image();
-        img.onload = () => {
-          if (id === this.checkId) {
-            this.gravatarAvailable.set(true);
-          }
-        };
-        img.onerror = () => {
-          if (id === this.checkId) {
-            this.gravatarFailed.set(true);
-          }
-        };
-        img.src = url;
-      }
+      this.requestId += 1;
+      const id = this.requestId;
+      this.electronService.getBimiLogo(address).then((result) => {
+        if (id !== this.requestId) {
+          return;
+        }
+        if (result.success && result.data?.logoUrl) {
+          this.bimiLogoUrl.set(result.data.logoUrl);
+        }
+      });
     });
   }
 
-  readonly showInitial = computed(() => {
-    const url = this.gravatarUrl();
-    const available = this.gravatarAvailable();
-    const failed = this.gravatarFailed();
-    return !url || failed || !available;
-  });
+  readonly showInitial = computed(() => !this.bimiLogoUrl());
 
   readonly initial = computed(() => {
     const name = this.displayName().trim();

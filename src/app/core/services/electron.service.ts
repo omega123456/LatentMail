@@ -157,8 +157,8 @@ interface ElectronAPI {
     delete: (accountId: string, gmailLabelId: string) => Promise<IpcResponse>;
     updateColor: (accountId: string, gmailLabelId: string, color: string | null) => Promise<IpcResponse>;
   };
-  gravatar: {
-    check: (url: string) => Promise<IpcResponse<{ available: boolean; url?: string }>>;
+  bimi: {
+    getLogo: (email: string) => Promise<IpcResponse<{ logoUrl: string | null }>>;
   };
   logger: {
     getRecentEntries: () => Promise<IpcResponse>;
@@ -443,10 +443,10 @@ export class ElectronService {
     return this.invoke(() => this.api!.labels.updateColor(accountId, gmailLabelId, color));
   }
 
-  /** Check if a Gravatar URL returns 200 (main process does the fetch so 404s don't log in renderer console). */
-  async checkGravatar(url: string): Promise<IpcResponse<{ available: boolean; url?: string }>> {
-    return this.invoke(() => this.api!.gravatar.check(url)) as Promise<
-      IpcResponse<{ available: boolean; url?: string }>
+  /** Get BIMI logo URL for sender domain (cached in main process). */
+  async getBimiLogo(email: string): Promise<IpcResponse<{ logoUrl: string | null }>> {
+    return this.invoke(() => this.api!.bimi.getLogo(email)) as Promise<
+      IpcResponse<{ logoUrl: string | null }>
     >;
   }
 

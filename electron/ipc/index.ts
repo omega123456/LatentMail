@@ -11,7 +11,7 @@ import { registerQueueIpcHandlers } from './queue-ipc';
 import { registerFilterIpcHandlers } from './filter-ipc';
 import { registerLoggerIpcHandlers } from './logger-ipc';
 import { registerAttachmentIpcHandlers } from './attachment-ipc';
-import { registerGravatarIpcHandlers } from './gravatar-ipc';
+import { registerBimiIpcHandlers } from './bimi-ipc';
 
 export function registerAllIpcHandlers(): void {
   log.info('Registering IPC handlers...');
@@ -26,7 +26,7 @@ export function registerAllIpcHandlers(): void {
   registerFilterIpcHandlers();
   registerLoggerIpcHandlers();
   registerAttachmentIpcHandlers();
-  registerGravatarIpcHandlers();
+  registerBimiIpcHandlers();
 
   log.info('All IPC handlers registered');
 }

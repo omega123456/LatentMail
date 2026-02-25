@@ -1,8 +1,8 @@
 <div [class]="avatarClass()" class="sender-avatar-wrapper">
-  @if (gravatarAvailable()) {
+  @if (bimiLogoUrl()) {
     <img
       class="sender-avatar-img"
-      [src]="gravatarUrl()"
+      [src]="bimiLogoUrl()"
       [alt]="''"
       referrerPolicy="no-referrer"
     />

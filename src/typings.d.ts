@@ -1,4 +1,1 @@
-declare module 'md5' {
-  function md5(message: string): string;
-  export default md5;
-}
+// Global type declarations for third-party modules (add as needed).
