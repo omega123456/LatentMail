@@ -383,7 +383,6 @@ export function registerMailIpcHandlers(): void {
         const byMessageId = db.getEmailByXGmMsgId(numAccountId, id);
         if (byMessageId) {
           resolvedEmails.push(byMessageId);
-          continue;
         }
         resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
       }
@@ -393,6 +392,25 @@ export function registerMailIpcHandlers(): void {
         const xGmMsgId = String(email['xGmMsgId'] || '');
         if (xGmMsgId) {
           deduped.set(xGmMsgId, email);
+        }
+      }
+
+      // Filter deduped to only emails present in sourceFolder (folder-scoped operation).
+      // Emails in other folders (e.g., already in Trash) are excluded so we do not
+      // create phantom folder associations for them.
+      if (sourceFolder) {
+        const keysToRemove: string[] = [];
+        for (const [xGmMsgId] of deduped) {
+          const folders = db.getFoldersForEmail(numAccountId, xGmMsgId);
+          if (!folders.includes(sourceFolder)) {
+            keysToRemove.push(xGmMsgId);
+          }
+        }
+        if (keysToRemove.length > 0) {
+          log.debug(`MAIL_MOVE: Filtered out ${keysToRemove.length} email(s) not in sourceFolder ${sourceFolder}: ${keysToRemove.join(', ')}`);
+          for (const key of keysToRemove) {
+            deduped.delete(key);
+          }
         }
       }
 
@@ -521,7 +539,6 @@ export function registerMailIpcHandlers(): void {
         const byMessageId = db.getEmailByXGmMsgId(numAccountId, id);
         if (byMessageId) {
           resolvedEmails.push(byMessageId);
-          continue;
         }
         resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
       }
@@ -594,7 +611,6 @@ export function registerMailIpcHandlers(): void {
         const byMessageId = db.getEmailByXGmMsgId(numAccountId, id);
         if (byMessageId) {
           resolvedEmails.push(byMessageId);
-          continue;
         }
         resolvedEmails.push(...db.getEmailsByThreadId(numAccountId, id));
       }
@@ -605,6 +621,31 @@ export function registerMailIpcHandlers(): void {
         if (xGmMsgId) {
           deduped.set(xGmMsgId, email);
         }
+      }
+
+      // Filter deduped to only emails present in folder (folder-scoped operation).
+      // Emails in other folders (e.g., already in Trash) are excluded so we do not
+      // create phantom Trash associations for messages that were never in this folder.
+      {
+        const keysToRemove: string[] = [];
+        for (const [xGmMsgId] of deduped) {
+          const folders = db.getFoldersForEmail(numAccountId, xGmMsgId);
+          if (!folders.includes(folder)) {
+            keysToRemove.push(xGmMsgId);
+          }
+        }
+        if (keysToRemove.length > 0) {
+          log.debug(`MAIL_DELETE: Filtered out ${keysToRemove.length} email(s) not in folder ${folder}: ${keysToRemove.join(', ')}`);
+          for (const key of keysToRemove) {
+            deduped.delete(key);
+          }
+        }
+      }
+
+      // If all emails were filtered out, there is nothing to delete from this folder — no-op.
+      if (deduped.size === 0) {
+        log.info(`MAIL_DELETE: No emails in folder ${folder} after filtering — returning no-op success`);
+        return ipcSuccess({ queueId: null });
       }
 
       const resolvedEmailsMeta: Array<{ xGmMsgId: string; xGmThrid: string }> = [];
