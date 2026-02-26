@@ -29,18 +29,20 @@
       </div>
       <div class="email-top-right">
         <span class="email-date">{{ thread().lastMessageDate | relativeTime }}</span>
-        @if (thread().isStarred) {
-          <span
-            class="material-symbols-outlined star-icon starred"
-            aria-label="Unstar"
-            (click)="onStarClick($event)"
-          >star</span>
-        } @else {
-          <span
-            class="material-symbols-outlined star-icon"
-            aria-label="Star"
-            (click)="onStarClick($event)"
-          >star_border</span>
+        @if (showStarAction()) {
+          @if (thread().isStarred) {
+            <span
+              class="material-symbols-outlined star-icon starred"
+              aria-label="Unstar"
+              (click)="onStarClick($event)"
+            >star</span>
+          } @else {
+            <span
+              class="material-symbols-outlined star-icon"
+              aria-label="Star"
+              (click)="onStarClick($event)"
+            >star_border</span>
+          }
         }
       </div>
     </div>

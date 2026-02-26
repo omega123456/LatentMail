@@ -105,7 +105,7 @@ export function getDefaultEmailActions(): EmailAction[] {
       group: 'state',
       isToggle: true,
       isActive: (ctx: EmailActionContext) => ctx.isStarred,
-      isVisible: () => true,
+      isVisible: (ctx: EmailActionContext) => ctx.activeFolderId !== ctx.trashFolderId,
       isEnabled: () => true,
     },
     {

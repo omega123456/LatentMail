@@ -236,7 +236,9 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         break;
       }
       case 'star': {
-        // Always thread-level — use threadId to flag all messages in thread
+        if (currentFolder === this.foldersStore.trashFolderId()) {
+          break;
+        }
         this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'starred', !thread.isStarred, thread.xGmThrid);
         break;
       }
@@ -621,6 +623,9 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         break;
       }
       case 'star': {
+        if (currentFolder === this.foldersStore.trashFolderId()) {
+          break;
+        }
         this.emailsStore.flagEmails(
           activeAccount.id,
           [thread.xGmThrid],

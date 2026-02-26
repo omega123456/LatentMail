@@ -23,6 +23,7 @@
         [density]="uiStore.density()"
         [showFolderBadge]="foldersStore.searchActive()"
         [activeFolderId]="foldersStore.activeFolderId()"
+        [showStarAction]="foldersStore.activeFolderId() !== foldersStore.trashFolderId()"
         (clicked)="onThreadClick(thread)"
         (starToggled)="onStarToggle(thread)"
         (contextMenuRequested)="onItemContextMenu($event)"

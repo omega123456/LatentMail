@@ -383,6 +383,9 @@ export class EmailListComponent implements OnDestroy {
     if (!thread || !activeAccount) {
       return;
     }
+    if (this.foldersStore.activeFolderId() === this.foldersStore.trashFolderId()) {
+      return;
+    }
     this.emailsStore.flagEmails(
       activeAccount.id,
       [thread.xGmThrid],
@@ -456,6 +459,9 @@ export class EmailListComponent implements OnDestroy {
   }
 
   onStarToggle(thread: Thread): void {
+    if (this.foldersStore.activeFolderId() === this.foldersStore.trashFolderId()) {
+      return;
+    }
     const accountId = thread.accountId;
     this.emailsStore.flagEmails(
       accountId,

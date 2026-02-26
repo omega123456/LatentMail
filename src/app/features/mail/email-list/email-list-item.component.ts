@@ -28,6 +28,8 @@ export class EmailListItemComponent {
   readonly showFolderBadge = input<boolean>(false);
   /** When set to [Gmail]/Trash, list item shows Draft/Sent/Deleted badges from thread folders. */
   readonly activeFolderId = input<string | null>(null);
+  /** When false (e.g. when viewing Trash), the star icon and toggle are hidden. */
+  readonly showStarAction = input<boolean>(true);
   readonly clicked = output<Thread>();
   readonly starToggled = output<Thread>();
   readonly contextMenuRequested = output<{ thread: Thread; x: number; y: number }>();
