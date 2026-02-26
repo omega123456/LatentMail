@@ -71,16 +71,14 @@ export const QueueStore = signalStore(
       handleUpdate(update: QueueItemSnapshot): void {
         const currentItems = [...store.items()];
         const idx = currentItems.findIndex(i => i.queueId === update.queueId);
+        const isSyncOp = update.type === 'sync-folder' || update.type === 'sync-thread';
 
         // Detect status transitions for toast notifications.
-        // Only show toasts when an existing item changes status — not for
-        // newly-appearing items (prevents toasts on initial loadStatus).
         if (idx >= 0) {
           const previousStatus = currentItems[idx].status;
           if (previousStatus !== update.status) {
             // Suppress failure toasts for background sync operations — they are transient
             // and will be retried automatically on the next sync tick.
-            const isSyncOp = update.type === 'sync-folder' || update.type === 'sync-thread';
             if (update.status === 'failed' && !isSyncOp) {
               toastService.error(`${update.description} failed: ${update.error || 'Unknown error'}`);
             } else if (update.status === 'completed' && update.type === 'send') {
@@ -89,6 +87,12 @@ export const QueueStore = signalStore(
           }
           currentItems[idx] = update;
         } else {
+          // New item (e.g. real-time push). Show failure toast if it arrives already failed,
+          // so user sees feedback when move/delete/send fails before a prior pending/processing
+          // update was applied (e.g. fast failure or out-of-order delivery).
+          if (update.status === 'failed' && !isSyncOp) {
+            toastService.error(`${update.description} failed: ${update.error || 'Unknown error'}`);
+          }
           currentItems.push(update);
         }
         patchState(store, { items: currentItems });
