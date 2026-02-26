@@ -45,7 +45,6 @@ const GMAIL_LABEL_TO_FOLDER: Record<string, string> = {
   '\\Inbox': 'INBOX',
   '\\Sent': '[Gmail]/Sent Mail',
   '\\Draft': '[Gmail]/Drafts',
-  '\\Trash': '[Gmail]/Trash',
   '\\Junk': '[Gmail]/Spam',
   '\\Starred': '[Gmail]/Starred',
   '\\Important': '[Gmail]/Important',
@@ -62,10 +61,19 @@ const GMAIL_LABEL_TO_FOLDER: Record<string, string> = {
  * @param knownMailboxPaths  Set of known IMAP folder paths for the account (from getMailboxesForSync).
  * @returns Array of validated IMAP folder paths.
  */
-function mapLabelsToFolderPaths(rawLabels: string[], knownMailboxPaths: Set<string>): string[] {
+function mapLabelsToFolderPaths(rawLabels: string[], knownMailboxPaths: Set<string>, accountId: number): string[] {
   const folderPaths: string[] = [];
 
   for (const label of rawLabels) {
+    // Resolve the \Trash label dynamically per-account (locale-specific: [Gmail]/Trash vs [Gmail]/Bin)
+    if (label === '\\Trash') {
+      const trashPath = DatabaseService.getInstance().getTrashFolder(accountId);
+      if (knownMailboxPaths.has(trashPath)) {
+        folderPaths.push(trashPath);
+      }
+      continue;
+    }
+
     // System label mapping
     const systemPath = GMAIL_LABEL_TO_FOLDER[label];
     if (systemPath) {
@@ -183,6 +191,7 @@ export class SyncService {
         type: mb.specialUse ? 'system' : 'user',
         unreadCount: mb.unseen,
         totalCount: mb.messages,
+        specialUse: mb.specialUse || undefined,
       });
     }
   }
@@ -600,7 +609,7 @@ export class SyncService {
         // If no labels map to known folders (archived email), use All Mail as a
         // fallback folder so the email retains at least one email_folders association
         // and doesn't get orphan-cleaned.
-        const mappedPaths = mapLabelsToFolderPaths(email.rawLabels, knownMailboxPaths);
+        const mappedPaths = mapLabelsToFolderPaths(email.rawLabels, knownMailboxPaths, numAccountId);
         const folderPaths = mappedPaths.length > 0 ? mappedPaths : [ALL_MAIL_PATH];
         const reconciled = db.reconcileEmailFolders(numAccountId, email.xGmMsgId, email.xGmThrid, folderPaths);
         for (const folder of reconciled) {

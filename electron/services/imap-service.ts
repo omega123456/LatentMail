@@ -937,7 +937,7 @@ export class ImapService {
   }
 
   /**
-   * Delete messages by UID from a folder by moving them to [Gmail]/Trash.
+   * Delete messages by UID from a folder by moving them to the account's trash folder.
    * This is a soft-delete — messages remain in Trash for 30 days before
    * Gmail automatically removes them. IMAP EXPUNGE is never performed here;
    * permanent deletion is not supported via this method.
@@ -946,14 +946,15 @@ export class ImapService {
     accountId: string,
     folder: string,
     uids: number[],
+    trashFolder: string,
   ): Promise<void> {
     const client = await this.connect(accountId);
     const lock = await client.getMailboxLock(folder);
     try {
       const uidRange = uids.join(',');
       // Move to Trash (soft-delete only)
-      await client.messageMove(uidRange, '[Gmail]/Trash', { uid: true });
-      log.info(`Moved ${uids.length} message(s) from ${folder} to Trash for account ${accountId}`);
+      await client.messageMove(uidRange, trashFolder, { uid: true });
+      log.info(`Moved ${uids.length} message(s) from ${folder} to ${trashFolder} for account ${accountId}`);
     } finally {
       lock.release();
     }

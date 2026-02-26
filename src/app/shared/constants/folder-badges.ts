@@ -48,7 +48,20 @@ export const HIDDEN_FOLDER_IDS = new Set<string>(['[gmail]/important']);
 export interface FolderForLookup {
   gmailLabelId: string;
   name: string;
+  specialUse?: string | null;
 }
+
+/**
+ * Maps RFC 6154 specialUse attribute to FOLDER_BADGE_META-style badge info.
+ * Used as a fallback for locale-variant folder names (e.g. '[Gmail]/Bin' uses '\\Trash').
+ */
+const SPECIAL_USE_BADGE_META: Record<string, { displayName: string; cssClass: string; icon: string }> = {
+  '\\Trash': { displayName: 'Trash', cssClass: 'folder-badge--trash', icon: 'delete' },
+  '\\Sent': { displayName: 'Sent', cssClass: 'folder-badge--sent', icon: 'send' },
+  '\\Drafts': { displayName: 'Drafts', cssClass: 'folder-badge--drafts', icon: 'edit_note' },
+  '\\Junk': { displayName: 'Spam', cssClass: 'folder-badge--spam', icon: 'report' },
+  '\\Flagged': { displayName: 'Starred', cssClass: 'folder-badge--starred', icon: 'star' },
+};
 
 /**
  * Order folder ids: primary system first, then custom (alphabetically), then secondary system.
@@ -99,10 +112,13 @@ function findFolderCaseInsensitive(folders: string[], target: string): string | 
 
 /**
  * Returns badge info for a single folder id (system or custom).
+ * @param specialUse Optional RFC 6154 specialUse attribute for fallback resolution when
+ *   the folderId doesn't match FOLDER_BADGE_META (e.g. '[Gmail]/Bin' → '\\Trash').
  */
 export function getBadgeForFolderId(
   folderId: string,
-  nameLookup?: FolderForLookup[]
+  nameLookup?: FolderForLookup[],
+  specialUse?: string | null
 ): FolderBadgeInfo {
   const normalized = folderId.toLowerCase();
   const predefined = FOLDER_BADGE_META[normalized];
@@ -112,6 +128,16 @@ export function getBadgeForFolderId(
       cssClass: predefined.cssClass,
       icon: predefined.icon,
       title: predefined.displayName,
+    };
+  }
+  // Fallback: resolve by specialUse attribute for locale-variant system folders
+  if (specialUse && SPECIAL_USE_BADGE_META[specialUse]) {
+    const specialUseMeta = SPECIAL_USE_BADGE_META[specialUse];
+    return {
+      displayName: specialUseMeta.displayName,
+      cssClass: specialUseMeta.cssClass,
+      icon: specialUseMeta.icon,
+      title: specialUseMeta.displayName,
     };
   }
   const displayName =
@@ -139,5 +165,8 @@ export function getOrderedFolderBadges(
   // Filter out folders that should never appear as badges (e.g. [Gmail]/Important).
   const visible = folderIds.filter((folderId) => !HIDDEN_FOLDER_IDS.has(folderId.toLowerCase()));
   const ordered = orderFolderIds(visible);
-  return ordered.map((id) => getBadgeForFolderId(id, nameLookup));
+  return ordered.map((id) => {
+    const folderData = nameLookup?.find((f) => f.gmailLabelId.toLowerCase() === id.toLowerCase());
+    return getBadgeForFolderId(id, nameLookup, folderData?.specialUse);
+  });
 }

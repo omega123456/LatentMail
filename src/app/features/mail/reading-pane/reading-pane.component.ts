@@ -205,6 +205,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
       currentFolderIds: threadFolderIds,
+      trashFolderId: this.foldersStore.trashFolderId(),
     };
   }
 
@@ -228,6 +229,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       replyLoading: this.aiStore.replySuggestionsLoading(),
       followUpLoading: this.aiStore.followUpLoading(),
       currentFolderIds: message.folders ?? [],
+      trashFolderId: this.foldersStore.trashFolderId(),
     };
   }
 
@@ -353,6 +355,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       replyLoading: false,
       followUpLoading: false,
       currentFolderIds: [],
+      trashFolderId: this.foldersStore.trashFolderId(),
     };
   }
 }

@@ -17,4 +17,6 @@ export interface Folder {
   unreadCount: number;
   totalCount: number;
   icon?: string;
+  /** RFC 6154 mailbox special-use attribute (e.g. '\\Trash', '\\Sent'). Null for user labels. */
+  specialUse?: string | null;
 }

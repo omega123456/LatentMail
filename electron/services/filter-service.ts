@@ -398,7 +398,7 @@ export class FilterService {
       }
 
       case 'delete': {
-        const trashFolder = '[Gmail]/Trash';
+        const trashFolder = DatabaseService.getInstance().getTrashFolder(accountId);
         log.info(`[FilterService] Deleting email ${email.id} (subject: "${email.subject}") via filter "${filterName}"`);
         return this.enqueueMove(accountId, email, 'INBOX', trashFolder, descriptionPrefix, `Delete`);
       }

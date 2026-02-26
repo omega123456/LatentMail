@@ -1,6 +1,7 @@
 import {
   Component,
   ChangeDetectionStrategy,
+  inject,
   input,
   output,
   computed,
@@ -22,6 +23,7 @@ import {
 } from '../email-actions/email-action.model';
 import { getDefaultEmailActions } from '../email-actions/email-action-defaults';
 import { DEFAULT_LABEL_COLOR } from '../../constants/label-colors';
+import { FoldersStore } from '../../../store/folders.store';
 
 /**
  * The five visual sections rendered in the context menu, in order.
@@ -43,7 +45,7 @@ const NON_AI_ACTIONS: ReadonlyArray<EmailAction> = getDefaultEmailActions().filt
 /** Gmail folder IDs excluded from the Move To submenu. */
 const EXCLUDED_FOLDER_IDS = ['[Gmail]/All Mail', '[Gmail]/Sent Mail', '[Gmail]/Important'];
 
-/** Display order for system folders in the Move To submenu. */
+/** Display order for system folders in the Move To submenu (keyed by gmailLabelId). */
 const SYSTEM_FOLDER_ORDER: Record<string, number> = {
   'INBOX': 0,
   '[Gmail]/Starred': 1,
@@ -52,13 +54,31 @@ const SYSTEM_FOLDER_ORDER: Record<string, number> = {
   '[Gmail]/Trash': 4,
 };
 
-/** Maps Gmail special-use folder IDs to Material Symbols icon names. */
+/** Fallback order keyed by RFC 6154 specialUse attribute (for locale-variant folder names). */
+const SPECIAL_USE_FOLDER_ORDER: Record<string, number> = {
+  '\\Inbox': 0,
+  '\\Flagged': 1,
+  '\\Drafts': 2,
+  '\\Junk': 3,
+  '\\Trash': 4,
+};
+
+/** Maps Gmail special-use folder IDs to Material Symbols icon names (keyed by gmailLabelId). */
 const FOLDER_ICON_MAP: Record<string, string> = {
   'INBOX': 'inbox',
   '[Gmail]/Drafts': 'edit_note',
   '[Gmail]/Trash': 'delete',
   '[Gmail]/Spam': 'report',
   '[Gmail]/Starred': 'star',
+};
+
+/** Fallback icon map keyed by RFC 6154 specialUse attribute (for locale-variant folder names). */
+const SPECIAL_USE_ICON_MAP: Record<string, string> = {
+  '\\Inbox': 'inbox',
+  '\\Drafts': 'edit_note',
+  '\\Trash': 'delete',
+  '\\Junk': 'report',
+  '\\Flagged': 'star',
 };
 
 @Component({
@@ -70,6 +90,8 @@ const FOLDER_ICON_MAP: Record<string, string> = {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class EmailContextMenuComponent implements OnDestroy {
+  private readonly foldersStore = inject(FoldersStore);
+
   /**
    * Zero-size hidden div positioned at right-click coordinates.
    * Used as the MatMenuTrigger anchor — both viewChild calls target the same
@@ -124,6 +146,7 @@ export class EmailContextMenuComponent implements OnDestroy {
       replyLoading: false,
       followUpLoading: false,
       currentFolderIds: thread.folders ?? [],
+      trashFolderId: this.foldersStore.trashFolderId(),
     };
   });
 
@@ -158,9 +181,15 @@ export class EmailContextMenuComponent implements OnDestroy {
           folder.gmailLabelId !== active,
       )
       .sort(
-        (folderA, folderB) =>
-          (SYSTEM_FOLDER_ORDER[folderA.gmailLabelId] ?? Number.MAX_SAFE_INTEGER) -
-          (SYSTEM_FOLDER_ORDER[folderB.gmailLabelId] ?? Number.MAX_SAFE_INTEGER),
+        (folderA, folderB) => {
+          const orderA = SYSTEM_FOLDER_ORDER[folderA.gmailLabelId]
+            ?? (folderA.specialUse ? SPECIAL_USE_FOLDER_ORDER[folderA.specialUse] : undefined)
+            ?? Number.MAX_SAFE_INTEGER;
+          const orderB = SYSTEM_FOLDER_ORDER[folderB.gmailLabelId]
+            ?? (folderB.specialUse ? SPECIAL_USE_FOLDER_ORDER[folderB.specialUse] : undefined)
+            ?? Number.MAX_SAFE_INTEGER;
+          return orderA - orderB;
+        },
       );
   });
 
@@ -307,7 +336,10 @@ export class EmailContextMenuComponent implements OnDestroy {
 
   /** Returns the display icon for a folder in the Move To list. */
   getFolderIcon(folder: Folder): string {
-    return folder.icon || FOLDER_ICON_MAP[folder.gmailLabelId] || 'folder';
+    return folder.icon
+      || FOLDER_ICON_MAP[folder.gmailLabelId]
+      || (folder.specialUse ? SPECIAL_USE_ICON_MAP[folder.specialUse] : undefined)
+      || 'folder';
   }
 
   /** Returns the display color for a label folder, falling back to the default. */

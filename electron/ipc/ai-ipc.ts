@@ -20,7 +20,8 @@ function isAllowedOllamaUrl(rawUrl: string): boolean {
   }
 }
 
-const SYSTEM_FOLDERS = [
+/** Fallback system folders used when DB labels are not available. */
+const FALLBACK_SYSTEM_FOLDERS = [
   'INBOX',
   '[Gmail]/Sent Mail',
   '[Gmail]/Drafts',
@@ -29,6 +30,28 @@ const SYSTEM_FOLDERS = [
   '[Gmail]/Starred',
   '[Gmail]/Important',
 ];
+
+/**
+ * Build the system folder list dynamically from the DB for a given account.
+ * Returns the system gmailLabelId values for all labels of type 'system'.
+ * Falls back to FALLBACK_SYSTEM_FOLDERS when DB returns empty or throws.
+ */
+function getSystemFolders(accountId: number): string[] {
+  try {
+    const db = DatabaseService.getInstance();
+    const labels = db.getLabelsByAccount(accountId);
+    const systemFolders = labels
+      .filter((label) => typeof label['type'] === 'string' && label['type'].toLowerCase() === 'system')
+      .map((label) => label['gmailLabelId'] as string)
+      .filter((gmailLabelId) => typeof gmailLabelId === 'string' && gmailLabelId.length > 0);
+    if (systemFolders.length > 0) {
+      return systemFolders;
+    }
+  } catch {
+    // DB not available — fall back to the static list
+  }
+  return FALLBACK_SYSTEM_FOLDERS;
+}
 
 function dedupeStrings(values: string[]): string[] {
   const deduped: string[] = [];
@@ -132,10 +155,13 @@ function isSearchIntent(value: unknown): value is SearchIntent {
 
 function buildFolderContext(
   providedFolders: unknown,
-  labels: Array<Record<string, unknown>>
+  labels: Array<Record<string, unknown>>,
+  accountId: number
 ): string[] {
+  const systemFolders = getSystemFolders(accountId);
+
   if (isStringArray(providedFolders) && providedFolders.length > 0) {
-    return dedupeStrings([...SYSTEM_FOLDERS, ...providedFolders]);
+    return dedupeStrings([...systemFolders, ...providedFolders]);
   }
 
   const customLabels: Array<{ gmailLabelId: string; name: string; totalCount: number }> = [];
@@ -151,7 +177,7 @@ function buildFolderContext(
       continue;
     }
 
-    const isSystem = type.toLowerCase() === 'system' || SYSTEM_FOLDERS.includes(gmailLabelId);
+    const isSystem = type.toLowerCase() === 'system' || systemFolders.includes(gmailLabelId);
     if (isSystem) {
       if (gmailLabelId) {
         dbFolders.push(gmailLabelId);
@@ -172,7 +198,7 @@ function buildFolderContext(
     .flatMap((label) => [label.gmailLabelId, label.name])
     .filter((value) => value.length > 0);
 
-  return dedupeStrings([...SYSTEM_FOLDERS, ...dbFolders, ...topCustomFolders]);
+  return dedupeStrings([...systemFolders, ...dbFolders, ...topCustomFolders]);
 }
 
 export function registerAiIpcHandlers(): void {
@@ -261,7 +287,7 @@ export function registerAiIpcHandlers(): void {
       const userEmail = account?.email || '';
       const todayDate = new Date().toISOString().split('T')[0];
       const labels = db.getLabelsByAccount(numAccountId);
-      const folderContext = buildFolderContext(folders, labels);
+      const folderContext = buildFolderContext(folders, labels, numAccountId);
 
       log.info('[AI] search request', {
         accountId,

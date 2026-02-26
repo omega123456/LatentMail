@@ -315,7 +315,7 @@ export class EmailListComponent implements OnDestroy {
   /** Delete (move to Trash) the thread under the keyboard cursor. */
   private deleteKeyboardCursorThread(): void {
     // Silently no-op when viewing Trash — deleting from Trash is not supported.
-    if (this.foldersStore.activeFolderId() === '[Gmail]/Trash') {
+    if (this.foldersStore.activeFolderId() === this.foldersStore.trashFolderId()) {
       return;
     }
     const thread = this.getKeyboardCursorThread();
@@ -327,7 +327,7 @@ export class EmailListComponent implements OnDestroy {
     this.emailsStore.moveEmails(
       activeAccount.id,
       [thread.xGmThrid],
-      '[Gmail]/Trash',
+      this.foldersStore.trashFolderId(),
       thread.xGmThrid,
       currentFolder,
     );

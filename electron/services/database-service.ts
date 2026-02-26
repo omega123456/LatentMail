@@ -554,8 +554,9 @@ export class DatabaseService {
         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
          FROM emails e2
          JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         LEFT JOIN labels trash_label ON trash_label.account_id = e2.account_id AND trash_label.special_use = '\Trash'
          WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
-           AND (:folder = '[Gmail]/Trash' OR ef2.folder != '[Gmail]/Trash')
+           AND (:folder = COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash') OR ef2.folder != COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash'))
         ) AS message_count,
         t.snippet, tf.folder, t.is_read, t.is_starred,
         MAX(e.has_attachments) AS has_attachments
@@ -584,8 +585,9 @@ export class DatabaseService {
         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
          FROM emails e2
          JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         LEFT JOIN labels trash_label ON trash_label.account_id = e2.account_id AND trash_label.special_use = '\Trash'
          WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
-           AND (:folder = '[Gmail]/Trash' OR ef2.folder != '[Gmail]/Trash')
+           AND (:folder = COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash') OR ef2.folder != COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash'))
         ) AS message_count,
         t.snippet, tf.folder, t.is_read, t.is_starred,
         MAX(e.has_attachments) AS has_attachments
@@ -1483,14 +1485,16 @@ export class DatabaseService {
     color?: string;
     unreadCount: number;
     totalCount: number;
+    specialUse?: string;
   }): void {
     if (!this.db) throw new Error('Database not initialized');
     this.db.run(
-      `INSERT INTO labels (account_id, gmail_label_id, name, type, color, unread_count, total_count)
-       VALUES (:accountId, :gmailLabelId, :name, :type, :color, :unreadCount, :totalCount)
+      `INSERT INTO labels (account_id, gmail_label_id, name, type, color, unread_count, total_count, special_use)
+       VALUES (:accountId, :gmailLabelId, :name, :type, :color, :unreadCount, :totalCount, :specialUse)
        ON CONFLICT(account_id, gmail_label_id) DO UPDATE SET
         name = excluded.name, type = excluded.type, color = COALESCE(excluded.color, labels.color),
-        unread_count = excluded.unread_count, total_count = excluded.total_count`,
+        unread_count = excluded.unread_count, total_count = excluded.total_count,
+        special_use = COALESCE(excluded.special_use, labels.special_use)`,
       {
         ':accountId': label.accountId,
         ':gmailLabelId': label.gmailLabelId,
@@ -1499,9 +1503,47 @@ export class DatabaseService {
         ':color': label.color || null,
         ':unreadCount': label.unreadCount,
         ':totalCount': label.totalCount,
+        ':specialUse': label.specialUse || null,
       }
     );
     this.scheduleSave();
+  }
+
+  /**
+   * Resolve the trash folder IMAP path for an account.
+   * Primary: queries the labels table for the row with special_use = '\Trash' and returns its gmail_label_id.
+   * Legacy fallback: if special_use is not yet populated (before first sync after migration),
+   *   checks for a label with gmail_label_id = '[Gmail]/Bin' (UK/international locale variant).
+   * Final fallback: '[Gmail]/Trash' (US locale default).
+   */
+  getTrashFolder(accountId: number): string {
+    if (!this.db) throw new Error('Database not initialized');
+
+    // Primary: resolve by special_use attribute (populated after first sync post-migration)
+    const bySpecialUse = this.db.exec(
+      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND special_use = '\Trash' LIMIT 1`,
+      { ':accountId': accountId }
+    );
+    if (bySpecialUse.length > 0 && bySpecialUse[0].values.length > 0) {
+      const value = bySpecialUse[0].values[0][0];
+      if (typeof value === 'string' && value.length > 0) {
+        return value;
+      }
+    }
+
+    // Legacy fallback: check for '[Gmail]/Bin' by label ID (UK locale, before special_use is populated)
+    const byBin = this.db.exec(
+      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND gmail_label_id = '[Gmail]/Bin' LIMIT 1`,
+      { ':accountId': accountId }
+    );
+    if (byBin.length > 0 && byBin[0].values.length > 0) {
+      const value = byBin[0].values[0][0];
+      if (typeof value === 'string' && value.length > 0) {
+        return value;
+      }
+    }
+
+    return '[Gmail]/Trash';
   }
 
   getUnreadThreadCountsByFolder(accountId: number): Record<string, number> {
@@ -1526,7 +1568,7 @@ export class DatabaseService {
   getLabelsByAccount(accountId: number): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const result = this.db.exec(
-      `SELECT id, account_id, gmail_label_id, name, type, color, unread_count, total_count
+      `SELECT id, account_id, gmail_label_id, name, type, color, unread_count, total_count, special_use
        FROM labels WHERE account_id = :accountId ORDER BY type ASC, name ASC`,
       { ':accountId': accountId }
     );
@@ -1540,6 +1582,7 @@ export class DatabaseService {
       color: row[5] as string | null,
       unreadCount: row[6] as number,
       totalCount: row[7] as number,
+      specialUse: row[8] as string | null,
     }));
   }
 
@@ -1737,7 +1780,10 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
 
     const { parseGmailQuery } = require('../utils/gmail-query-parser');
-    const parsed = parseGmailQuery(query, { accountId }) as { whereClause: string; params: Record<string, unknown> };
+    const parsed = parseGmailQuery(query, {
+      accountId,
+      trashFolderResolver: (resolverAccountId?: number) => this.getTrashFolder(resolverAccountId ?? accountId),
+    }) as { whereClause: string; params: Record<string, unknown> };
 
     const params = {
       ':accountId': accountId,
@@ -1753,29 +1799,30 @@ export class DatabaseService {
         t.subject,
         t.last_message_date,
         t.participants,
-        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
-         FROM emails e2
-         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
-         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
-           AND ef2.folder != '[Gmail]/Trash'
-        ) AS message_count,
-        t.snippet,
-        'search' AS folder,
-        t.is_read,
-        t.is_starred,
-        (SELECT MAX(e3.has_attachments) FROM emails e3
-         WHERE e3.account_id = :accountId AND e3.x_gm_thrid = t.x_gm_thrid
-        ) AS has_attachments
-      FROM threads t
-      WHERE t.account_id = :accountId
-        AND t.x_gm_thrid IN (
-          SELECT DISTINCT e.x_gm_thrid
-          FROM emails e
-          WHERE e.account_id = :accountId AND (${parsed.whereClause})
-        )
-      ORDER BY t.last_message_date DESC
-      LIMIT :limit
-    `;
+         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+          FROM emails e2
+          JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+          LEFT JOIN labels trash_label ON trash_label.account_id = e2.account_id AND trash_label.special_use = '\Trash'
+          WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+            AND ef2.folder != COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash')
+         ) AS message_count,
+         t.snippet,
+         'search' AS folder,
+         t.is_read,
+         t.is_starred,
+         (SELECT MAX(e3.has_attachments) FROM emails e3
+          WHERE e3.account_id = :accountId AND e3.x_gm_thrid = t.x_gm_thrid
+         ) AS has_attachments
+       FROM threads t
+       WHERE t.account_id = :accountId
+         AND t.x_gm_thrid IN (
+           SELECT DISTINCT e.x_gm_thrid
+           FROM emails e
+           WHERE e.account_id = :accountId AND (${parsed.whereClause})
+         )
+       ORDER BY t.last_message_date DESC
+       LIMIT :limit
+     `;
 
     const result = this.db.exec(sql, params);
     if (result.length === 0) return [];
@@ -1799,6 +1846,7 @@ export class DatabaseService {
       const parsed = parseGmailQuery(query, {
         accountId,
         paramPrefix: `mq${index + 1}_`,
+        trashFolderResolver: (resolverAccountId?: number) => this.getTrashFolder(resolverAccountId ?? accountId),
       }) as { whereClause: string; params: Record<string, unknown> };
 
       const params = {
@@ -1853,11 +1901,12 @@ export class DatabaseService {
          t.subject,
          t.last_message_date,
          t.participants,
-         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+          (SELECT COUNT(DISTINCT e2.x_gm_msgid)
           FROM emails e2
           JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+          LEFT JOIN labels trash_label ON trash_label.account_id = e2.account_id AND trash_label.special_use = '\Trash'
           WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
-            AND ef2.folder != '[Gmail]/Trash'
+            AND ef2.folder != COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash')
          ) AS message_count,
          t.snippet,
          'search' AS folder,

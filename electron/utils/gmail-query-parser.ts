@@ -23,13 +23,19 @@ export interface ParsedQuery {
 export interface ParseGmailQueryOptions {
   accountId?: number;
   paramPrefix?: string;
+  /**
+   * Optional callback to resolve the trash folder path for the current account.
+   * Called when the parser encounters the 'trash' folder alias.
+   * Must NOT import DatabaseService — callers inject the resolution logic to avoid circular deps.
+   * Falls back to '[Gmail]/Trash' when not provided.
+   */
+  trashFolderResolver?: (accountId?: number) => string;
 }
 
 const FOLDER_ALIAS_MAP: Record<string, string | null> = {
   inbox: 'INBOX',
   sent: '[Gmail]/Sent Mail',
   drafts: '[Gmail]/Drafts',
-  trash: '[Gmail]/Trash',
   spam: '[Gmail]/Spam',
   starred: '[Gmail]/Starred',
   important: '[Gmail]/Important',
@@ -98,8 +104,16 @@ function normalizeParamPrefix(rawPrefix: string | undefined): string {
   return `sqp_${sanitized}`;
 }
 
-function resolveFolderAlias(value: string): string | null | undefined {
+function resolveFolderAlias(value: string, options?: ParseGmailQueryOptions): string | null | undefined {
   const normalized = value.trim().toLowerCase();
+  // 'trash' is resolved dynamically via an optional resolver callback to avoid circular dependencies
+  // (database-service requires this file at runtime; this file must NOT import database-service).
+  if (normalized === 'trash') {
+    if (options?.trashFolderResolver) {
+      return options.trashFolderResolver(options.accountId);
+    }
+    return '[Gmail]/Trash';
+  }
   if (Object.prototype.hasOwnProperty.call(FOLDER_ALIAS_MAP, normalized)) {
     return FOLDER_ALIAS_MAP[normalized];
   }
@@ -264,7 +278,7 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
           break;
         }
 
-        const mappedFolder = resolveFolderAlias(rawFolder);
+        const mappedFolder = resolveFolderAlias(rawFolder, options);
         if (mappedFolder === null) {
           if (negated) {
             conditions.push('1 = 0');

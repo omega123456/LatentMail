@@ -33,7 +33,7 @@ const initialState: FoldersState = {
   previousFolderId: null,
 };
 
-/** Map Gmail special-use paths to icons */
+/** Map Gmail special-use paths to icons (keyed by gmailLabelId) */
 const FOLDER_ICON_MAP: Record<string, string> = {
   'INBOX': 'inbox',
   '[Gmail]/Sent Mail': 'send',
@@ -41,6 +41,16 @@ const FOLDER_ICON_MAP: Record<string, string> = {
   '[Gmail]/Trash': 'delete',
   '[Gmail]/Spam': 'report',
   '[Gmail]/Starred': 'star',
+};
+
+/** Fallback icon map keyed by RFC 6154 specialUse attribute (for locale-variant folder names) */
+const SPECIAL_USE_ICON_MAP: Record<string, string> = {
+  '\\Inbox': 'inbox',
+  '\\Sent': 'send',
+  '\\Drafts': 'edit_note',
+  '\\Trash': 'delete',
+  '\\Junk': 'report',
+  '\\Flagged': 'star',
 };
 
 const SYSTEM_FOLDER_ORDER: Record<string, number> = {
@@ -52,9 +62,23 @@ const SYSTEM_FOLDER_ORDER: Record<string, number> = {
   '[Gmail]/Trash': 5,
 };
 
+/** Fallback ordering by RFC 6154 specialUse attribute (for locale-variant folder names) */
+const SPECIAL_USE_ORDER: Record<string, number> = {
+  '\\Inbox': 0,
+  '\\Flagged': 1,
+  '\\Drafts': 2,
+  '\\Sent': 3,
+  '\\Junk': 4,
+  '\\Trash': 5,
+};
+
 function compareSystemFolders(a: Folder, b: Folder): number {
-  const orderA = SYSTEM_FOLDER_ORDER[a.gmailLabelId] ?? Number.MAX_SAFE_INTEGER;
-  const orderB = SYSTEM_FOLDER_ORDER[b.gmailLabelId] ?? Number.MAX_SAFE_INTEGER;
+  const orderA = SYSTEM_FOLDER_ORDER[a.gmailLabelId]
+    ?? (a.specialUse ? SPECIAL_USE_ORDER[a.specialUse] : undefined)
+    ?? Number.MAX_SAFE_INTEGER;
+  const orderB = SYSTEM_FOLDER_ORDER[b.gmailLabelId]
+    ?? (b.specialUse ? SPECIAL_USE_ORDER[b.specialUse] : undefined)
+    ?? Number.MAX_SAFE_INTEGER;
 
   if (orderA !== orderB) {
     return orderA - orderB;
@@ -90,6 +114,24 @@ export const FoldersStore = signalStore(
       const inbox = store.folders().find(f => f.gmailLabelId === 'INBOX');
       return inbox?.unreadCount ?? 0;
     }),
+    /**
+     * The gmailLabelId of the account's trash folder (locale-aware).
+     * Primary: finds a folder with specialUse === '\\Trash'.
+     * Legacy fallback: finds '[Gmail]/Bin' by gmailLabelId (UK locale, before first sync populates specialUse).
+     * Final fallback: '[Gmail]/Trash'.
+     */
+    trashFolderId: computed(() => {
+      const folders = store.folders();
+      const bySpecialUse = folders.find(f => f.specialUse === '\\Trash');
+      if (bySpecialUse) {
+        return bySpecialUse.gmailLabelId;
+      }
+      const byBin = folders.find(f => f.gmailLabelId === '[Gmail]/Bin');
+      if (byBin) {
+        return byBin.gmailLabelId;
+      }
+      return '[Gmail]/Trash';
+    }),
   })),
 
   withMethods((store) => {
@@ -102,17 +144,25 @@ export const FoldersStore = signalStore(
           const response = await electronService.getFolders(String(accountId));
           if (response.success && response.data) {
             const rawFolders = response.data as Array<Record<string, unknown>>;
-            const folders: Folder[] = rawFolders.map(f => ({
-              id: f['id'] as number,
-              accountId: f['accountId'] as number,
-              gmailLabelId: f['gmailLabelId'] as string,
-              name: f['name'] as string,
-              type: f['type'] as 'system' | 'user',
-              color: f['color'] as string | undefined,
-              unreadCount: f['unreadCount'] as number,
-              totalCount: f['totalCount'] as number,
-              icon: (f['icon'] as string | undefined) || FOLDER_ICON_MAP[f['gmailLabelId'] as string],
-            }));
+            const folders: Folder[] = rawFolders.map(f => {
+              const gmailLabelId = f['gmailLabelId'] as string;
+              const specialUse = (f['specialUse'] as string | null | undefined) ?? null;
+              const icon = (f['icon'] as string | undefined)
+                || FOLDER_ICON_MAP[gmailLabelId]
+                || (specialUse ? SPECIAL_USE_ICON_MAP[specialUse] : undefined);
+              return {
+                id: f['id'] as number,
+                accountId: f['accountId'] as number,
+                gmailLabelId,
+                name: f['name'] as string,
+                type: f['type'] as 'system' | 'user',
+                color: f['color'] as string | undefined,
+                unreadCount: f['unreadCount'] as number,
+                totalCount: f['totalCount'] as number,
+                icon,
+                specialUse,
+              };
+            });
 
             // Default to INBOX if no active folder or if current is invalid
             const currentActive = store.activeFolderId();

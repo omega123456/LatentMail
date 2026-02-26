@@ -172,7 +172,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     switch (event.action) {
       case 'delete': {
         // Silently no-op when viewing Trash — deleting from Trash is not supported.
-        if (currentFolder === '[Gmail]/Trash') {
+        if (currentFolder === this.foldersStore.trashFolderId()) {
           break;
         }
         // Per-message delete when event.message is set, otherwise whole thread via threadId.
@@ -182,7 +182,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
           : [thread.xGmThrid];
         const deletePerMsg = event.message?.xGmMsgId;
         const deleteSourceFolder = deletePerMsg ? undefined : currentFolder;
-        this.emailsStore.moveEmails(activeAccount.id, deleteIds, '[Gmail]/Trash', thread.xGmThrid, deleteSourceFolder, deletePerMsg);
+        this.emailsStore.moveEmails(activeAccount.id, deleteIds, this.foldersStore.trashFolderId(), thread.xGmThrid, deleteSourceFolder, deletePerMsg);
         if (!deletePerMsg) {
           this.emailsStore.clearSelection();
         }
@@ -593,13 +593,13 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     switch (event.action) {
       case 'delete': {
         // Silently no-op when viewing Trash — deleting from Trash is not supported.
-        if (currentFolder === '[Gmail]/Trash') {
+        if (currentFolder === this.foldersStore.trashFolderId()) {
           break;
         }
         this.emailsStore.moveEmails(
           activeAccount.id,
           [thread.xGmThrid],
-          '[Gmail]/Trash',
+          this.foldersStore.trashFolderId(),
           thread.xGmThrid,
           currentFolder,
         );

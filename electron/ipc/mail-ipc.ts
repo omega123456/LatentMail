@@ -573,7 +573,7 @@ export function registerMailIpcHandlers(): void {
   });
 
   // Delete messages (via queue) — always a soft-delete (move to Trash).
-  // Returns no-op success when folder is already [Gmail]/Trash since there
+  // Returns no-op success when folder is already the trash folder since there
   // is no meaningful action to take (Trash items cannot be permanently deleted
   // through this application).
   ipcMain.handle(IPC_CHANNELS.MAIL_DELETE, async (_event, accountId: string, messageIds: string[], folder: string) => {
@@ -581,10 +581,11 @@ export function registerMailIpcHandlers(): void {
       log.info(`Enqueuing delete of ${messageIds.length} messages from ${folder} for account ${accountId}`);
       const numAccountId = Number(accountId);
       const queueService = MailQueueService.getInstance();
+      const trashFolder = db.getTrashFolder(numAccountId);
 
       // No-op: deleting from Trash is not supported — return early with success.
-      if (folder === '[Gmail]/Trash') {
-        log.info(`MAIL_DELETE: folder is [Gmail]/Trash — no-op (permanent delete not supported)`);
+      if (folder === trashFolder) {
+        log.info(`MAIL_DELETE: folder is ${trashFolder} — no-op (permanent delete not supported)`);
         return ipcSuccess({ queueId: null });
       }
 
@@ -623,15 +624,15 @@ export function registerMailIpcHandlers(): void {
           continue;
         }
 
-        db.moveEmailFolder(numAccountId, xGmMsgId, folder, '[Gmail]/Trash', null);
+        db.moveEmailFolder(numAccountId, xGmMsgId, folder, trashFolder, null);
 
         if (xGmThrid) {
           const internalThreadId = db.getThreadInternalId(numAccountId, xGmThrid);
           if (internalThreadId != null) {
             if (!db.threadHasEmailsInFolder(numAccountId, xGmThrid, folder)) {
-              db.moveThreadFolder(numAccountId, xGmThrid, folder, '[Gmail]/Trash');
+              db.moveThreadFolder(numAccountId, xGmThrid, folder, trashFolder);
             } else {
-              db.upsertThreadFolder(numAccountId, xGmThrid, '[Gmail]/Trash');
+              db.upsertThreadFolder(numAccountId, xGmThrid, trashFolder);
             }
           }
         }

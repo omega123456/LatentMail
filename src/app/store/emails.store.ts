@@ -130,14 +130,14 @@ export const EmailsStore = signalStore(
         const activeFolderId = foldersStore.activeFolderId();
 
         // When viewing the Trash folder, show all messages (including those in Trash)
-        if (activeFolderId === '[Gmail]/Trash') {
+        if (activeFolderId === foldersStore.trashFolderId()) {
           return messages;
         }
 
         // For all other folders (including null during search), hide messages that
         // have been moved to Trash — they should not appear in non-Trash thread views
         return messages.filter(
-          m => !m.folders?.includes('[Gmail]/Trash')
+          m => !m.folders?.includes(foldersStore.trashFolderId())
         );
       }),
       isEmpty: computed(() =>
@@ -322,9 +322,9 @@ export const EmailsStore = signalStore(
               // Compute folder-aware visible message count for the list badge.
               // When viewing Trash, show total count; otherwise exclude trashed messages.
               const activeFolderId = foldersStore.activeFolderId();
-              const visibleMessages = activeFolderId === '[Gmail]/Trash'
+              const visibleMessages = activeFolderId === foldersStore.trashFolderId()
                 ? messages
-                : messages.filter(m => !m.folders?.includes('[Gmail]/Trash'));
+                : messages.filter(m => !m.folders?.includes(foldersStore.trashFolderId()));
               const visibleCount = visibleMessages.length;
 
               const updatedThreads = store.threads().map((t) =>

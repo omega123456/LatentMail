@@ -258,7 +258,6 @@ function classifyError(err: unknown): ErrorCategory {
 
 const GMAIL_DRAFTS_FOLDER = '[Gmail]/Drafts';
 const GMAIL_SENT_FOLDER = '[Gmail]/Sent Mail';
-const GMAIL_TRASH_FOLDER = '[Gmail]/Trash';
 const GMAIL_STARRED_FOLDER = '[Gmail]/Starred';
 const POST_OP_FETCH_LIMIT = 5;
 const MAX_RETRIES = 10;
@@ -1208,15 +1207,17 @@ export class MailQueueService {
     const payload = item.payload as DeletePayload;
     const imapService = ImapService.getInstance();
     const lockManager = FolderLockManager.getInstance();
+    const db = DatabaseService.getInstance();
 
     const folder = payload.folder;
+    const trashFolder = db.getTrashFolder(item.accountId);
 
     // Defensive guard: if somehow a delete targeting Trash ends up in the queue
     // (e.g. a race condition between the UI guard and queue enqueue), treat it as
     // a no-op success. The IPC handler already returns early for Trash folders,
     // so this should never fire in practice, but prevents a IMAP MOVE Trash→Trash
     // error if it does.
-    if (folder === GMAIL_TRASH_FOLDER) {
+    if (folder === trashFolder) {
       log.info(`[MailQueue] delete (${item.queueId}): folder is Trash — no-op (permanent delete not supported)`);
       return;
     }
@@ -1244,7 +1245,7 @@ export class MailQueueService {
     // Permanent IMAP EXPUNGE is not performed here.
     const release = await lockManager.acquire(folder, item.accountId);
     try {
-      await imapService.deleteMessages(String(item.accountId), folder, uids);
+      await imapService.deleteMessages(String(item.accountId), folder, uids, trashFolder);
     } finally {
       release();
     }
@@ -1747,11 +1748,13 @@ export class MailQueueService {
    */
   private async postOpFetchDelete(item: QueueItem): Promise<void> {
     const payload = item.payload as DeletePayload;
+    const db = DatabaseService.getInstance();
+    const trashFolder = db.getTrashFolder(item.accountId);
 
     // Fetch latest N from Trash to pick up newly-trashed messages
-    await this.fetchLatestAndUpsert(item.accountId, GMAIL_TRASH_FOLDER);
-    await this.updateFolderStateForFolders(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER]);
-    this.emitFolderUpdated(item.accountId, [payload.folder, GMAIL_TRASH_FOLDER], 'delete', 'deletions');
+    await this.fetchLatestAndUpsert(item.accountId, trashFolder);
+    await this.updateFolderStateForFolders(item.accountId, [payload.folder, trashFolder]);
+    this.emitFolderUpdated(item.accountId, [payload.folder, trashFolder], 'delete', 'deletions');
 
     TrayService.getInstance().refreshUnreadCount();
 

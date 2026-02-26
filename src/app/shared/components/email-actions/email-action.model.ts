@@ -35,6 +35,11 @@ export interface EmailActionContext {
    * Used by the labels menu to pre-check which labels are already applied.
    */
   currentFolderIds?: string[];
+  /**
+   * The gmailLabelId of the account's trash folder (locale-aware, e.g. '[Gmail]/Trash' or '[Gmail]/Bin').
+   * Used by the delete action visibility predicate.
+   */
+  trashFolderId: string;
 }
 
 /**
