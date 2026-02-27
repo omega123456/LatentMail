@@ -50,9 +50,8 @@ export class EmailListComponent implements OnDestroy {
   });
 
   /**
-   * The thread ID currently highlighted by J/K keyboard navigation.
-   * Separate from emailsStore.selectedThreadId() (the opened/reading thread) so
-   * that navigating with the keyboard does NOT auto-open the reading pane.
+   * The thread ID currently highlighted by J/K or Arrow Up/Down keyboard navigation.
+   * Arrow-key navigation also opens the focused thread in the reading pane (same as Enter/click).
    */
   readonly keyboardCursorId = signal<string | null>(null);
 
@@ -408,6 +407,7 @@ export class EmailListComponent implements OnDestroy {
     if (nextThread) {
       this.keyboardCursorId.set(nextThread.xGmThrid);
       this.scrollCursorIntoView(nextIndex);
+      this.threadSelected.emit(nextThread);
     }
   }
 
