@@ -135,12 +135,24 @@ html, body {
   background-color: var(--color-background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 // Prevent text selection on UI elements (not email content)
 .no-select {
   user-select: none;
   -webkit-user-select: none;
+}
+
+// Selectable content: email body, inputs, contenteditable, log entries
+.message-body,
+input,
+textarea,
+[contenteditable='true'],
+.log-entry {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 // Scrollbar styling
