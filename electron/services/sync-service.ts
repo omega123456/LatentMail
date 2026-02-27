@@ -1,4 +1,5 @@
-import { BrowserWindow, Notification } from 'electron';
+import { app, BrowserWindow, Notification, nativeImage } from 'electron';
+import * as path from 'path';
 import { LoggerService } from './logger-service';
 import { ImapService } from './imap-service';
 import { TrayService } from './tray-service';
@@ -109,12 +110,16 @@ export interface SyncFolderResult {
   changeCount: number;
 }
 
+/** Maximum age (ms) for an email to be counted in desktop notifications. */
+const NOTIFICATION_RECENCY_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+
 interface NewEmailInfo {
   xGmMsgId: string;
   xGmThrid: string;
   sender: string;
   subject: string;
   snippet: string;
+  date: string;
 }
 
 interface NotificationBatch {
@@ -324,13 +329,19 @@ export class SyncService {
         } else {
           newCount++;
           if (showNotifications && folder === 'INBOX') {
-            newEmailsForNotification.push({
-              xGmMsgId: email.xGmMsgId,
-              xGmThrid: email.xGmThrid,
-              sender: email.fromName || email.fromAddress,
-              subject: email.subject,
-              snippet: email.snippet,
-            });
+            const emailTimestamp = Date.parse(email.date);
+            const now = Date.now();
+            const isRecent = !isNaN(emailTimestamp) && emailTimestamp <= now && (now - emailTimestamp) <= NOTIFICATION_RECENCY_WINDOW_MS;
+            if (isRecent) {
+              newEmailsForNotification.push({
+                xGmMsgId: email.xGmMsgId,
+                xGmThrid: email.xGmThrid,
+                sender: email.fromName || email.fromAddress,
+                subject: email.subject,
+                snippet: email.snippet,
+                date: email.date,
+              });
+            }
           }
         }
 
@@ -1142,7 +1153,18 @@ export class SyncService {
         }
       }
 
-      const notification = new Notification({ title, body });
+      let icon: ReturnType<typeof nativeImage.createFromPath> | undefined;
+      try {
+        const iconPath = path.join(app.getAppPath(), 'assets', 'icons', 'icon.png');
+        icon = nativeImage.createFromPath(iconPath);
+        if (icon.isEmpty()) {
+          icon = undefined;
+        }
+      } catch {
+        icon = undefined;
+      }
+
+      const notification = new Notification({ title, body, ...(icon ? { icon } : {}) });
 
       notification.on('click', () => {
         const windows = BrowserWindow.getAllWindows();

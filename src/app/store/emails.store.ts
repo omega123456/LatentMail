@@ -25,6 +25,7 @@ interface MailNewEmailPayload {
     sender: string;
     subject: string;
     snippet: string;
+    date?: string;
   }>;
   totalNewCount: number;
 }

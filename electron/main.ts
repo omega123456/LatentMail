@@ -17,6 +17,9 @@ import { getAvatarCacheDir } from './services/avatar-cache-service';
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
 
+// Set app name for Windows toast notifications (must be before app.whenReady())
+app.setAppUserModelId('com.latentmail.app');
+
 // Register custom schemes before app is ready (required for custom protocols to load in renderer)
 protocol.registerSchemesAsPrivileged([
   { scheme: 'bimi-logo', privileges: { bypassCSP: true, standard: true } },
