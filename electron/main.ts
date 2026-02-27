@@ -23,23 +23,36 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'account-avatar', privileges: { bypassCSP: true, standard: true } },
 ]);
 
+// Dev mode: use separate userData so dev and packaged app can run side-by-side with different accounts.
+const isDev = !app.isPackaged || process.env['NODE_ENV'] === 'development';
+if (isDev) {
+  app.setPath('userData', path.join(app.getPath('home'), 'LatentMail-Dev'));
+}
+
 // Phase 1: Initialize logging with env-based defaults (no DB dependency yet).
 const logger = LoggerService.getInstance();
 
 let mainWindow: BrowserWindow | null = null;
 
-// Single instance lock
-const gotTheLock = app.requestSingleInstanceLock();
+// Single instance lock (production only; in dev allow running alongside packaged app)
+let runApp = true;
+if (!isDev) {
+  const gotTheLock = app.requestSingleInstanceLock();
+  if (!gotTheLock) {
+    runApp = false;
+    app.quit();
+  }
+}
 
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) { mainWindow.restore(); }
-      mainWindow.focus();
-    }
-  });
+if (runApp) {
+  if (!isDev) {
+    app.on('second-instance', () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) { mainWindow.restore(); }
+        mainWindow.focus();
+      }
+    });
+  }
 
   app.whenReady().then(async () => {
     logger.info('LatentMail starting...');
@@ -165,7 +178,6 @@ function createMainWindow(): void {
   restoreWindowState(mainWindow);
 
   // Show window when ready; in dev mode open DevTools once the window is shown
-  const isDev = process.env['NODE_ENV'] === 'development';
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
     if (isDev) {
