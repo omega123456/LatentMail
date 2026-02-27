@@ -1,6 +1,7 @@
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { ImapService } from './imap-service';
+import { formatParticipantList } from '../utils/format-participant';
 
 const log = LoggerService.getInstance();
 
@@ -90,7 +91,7 @@ export async function executeFetchOlder(
     const latest = uniqueEmails.reduce((a, b) =>
       new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
     );
-    const participants = [...new Set(uniqueEmails.map((e) => e.fromAddress))].join(', ');
+    const participants = formatParticipantList(uniqueEmails);
     const allRead = uniqueEmails.every((e) => e.isRead);
     const anyStarred = uniqueEmails.some((e) => e.isStarred);
 

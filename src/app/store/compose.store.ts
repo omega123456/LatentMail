@@ -1,4 +1,13 @@
 import { computed, inject } from '@angular/core';
+
+/** Extracts the raw email address from a "Name <email>" or plain email string. */
+function extractEmailFromParticipant(participant: string): string {
+  const match = participant.match(/<([^>]+)>/);
+  if (match) {
+    return match[1].trim();
+  }
+  return participant.trim();
+}
 import { signalStore, withState, withMethods, withComputed, patchState } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
 import {
@@ -312,11 +321,11 @@ export const ComposeStore = signalStore(
             to = msg.fromAddress;
             // Add other recipients, excluding the sender's own address
             const otherTo = (msg.toAddresses || '').split(',')
-              .map(a => a.trim())
-              .filter(a => a && a.toLowerCase() !== context.accountEmail.toLowerCase());
+              .map(participantEntry => participantEntry.trim())
+              .filter(participantEntry => participantEntry && extractEmailFromParticipant(participantEntry).toLowerCase() !== context.accountEmail.toLowerCase());
             const ccAddresses = (msg.ccAddresses || '').split(',')
-              .map(a => a.trim())
-              .filter(a => a && a.toLowerCase() !== context.accountEmail.toLowerCase());
+              .map(participantEntry => participantEntry.trim())
+              .filter(participantEntry => participantEntry && extractEmailFromParticipant(participantEntry).toLowerCase() !== context.accountEmail.toLowerCase());
             if (otherTo.length > 0) {
               to = [to, ...otherTo].join(', ');
             }

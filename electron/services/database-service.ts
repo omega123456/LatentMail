@@ -9,6 +9,7 @@ import { createSqlJsStorage } from '../database/umzug-storage';
 const log = LoggerService.getInstance();
 import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord, AttachmentRecord } from '../database/models';
 import { ALL_MAIL_PATH } from './sync-service';
+import { formatParticipantList } from '../utils/format-participant';
 
 export class DatabaseService {
   private static instance: DatabaseService;
@@ -1259,12 +1260,18 @@ export class DatabaseService {
         ? snippetResult[0].values[0][0] as string : '';
 
       const participantsResult = this.db.exec(
-        `SELECT DISTINCT from_address FROM emails
-         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
+        `SELECT from_address, from_name FROM emails
+         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
+         ORDER BY date DESC`,
         { ':accountId': accountId, ':xGmThrid': xGmThrid }
       );
-      const participants = participantsResult.length > 0 && participantsResult[0].values.length > 0
-        ? participantsResult[0].values.map((row) => row[0] as string).join(', ') : '';
+      const participantRows = participantsResult.length > 0 && participantsResult[0].values.length > 0
+        ? participantsResult[0].values.map((row) => ({
+            fromAddress: row[0] as string,
+            fromName: row[1] as string | null,
+          }))
+        : [];
+      const participants = formatParticipantList(participantRows);
 
       this.db.run(
         `UPDATE threads SET

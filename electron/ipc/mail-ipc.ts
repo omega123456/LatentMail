@@ -10,6 +10,7 @@ import { MailQueueService } from '../services/mail-queue-service';
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
 import { FolderLockManager } from '../services/folder-lock-manager';
 import { PendingOpService } from '../services/pending-op-service';
+import { formatParticipantList } from '../utils/format-participant';
 
 export function registerMailIpcHandlers(): void {
   const db = DatabaseService.getInstance();
@@ -53,7 +54,12 @@ export function registerMailIpcHandlers(): void {
       });
       const allRead = messagesWithFolders.every((m) => m['isRead'] === true);
       const anyStarred = messagesWithFolders.some((m) => m['isStarred'] === true);
-      const participants = [...new Set(messagesWithFolders.map((m) => String(m['fromAddress'] ?? '')))].join(', ');
+      const participants = formatParticipantList(
+        messagesWithFolders.map((message) => ({
+          fromAddress: String(message['fromAddress'] ?? ''),
+          fromName: message['fromName'] != null ? String(message['fromName']) : undefined,
+        }))
+      );
 
       threadResponse = {
         ...threadResponse,
@@ -850,7 +856,7 @@ export function registerMailIpcHandlers(): void {
           const latest = uniqueEmails.reduce((a, b) =>
             new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
           );
-          const participants = [...new Set(uniqueEmails.map((email) => email.fromAddress))].join(', ');
+          const participants = formatParticipantList(uniqueEmails);
           const allRead = uniqueEmails.every((email) => email.isRead);
           const anyStarred = uniqueEmails.some((email) => email.isStarred);
 
@@ -891,7 +897,7 @@ export function registerMailIpcHandlers(): void {
         const latest = uniqueEmails.reduce((a, b) =>
           new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
         );
-        const participants = [...new Set(uniqueEmails.map((email) => email.fromAddress))].join(', ');
+        const participants = formatParticipantList(uniqueEmails);
         const allRead = uniqueEmails.every((email) => email.isRead);
         const anyStarred = uniqueEmails.some((email) => email.isStarred);
 

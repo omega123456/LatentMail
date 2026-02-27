@@ -11,6 +11,7 @@ import { OAuthService } from './oauth-service';
 import { FilterService } from './filter-service';
 import { PendingOpService } from './pending-op-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
+import { formatParticipant, formatParticipantList } from '../utils/format-participant';
 
 /** Gmail special-use folder mappings (All Mail excluded — not shown or synced) */
 const GMAIL_FOLDER_MAP: Record<string, { name: string; icon: string }> = {
@@ -391,7 +392,7 @@ export class SyncService {
         const latest = uniqueEmails.reduce((a, b) =>
           new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
         );
-        const participants = [...new Set(uniqueEmails.map((e) => e.fromAddress))].join(', ');
+        const participants = formatParticipantList(uniqueEmails);
         const allRead = uniqueEmails.every((e) => e.isRead);
         const anyStarred = uniqueEmails.some((e) => e.isStarred);
 
@@ -642,7 +643,7 @@ export class SyncService {
           xGmThrid: threadId,
           subject: email.subject,
           lastMessageDate: email.date,
-          participants: email.fromAddress,
+          participants: formatParticipant(email.fromAddress, email.fromName),
           messageCount: 1,
           snippet: email.snippet,
           isRead: email.isRead,

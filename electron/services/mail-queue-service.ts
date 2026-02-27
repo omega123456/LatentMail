@@ -13,6 +13,7 @@ import { SyncService } from './sync-service';
 import { TrayService } from './tray-service';
 import { buildDraftMime } from './draft-mime';
 import { executeFetchOlder } from './fetch-older-handler';
+import { formatParticipant, formatParticipantList } from '../utils/format-participant';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 // ---------------------------------------------------------------------------
@@ -857,7 +858,12 @@ export class MailQueueService {
           xGmThrid,
           subject: payload.subject || '',
           lastMessageDate: new Date().toISOString(),
-          participants: account.email,
+          participants: formatParticipant(
+            account.email,
+            typeof (account as Record<string, unknown>)['display_name'] === 'string'
+              ? (account as Record<string, unknown>)['display_name'] as string
+              : undefined
+          ),
           messageCount: 1,
           snippet: (payload.textBody || '').substring(0, 100),
           isRead: true,
@@ -1042,7 +1048,12 @@ export class MailQueueService {
           xGmThrid,
           subject: payload.subject || '',
           lastMessageDate: new Date().toISOString(),
-          participants: account.email,
+          participants: formatParticipant(
+            account.email,
+            typeof (account as Record<string, unknown>)['display_name'] === 'string'
+              ? (account as Record<string, unknown>)['display_name'] as string
+              : undefined
+          ),
           messageCount: 1,
           snippet: (payload.textBody || '').substring(0, 100),
           isRead: true,
@@ -2015,7 +2026,7 @@ export class MailQueueService {
       const latest = uniqueEmails.reduce((a, b) =>
         new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
       );
-      const participants = [...new Set(uniqueEmails.map(e => e.fromAddress))].join(', ');
+      const participants = formatParticipantList(uniqueEmails);
       const allRead = uniqueEmails.every(e => e.isRead);
       const anyStarred = uniqueEmails.some(e => e.isStarred);
 

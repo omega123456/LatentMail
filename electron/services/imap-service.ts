@@ -6,6 +6,7 @@ const log = LoggerService.getInstance();
 import { OAuthService } from './oauth-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
+import { formatParticipant } from '../utils/format-participant';
 
 /** Parsed attachment metadata from simpleParser (non-inline attachments). */
 export interface ParsedAttachmentMeta {
@@ -1156,7 +1157,10 @@ export class ImapService {
       const fromAddress = from?.address || '';
       const fromName = from?.name || fromAddress;
 
-      const toAddresses = (envelope.to || []).map(a => a.address || '').filter(Boolean).join(', ');
+      const toAddresses = (envelope.to || [])
+        .map(recipient => formatParticipant(recipient.address || '', recipient.name))
+        .filter(Boolean)
+        .join(', ');
       const ccAddresses = (envelope.cc || []).map(a => a.address || '').filter(Boolean).join(', ');
       const bccAddresses = (envelope.bcc || []).map(a => a.address || '').filter(Boolean).join(', ');
 
