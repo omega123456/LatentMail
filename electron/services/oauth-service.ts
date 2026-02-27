@@ -7,7 +7,7 @@ import { OAuthLoopbackServer } from './oauth-loopback';
 const log = LoggerService.getInstance();
 import { CredentialService } from './credential-service';
 import { DatabaseService } from './database-service';
-import { GOOGLE_CLIENT_ID_DESKTOP, GOOGLE_CLIENT_SECRET } from '../config';
+import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from '../secrets';
 import { clearAvatarCacheForAccount, getCachedAvatarUrl } from './avatar-cache-service';
 
 // Google OAuth2 endpoints
@@ -51,8 +51,8 @@ export class OAuthService {
   private refreshTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   private constructor() {
-    // Prefer baked-in Desktop client ID so env (e.g. .env loaded by IDE) cannot override with an old Web client ID
-    this.clientId = GOOGLE_CLIENT_ID_DESKTOP || process.env['GOOGLE_CLIENT_ID'] || '';
+    // Prefer secrets, then env override, then built-in Desktop client ID
+    this.clientId = GOOGLE_CLIENT_ID || process.env['GOOGLE_CLIENT_ID'];
     if (!this.clientId) {
       log.warn('GOOGLE_CLIENT_ID not set — OAuth login will not work');
     }

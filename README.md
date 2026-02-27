@@ -88,11 +88,11 @@ latentmail/
 
 ## Environment Variables
 
-The app uses a **built-in Desktop OAuth client ID** (PKCE only, no client secret). For local development you can override it via `GOOGLE_CLIENT_ID` in the environment or in a `.env` file; see [.env.example](.env.example).
+The app uses a **built-in Desktop OAuth client ID** when no custom credentials are set. You can put your own client ID (and client secret) in `electron/secrets.ts` — see `electron/secrets.example.ts` for the template; `yarn install` creates `secrets.ts` from it if missing. For local development you can also override the client ID via `GOOGLE_CLIENT_ID` in the environment or a `.env` file; see [.env.example](.env.example). If you already have an existing `electron/secrets.ts` with only the secret, add `export const GOOGLE_CLIENT_ID = '';` (or your client ID) so the file exports both.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GOOGLE_CLIENT_ID` | No | Optional override for OAuth (default: built-in Desktop client ID) |
+| `GOOGLE_CLIENT_ID` | No | Optional override for OAuth (default: value from `electron/secrets.ts`, or built-in Desktop client ID) |
 | `DATABASE_PATH` | No | Custom SQLite database path (dev override) |
 | `LOG_LEVEL` | No | Log level: debug/info/warn/error (dev override) |
 

@@ -28,5 +28,7 @@ if (fs.existsSync(secretsPath)) {
   }
   fs.copyFileSync(examplePath, secretsPath);
   console.log('[create-secrets] Created electron/secrets.ts from secrets.example.ts.');
-  console.log('[create-secrets] Replace the empty GOOGLE_CLIENT_SECRET value with your real secret from Google Cloud Console.');
+  console.log(
+    '[create-secrets] Fill in GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in electron/secrets.ts when using a custom OAuth client (see secrets.example.ts).'
+  );
 }
