@@ -7,6 +7,7 @@ import { DatabaseService } from '../services/database-service';
 import { OAuthService } from '../services/oauth-service';
 import { SyncService } from '../services/sync-service';
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
+import { getCachedAvatarUrl } from '../services/avatar-cache-service';
 
 export function registerAuthIpcHandlers(): void {
   // Initiate OAuth login flow (opens system browser)
@@ -74,16 +75,27 @@ export function registerAuthIpcHandlers(): void {
     try {
       const db = DatabaseService.getInstance();
       const accounts = db.getAccounts();
+      const mapped = await Promise.all(
+        accounts.map(async (account) => {
+          let avatarUrl = account.avatar_url;
+          if (avatarUrl) {
+            try {
+              avatarUrl = await getCachedAvatarUrl(account.id, avatarUrl);
+            } catch (error) {
+              log.warn(`[AuthIPC] Failed to resolve cached avatar for account ${account.id}:`, error);
+            }
+          }
 
-      // Map snake_case DB fields to camelCase for the renderer
-      const mapped = accounts.map(a => ({
-        id: a.id,
-        email: a.email,
-        displayName: a.display_name,
-        avatarUrl: a.avatar_url,
-        isActive: a.is_active === 1,
-        needsReauth: a.needs_reauth === 1,
-      }));
+          return {
+            id: account.id,
+            email: account.email,
+            displayName: account.display_name,
+            avatarUrl: avatarUrl,
+            isActive: account.is_active === 1,
+            needsReauth: account.needs_reauth === 1,
+          };
+        })
+      );
 
       return ipcSuccess(mapped);
     } catch (err: any) {

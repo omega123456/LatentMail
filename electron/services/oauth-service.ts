@@ -8,6 +8,7 @@ const log = LoggerService.getInstance();
 import { CredentialService } from './credential-service';
 import { DatabaseService } from './database-service';
 import { GOOGLE_CLIENT_ID_DESKTOP, GOOGLE_CLIENT_SECRET } from '../config';
+import { clearAvatarCacheForAccount, getCachedAvatarUrl } from './avatar-cache-service';
 
 // Google OAuth2 endpoints
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -143,6 +144,15 @@ export class OAuthService {
       log.info(`Created new account: ${userInfo.email} (id: ${accountId})`);
     }
 
+    let avatarDisplayUrl: string | null = userInfo.picture || null;
+    if (avatarDisplayUrl) {
+      try {
+        avatarDisplayUrl = await getCachedAvatarUrl(accountId, avatarDisplayUrl);
+      } catch (error) {
+        log.warn(`[OAuthService] Failed to resolve cached avatar for account ${accountId}:`, error);
+      }
+    }
+
     // Store tokens with the account ID
     credentialService.storeTokens(
       String(accountId),
@@ -158,7 +168,7 @@ export class OAuthService {
       id: accountId,
       email: userInfo.email,
       displayName: userInfo.name,
-      avatarUrl: userInfo.picture || null,
+      avatarUrl: avatarDisplayUrl,
     };
   }
 
@@ -237,6 +247,13 @@ export class OAuthService {
 
     // Step 7: Remove stored credentials from OS secure storage
     credentialService.removeTokens(accountId);
+
+    // Step 8: Clear any cached avatar images for this account
+    try {
+      clearAvatarCacheForAccount(numericAccountId);
+    } catch (error) {
+      log.warn(`Failed to clear avatar cache for account ${accountId} (continuing):`, error);
+    }
 
     log.info(`Account ${accountId} fully removed`);
   }

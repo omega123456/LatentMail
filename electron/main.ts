@@ -12,13 +12,15 @@ import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
 import { NativeDropService } from './services/native-drop-service';
 import { TrayService } from './services/tray-service';
+import { getAvatarCacheDir } from './services/avatar-cache-service';
 
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
 
-// Register custom scheme before app is ready (required for bimi-logo:// to load in renderer)
+// Register custom schemes before app is ready (required for custom protocols to load in renderer)
 protocol.registerSchemesAsPrivileged([
   { scheme: 'bimi-logo', privileges: { bypassCSP: true, standard: true } },
+  { scheme: 'account-avatar', privileges: { bypassCSP: true, standard: true } },
 ]);
 
 // Phase 1: Initialize logging with env-based defaults (no DB dependency yet).
@@ -74,6 +76,36 @@ if (!gotTheLock) {
         });
       } catch {
         return new Response('Not Found', { status: 404 });
+      }
+    });
+
+    // Serve cached account avatars from disk (account-avatar://<filename>)
+    protocol.handle('account-avatar', (request) => {
+      try {
+        const url = new URL(request.url);
+        const rawFilename = url.hostname || url.pathname.replace(/^\//, '');
+        const filename = rawFilename.trim();
+        if (!/^[0-9]+\.(png|jpg|jpeg|webp)$/i.test(filename)) {
+          return new Response('Forbidden', { status: 403 });
+        }
+        const filePath = path.join(getAvatarCacheDir(), filename);
+        try {
+          const data = fs.readFileSync(filePath);
+          const lower = filename.toLowerCase();
+          let contentType = 'image/jpeg';
+          if (lower.endsWith('.png')) {
+            contentType = 'image/png';
+          } else if (lower.endsWith('.webp')) {
+            contentType = 'image/webp';
+          }
+          return new Response(data, {
+            headers: { 'Content-Type': contentType },
+          });
+        } catch {
+          return new Response('Not Found', { status: 404 });
+        }
+      } catch {
+        return new Response('Bad Request', { status: 400 });
       }
     });
 
