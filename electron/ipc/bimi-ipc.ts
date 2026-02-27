@@ -62,7 +62,11 @@ function parseBimiLogoUrl(txtRecords: string[][]): string | null {
   const parts = joined.split(';').map((p) => p.trim());
   for (const part of parts) {
     if (part.startsWith('l=')) {
-      const url = part.slice(2).trim();
+      let url = part.slice(2).trim();
+      // BIMI TXT values are often quoted (e.g. l="https://..."); strip surrounding quotes
+      if (url.length >= 2 && url.startsWith('"') && url.endsWith('"')) {
+        url = url.slice(1, -1);
+      }
       try {
         const parsed = new URL(url);
         if (parsed.protocol !== 'https:') {
@@ -155,8 +159,9 @@ function getCachedLogoUrlForDomain(domain: string): string | null {
 /**
  * Fetch the logo from remoteUrl and save under the domain key; return bimi-logo:// URL.
  * Caller must have already checked getCachedLogoUrlForDomain (cache hit is handled there).
+ * On fetch failure or non-OK response, returns null so the UI falls back to initials.
  */
-async function ensureLogoCached(domain: string, remoteUrl: string): Promise<string> {
+async function ensureLogoCached(domain: string, remoteUrl: string): Promise<string | null> {
   const cacheDir = getBimiCacheDir();
   if (!fs.existsSync(cacheDir)) {
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -171,7 +176,7 @@ async function ensureLogoCached(domain: string, remoteUrl: string): Promise<stri
     });
     clearTimeout(timeoutId);
     if (!response.ok) {
-      return remoteUrl;
+      return null;
     }
     const contentType = response.headers.get('content-type') ?? '';
     const ext = contentType.includes('png') ? '.png' : '.svg';
@@ -190,7 +195,7 @@ async function ensureLogoCached(domain: string, remoteUrl: string): Promise<stri
     }
     return `bimi-logo://${hash}${ext}`;
   } catch {
-    return remoteUrl;
+    return null;
   }
 }
 
@@ -233,7 +238,9 @@ export function registerBimiIpcHandlers(): void {
         const remoteLogoUrl = parseBimiLogoUrl(records);
         if (remoteLogoUrl) {
           const logoUrl = await ensureLogoCached(tryDomain, remoteLogoUrl);
-          return ipcSuccess({ logoUrl });
+          if (logoUrl) {
+            return ipcSuccess({ logoUrl });
+          }
         }
       }
       return ipcSuccess({ logoUrl: null });
