@@ -1,6 +1,7 @@
-import { Component, inject, output, OnInit, OnDestroy, effect, signal, computed } from '@angular/core';
+import { Component, inject, output, OnInit, OnDestroy, effect, signal, computed, viewChild, ElementRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
+import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { EmailsStore } from '../../../store/emails.store';
 import { FoldersStore } from '../../../store/folders.store';
 import { AiStore } from '../../../store/ai.store';
@@ -9,6 +10,7 @@ import { AccountsStore } from '../../../store/accounts.store';
 import { Email } from '../../../core/models/email.model';
 import { AiStreamEvent } from '../../../core/models/ai.model';
 import { ElectronService } from '../../../core/services/electron.service';
+import { ToastService } from '../../../core/services/toast.service';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 import { EmailBodyFrameComponent } from './email-body-frame.component';
 import { MessageAttachmentsComponent } from './message-attachments.component';
@@ -24,6 +26,7 @@ import { SenderAvatarComponent } from '../../../shared/components/sender-avatar/
   standalone: true,
   imports: [
     CommonModule,
+    MatMenuModule,
     RelativeTimePipe,
     EmailBodyFrameComponent,
     MessageAttachmentsComponent,
@@ -41,12 +44,22 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
   private readonly electronService = inject(ElectronService);
   private readonly composeStore = inject(ComposeStore);
   private readonly accountsStore = inject(AccountsStore);
+  private readonly toastService = inject(ToastService);
 
   /** Emits EmailActionEvent to the parent (mail-shell). */
   readonly actionClicked = output<EmailActionEvent>();
 
   /** Shared open-menu key for all ribbon instances within this thread view. */
   readonly threadOpenMenuKey = signal<string | null>(null);
+
+  /** Header (from/to) context menu state. */
+  readonly headerContextMenuOpen = signal(false);
+  readonly headerContextMenuPosition = signal<{ x: number; y: number } | null>(null);
+  readonly headerContextMenuEmail = signal('');
+
+  private readonly headerMenuTriggerDiv = viewChild<ElementRef<HTMLDivElement>>('headerMenuTrigger');
+  private readonly headerMenuTrigger = viewChild('headerMenuTrigger', { read: MatMenuTrigger });
+  private headerMenuPendingTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   /** True when the current folder is Spam (remote images and full DOMPurify apply). */
   readonly isSpamFolder = computed(() =>
@@ -76,6 +89,35 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       // does not suppress close effects when the same menu position is opened on the new thread.
       this.threadOpenMenuKey.set(null);
     });
+
+    // Open/close header (from/to) context menu and position trigger at click coordinates
+    effect(() => {
+      const open = this.headerContextMenuOpen();
+      const pos = this.headerContextMenuPosition();
+
+      if (open && pos) {
+        const capturedPos = { ...pos };
+        this.headerMenuPendingTimeoutId = setTimeout(() => {
+          this.headerMenuPendingTimeoutId = null;
+          if (!this.headerContextMenuOpen() || !this.headerContextMenuPosition()) {
+            return;
+          }
+          const divEl = this.headerMenuTriggerDiv()?.nativeElement;
+          if (!divEl) {
+            return;
+          }
+          divEl.style.left = capturedPos.x + 'px';
+          divEl.style.top = capturedPos.y + 'px';
+          this.headerMenuTrigger()?.openMenu();
+        }, 0);
+      } else if (!open) {
+        if (this.headerMenuPendingTimeoutId !== null) {
+          clearTimeout(this.headerMenuPendingTimeoutId);
+          this.headerMenuPendingTimeoutId = null;
+        }
+        this.headerMenuTrigger()?.closeMenu();
+      }
+    });
   }
 
   ngOnInit(): void {
@@ -89,6 +131,66 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.aiStreamSub?.unsubscribe();
+    if (this.headerMenuPendingTimeoutId !== null) {
+      clearTimeout(this.headerMenuPendingTimeoutId);
+      this.headerMenuPendingTimeoutId = null;
+    }
+  }
+
+  /** Right-click on from/to line: show context menu for that address(es). */
+  onHeaderContextMenu(event: MouseEvent, email: string): void {
+    if (!email?.trim()) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.headerContextMenuPosition.set({ x: event.clientX, y: event.clientY });
+    this.headerContextMenuEmail.set(email.trim());
+    this.headerContextMenuOpen.set(true);
+  }
+
+  /** Called when the header context menu closes (action, Escape, or outside click). */
+  onHeaderContextMenuClosed(): void {
+    this.headerContextMenuOpen.set(false);
+    this.headerContextMenuPosition.set(null);
+  }
+
+  /** Copy the current header context email(s) to clipboard (normalized: extract from "Name <addr>"). */
+  async onCopyHeaderEmail(): Promise<void> {
+    const raw = this.headerContextMenuEmail();
+    const toCopy = this.getCopyableAddresses(raw);
+    if (!toCopy) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(toCopy);
+      this.toastService.success('Copied to clipboard');
+    } catch {
+      this.toastService.error('Failed to copy');
+    }
+  }
+
+  /** Open compose with the current header context email(s). */
+  onSendHeaderEmail(): void {
+    const email = this.headerContextMenuEmail();
+    if (email?.trim()) {
+      this.openComposeTo(email);
+    }
+  }
+
+  /** When the header context menu is open, right-click outside the panel closes it. */
+  @HostListener('document:contextmenu', ['$event'])
+  onDocumentContextMenu(event: MouseEvent): void {
+    if (!this.headerContextMenuOpen()) {
+      return;
+    }
+    const panel = document.querySelector('.header-address-context-menu-panel');
+    if (panel?.contains(event.target as Node)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.onHeaderContextMenuClosed();
   }
 
   /**
@@ -339,6 +441,24 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
       return;
     }
     await this.aiStore.detectFollowUp(content, thread?.xGmThrid);
+  }
+
+  /**
+   * Extract the email address from a string that may be "Name <email@x.com>" or plain "email@x.com".
+   */
+  private extractEmailAddress(value: string): string {
+    const trimmed = value.trim();
+    const angleMatch = trimmed.match(/<([^>]+)>/);
+    return angleMatch ? angleMatch[1].trim() : trimmed;
+  }
+
+  /** Normalize one or more addresses (comma-separated) for clipboard: extract email from each. */
+  private getCopyableAddresses(raw: string): string {
+    if (!raw?.trim()) {
+      return '';
+    }
+    const parts = raw.split(',').map(segment => this.extractEmailAddress(segment)).filter(Boolean);
+    return parts.join(', ');
   }
 
   /** Safe default context for when no thread is selected. */

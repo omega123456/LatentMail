@@ -313,6 +313,13 @@ html {
   font-size: 14px;
 }
 
+// Reading pane header (from/to) context menu icons
+.header-context-menu-icon {
+  font-size: 20px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
 // Attachment preview dialog: auto-size to content, centered (panelClass is on overlay pane)
 .cdk-overlay-pane.attachment-preview-dialog {
   width: auto;

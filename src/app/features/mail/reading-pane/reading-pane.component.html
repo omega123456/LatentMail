@@ -1,3 +1,22 @@
+@if (headerContextMenuOpen()) {
+  <div
+    #headerMenuTrigger
+    style="position: fixed; width: 0; height: 0; pointer-events: none;"
+    [matMenuTriggerFor]="headerContextMenu"
+    (menuClosed)="onHeaderContextMenuClosed()"
+  ></div>
+}
+<mat-menu #headerContextMenu="matMenu" panelClass="header-address-context-menu-panel">
+  <button mat-menu-item type="button" (click)="onCopyHeaderEmail()">
+    <span class="material-symbols-outlined header-context-menu-icon">content_copy</span>
+    <span>Copy email</span>
+  </button>
+  <button mat-menu-item type="button" (click)="onSendHeaderEmail()">
+    <span class="material-symbols-outlined header-context-menu-icon">send</span>
+    <span>Send email</span>
+  </button>
+</mat-menu>
+
 @if (emailsStore.loadingThread()) {
   <div class="reading-pane-loading">
     <span class="material-symbols-outlined spinning">sync</span>
@@ -136,6 +155,7 @@
                   class="sender-link"
                   [title]="message.fromName ? message.fromAddress : null"
                   (click)="$event.stopPropagation(); openComposeTo(message.fromAddress)"
+                  (contextmenu)="onHeaderContextMenu($event, message.fromAddress)"
                 >
                   {{ message.fromName || message.fromAddress }}
                 </button>
@@ -164,6 +184,7 @@
                   class="recipients-link"
                   [title]="getRecipientsTooltip(message)"
                   (click)="$event.stopPropagation(); openComposeTo(message.toAddresses)"
+                  (contextmenu)="onHeaderContextMenu($event, message.toAddresses)"
                 >
                   to {{ getRecipients(message) }}
                 </button>
