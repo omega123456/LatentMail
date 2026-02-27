@@ -71,6 +71,8 @@ export const IPC_CHANNELS = {
   SYSTEM_CLOSE: 'system:close',
   SYSTEM_IS_MAXIMIZED: 'system:is-maximized',
   SYSTEM_GET_PLATFORM: 'system:get-platform',
+  SYSTEM_SET_ZOOM: 'system:set-zoom',
+  SYSTEM_GET_ZOOM: 'system:get-zoom',
 
   // Attachment operations
   ATTACHMENT_DOWNLOAD: 'attachment:download',

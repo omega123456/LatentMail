@@ -169,6 +169,8 @@ interface ElectronAPI {
     close: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
     getPlatform: () => Promise<string>;
+    setZoom: (factor: number) => Promise<number>;
+    getZoom: () => Promise<number>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => void;
   off: (channel: string, callback: (...args: unknown[]) => void) => void;
@@ -478,6 +480,16 @@ export class ElectronService {
   async getPlatform(): Promise<string> {
     if (this.api) return this.api.system.getPlatform();
     return 'browser';
+  }
+
+  async setZoom(factor: number): Promise<number> {
+    if (this.api) return this.api.system.setZoom(factor);
+    return factor;
+  }
+
+  async getZoom(): Promise<number> {
+    if (this.api) return this.api.system.getZoom();
+    return 1.0;
   }
 
   // ---- Event streams (main → renderer push events) ----

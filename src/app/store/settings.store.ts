@@ -28,6 +28,8 @@ export interface SettingsState {
    * `blockRemoteImages` is true.  Comparison is case-insensitive.
    */
   allowedImageSenders: string[];
+  /** UI zoom level as a percentage (e.g. 100 = 100%). Persisted as a string in the DB. */
+  zoomLevel: number;
   loading: boolean;
   error: string | null;
 }
@@ -44,6 +46,7 @@ const initialState: SettingsState = {
   showAvatars: true,
   closeToTray: true,
   logLevel: 'error',
+  zoomLevel: 100,
   customKeyBindings: {},
   allowedImageSenders: [],
   loading: false,
@@ -95,6 +98,8 @@ export const SettingsStore = signalStore(
               allowedImageSenders = [];
             }
           }
+          const rawZoomLevel = data['zoomLevel'] ? Number(data['zoomLevel']) : NaN;
+          const zoomLevel = isNaN(rawZoomLevel) ? 100 : Math.min(150, Math.max(75, rawZoomLevel));
           patchState(store, {
             theme: (data['theme'] as ThemeMode) || store.theme(),
             layout: (data['layout'] as LayoutMode) || store.layout(),
@@ -109,6 +114,7 @@ export const SettingsStore = signalStore(
             logLevel,
             customKeyBindings,
             allowedImageSenders,
+            zoomLevel,
             loading: false,
           });
         } else {
@@ -208,6 +214,12 @@ export const SettingsStore = signalStore(
        * Add an email address to the remote-image allowlist.
        * Images from this sender will always load even when `blockRemoteImages` is true.
        */
+      async setZoomLevel(level: number): Promise<void> {
+        const clampedLevel = isNaN(level) ? 100 : Math.min(150, Math.max(75, level));
+        patchState(store, { zoomLevel: clampedLevel });
+        await electronService.setSettings({ zoomLevel: String(clampedLevel) });
+      },
+
       async addAllowedImageSender(email: string): Promise<void> {
         const normalized = email.trim().toLowerCase();
         if (!normalized) {

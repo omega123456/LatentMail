@@ -3,6 +3,7 @@ import { RouterOutlet } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { TitlebarComponent } from './shared/components/titlebar.component';
 import { ToastContainerComponent } from './shared/components/toast-container.component';
+import { ZoomIndicatorComponent } from './shared/components/zoom-indicator.component';
 import { CommandPaletteComponent } from './features/command-palette/command-palette.component';
 import { CommandRegistryService } from './core/services/command-registry.service';
 import { ElectronService } from './core/services/electron.service';
@@ -14,7 +15,7 @@ import { EmailsStore } from './store/emails.store';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, TitlebarComponent, ToastContainerComponent, CommandPaletteComponent],
+  imports: [RouterOutlet, TitlebarComponent, ToastContainerComponent, ZoomIndicatorComponent, CommandPaletteComponent],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss'
 })

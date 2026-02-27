@@ -8,6 +8,7 @@ import { FoldersStore } from '../../store/folders.store';
 import { UiStore } from '../../store/ui.store';
 import { SettingsStore } from '../../store/settings.store';
 import { ElectronService } from './electron.service';
+import { ZoomService } from './zoom.service';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -59,6 +60,7 @@ export class CommandRegistryService {
   private readonly foldersStore = inject(FoldersStore);
   private readonly router = inject(Router);
   private readonly electronService = inject(ElectronService);
+  private readonly zoomService = inject(ZoomService);
 
   private readonly commands = new Map<string, Command>();
   private readonly commandExecutedSubject = new Subject<string>();
@@ -576,6 +578,44 @@ export class CommandRegistryService {
         if (this.uiStore.commandPaletteOpen()) {
           this.uiStore.closeCommandPalette();
         }
+      },
+    });
+
+    // --- Zoom ---
+
+    this.registerCommand({
+      id: 'zoom-in',
+      label: 'Zoom In',
+      description: 'Increase the UI zoom level',
+      icon: 'zoom_in',
+      defaultKeys: ['ctrl++', 'ctrl+='],
+      context: 'global',
+      action: () => {
+        void this.zoomService.zoomIn();
+      },
+    });
+
+    this.registerCommand({
+      id: 'zoom-out',
+      label: 'Zoom Out',
+      description: 'Decrease the UI zoom level',
+      icon: 'zoom_out',
+      defaultKeys: ['ctrl+-'],
+      context: 'global',
+      action: () => {
+        void this.zoomService.zoomOut();
+      },
+    });
+
+    this.registerCommand({
+      id: 'zoom-reset',
+      label: 'Reset Zoom',
+      description: 'Reset the UI zoom level to 100%',
+      icon: 'fit_screen',
+      defaultKeys: ['ctrl+0'],
+      context: 'global',
+      action: () => {
+        void this.zoomService.resetZoom();
       },
     });
   }

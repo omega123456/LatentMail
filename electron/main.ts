@@ -182,6 +182,19 @@ function createMainWindow(): void {
 
   // Show window when ready; in dev mode open DevTools once the window is shown
   mainWindow.once('ready-to-show', () => {
+    // Restore saved zoom level before showing to avoid visible flash
+    try {
+      const savedZoom = DatabaseService.getInstance().getSetting('zoomLevel');
+      if (savedZoom !== null && savedZoom !== undefined) {
+        const parsedPercentage = Number(savedZoom);
+        if (!isNaN(parsedPercentage) && parsedPercentage > 0) {
+          const zoomFactor = Math.min(1.5, Math.max(0.75, parsedPercentage / 100));
+          mainWindow?.webContents.setZoomFactor(zoomFactor);
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to restore zoom level:', err);
+    }
     mainWindow?.show();
     if (isDev) {
       mainWindow?.webContents.openDevTools();

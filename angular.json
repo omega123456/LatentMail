@@ -65,6 +65,7 @@
           },
           "configurations": {
             "production": {
+              "optimization": false,
               "budgets": [
                 {
                   "type": "initial",
@@ -81,6 +82,7 @@
             },
             "electron": {
               "baseHref": "./",
+              "optimization": false,
               "budgets": [
                 {
                   "type": "initial",

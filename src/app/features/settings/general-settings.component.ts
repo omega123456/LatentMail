@@ -13,6 +13,7 @@ import { UiStore } from '../../store/ui.store';
 import { SettingsStore } from '../../store/settings.store';
 import { LayoutMode, DensityMode } from '../../core/services/layout.service';
 import { ElectronService } from '../../core/services/electron.service';
+import { ZoomService, ZOOM_PRESETS } from '../../core/services/zoom.service';
 
 @Component({
   selector: 'app-general-settings',
@@ -32,7 +33,10 @@ export class GeneralSettingsComponent implements OnInit {
   readonly themeService = inject(ThemeService);
   readonly uiStore = inject(UiStore);
   readonly settingsStore = inject(SettingsStore);
+  readonly zoomService = inject(ZoomService);
   private readonly electronService = inject(ElectronService);
+
+  readonly zoomPresets = ZOOM_PRESETS;
 
   /** True when running on Windows — controls visibility of Windows-only settings. */
   readonly isWindows = signal(false);
@@ -96,6 +100,18 @@ export class GeneralSettingsComponent implements OnInit {
   onDensityChange(mode: DensityMode): void {
     this.uiStore.setDensity(mode);
     this.settingsStore.setDensity(mode);
+  }
+
+  onZoomChange(percentage: number): void {
+    this.zoomService.setZoom(percentage).catch(() => {
+      // Zoom change is best-effort; failures are non-fatal
+    });
+  }
+
+  onZoomReset(): void {
+    this.zoomService.resetZoom().catch(() => {
+      // Zoom reset is best-effort; failures are non-fatal
+    });
   }
 
   onAlwaysAllowToggle(event: MatSlideToggleChange): void {

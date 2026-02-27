@@ -28,6 +28,24 @@
 </section>
 
 <section class="settings-section">
+  <h3>Appearance</h3>
+  <div class="select-row">
+    <label>Zoom:</label>
+    <mat-form-field appearance="outline" class="sync-select">
+      <mat-select [value]="zoomService.zoomLevel()" (selectionChange)="onZoomChange($event.value)">
+        @for (preset of zoomPresets; track preset) {
+          <mat-option [value]="preset">{{ preset }}%</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+    @if (zoomService.zoomLevel() !== 100) {
+      <button mat-button (click)="onZoomReset()">Reset to 100%</button>
+    }
+  </div>
+  <p class="close-to-tray-hint">Scale the entire app interface.</p>
+</section>
+
+<section class="settings-section">
   <h3>Sidebar</h3>
   <div class="toggle-row">
     <mat-slide-toggle
