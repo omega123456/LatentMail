@@ -38,7 +38,7 @@ const SRCDOC_SHELL_HEAD =
 
 /** Injected into srcdoc to report content height to parent when body size changes (e.g. after images load). */
 const SRCDOC_RESIZE_SCRIPT =
-  '<script>(function(){function sendHeight(){var b=document.body,h=document.documentElement,hgt=Math.max(b.scrollHeight,b.offsetHeight,h.scrollHeight,h.offsetHeight,120);if(window.parent!==window)window.parent.postMessage({type:"email-body-frame-resize",height:hgt},"*")}sendHeight();if(typeof ResizeObserver!=="undefined"){var ro=new ResizeObserver(sendHeight);ro.observe(document.body)}window.addEventListener("load",sendHeight)})();<\/script>';
+  '<script>(function(){function sendHeight(){var b=document.body,h=document.documentElement,hgt=Math.max(b.scrollHeight,b.offsetHeight,h.scrollHeight,h.offsetHeight,120);if(window.parent!==window)window.parent.postMessage({type:"email-body-frame-resize",height:hgt},"*")}function afterLayout(){requestAnimationFrame(function(){requestAnimationFrame(sendHeight)})}afterLayout();setTimeout(sendHeight,150);if(typeof ResizeObserver!=="undefined"){var ro=new ResizeObserver(sendHeight);ro.observe(document.body)}window.addEventListener("load",sendHeight)})();<\/script>';
 const SRCDOC_SHELL_TAIL = SRCDOC_RESIZE_SCRIPT + '</body></html>';
 
 @Component({
@@ -94,6 +94,12 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
   /** Last htmlBody value we saw; used to reset bypass only when the body actually changes. */
   private lastBodyForBypassReset: string | undefined = undefined;
 
+  /** Timeout id for the delayed resize fallback; cleared on destroy or before scheduling a new one. */
+  private resizeFallbackTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  /** Last srcdoc we wrote; skip write when content unchanged to avoid redundant iframe reload. */
+  private lastWrittenSrcdoc: string | undefined = undefined;
+
   constructor() {
     // Reset the per-email bypass only when the email body actually changes (e.g. user switched message).
     effect(() => {
@@ -142,6 +148,14 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     window.removeEventListener('message', this.boundMessageHandler);
+    this.clearResizeFallback();
+  }
+
+  private clearResizeFallback(): void {
+    if (this.resizeFallbackTimeoutId !== null) {
+      window.clearTimeout(this.resizeFallbackTimeoutId);
+      this.resizeFallbackTimeoutId = null;
+    }
   }
 
   private onMessage(event: MessageEvent): void {
@@ -159,7 +173,9 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
   }
 
   onIframeLoad(): void {
-    this.resizeFrameToContent();
+    requestAnimationFrame(() => this.resizeFrameToContent());
+    this.clearResizeFallback();
+    this.resizeFallbackTimeoutId = window.setTimeout(() => this.resizeFrameToContent(), 150);
   }
 
   /** Load images for this message only — does not persist to settings. */
@@ -316,7 +332,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
     bypass: boolean,
     isSpamFolder: boolean,
   ): void {
-    iframe.srcdoc = this.buildSrcdoc(
+    const srcdoc = this.buildSrcdoc(
       rawBody,
       blockImages,
       allowedSenders,
@@ -324,6 +340,11 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
       bypass,
       isSpamFolder,
     );
+    if (srcdoc === this.lastWrittenSrcdoc) {
+      return;
+    }
+    this.lastWrittenSrcdoc = srcdoc;
+    iframe.srcdoc = srcdoc;
   }
 
   private resizeFrameToContent(): void {
