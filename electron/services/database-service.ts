@@ -559,7 +559,11 @@ export class DatabaseService {
            AND (:folder = COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash') OR ef2.folder != COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash'))
         ) AS message_count,
         t.snippet, tf.folder, t.is_read, t.is_starred,
-        MAX(e.has_attachments) AS has_attachments
+        MAX(e.has_attachments) AS has_attachments,
+        (SELECT e2.to_addresses FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid AND ef2.folder = :folder
+         WHERE e2.account_id = t.account_id AND e2.x_gm_thrid = t.x_gm_thrid
+         ORDER BY e2.date DESC LIMIT 1) AS to_participants
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder
@@ -590,7 +594,11 @@ export class DatabaseService {
            AND (:folder = COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash') OR ef2.folder != COALESCE(trash_label.gmail_label_id, '[Gmail]/Trash'))
         ) AS message_count,
         t.snippet, tf.folder, t.is_read, t.is_starred,
-        MAX(e.has_attachments) AS has_attachments
+        MAX(e.has_attachments) AS has_attachments,
+        (SELECT e2.to_addresses FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid AND ef2.folder = :folder
+         WHERE e2.account_id = t.account_id AND e2.x_gm_thrid = t.x_gm_thrid
+         ORDER BY e2.date DESC LIMIT 1) AS to_participants
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid AND tf.folder = :folder
        INNER JOIN email_folders ef ON ef.account_id = t.account_id AND ef.folder = :folder

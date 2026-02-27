@@ -36,6 +36,8 @@ export interface Thread {
   subject?: string;
   lastMessageDate: string;
   participants?: string;
+  /** When viewing Sent folder: to_addresses of the latest message in that folder (for "To: …" display). */
+  toParticipants?: string;
   messageCount: number;
   snippet?: string;
   folder?: string;

@@ -9,6 +9,9 @@ import {
   getOrderedFolderBadges,
   HIDDEN_FOLDER_IDS,
 } from '../../../shared/constants/folder-badges';
+
+/** Folder IDs treated as Sent (for "To: …" display in list). */
+const SENT_FOLDER_IDS = ['[Gmail]/Sent Mail', 'Sent', '[Gmail]/Sent'];
 import { DEFAULT_LABEL_COLOR } from '../../../shared/constants/label-colors';
 import { SettingsStore } from '../../../store/settings.store';
 import { SenderAvatarComponent } from '../../../shared/components/sender-avatar/sender-avatar.component';
@@ -111,6 +114,41 @@ export class EmailListItemComponent {
     const first = participants.split(',')[0].trim();
     const angleMatch = first.match(/<([^>]+)>/);
     return angleMatch ? angleMatch[1].trim() : first;
+  }
+
+  /** True when the active folder is Sent (show "To: …" instead of sender). */
+  isSentFolder(): boolean {
+    const folder = this.activeFolderId();
+    if (!folder) {
+      return false;
+    }
+    const normalized = folder.toLowerCase();
+    return SENT_FOLDER_IDS.some((id) => id.toLowerCase() === normalized);
+  }
+
+  /** First recipient from toParticipants (for Sent folder). Parses "Name <email>" or plain email. */
+  getToRecipientDisplay(): string {
+    const toParticipants = this.thread().toParticipants;
+    if (!toParticipants || !toParticipants.trim()) {
+      return '(no recipient)';
+    }
+    const first = toParticipants.split(',')[0].trim();
+    const nameMatch = first.match(/^(.+?)(?:\s*<.*>)?$/);
+    return nameMatch?.[1]?.trim() || first || '(no recipient)';
+  }
+
+  getToRecipientEmail(): string | null {
+    const toParticipants = this.thread().toParticipants;
+    if (!toParticipants || !toParticipants.trim()) {
+      return null;
+    }
+    const first = toParticipants.split(',')[0].trim();
+    const angleMatch = first.match(/<([^>]+)>/);
+    return angleMatch ? angleMatch[1].trim() : first;
+  }
+
+  getToRecipientName(): string {
+    return this.getToRecipientDisplay();
   }
 
   getInitial(): string {
