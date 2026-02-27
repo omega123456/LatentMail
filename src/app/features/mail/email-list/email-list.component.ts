@@ -57,6 +57,12 @@ export class EmailListComponent implements OnDestroy {
   readonly keyboardCursorId = signal<string | null>(null);
 
   /**
+   * The xGmThrid of the last thread clicked (anchor for Shift+Click range selection).
+   * Updated only on click events — J/K keyboard navigation does NOT update this.
+   */
+  readonly lastClickedThreadId = signal<string | null>(null);
+
+  /**
    * Thread IDs from the previous render cycle, used for detecting prepended threads
    * during merge-mode background refreshes so scroll position can be compensated.
    */
@@ -71,8 +77,9 @@ export class EmailListComponent implements OnDestroy {
       const preserve = this.emailsStore.preserveListPosition();
       if (!preserve) {
         this.viewport()?.scrollToIndex(0);
-        // Also clear the keyboard cursor on folder/account switch.
+        // Also clear the keyboard cursor and range anchor on folder/account switch.
         this.keyboardCursorId.set(null);
+        this.lastClickedThreadId.set(null);
       }
     });
 
@@ -200,29 +207,174 @@ export class EmailListComponent implements OnDestroy {
         this.moveKeyboardCursor(-1);
         break;
       case 'open-thread':
+        if (this.emailsStore.multiSelectActive()) {
+          // Clear multi-select, then open the keyboard cursor thread
+          this.emailsStore.clearMultiSelection();
+        }
         this.openKeyboardCursorThread();
         break;
       case 'delete':
-        this.deleteKeyboardCursorThread();
+        if (this.emailsStore.multiSelectActive()) {
+          this.bulkDelete();
+        } else {
+          this.deleteKeyboardCursorThread();
+        }
         break;
       case 'star':
-        this.toggleStarKeyboardCursorThread();
+        if (this.emailsStore.multiSelectActive()) {
+          this.bulkStar();
+        } else {
+          this.toggleStarKeyboardCursorThread();
+        }
         break;
       case 'mark-read':
-        this.markKeyboardCursorThread(true);
+        if (this.emailsStore.multiSelectActive()) {
+          this.bulkMarkRead(true);
+        } else {
+          this.markKeyboardCursorThread(true);
+        }
         break;
       case 'mark-unread':
-        this.markKeyboardCursorThread(false);
+        if (this.emailsStore.multiSelectActive()) {
+          this.bulkMarkRead(false);
+        } else {
+          this.markKeyboardCursorThread(false);
+        }
         break;
       case 'mark-spam':
-        this.markSpamKeyboardCursorThread();
+        if (this.emailsStore.multiSelectActive()) {
+          this.bulkMarkSpam();
+        } else {
+          this.markSpamKeyboardCursorThread();
+        }
         break;
       case 'mark-not-spam':
-        this.markNotSpamKeyboardCursorThread();
+        if (this.emailsStore.multiSelectActive()) {
+          this.bulkMarkNotSpam();
+        } else {
+          this.markNotSpamKeyboardCursorThread();
+        }
         break;
+      case 'select-all': {
+        const allThreads = this.filteredThreads();
+        this.emailsStore.setMultiSelectedThreadIds(allThreads.map(t => t.xGmThrid));
+        // Set cursor to first thread so open-thread has a target if cursor was null
+        if (allThreads.length > 0 && !this.keyboardCursorId()) {
+          this.keyboardCursorId.set(allThreads[0].xGmThrid);
+        }
+        break;
+      }
       default:
         break;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bulk multi-select action helpers
+  // ---------------------------------------------------------------------------
+
+  private bulkDelete(): void {
+    if (this.foldersStore.activeFolderId() === this.foldersStore.trashFolderId()) {
+      return;
+    }
+    const selectedIds = this.emailsStore.multiSelectedThreadIds().slice();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+    for (const threadId of selectedIds) {
+      const thread = this.filteredThreads().find(t => t.xGmThrid === threadId);
+      if (thread) {
+        this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], this.foldersStore.trashFolderId(), thread.xGmThrid, currentFolder);
+      }
+    }
+    this.emailsStore.clearMultiSelection();
+    this.keyboardCursorId.set(null);
+  }
+
+  private bulkStar(): void {
+    if (this.foldersStore.activeFolderId() === this.foldersStore.trashFolderId()) {
+      return;
+    }
+    const selectedIds = this.emailsStore.multiSelectedThreadIds().slice();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+    const threads = this.filteredThreads();
+    // OR rule: if any is unstarred → star all; if all starred → unstar all
+    const starValue = selectedIds.some(id => {
+      const thread = threads.find(t => t.xGmThrid === id);
+      return thread ? !thread.isStarred : false;
+    });
+    for (const threadId of selectedIds) {
+      const thread = threads.find(t => t.xGmThrid === threadId);
+      if (thread) {
+        this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'starred', starValue, thread.xGmThrid);
+      }
+    }
+    this.emailsStore.clearMultiSelection();
+    this.keyboardCursorId.set(null);
+  }
+
+  private bulkMarkRead(asRead: boolean): void {
+    const selectedIds = this.emailsStore.multiSelectedThreadIds().slice();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+    const threads = this.filteredThreads();
+    for (const threadId of selectedIds) {
+      const thread = threads.find(t => t.xGmThrid === threadId);
+      if (thread) {
+        this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'read', asRead, thread.xGmThrid);
+      }
+    }
+    this.emailsStore.clearMultiSelection();
+    this.keyboardCursorId.set(null);
+  }
+
+  private bulkMarkSpam(): void {
+    if (this.foldersStore.activeFolderId() === '[Gmail]/Spam') {
+      return;
+    }
+    const selectedIds = this.emailsStore.multiSelectedThreadIds().slice();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+    const threads = this.filteredThreads();
+    for (const threadId of selectedIds) {
+      const thread = threads.find(t => t.xGmThrid === threadId);
+      if (thread) {
+        this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], '[Gmail]/Spam', thread.xGmThrid, currentFolder);
+      }
+    }
+    this.emailsStore.clearMultiSelection();
+    this.keyboardCursorId.set(null);
+  }
+
+  private bulkMarkNotSpam(): void {
+    if (this.foldersStore.activeFolderId() !== '[Gmail]/Spam') {
+      return;
+    }
+    const selectedIds = this.emailsStore.multiSelectedThreadIds().slice();
+    const activeAccount = this.accountsStore.activeAccount();
+    if (!activeAccount) {
+      return;
+    }
+    const currentFolder = this.foldersStore.activeFolderId() || '[Gmail]/Spam';
+    const threads = this.filteredThreads();
+    for (const threadId of selectedIds) {
+      const thread = threads.find(t => t.xGmThrid === threadId);
+      if (thread) {
+        this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], 'INBOX', thread.xGmThrid, currentFolder);
+      }
+    }
+    this.emailsStore.clearMultiSelection();
+    this.keyboardCursorId.set(null);
   }
 
   /**
@@ -446,16 +598,53 @@ export class EmailListComponent implements OnDestroy {
     return thread.xGmThrid;
   }
 
-  onThreadClick(thread: Thread): void {
-    // Sync keyboard cursor to the clicked thread so J/K navigation continues from here.
-    this.keyboardCursorId.set(thread.xGmThrid);
-    this.threadSelected.emit(thread);
+  onThreadClick(event: { thread: Thread; ctrlKey: boolean; shiftKey: boolean }): void {
+    const { thread, ctrlKey, shiftKey } = event;
+
+    if (ctrlKey) {
+      // Ctrl/Cmd click: toggle thread in/out of multi-selection
+      this.emailsStore.toggleMultiSelectThread(thread.xGmThrid);
+      this.keyboardCursorId.set(thread.xGmThrid);
+      this.lastClickedThreadId.set(thread.xGmThrid);
+    } else if (shiftKey) {
+      // Shift click: select a range from the last-clicked anchor to this thread
+      const threads = this.filteredThreads();
+      const anchorId = this.lastClickedThreadId();
+      const anchorIndex = anchorId ? threads.findIndex(t => t.xGmThrid === anchorId) : -1;
+      const clickedIndex = threads.findIndex(t => t.xGmThrid === thread.xGmThrid);
+
+      let rangeIds: string[];
+      if (clickedIndex < 0 || anchorIndex < 0) {
+        // Anchor or clicked thread not found in current list — select only the clicked thread
+        rangeIds = [thread.xGmThrid];
+      } else {
+        const minIndex = Math.min(anchorIndex, clickedIndex);
+        const maxIndex = Math.max(anchorIndex, clickedIndex);
+        rangeIds = threads.slice(minIndex, maxIndex + 1).map(t => t.xGmThrid);
+      }
+
+      this.emailsStore.setMultiSelectedThreadIds(rangeIds);
+      this.keyboardCursorId.set(thread.xGmThrid);
+      this.lastClickedThreadId.set(thread.xGmThrid);
+    } else {
+      // Plain click: clear multi-selection and open the thread
+      this.emailsStore.clearMultiSelection();
+      this.keyboardCursorId.set(thread.xGmThrid);
+      this.lastClickedThreadId.set(thread.xGmThrid);
+      this.threadSelected.emit(thread);
+    }
   }
 
   onItemContextMenu(data: { thread: Thread; x: number; y: number }): void {
-    // Select the thread so the reading pane loads it in parallel with the menu opening.
-    this.onThreadClick(data.thread);
-    this.threadContextMenu.emit(data);
+    if (this.emailsStore.multiSelectedThreadIds().includes(data.thread.xGmThrid)) {
+      // Right-clicking a multi-selected thread — keep multi-selection, just open the menu
+      this.threadContextMenu.emit(data);
+    } else {
+      // Right-clicking a non-selected thread — clear multi-selection, single-select that thread
+      this.emailsStore.clearMultiSelection();
+      this.onThreadClick({ thread: data.thread, ctrlKey: false, shiftKey: false });
+      this.threadContextMenu.emit(data);
+    }
   }
 
   onStarToggle(thread: Thread): void {

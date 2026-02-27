@@ -40,6 +40,11 @@ export interface EmailActionContext {
    * Used by the delete action visibility predicate.
    */
   trashFolderId: string;
+  /**
+   * Number of threads currently multi-selected. Optional for backward compatibility.
+   * Undefined / 0 = no multi-select; 1 = single; 2+ = bulk.
+   */
+  multiSelectCount?: number;
 }
 
 /**

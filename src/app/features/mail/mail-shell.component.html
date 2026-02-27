@@ -121,6 +121,7 @@
   [thread]="contextMenuThread()"
   [folders]="foldersStore.folders()"
   [activeFolderId]="foldersStore.activeFolderId()"
+  [multiSelectCount]="emailsStore.multiSelectCount()"
   (actionTriggered)="onContextMenuAction($event)"
   (closed)="onContextMenuClosed()"
 />

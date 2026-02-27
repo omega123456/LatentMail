@@ -19,12 +19,13 @@
       <app-email-list-item
         *cdkVirtualFor="let thread of filteredThreads(); trackBy: trackByThreadId"
         [thread]="thread"
-        [isSelected]="thread.xGmThrid === emailsStore.selectedThreadId() || thread.xGmThrid === keyboardCursorId()"
+        [isSelected]="!emailsStore.multiSelectActive() && (thread.xGmThrid === emailsStore.selectedThreadId() || thread.xGmThrid === keyboardCursorId())"
+        [isMultiSelected]="emailsStore.multiSelectedThreadIds().includes(thread.xGmThrid)"
         [density]="uiStore.density()"
         [showFolderBadge]="foldersStore.searchActive()"
         [activeFolderId]="foldersStore.activeFolderId()"
         [showStarAction]="foldersStore.activeFolderId() !== foldersStore.trashFolderId()"
-        (clicked)="onThreadClick(thread)"
+        (clicked)="onThreadClick($event)"
         (starToggled)="onStarToggle(thread)"
         (contextMenuRequested)="onItemContextMenu($event)"
       />

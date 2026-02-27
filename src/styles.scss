@@ -52,6 +52,8 @@
   --color-border: #E0E0E0;
   --color-error: #D32F2F;
   --color-success: #388E3C;
+  --color-multi-select: color-mix(in srgb, var(--color-primary) 14%, #FFFFFF);
+  --color-multi-select-accent: var(--color-primary);
 
   color-scheme: light;
 }
@@ -77,6 +79,8 @@
   --color-border: #333333;
   --color-error: #FF6B6B;
   --color-success: #81C784;
+  --color-multi-select: color-mix(in srgb, var(--color-primary) 14%, var(--color-surface));
+  --color-multi-select-accent: var(--color-primary);
 
   color-scheme: dark;
 }
@@ -103,6 +107,8 @@
     --color-border: #333333;
     --color-error: #FF6B6B;
     --color-success: #81C784;
+    --color-multi-select: color-mix(in srgb, var(--color-primary) 14%, var(--color-surface));
+    --color-multi-select-accent: var(--color-primary);
 
     color-scheme: dark;
   }

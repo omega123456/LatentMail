@@ -353,15 +353,14 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         // SearchBarComponent handles Ctrl+F itself, making this a secondary path.
         this.focusSearchBar();
         break;
-      case 'select-all':
-        // Multi-select is not yet implemented in EmailsStore (single-thread selection
-        // only). This is intentionally a no-op stub; a future phase will add
-        // selectedThreadIds[] to the store and hook it up here.
-        break;
       case 'escape':
-        // Clear the current thread selection. The command palette (if open) already
-        // closes itself via its own host listener before this subscription fires.
-        this.emailsStore.clearSelection();
+        // When multi-select is active, clear just the multi-selection.
+        // Otherwise clear the current single-thread selection.
+        if (this.emailsStore.multiSelectActive()) {
+          this.emailsStore.clearMultiSelection();
+        } else {
+          this.emailsStore.clearSelection();
+        }
         break;
       default:
         break;
@@ -580,17 +579,116 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     // Dismiss the overlay immediately so the UI responds without waiting for the action.
     this.contextMenuOpen.set(false);
 
-    const thread = this.contextMenuThread();
-    if (!thread) {
-      return;
-    }
-
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
       return;
     }
 
     const currentFolder = this.foldersStore.activeFolderId() || 'INBOX';
+
+    // ── Multi-select bulk dispatch (2+ threads selected) ─────────────────────
+    if (this.emailsStore.multiSelectCount() > 1) {
+      const selectedIds = this.emailsStore.multiSelectedThreadIds().slice();
+      const allThreads = this.emailsStore.threads();
+
+      switch (event.action) {
+        case 'delete': {
+          if (currentFolder === this.foldersStore.trashFolderId()) {
+            break;
+          }
+          for (const threadId of selectedIds) {
+            const thread = allThreads.find(t => t.xGmThrid === threadId);
+            if (thread) {
+              this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], this.foldersStore.trashFolderId(), thread.xGmThrid, currentFolder);
+            }
+          }
+          break;
+        }
+        case 'move-to': {
+          if (!event.targetFolder) {
+            break;
+          }
+          for (const threadId of selectedIds) {
+            const thread = allThreads.find(t => t.xGmThrid === threadId);
+            if (thread) {
+              this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], event.targetFolder, thread.xGmThrid, currentFolder);
+            }
+          }
+          break;
+        }
+        case 'mark-spam': {
+          if (currentFolder === '[Gmail]/Spam') {
+            break;
+          }
+          for (const threadId of selectedIds) {
+            const thread = allThreads.find(t => t.xGmThrid === threadId);
+            if (thread) {
+              this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], '[Gmail]/Spam', thread.xGmThrid, currentFolder);
+            }
+          }
+          break;
+        }
+        case 'mark-not-spam': {
+          if (currentFolder !== '[Gmail]/Spam') {
+            break;
+          }
+          for (const threadId of selectedIds) {
+            const thread = allThreads.find(t => t.xGmThrid === threadId);
+            if (thread) {
+              this.emailsStore.moveEmails(activeAccount.id, [thread.xGmThrid], 'INBOX', thread.xGmThrid, currentFolder);
+            }
+          }
+          break;
+        }
+        case 'star': {
+          if (currentFolder === this.foldersStore.trashFolderId()) {
+            break;
+          }
+          // OR rule: any unstarred → star all; all starred → unstar all
+          const starValue = selectedIds.some(id => {
+            const thread = allThreads.find(t => t.xGmThrid === id);
+            return thread ? !thread.isStarred : false;
+          });
+          for (const threadId of selectedIds) {
+            const thread = allThreads.find(t => t.xGmThrid === threadId);
+            if (thread) {
+              this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'starred', starValue, thread.xGmThrid);
+            }
+          }
+          break;
+        }
+        case 'mark-read-unread': {
+          // OR rule: any unread → mark all read; all read → mark all unread
+          const readValue = selectedIds.some(id => {
+            const thread = allThreads.find(t => t.xGmThrid === id);
+            return thread ? !thread.isRead : false;
+          });
+          for (const threadId of selectedIds) {
+            const thread = allThreads.find(t => t.xGmThrid === threadId);
+            if (thread) {
+              this.emailsStore.flagEmails(activeAccount.id, [thread.xGmThrid], 'read', readValue, thread.xGmThrid);
+            }
+          }
+          break;
+        }
+        case 'add-labels':
+        case 'remove-labels':
+          // Disabled in the UI during multi-select — no-op here
+          break;
+        default:
+          break;
+      }
+
+      this.emailsStore.clearMultiSelection();
+      this.emailsStore.clearSelection();
+      return;
+    }
+
+    // ── Single-thread dispatch ────────────────────────────────────────────────
+    const thread = this.contextMenuThread();
+    if (!thread) {
+      return;
+    }
 
     switch (event.action) {
       case 'delete': {

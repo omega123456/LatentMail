@@ -115,6 +115,8 @@ export class EmailContextMenuComponent implements OnDestroy {
   readonly folders = input<Folder[]>([]);
   /** Active folder ID used for isVisible predicate evaluation. */
   readonly activeFolderId = input<string | null>(null);
+  /** Number of threads in the current multi-selection (0 = single-thread mode). */
+  readonly multiSelectCount = input<number>(0);
 
   // ─── Outputs ──────────────────────────────────────────────────────────────
 
@@ -147,6 +149,7 @@ export class EmailContextMenuComponent implements OnDestroy {
       followUpLoading: false,
       currentFolderIds: thread.folders ?? [],
       trashFolderId: this.foldersStore.trashFolderId(),
+      multiSelectCount: this.multiSelectCount(),
     };
   });
 

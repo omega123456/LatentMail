@@ -30,7 +30,9 @@ export class EmailListItemComponent {
   readonly activeFolderId = input<string | null>(null);
   /** When false (e.g. when viewing Trash), the star icon and toggle are hidden. */
   readonly showStarAction = input<boolean>(true);
-  readonly clicked = output<Thread>();
+  /** Whether this item is part of the active multi-selection. */
+  readonly isMultiSelected = input<boolean>(false);
+  readonly clicked = output<{ thread: Thread; ctrlKey: boolean; shiftKey: boolean }>();
   readonly starToggled = output<Thread>();
   readonly contextMenuRequested = output<{ thread: Thread; x: number; y: number }>();
 
@@ -114,6 +116,14 @@ export class EmailListItemComponent {
   getInitial(): string {
     const name = this.getSenderName();
     return name.charAt(0).toUpperCase();
+  }
+
+  onClick(event: MouseEvent): void {
+    this.clicked.emit({
+      thread: this.thread(),
+      ctrlKey: event.ctrlKey || event.metaKey,
+      shiftKey: event.shiftKey,
+    });
   }
 
   onStarClick(event: Event): void {

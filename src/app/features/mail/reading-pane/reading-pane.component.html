@@ -210,8 +210,15 @@
     </div>
   </div>
 } @else {
-  <div class="reading-pane-empty">
-    <span class="material-symbols-outlined">mail</span>
-    <p>Select an email to read</p>
-  </div>
+  @if (emailsStore.multiSelectActive()) {
+    <div class="reading-pane-empty">
+      <span class="material-symbols-outlined">done_all</span>
+      <p>{{ emailsStore.multiSelectCount() }} conversations selected</p>
+    </div>
+  } @else {
+    <div class="reading-pane-empty">
+      <span class="material-symbols-outlined">mail</span>
+      <p>Select an email to read</p>
+    </div>
+  }
 }

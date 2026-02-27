@@ -45,6 +45,7 @@ interface EmailsState {
   threads: Thread[];
   selectedThreadId: string | null;
   selectedThread: (Thread & { messages?: Email[] }) | null;
+  multiSelectedThreadIds: string[];
   loading: boolean;
   loadingPage: boolean;
   loadingThread: boolean;
@@ -71,6 +72,7 @@ const initialState: EmailsState = {
   threads: [],
   selectedThreadId: null,
   selectedThread: null,
+  multiSelectedThreadIds: [],
   loading: false,
   loadingPage: false,
   loadingThread: false,
@@ -119,6 +121,8 @@ export const EmailsStore = signalStore(
     const foldersStore = inject(FoldersStore);
 
     return {
+      multiSelectActive: computed(() => store.multiSelectedThreadIds().length > 0),
+      multiSelectCount: computed(() => store.multiSelectedThreadIds().length),
       unreadCount: computed(() =>
         store.threads().filter(t => !t.isRead).length
       ),
@@ -194,7 +198,7 @@ export const EmailsStore = signalStore(
     return {
       /** Load threads for a folder */
       async loadThreads(accountId: number, folderId: string): Promise<void> {
-        patchState(store, { loading: true, loadingPage: false, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false });
+        patchState(store, { loading: true, loadingPage: false, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false, multiSelectedThreadIds: [] });
         try {
           const response = await electronService.fetchEmails(
             String(accountId),
@@ -491,6 +495,7 @@ export const EmailsStore = signalStore(
             threads: store.threads().filter(t => t.xGmThrid !== targetThreadId),
             selectedThread: null,
             selectedThreadId: null,
+            multiSelectedThreadIds: store.multiSelectedThreadIds().filter(id => id !== targetThreadId),
           });
         }
 
@@ -519,6 +524,7 @@ export const EmailsStore = signalStore(
         const targetThreadId = threadId || store.selectedThreadId() || null;
         patchState(store, {
           threads: store.threads().filter(t => t.xGmThrid !== targetThreadId),
+          multiSelectedThreadIds: store.multiSelectedThreadIds().filter(id => id !== targetThreadId),
         });
 
         try {
@@ -727,9 +733,48 @@ export const EmailsStore = signalStore(
         });
       },
 
+      /** Set the entire multi-selection. If ids is non-empty, clears single-select state. */
+      setMultiSelectedThreadIds(ids: string[]): void {
+        if (ids.length > 0) {
+          patchState(store, { multiSelectedThreadIds: ids, selectedThreadId: null, selectedThread: null });
+        } else {
+          patchState(store, { multiSelectedThreadIds: [] });
+        }
+      },
+
+      /** Toggle a single thread ID in/out of multi-selection. */
+      toggleMultiSelectThread(threadId: string): void {
+        const current = store.multiSelectedThreadIds();
+        if (current.includes(threadId)) {
+          // Remove it
+          patchState(store, { multiSelectedThreadIds: current.filter(id => id !== threadId) });
+        } else if (current.length === 0) {
+          // First addition — also pull in the existing single selection if it is in the current list
+          const existingSelectedId = store.selectedThreadId();
+          const newArray: string[] = [];
+          if (
+            existingSelectedId &&
+            existingSelectedId !== threadId &&
+            store.threads().some(t => t.xGmThrid === existingSelectedId)
+          ) {
+            newArray.push(existingSelectedId);
+          }
+          newArray.push(threadId);
+          patchState(store, { multiSelectedThreadIds: newArray, selectedThreadId: null, selectedThread: null });
+        } else {
+          // Already in multi-select mode — just append
+          patchState(store, { multiSelectedThreadIds: [...current, threadId] });
+        }
+      },
+
+      /** Clear multi-selection without touching single-select state. */
+      clearMultiSelection(): void {
+        patchState(store, { multiSelectedThreadIds: [] });
+      },
+
       /** Clear selection */
       clearSelection(): void {
-        patchState(store, { selectedThreadId: null, selectedThread: null });
+        patchState(store, { selectedThreadId: null, selectedThread: null, multiSelectedThreadIds: [] });
       },
 
       /** Clear all state */
@@ -840,10 +885,13 @@ export const EmailsStore = signalStore(
               // Step 5: Update serverCursorDate to the oldest thread in the merged list
               const newCursorDate = getOldestThreadDate(mergedThreads);
 
+              const mergedIdSet = new Set(mergedThreads.map(t => t.xGmThrid));
+              const prunedMultiSelect = store.multiSelectedThreadIds().filter(id => mergedIdSet.has(id));
               patchState(store, {
                 threads: mergedThreads,
                 dbExhausted: folderShrunkBelowPage,
                 serverCursorDate: newCursorDate || store.serverCursorDate(),
+                multiSelectedThreadIds: prunedMultiSelect,
                 ...(currentSelectedId && !selectedStillExists
                   ? { selectedThreadId: null, selectedThread: null }
                   : {}),
@@ -854,6 +902,8 @@ export const EmailsStore = signalStore(
                 ? freshThreads.some(t => t.xGmThrid === currentSelectedId)
                 : false;
 
+              const freshIdSet = new Set(freshThreads.map(t => t.xGmThrid));
+              const prunedMultiSelectFresh = store.multiSelectedThreadIds().filter(id => freshIdSet.has(id));
               patchState(store, {
                 threads: freshThreads,
                 hasMore: true,
@@ -862,6 +912,7 @@ export const EmailsStore = signalStore(
                 serverCursorDate: getOldestThreadDate(freshThreads),
                 hasLoadedMore: false,
                 preserveListPosition: false,
+                multiSelectedThreadIds: prunedMultiSelectFresh,
                 // Clear selection if the selected thread no longer exists in the refreshed list
                 ...(currentSelectedId && !selectedStillExists
                   ? { selectedThreadId: null, selectedThread: null }

@@ -22,7 +22,8 @@ export function getDefaultEmailActions(): EmailAction[] {
         // Both per-message and thread-level: show when isDraft is true.
         // For thread-level, isDraft reflects thread.hasDraft (any email in thread is a draft).
         // For per-message, isDraft reflects message.isDraft directly.
-        return ctx.isDraft;
+        // Hidden during multi-select (only makes sense for a single thread).
+        return ctx.isDraft && (ctx.multiSelectCount ?? 0) <= 1;
       },
       isEnabled: () => true,
     },
@@ -33,7 +34,7 @@ export function getDefaultEmailActions(): EmailAction[] {
       icon: 'reply',
       label: 'Reply',
       group: 'compose',
-      isVisible: () => true,
+      isVisible: (ctx: EmailActionContext) => (ctx.multiSelectCount ?? 0) <= 1,
       isEnabled: () => true,
     },
     {
@@ -41,7 +42,7 @@ export function getDefaultEmailActions(): EmailAction[] {
       icon: 'reply_all',
       label: 'Reply All',
       group: 'compose',
-      isVisible: () => true,
+      isVisible: (ctx: EmailActionContext) => (ctx.multiSelectCount ?? 0) <= 1,
       isEnabled: () => true,
     },
     {
@@ -49,7 +50,7 @@ export function getDefaultEmailActions(): EmailAction[] {
       icon: 'forward',
       label: 'Forward',
       group: 'compose',
-      isVisible: () => true,
+      isVisible: (ctx: EmailActionContext) => (ctx.multiSelectCount ?? 0) <= 1,
       isEnabled: () => true,
     },
 
@@ -76,7 +77,8 @@ export function getDefaultEmailActions(): EmailAction[] {
       label: 'Labels',
       group: 'manage',
       isVisible: () => true,
-      isEnabled: () => true,
+      isEnabled: (ctx: EmailActionContext) => (ctx.multiSelectCount ?? 0) <= 1,
+      disabledTooltip: 'Labels can only be applied to one conversation at a time',
     },
     {
       id: 'mark-spam',

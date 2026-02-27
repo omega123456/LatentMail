@@ -2,9 +2,10 @@
   class="email-item"
   [class.unread]="!thread().isRead"
   [class.selected]="isSelected()"
+  [class.multi-selected]="isMultiSelected()"
   [class.compact]="density() === 'compact'"
   [class.spacious]="density() === 'spacious'"
-  (click)="clicked.emit(thread())"
+  (click)="onClick($event)"
   (contextmenu)="onContextMenu($event)"
 >
   @if (settingsStore.showAvatars()) {
