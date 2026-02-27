@@ -295,20 +295,6 @@ html {
   min-width: 220px !important;
 }
 
-// Context menu panels: more specific selectors so they win in production builds
-// (optimized CSS order can let Material's rules override the generic .mat-mdc-menu-panel).
-.email-context-menu-panel.mat-mdc-menu-panel,
-.header-address-context-menu-panel.mat-mdc-menu-panel {
-  min-width: 220px !important;
-  width: auto !important;
-}
-
-// Ensure overlay pane does not constrain menu panel width (production bundle can add constraints).
-.cdk-overlay-pane .mat-mdc-menu-panel {
-  min-width: 220px !important;
-  width: auto !important;
-}
-
 // 44px item height — comfortably readable without being oversized.
 // Use !important because MDC sets height via its own class selectors.
 .mat-mdc-menu-item {
