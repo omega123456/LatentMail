@@ -9,10 +9,13 @@ import {
   signal,
   computed,
   inject,
+  HostListener,
+  untracked,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import DOMPurify from 'dompurify';
 import { SettingsStore } from '../../../store/settings.store';
+import { ZoomService } from '../../../core/services/zoom.service';
 
 /** 1×1 grey GIF placeholder URI used while remote images are blocked. */
 const BLOCKED_IMAGE_PLACEHOLDER =
@@ -56,8 +59,16 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
   readonly isSpamFolder = input<boolean>(false);
 
   private readonly settingsStore = inject(SettingsStore);
+  private readonly zoomService = inject(ZoomService);
 
   readonly frame = viewChild<ElementRef<HTMLIFrameElement>>('frame');
+  readonly wrapper = viewChild<ElementRef<HTMLDivElement>>('wrapper');
+
+  /**
+   * Most recently computed height cap in CSS pixels.
+   * Updated by `applyMaxHeight()` whenever the wrapper's scroll container is measured.
+   */
+  private maxIframeHeight = 120;
 
   /**
    * Whether remote images are currently blocked for this message.
@@ -126,11 +137,104 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
         this.writeSrcdoc(iframeElement, body, blockImages, allowedSenders, sender, bypass, spamFolder);
       }
     });
+
+    // Re-apply the max-height cap whenever the zoom level changes.
+    // Reading zoomLevel() establishes the reactive dependency; the actual cap
+    // calculation uses window.innerHeight directly (already zoom-adjusted).
+    effect(() => {
+      this.zoomService.zoomLevel();
+      untracked(() => this.updateMaxIframeHeight());
+    });
+  }
+
+  /** Recompute the cap from the live container height and apply it. */
+  private updateMaxIframeHeight(): void {
+    this.applyMaxHeight();
+    this.resizeFrameToContent();
+  }
+
+  /**
+   * Measure the actual scroll container (.messages-list) and compute a precise cap
+   * that accounts for all non-body chrome inside the message card (header, ribbon,
+   * card margin, and CSS padding). This keeps the ribbon visible without scrolling
+   * at any zoom level.
+   *
+   * Formula (all values are live DOM measurements in CSS pixels — already zoom-adjusted):
+   *
+   *   cap = scrollContainer.clientHeight
+   *         − messageHeader.offsetHeight
+   *         − ribbon.offsetHeight
+   *         − messageBody.paddingBottom   (CSS computed)
+   *         − scrollContainer.paddingBottom (CSS computed)
+   *         − messageCard.marginTop       (CSS computed)
+   *
+   * If any element is not yet in the DOM (e.g. early init before ribbon renders),
+   * a 200px chrome estimate is used as a fallback. That is fine because
+   * applyMaxHeight() is re-called by onMessage(), resizeFallbackTimeout, the zoom
+   * effect, and window:resize — by any of those points the ribbon will be rendered.
+   */
+  private applyMaxHeight(): void {
+    const wrapperElement = this.wrapper()?.nativeElement;
+    if (!wrapperElement) {
+      return;
+    }
+
+    // Walk up the DOM to the scroll container.
+    const scrollContainer = wrapperElement.closest('.messages-list') as HTMLElement | null;
+    const containerHeight = scrollContainer
+      ? scrollContainer.clientHeight
+      : window.innerHeight;
+
+    // Locate sibling chrome elements from the message card.
+    const messageCard = wrapperElement.closest('.message-card') as HTMLElement | null;
+    const messageHeader = messageCard?.querySelector('.message-header') as HTMLElement | null;
+    const ribbon = messageCard?.querySelector('app-email-action-ribbon') as HTMLElement | null;
+    // The wrapper is a direct child of .message-body; step up to it for padding.
+    const messageBody = wrapperElement.parentElement as HTMLElement | null;
+
+    let chromeHeight: number;
+    if (messageCard && messageHeader && ribbon && messageBody && scrollContainer) {
+      const messageBodyPaddingBottom = parseFloat(
+        getComputedStyle(messageBody).paddingBottom,
+      ) || 0;
+      const containerPaddingBottom = parseFloat(
+        getComputedStyle(scrollContainer).paddingBottom,
+      ) || 0;
+      const cardMarginTop = parseFloat(
+        getComputedStyle(messageCard).marginTop,
+      ) || 0;
+      chromeHeight =
+        messageHeader.offsetHeight +
+        ribbon.offsetHeight +
+        messageBodyPaddingBottom +
+        containerPaddingBottom +
+        cardMarginTop;
+    } else {
+      // Fallback: ribbon not yet rendered or DOM structure not yet available.
+      chromeHeight = 200;
+    }
+
+    // Small safety buffer: on some zoom/measurement combos the computed
+    // measurements can be off by a few pixels (subpixel rounding, borders)
+    // which can leave the ribbon nudged below the fold. Subtract a small
+    // constant so the cap is a few pixels smaller than the strict sum.
+    const SAFETY_BUFFER = 20; // pixels
+
+    const cap = Math.max(120, containerHeight - chromeHeight - SAFETY_BUFFER);
+    this.maxIframeHeight = cap;
+    wrapperElement.style.maxHeight = `${cap}px`;
+  }
+
+  /** Re-apply the height cap when the application window is resized. */
+  @HostListener('window:resize')
+  onWindowResize(): void {
+    this.updateMaxIframeHeight();
   }
 
   private readonly boundMessageHandler = (event: MessageEvent): void => this.onMessage(event);
 
   ngAfterViewInit(): void {
+    this.applyMaxHeight();
     const iframeElement = this.frame()?.nativeElement;
     if (iframeElement) {
       this.writeSrcdoc(
@@ -170,6 +274,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
     }
     const height = Math.max(120, Math.min(event.data.height, 50_000));
     iframeElement.style.height = `${height}px`;
+    this.applyMaxHeight();
   }
 
   onIframeLoad(): void {
@@ -344,6 +449,9 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.lastWrittenSrcdoc = srcdoc;
+    // Apply the cap to the wrapper proactively so it is present from the first paint,
+    // before the resize postMessage arrives from the iframe.
+    this.applyMaxHeight();
     iframe.srcdoc = srcdoc;
   }
 
@@ -364,6 +472,7 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
         120,
       );
       iframeElement.style.height = `${height}px`;
+      this.applyMaxHeight();
     } catch {
       // Cross-origin or security restriction; leave height as-is
     }
