@@ -112,7 +112,7 @@
                 color="warn"
                 class="reset-btn"
                 (click)="resetBinding(row.id)"
-                [matTooltip]="'Reset to: ' + commandRegistry.formatKeyCombo(row.defaultKeys[0] ?? '')"
+                [matTooltip]="'Reset to: ' + commandRegistry.formatKeyCombo(row.defaultKeys[0])"
                 [attr.aria-label]="'Reset ' + row.label + ' to default'"
               >
                 Reset
