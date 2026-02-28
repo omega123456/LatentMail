@@ -147,6 +147,7 @@ const electronAPI = {
     close: () => ipcRenderer.invoke('system:close') as Promise<void>,
     isMaximized: () => ipcRenderer.invoke('system:is-maximized') as Promise<boolean>,
     getPlatform: () => ipcRenderer.invoke('system:get-platform') as Promise<string>,
+    getIsMacOS: () => ipcRenderer.invoke('system:get-is-mac-os') as Promise<boolean>,
     setZoom: (factor: number) => ipcRenderer.invoke('system:set-zoom', factor) as Promise<number>,
     getZoom: () => ipcRenderer.invoke('system:get-zoom') as Promise<number>,
   },

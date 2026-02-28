@@ -1,4 +1,4 @@
-import { Component, inject, OnDestroy, OnInit } from '@angular/core';
+import { Component, HostBinding, inject, OnDestroy, OnInit } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { TitlebarComponent } from './shared/components/titlebar.component';
@@ -22,6 +22,9 @@ import { EmailsStore } from './store/emails.store';
 export class AppComponent implements OnInit, OnDestroy {
   title = 'LatentMail';
 
+  /** Set when platform is darwin so we can reserve top padding for traffic lights. */
+  @HostBinding('class.platform-darwin') platformDarwin = false;
+
   /** Injected so QueueStore is created at app startup and subscribes to queue:update for toasts. */
   private readonly queueStore = inject(QueueStore);
 
@@ -42,6 +45,14 @@ export class AppComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.settingsStore.loadSettings();
     this.subscribeToTrayActions();
+    this.detectPlatform();
+  }
+
+  private async detectPlatform(): Promise<void> {
+    if (!this.electronService.isElectron) {
+      return;
+    }
+    this.platformDarwin = await this.electronService.getIsMacOS();
   }
 
   ngOnDestroy(): void {

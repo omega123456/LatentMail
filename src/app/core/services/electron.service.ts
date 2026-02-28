@@ -169,6 +169,7 @@ interface ElectronAPI {
     close: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
     getPlatform: () => Promise<string>;
+    getIsMacOS: () => Promise<boolean>;
     setZoom: (factor: number) => Promise<number>;
     getZoom: () => Promise<number>;
   };
@@ -480,6 +481,11 @@ export class ElectronService {
   async getPlatform(): Promise<string> {
     if (this.api) return this.api.system.getPlatform();
     return 'browser';
+  }
+
+  async getIsMacOS(): Promise<boolean> {
+    if (this.api) return this.api.system.getIsMacOS();
+    return false;
   }
 
   async setZoom(factor: number): Promise<number> {

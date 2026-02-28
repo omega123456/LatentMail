@@ -151,8 +151,8 @@ if (runApp) {
     // Create the main window
     createMainWindow();
 
-    // Initialize system tray after the main window exists
-    if (mainWindow) {
+    // Initialize system tray only on Windows (menu bar icon on macOS is not desired)
+    if (mainWindow && isWindows()) {
       try {
         TrayService.getInstance().initialize(mainWindow);
       } catch (err) {

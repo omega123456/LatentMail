@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from './ipc-channels';
+import { isMacOS } from '../utils/platform';
 
 export function registerSystemIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SYSTEM_MINIMIZE, (event) => {
@@ -30,6 +31,10 @@ export function registerSystemIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.SYSTEM_GET_PLATFORM, () => {
     return process.platform;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SYSTEM_GET_IS_MAC_OS, () => {
+    return isMacOS();
   });
 
   ipcMain.handle(IPC_CHANNELS.SYSTEM_SET_ZOOM, (event, factor: unknown) => {

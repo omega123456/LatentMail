@@ -4,6 +4,10 @@
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+
+  &.platform-darwin {
+    padding-top: var(--mac-titlebar-inset, 38px);
+  }
 }
 
 .app-main {
