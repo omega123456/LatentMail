@@ -93,7 +93,14 @@
         (change)="settingsStore.toggleSetting('closeToTray')"
       >Close to system tray</mat-slide-toggle>
     </div>
-    <p class="close-to-tray-hint">When enabled, closing the window keeps the app running in the system tray. Right-click the tray icon to quit.</p>
+    <p class="close-to-tray-hint close-to-tray-hint--spaced">When enabled, closing the window keeps the app running in the system tray. Right-click the tray icon to quit.</p>
+    <div class="toggle-row">
+      <mat-slide-toggle
+        [checked]="settingsStore.startMinimized()"
+        (change)="settingsStore.toggleSetting('startMinimized')"
+      >Start minimized</mat-slide-toggle>
+    </div>
+    <p class="close-to-tray-hint">When enabled, LatentMail starts hidden in the system tray (no window opens).</p>
   </section>
 }
 

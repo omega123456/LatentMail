@@ -51,7 +51,12 @@ if (runApp) {
   if (!isDev) {
     app.on('second-instance', () => {
       if (mainWindow) {
-        if (mainWindow.isMinimized()) { mainWindow.restore(); }
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        if (!mainWindow.isVisible()) {
+          mainWindow.show();
+        }
         mainWindow.focus();
       }
     });
@@ -158,6 +163,7 @@ if (runApp) {
 
 function createMainWindow(): void {
   const isWindows = process.platform === 'win32';
+  const startInTrayOnLaunch = isWindows && getWindowsBooleanSetting('startMinimized', false);
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -180,7 +186,7 @@ function createMainWindow(): void {
   // Restore window position/size from saved state
   restoreWindowState(mainWindow);
 
-  // Show window when ready; in dev mode open DevTools once the window is shown
+  // Show window when ready; optionally keep it hidden in tray-only startup mode.
   mainWindow.once('ready-to-show', () => {
     // Restore saved zoom level before showing to avoid visible flash
     try {
@@ -195,9 +201,13 @@ function createMainWindow(): void {
     } catch (err) {
       logger.warn('Failed to restore zoom level:', err);
     }
-    mainWindow?.show();
-    if (isDev) {
-      mainWindow?.webContents.openDevTools();
+    if (!startInTrayOnLaunch) {
+      mainWindow?.show();
+      if (isDev) {
+        mainWindow?.webContents.openDevTools();
+      }
+    } else {
+      logger.info('Starting in tray mode (main window hidden)');
     }
   });
 
@@ -255,6 +265,25 @@ function createMainWindow(): void {
   }
 
   logger.info('Main window created');
+}
+
+function getWindowsBooleanSetting(settingKey: string, defaultValue: boolean): boolean {
+  if (process.platform !== 'win32') {
+    return defaultValue;
+  }
+
+  try {
+    const dbService = DatabaseService.getInstance();
+    const rawValue = dbService.getSetting(settingKey);
+
+    if (rawValue === null || rawValue === undefined) {
+      return defaultValue;
+    }
+
+    return rawValue === 'true';
+  } catch {
+    return defaultValue;
+  }
 }
 
 function saveWindowState(win: BrowserWindow): void {

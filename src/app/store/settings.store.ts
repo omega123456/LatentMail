@@ -20,6 +20,8 @@ export interface SettingsState {
   showAvatars: boolean;
   /** When true, closing the main window on Windows hides it to the system tray instead of quitting. */
   closeToTray: boolean;
+  /** When true on Windows, the app starts minimized. */
+  startMinimized: boolean;
   logLevel: LogLevel;
   /** Custom keybinding overrides: command ID → normalized key combo string. */
   customKeyBindings: Record<string, string>;
@@ -45,6 +47,7 @@ const initialState: SettingsState = {
   blockRemoteImages: true,
   showAvatars: true,
   closeToTray: true,
+  startMinimized: true,
   logLevel: 'error',
   zoomLevel: 100,
   customKeyBindings: {},
@@ -111,6 +114,7 @@ export const SettingsStore = signalStore(
             blockRemoteImages: data['blockRemoteImages'] !== undefined ? data['blockRemoteImages'] === 'true' : store.blockRemoteImages(),
             showAvatars: data['showAvatars'] !== undefined ? data['showAvatars'] === 'true' : store.showAvatars(),
             closeToTray: data['closeToTray'] !== undefined ? data['closeToTray'] === 'true' : store.closeToTray(),
+            startMinimized: data['startMinimized'] !== undefined ? data['startMinimized'] === 'true' : store.startMinimized(),
             logLevel,
             customKeyBindings,
             allowedImageSenders,
