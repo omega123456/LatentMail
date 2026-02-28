@@ -218,9 +218,9 @@ export class EmailBodyFrameComponent implements AfterViewInit, OnDestroy {
     // measurements can be off by a few pixels (subpixel rounding, borders)
     // which can leave the ribbon nudged below the fold. Subtract a small
     // constant so the cap is a few pixels smaller than the strict sum.
-    const SAFETY_BUFFER = 20; // pixels
+    const SAFETY_BUFFER = 0.95; // multiplier
 
-    const cap = Math.max(120, containerHeight - chromeHeight - SAFETY_BUFFER);
+    const cap = Math.max(120, (containerHeight - chromeHeight) * SAFETY_BUFFER);
     this.maxIframeHeight = cap;
     wrapperElement.style.maxHeight = `${cap}px`;
   }
