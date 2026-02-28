@@ -26,6 +26,7 @@ dist-electron
 .ignore
 config.json
 out
+.cursor
 
 # Visual Studio Code
 .vscode/*

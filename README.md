@@ -1,145 +1,119 @@
 # LatentMail
 
-A cross-platform desktop email client built with Electron 40 and Angular 21, featuring Gmail integration via IMAP/OAuth2 and local AI through Ollama.
+A cross-platform desktop email client with Gmail (IMAP/OAuth2) and optional local AI via [Ollama](https://ollama.com). Built with Electron and Angular. **All data is stored locally in a SQLite database**; the only remote communication is with your IMAP (and SMTP) server.
+
+**This project was written entirely by AI** — mostly [Claude](https://claude.ai) (Anthropic), with some assistance from other AI coding tools. It serves as a working example of an AI-generated desktop application.
+
+---
+
+## What it does
+
+- **Email**: Connect Gmail accounts via OAuth2; read, search, and manage mail over IMAP. Compose and send with SMTP. **Everything—mail metadata, folders, threads, search index—lives in a local SQLite DB on your machine.** The app talks only to your IMAP/SMTP server; no other servers see your mail.
+- **Operation queue**: Drafts, send, move, flag, and delete are processed through an in-process queue (one at a time per account) so they run in order. The queue is in-memory only and does not persist across app restarts.
+- **Local AI** (optional): If you run [Ollama](https://ollama.com) locally, the client can use it for summarization and other AI features; no data leaves your machine.
+- **Desktop-native**: Runs on Windows, macOS, and Linux. Credentials are stored with the OS (e.g. Windows DPAPI, macOS Keychain). On Windows, an optional native addon restores drag-and-drop for attachments when using recent Electron/Chromium.
+
+---
+
+## How it works (high level)
+
+- **Electron** hosts a **main process** (Node.js) and a **renderer** (Angular in a browser window). They talk only over IPC; the UI never touches the database or network directly.
+- The main process uses a **local SQLite database** (via sql.js) for all storage—mail, folders, threads, search index, settings. The only network communication is with your **IMAP server** (and SMTP for sending). OAuth is used once to obtain tokens; credentials are stored locally with the OS.
+- Mail is synced from the IMAP server into SQLite; the app reads and writes only from the local DB, so it stays responsive and your data stays on your machine.
+
+---
 
 ## Prerequisites
 
-- **Node.js** 20+ (tested with v24)
-- **Yarn** 1.x (`npm install -g yarn`)
-- **Google OAuth2 Client ID** — Create a "Desktop" type client in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-- **Ollama** (optional) — For AI features, install from [ollama.com](https://ollama.com)
+- **Node.js** 20+ (e.g. v24)
+- **Yarn** 1.x: `npm install -g yarn`
+- **Google OAuth2 client** (for Gmail login): See **Google OAuth setup** below for how to get the Client ID and secret and save them in `electron/secrets.ts`.
+- **Ollama** (optional): [ollama.com](https://ollama.com) for local AI features.
 
-## Setup
+---
+
+## Google OAuth setup (client ID & secret)
+
+Gmail login uses Google OAuth 2.0. You need to create a **Desktop** OAuth client and put its credentials in the app's secrets file.
+
+1. Open [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials).
+2. Create an **OAuth 2.0 Client ID** (or use an existing one). Set the application type to **Desktop app**.
+3. Copy the **Client ID** and **Client secret**.
+4. In this repo, credentials are read from **`electron/secrets.ts`** (git-ignored). After `yarn install`, that file is created from `electron/secrets.example.ts` if it doesn't exist. Open `electron/secrets.ts` and set:
+   - `GOOGLE_CLIENT_ID` — your Desktop client's Client ID  
+   - `GOOGLE_CLIENT_SECRET` — your Desktop client's Client secret  
+
+Do not commit `electron/secrets.ts` or put real values in `secrets.example.ts`. Your keys stay only in `secrets.ts`.
+
+---
+
+## Installation & running
+
+### From source
 
 ```bash
-# Install dependencies
+# Clone the repo
+git clone https://github.com/YOUR_USERNAME/mailclient.git
+cd mailclient
+
+# Install dependencies (creates electron/secrets.ts from example if missing)
 yarn install
 
-# Optional: copy .env.example to .env for local dev overrides (e.g. LOG_LEVEL, DATABASE_PATH)
-# OAuth uses a built-in Desktop client ID; no .env required for packaged or dev runs.
+# Add your Google OAuth Client ID and Client secret to electron/secrets.ts (see Google OAuth setup above)
 
-# Optional: rebuild native modules if you add any
-# npx @electron/rebuild
+# Run in development (Angular dev server + Electron)
+yarn electron:dev
 ```
 
-## Development
+For a **packaged build** (installer/portable app):
 
 ```bash
-# Start Angular dev server (browser only, no Electron)
-yarn start
-# Open http://localhost:4200
-
-# Build and run in Electron (dev mode)
-yarn electron:dev
-
-# Build Angular + Electron and run
-yarn electron:start
+yarn package    # Unpacked app in out/
+# or
+yarn make       # Platform installer (e.g. NSIS on Windows, DMG on macOS)
 ```
 
-## Build Scripts
+Output goes to the `out/` directory.
+
+### Windows: drag-and-drop (optional)
+
+On Windows, OS file drag-and-drop for attachments is fixed by a small native addon. To build it:
+
+1. Install **Visual Studio Build Tools** with the “Desktop development with C++” workload, and **Python 3.x**.
+2. From the project root:
+
+```bash
+yarn build:native
+```
+
+Then run or package as above. If you skip this step, the app still runs; only dragging files from the OS into the window won’t work on Windows. macOS and Linux do not need this addon.
+
+---
+
+## Scripts
 
 | Command | Description |
-|---------|-------------|
-| `yarn start` | Start Angular dev server at localhost:4200 |
-| `yarn build` | Build Angular app (development) |
-| `yarn build:prod` | Build Angular app (production) |
-| `yarn build:electron` | Compile Electron main process TypeScript |
-| `yarn build:all` | Build both Angular (prod) and Electron |
-| `yarn electron:dev` | Build Electron + run in dev mode (loads localhost:4200) |
-| `yarn electron:start` | Build everything + run packaged Electron app |
-| `yarn package` | Package app with Electron Forge |
-| `yarn make` | Create distributable installer |
+|--------|-------------|
+| `yarn electron:dev` | Run app in development (hot-reload) |
+| `yarn electron:start` | Build and run packaged app |
+| `yarn package` | Build and output unpacked app to `out/` |
+| `yarn make` | Build platform installer (e.g. `.exe`, `.dmg`) |
+| `yarn test` | Run Angular unit tests |
 
-## Project Structure
+---
 
-```
-latentmail/
-├── electron/               # Electron main process
-│   ├── main.ts            # App entry point, window management
-│   ├── preload.ts         # Context bridge (IPC API)
-│   ├── ipc/               # IPC handler modules
-│   ├── services/          # Backend services (DB, credentials, etc.)
-│   ├── database/          # SQLite schema and Umzug migrations (migrations/)
-│   └── utils/             # Platform utilities
-├── src/                   # Angular renderer process
-│   ├── app/
-│   │   ├── core/          # Services, guards, models
-│   │   ├── features/      # Feature modules (mail, auth, settings, etc.)
-│   │   ├── shared/        # Shared components, directives, pipes
-│   │   └── store/         # NgRx SignalStores
-│   ├── environments/      # Environment configs
-│   └── styles.scss        # Global styles, themes, design tokens
-├── assets/                # Icons, images, sounds
-├── forge.config.ts        # Electron Forge config
-├── tsconfig.electron.json # Electron TypeScript config
-└── angular.json           # Angular workspace config
-```
+## Tech stack (summary)
 
-## Technology Stack
+- **Shell**: Electron  
+- **Frontend**: Angular (standalone components, signals), Angular Material  
+- **State**: NgRx SignalStore  
+- **Backend**: Node.js, SQLite (sql.js), IMAP/SMTP, OAuth2, Electron `safeStorage`  
+- **Build**: Electron Builder  
 
-- **Shell**: Electron 40+
-- **Frontend**: Angular 21+ (standalone components, signals)
-- **UI**: Angular Material + custom SCSS
-- **State**: NgRx SignalStore
-- **Database**: SQLite via sql.js (WASM, in-memory with persist to disk); schema managed by Umzug migrations in `electron/database/migrations/`
-- **Logging**: electron-log
-- **Credentials**: Electron safeStorage API (DPAPI/Keychain)
-- **Build**: Electron Forge
+For detailed architecture, development, and conventions, see [AGENTS.md](AGENTS.md) (written for AI and human contributors).
 
-## Environment Variables
+---
 
-The app uses a **built-in Desktop OAuth client ID** when no custom credentials are set. You can put your own client ID (and client secret) in `electron/secrets.ts` — see `electron/secrets.example.ts` for the template; `yarn install` creates `secrets.ts` from it if missing. For local development you can also override the client ID via `GOOGLE_CLIENT_ID` in the environment or a `.env` file; see [.env.example](.env.example). If you already have an existing `electron/secrets.ts` with only the secret, add `export const GOOGLE_CLIENT_ID = '';` (or your client ID) so the file exports both.
+## License
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GOOGLE_CLIENT_ID` | No | Optional override for OAuth (default: value from `electron/secrets.ts`, or built-in Desktop client ID) |
-| `DATABASE_PATH` | No | Custom SQLite database path (dev override) |
-| `LOG_LEVEL` | No | Log level: debug/info/warn/error (dev override) |
-
-Ollama URL and sync interval are **app settings** (stored in the database and configurable in the UI), not main-process environment variables.
-
-## Native Drag-and-Drop (Windows)
-
-This project includes an optional native C++ NAPI addon that restores OS file drag-and-drop on Windows (fixes a Chromium regression introduced in later Chromium/Electron versions).
-
-Overview:
-
-- On Windows we use a small native addon located at `native/win32-drop-target/`.
-- It revokes Chromium's OLE drop target and accepts OS file drops, forwarding file paths/content to the Electron main process which then sends IPC push events to the renderer.
-
-Building and running (development):
-
-1. Install prerequisites on Windows:
-   - Visual Studio Build Tools with "Desktop development with C++" workload
-   - Python 3.x (required by node-gyp)
-
-2. Build the native addon (Windows only):
-
-```bash
-yarn build:native
-```
-
-3. Run in development:
-
-```bash
-yarn electron:dev
-# The app will load the .node binary from native/win32-drop-target/build/Release/
-```
-
-macOS / Linux:
-
-- No native addon is required — OS drag-and-drop works natively via Chromium on macOS and Linux. `yarn build:native` is a no-op on those platforms and `NativeDropService` skips initialization.
-
-Packaging for production (Windows):
-
-```bash
-# Build the native addon first (Windows CI or dev machine)
-yarn build:native
-# Then package
-yarn package
-```
-
-Notes:
-
-- If the addon is not built or fails to load, the app runs normally; OS explorer drops on Windows will not work (same as current Chromium behavior). A warning is logged.
-- Rebuild the addon when upgrading Electron (must match Electron ABI) or after modifying any C++ source.
+[MIT](LICENSE)
