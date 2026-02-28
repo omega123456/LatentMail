@@ -13,3 +13,15 @@ export function isMacOS(): boolean {
 export function isLinux(): boolean {
   return isPlatform('linux');
 }
+
+export function isArch(arch: NodeJS.Architecture): boolean {
+  return process.arch === arch;
+}
+
+export function isX64(): boolean {
+  return isArch('x64');
+}
+
+export function isArm64(): boolean {
+  return isArch('arm64');
+}

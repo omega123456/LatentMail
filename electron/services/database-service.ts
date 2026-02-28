@@ -2609,6 +2609,174 @@ export class DatabaseService {
     };
   }
 
+  // ---- Embedding tracking operations ----
+
+  /**
+   * Query emails that have not yet been embedded (embedding_hash IS NULL)
+   * and have at least one body (text_body or html_body is not null/empty).
+   *
+   * Ordered by date DESC so the most recently received emails are indexed first,
+   * giving users faster semantic search results for recent mail.
+   *
+   * @param accountId - Account to query for
+   * @param batchSize - Maximum number of emails to return
+   * @returns Array of email records needed for embedding
+   */
+  getEmailsNeedingEmbedding(
+    accountId: number,
+    batchSize: number = 50
+  ): Array<{
+    xGmMsgId: string;
+    accountId: number;
+    subject: string;
+    textBody: string | null;
+    htmlBody: string | null;
+  }> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = this.db.exec(
+      `SELECT x_gm_msgid, account_id, subject, text_body, html_body
+       FROM emails
+       WHERE account_id = :accountId
+         AND embedding_hash IS NULL
+         AND (
+           (text_body IS NOT NULL AND text_body != '')
+           OR
+           (html_body IS NOT NULL AND html_body != '')
+         )
+       ORDER BY date DESC
+       LIMIT :batchSize`,
+      { ':accountId': accountId, ':batchSize': batchSize }
+    );
+
+    if (result.length === 0) {
+      return [];
+    }
+
+    return result[0].values.map((row) => ({
+      xGmMsgId: row[0] as string,
+      accountId: row[1] as number,
+      subject: (row[2] as string) || '',
+      textBody: row[3] as string | null,
+      htmlBody: row[4] as string | null,
+    }));
+  }
+
+  /**
+   * Batch-update embedding_hash for a list of emails identified by x_gm_msgid.
+   * Called after the embedding worker successfully embeds a batch of emails.
+   *
+   * @param accountId - Account ID the emails belong to
+   * @param updates - Array of { xGmMsgId, hash } pairs to update
+   */
+  batchUpdateEmbeddingHash(
+    accountId: number,
+    updates: Array<{ xGmMsgId: string; hash: string }>
+  ): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    if (updates.length === 0) {
+      return;
+    }
+
+    // Use sql.js transaction pattern
+    this.db.run('BEGIN');
+    try {
+      for (const update of updates) {
+        this.db.run(
+          'UPDATE emails SET embedding_hash = :hash WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+          { ':hash': update.hash, ':accountId': accountId, ':xGmMsgId': update.xGmMsgId }
+        );
+      }
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+
+    this.scheduleSave();
+  }
+
+  /**
+   * Count embeddable vs. embedded emails for an account.
+   * An email is "embeddable" if it has at least one body.
+   * An email is "embedded" if embedding_hash is not NULL.
+   *
+   * @param accountId - Account ID to count for
+   * @returns { total: number of embeddable emails, embedded: number of embedded emails }
+   */
+  countEmbeddingStatus(accountId: number): { total: number; embedded: number } {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const totalResult = this.db.exec(
+      `SELECT COUNT(*) FROM emails
+       WHERE account_id = :accountId
+         AND (
+           (text_body IS NOT NULL AND text_body != '')
+           OR
+           (html_body IS NOT NULL AND html_body != '')
+         )`,
+      { ':accountId': accountId }
+    );
+
+    const embeddedResult = this.db.exec(
+      `SELECT COUNT(*) FROM emails
+       WHERE account_id = :accountId
+         AND embedding_hash IS NOT NULL
+         AND (
+           (text_body IS NOT NULL AND text_body != '')
+           OR
+           (html_body IS NOT NULL AND html_body != '')
+         )`,
+      { ':accountId': accountId }
+    );
+
+    const total = (totalResult.length > 0 && totalResult[0].values.length > 0)
+      ? (totalResult[0].values[0][0] as number) : 0;
+    const embedded = (embeddedResult.length > 0 && embeddedResult[0].values.length > 0)
+      ? (embeddedResult[0].values[0][0] as number) : 0;
+
+    return { total, embedded };
+  }
+
+  /**
+   * Reset all embedding_hash values to NULL for an account.
+   * Called when the user switches embedding models — a full re-index is required.
+   *
+   * @param accountId - Account ID to reset embedding hashes for
+   */
+  resetEmbeddingHashes(accountId: number): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run(
+      'UPDATE emails SET embedding_hash = NULL WHERE account_id = :accountId',
+      { ':accountId': accountId }
+    );
+    this.scheduleSave();
+    log.info(`[DatabaseService] Reset all embedding hashes for account ${accountId}`);
+  }
+
+  /**
+   * Reset all embedding_hash values to NULL across all accounts.
+   * Used when performing a full global re-index.
+   */
+  resetAllEmbeddingHashes(): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run('UPDATE emails SET embedding_hash = NULL');
+    this.scheduleSave();
+    log.info('[DatabaseService] Reset all embedding hashes globally');
+  }
+
   // ---- Close ----
 
   close(): void {
