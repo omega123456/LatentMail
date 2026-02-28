@@ -108,21 +108,25 @@ This is an **Electron + Angular** desktop email client with a strict IPC-based s
 All main-renderer communication flows through the IPC bridge defined in `electron/preload.ts`:
 
 1. **Renderer → Main**: Angular services call `ElectronService` methods → IPC invoke → handlers in `electron/ipc/*-ipc.ts`
-2. **Main → Renderer**: Main process emits events via `BrowserWindow.webContents.send()` → renderer listens via `electronAPI.on()`
+2. **Main → Renderer**: Main process emits events via `BrowserWindow.webContents.send()` → renderer listens via `electronAPI.on()`. Channel names are in `IPC_EVENTS` in `ipc-channels.ts` (e.g. `mail:sync`, `queue:update`, `os-file:drop`).
 3. **Response Format**: All IPC handlers return `IpcResponse<T>` with `{ success, data?, error? }`
 
 **Key IPC Modules**:
-- `mail-ipc.ts` - Email operations (fetch, search, move, flag, delete)
+- `mail-ipc.ts` - Email operations (fetch, search, move, flag, delete); label CRUD (create, delete, update-color)
 - `queue-ipc.ts` - Mail queue operations (draft, send, retry)
 - `auth-ipc.ts` - Google OAuth login/logout
 - `ai-ipc.ts` - Ollama AI integration
 - `compose-ipc.ts` - Contact search, signatures
-- `db-ipc.ts` - Settings persistence
-- `system-ipc.ts` - Window controls (minimize, maximize, close)
+- `db-ipc.ts` - Settings and filters persistence
+- `filter-ipc.ts` - Apply filters (filter:apply-all)
+- `attachment-ipc.ts` - Attachment download, content, draft attachments
+- `logger-ipc.ts` - Recent log entries (for settings/debug)
+- `bimi-ipc.ts` - BIMI sender logo (domain DNS)
+- `system-ipc.ts` - Window controls (minimize, maximize, close), platform, zoom
 
 ### Database Schema (SQLite via sql.js)
 
-**Migrations**: Schema is managed by **Umzug** (file-based migrations). Migrations live in `electron/database/migrations/`; executed migrations are recorded in the `schema_migrations` table. On app start, `DatabaseService.initialize()` runs `umzug.up()`. To add schema changes: add a new migration file (e.g. `002_add_foo.ts`) with `up` (and optionally `down`) receiving `{ context: { db, databaseService } }`.
+**Migrations**: Schema is managed by **Umzug** (file-based migrations). Migrations live in `electron/database/migrations/` (e.g. `001_initial_schema.ts`, `002_remove_gmail_parent_label.ts`); executed migrations are recorded in the `schema_migrations` table. On app start, `DatabaseService.initialize()` runs `umzug.up()`. To add schema changes: add a new migration file with `up` (and optionally `down`) receiving `{ context }: { context: MigrationContext }` — the `MigrationContext` type is exported from `001_initial_schema.ts` and has `db` and `databaseService`.
 
 **Core tables**:
 - `accounts` - Gmail accounts (email, tokens stored separately in OS keychain)
@@ -156,6 +160,7 @@ Angular uses **NgRx SignalStore** (not traditional NgRx Store):
 - `queue.store.ts` - Mail queue status
 - `settings.store.ts` - User preferences
 - `ui.store.ts` - UI state (sidebar collapsed, theme, layout)
+- `ai.store.ts` - AI state (Ollama connection, models, summarize/compose/search/filter UI)
 
 Stores are used in components via `inject()` and expose signals/computed values.
 
@@ -192,6 +197,8 @@ The app uses a **persistent, resumable queue** for all mail operations (`MailQue
 - `SyncService` - Background sync orchestrator (syncs all accounts every 5min, prioritizes INBOX/Sent/Drafts)
 - `MailQueueService` - Persistent queue processor with folder locking
 - `FolderLockManager` - Per-folder mutex to prevent concurrent IMAP operations
+- `BodyPrefetchService` - Prefetches email bodies for threads (reduces latency when opening messages)
+- `NativeDropService` - Loads Win32 drag-and-drop addon, forwards OS file drops to renderer (Windows only)
 
 ### Angular Components Structure
 
@@ -208,6 +215,9 @@ The app uses a **persistent, resumable queue** for all mail operations (`MailQue
 - `ThemeService` - Material theme switching (light/dark)
 - `ToastService` - Snackbar notifications
 - `KeyboardService` - Global keyboard shortcuts
+- `ZoomService` - Window zoom level (system:set-zoom / system:get-zoom)
+- `LayoutService` - Layout state for mail/compose
+- `CommandRegistryService` - Global command palette / shortcuts
 
 ## Key Development Patterns
 
@@ -221,8 +231,8 @@ The app uses a **persistent, resumable queue** for all mail operations (`MailQue
 
 ### Database Schema Migrations (Umzug)
 
-1. Add a new file under `electron/database/migrations/` (e.g. `002_add_foo.ts`) with named exports `up` and optionally `down`.
-2. Migration functions receive `{ context }: { context: { db, databaseService } }`. Use `context.db.run()` or `context.db.exec()` for SQL; use **named placeholders** (`:name`) and objects for parameters.
+1. Add a new file under `electron/database/migrations/` (e.g. `008_add_foo.ts`) with named exports `up` and optionally `down`.
+2. Migration functions receive `{ context }: { context: MigrationContext }` (import `MigrationContext` from `./001_initial_schema`). Use `context.db.run()` or `context.db.exec()` for SQL; use **named placeholders** (`:name`) and objects for parameters.
 3. Run `yarn build:electron` so the new migration is compiled to `dist-electron/database/migrations/*.js`. Migrations run automatically on app start via `umzug.up()` in `DatabaseService.initialize()`.
 4. The `schema_migrations` table records executed migration names; no manual version bump needed.
 
@@ -271,7 +281,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 - **Use external template files** for all components: `templateUrl: './<name>.component.html'`. Do **not** use inline `template: \`...\`` in `@Component()`. Place the `.html` file in the same directory as the component (e.g. `compose-window.component.html` next to `compose-window.component.ts`).
 - **Use external style files** for all components: `styleUrl: './<name>.component.scss'`. Do **not** use inline `styles: [\`...\`]` in `@Component()`. Place the `.scss` file in the same directory as the component and follow SASS nesting conventions.
-- Use standalone components (no NgModules except `AppModule`)
+- Use standalone components; app is bootstrapped with `bootstrapApplication(AppComponent, appConfig)` (no NgModules)
 - Inject services via `inject()` function, not constructor DI
 - Use signals and `computed()` for reactive state
 - Use `OnPush` change detection (default for all components)
