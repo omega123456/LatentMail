@@ -1660,6 +1660,26 @@ export class MailQueueService {
     if (affectedFolders.size > 0) {
       this.emitFolderUpdated(item.accountId, Array.from(affectedFolders), 'sync', 'mixed');
     }
+
+    // Enqueue body-fetch after sync completes so we're working against freshly-upserted rows.
+    try {
+      const prefetchService = BodyPrefetchService.getInstance();
+      const emailsNeedingBodies = prefetchService.getEmailsNeedingBodies(item.accountId, 50);
+      if (emailsNeedingBodies.length > 0) {
+        const dedupKey = `body-fetch:${item.accountId}`;
+        this.enqueue(
+          item.accountId,
+          'body-fetch',
+          { emails: emailsNeedingBodies.map((email) => ({ xGmMsgId: email.xGmMsgId, xGmThrid: email.xGmThrid })) },
+          `Prefetch ${emailsNeedingBodies.length} email bodies`,
+          undefined,
+          dedupKey,
+        );
+        log.debug(`[MailQueue] processSyncAllMail: enqueued body-fetch for account ${item.accountId} (${emailsNeedingBodies.length} emails)`);
+      }
+    } catch (bodyFetchErr) {
+      log.warn(`[MailQueue] processSyncAllMail: failed to enqueue body-fetch for account ${item.accountId}:`, bodyFetchErr);
+    }
   }
 
   // -----------------------------------------------------------------------
