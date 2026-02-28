@@ -1,11 +1,15 @@
+export function isPlatform(platform: NodeJS.Platform): boolean {
+  return process.platform === platform;
+}
+
 export function isWindows(): boolean {
-  return process.platform === 'win32';
+  return isPlatform('win32');
 }
 
 export function isMacOS(): boolean {
-  return process.platform === 'darwin';
+  return isPlatform('darwin');
 }
 
 export function isLinux(): boolean {
-  return process.platform === 'linux';
+  return isPlatform('linux');
 }

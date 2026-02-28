@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
+import { isMacOS } from '../utils/platform';
 
 const log = LoggerService.getInstance();
 
@@ -121,7 +122,7 @@ export class TrayService {
       this.tray.destroy();
       this.tray = null;
     }
-    if (process.platform === 'darwin') {
+    if (isMacOS()) {
       try {
         app.setBadgeCount(0);
       } catch {
@@ -163,7 +164,7 @@ export class TrayService {
     const unifiedPath = path.join(appPath, 'assets', 'icons', 'tray-icon.png');
     if (fs.existsSync(unifiedPath)) {
       const image = nativeImage.createFromPath(unifiedPath);
-      if (process.platform === 'darwin') {
+      if (isMacOS()) {
         image.setTemplateImage(true);
       }
       return image;
@@ -180,7 +181,7 @@ export class TrayService {
         const buffer2x = fs.readFileSync(path2x);
         image.addRepresentation({ scaleFactor: 2.0, buffer: buffer2x });
       }
-      if (process.platform === 'darwin') {
+      if (isMacOS()) {
         image.setTemplateImage(true);
       }
       log.info(`TrayService: using ${baseName} icon`);
@@ -241,7 +242,7 @@ export class TrayService {
 
     const image = nativeImage.createFromBuffer(composited);
 
-    if (process.platform === 'darwin') {
+    if (isMacOS()) {
       image.setTemplateImage(false); // dot must stay coloured, not template
     }
 
@@ -252,7 +253,7 @@ export class TrayService {
 
   private async updateBadge(count: number): Promise<void> {
     // macOS: update Dock badge count
-    if (process.platform === 'darwin') {
+    if (isMacOS()) {
       try {
         app.setBadgeCount(count);
       } catch (err) {

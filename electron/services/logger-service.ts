@@ -2,6 +2,7 @@ import { app } from 'electron';
 import log from 'electron-log/main';
 import fs from 'fs';
 import path from 'path';
+import { isMacOS } from '../utils/platform';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -72,7 +73,7 @@ export class LoggerService {
    * Returns the directory where daily log files are written (same rules as electron-log).
    */
   private getLogDir(): string {
-    return process.platform === 'darwin'
+    return isMacOS()
       ? path.join(app.getPath('home'), 'Library', 'Logs', app.getName())
       : path.join(app.getPath('userData'), 'logs');
   }

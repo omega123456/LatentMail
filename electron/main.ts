@@ -13,6 +13,7 @@ import { MailQueueService } from './services/mail-queue-service';
 import { NativeDropService } from './services/native-drop-service';
 import { TrayService } from './services/tray-service';
 import { getAvatarCacheDir } from './services/avatar-cache-service';
+import { isMacOS, isWindows } from './utils/platform';
 
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
@@ -162,16 +163,16 @@ if (runApp) {
 }
 
 function createMainWindow(): void {
-  const isWindows = process.platform === 'win32';
-  const startInTrayOnLaunch = isWindows && getWindowsBooleanSetting('startMinimized', false);
+  const isWindowsPlatform = isWindows();
+  const startInTrayOnLaunch = isWindowsPlatform && getWindowsBooleanSetting('startMinimized', false);
 
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    frame: !isWindows, // Frameless on Windows for custom titlebar
-    titleBarStyle: isWindows ? undefined : 'hiddenInset', // macOS native titlebar with inset
+    frame: !isWindowsPlatform, // Frameless on Windows for custom titlebar
+    titleBarStyle: isWindowsPlatform ? undefined : 'hiddenInset', // macOS native titlebar with inset
     show: false,
     icon: path.join(__dirname, '../assets/icons/icon.png'),
     webPreferences: {
@@ -234,7 +235,7 @@ function createMainWindow(): void {
     if (mainWindow) {
       saveWindowState(mainWindow);
     }
-    if (process.platform === 'win32' && !quitting) {
+    if (isWindows() && !quitting) {
       try {
         const dbService = DatabaseService.getInstance();
         const closeToTrayRaw = dbService.getSetting('closeToTray');
@@ -268,7 +269,7 @@ function createMainWindow(): void {
 }
 
 function getWindowsBooleanSetting(settingKey: string, defaultValue: boolean): boolean {
-  if (process.platform !== 'win32') {
+  if (!isWindows()) {
     return defaultValue;
   }
 
@@ -367,7 +368,7 @@ app.on('before-quit', async (event) => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (!isMacOS()) {
     app.quit();
   }
 });
