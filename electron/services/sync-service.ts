@@ -1142,7 +1142,7 @@ export class SyncService {
       if (emails.length === 1) {
         const email = emails[0];
         title = email.sender;
-        body = email.subject + (email.snippet ? '\n' + email.snippet.substring(0, 100) : '');
+        body = email.subject || '(no subject)';
         clickThreadId = email.xGmThrid;
       } else {
         title = `${emails.length} new emails`;
