@@ -5,6 +5,7 @@ import { DatabaseService } from './database-service';
 const log = LoggerService.getInstance();
 import { SyncService } from './sync-service';
 import { MailQueueService } from './mail-queue-service';
+import { BodyPrefetchService } from './body-prefetch-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 /**
@@ -29,6 +30,12 @@ export class SyncQueueBridge {
 
   /** Background sync timer handle. */
   private syncInterval: ReturnType<typeof setInterval> | null = null;
+
+  /** Body-prefetch timer handle (interval, offset by half the sync interval). */
+  private bodyPrefetchInterval: ReturnType<typeof setInterval> | null = null;
+
+  /** Timeout used to delay the start of the body-prefetch interval (offset timer). */
+  private bodyPrefetchOffsetTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {}
 
@@ -67,6 +74,20 @@ export class SyncQueueBridge {
 
     log.info(`[SyncQueueBridge] Background sync started with ${interval / 1000}s interval`);
 
+    // Start body-prefetch timer offset by half the sync interval so it fires at the
+    // midpoint between metadata sync ticks, reducing IMAP connection contention.
+    this.bodyPrefetchOffsetTimeout = setTimeout(() => {
+      this.bodyPrefetchOffsetTimeout = null;
+      this.onBodyPrefetchTick().catch((err) => {
+        log.error('[SyncQueueBridge] Body-prefetch tick (initial) failed:', err);
+      });
+      this.bodyPrefetchInterval = setInterval(() => {
+        this.onBodyPrefetchTick().catch((err) => {
+          log.error('[SyncQueueBridge] Body-prefetch tick failed:', err);
+        });
+      }, interval);
+    }, interval / 2);
+
     // Kick off an initial sync tick, then start IDLE after queue items are enqueued.
     this.onSyncTick()
       .then(() => {
@@ -88,6 +109,15 @@ export class SyncQueueBridge {
       clearInterval(this.syncInterval);
       this.syncInterval = null;
       log.info('[SyncQueueBridge] Background sync stopped');
+    }
+    if (this.bodyPrefetchOffsetTimeout) {
+      clearTimeout(this.bodyPrefetchOffsetTimeout);
+      this.bodyPrefetchOffsetTimeout = null;
+    }
+    if (this.bodyPrefetchInterval) {
+      clearInterval(this.bodyPrefetchInterval);
+      this.bodyPrefetchInterval = null;
+      log.info('[SyncQueueBridge] Body-prefetch timer stopped');
     }
   }
 
@@ -228,6 +258,42 @@ export class SyncQueueBridge {
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
+
+  /**
+   * Called on each body-prefetch timer tick (offset by half the sync interval).
+   * Queries the DB for emails with missing bodies and enqueues body-fetch items
+   * per account. Uses dedup key `body-fetch:{accountId}` to prevent duplicates.
+   */
+  private async onBodyPrefetchTick(): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const queue = MailQueueService.getInstance();
+    const prefetchService = BodyPrefetchService.getInstance();
+    const accounts = db.getAccounts();
+
+    for (const account of accounts) {
+      if (account.needs_reauth) {
+        continue;
+      }
+      try {
+        const emails = prefetchService.getEmailsNeedingBodies(account.id, 50);
+        if (emails.length === 0) {
+          continue;
+        }
+        const dedupKey = `body-fetch:${account.id}`;
+        queue.enqueue(
+          account.id,
+          'body-fetch',
+          { emails: emails.map((email) => ({ xGmMsgId: email.xGmMsgId, xGmThrid: email.xGmThrid })) },
+          `Prefetch ${emails.length} email bodies`,
+          undefined,
+          dedupKey,
+        );
+        log.debug(`[SyncQueueBridge] onBodyPrefetchTick: enqueued body-fetch for account ${account.id} (${emails.length} emails)`);
+      } catch (err) {
+        log.warn(`[SyncQueueBridge] onBodyPrefetchTick: failed for account ${account.id}:`, err);
+      }
+    }
+  }
 
   /**
    * Called on each background sync timer tick.

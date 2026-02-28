@@ -2288,6 +2288,107 @@ export class DatabaseService {
     }));
   }
 
+  // ---- Body prefetch helpers ----
+
+  /**
+   * Query emails with missing bodies (text_body AND html_body both empty/null).
+   *
+   * Periodic timer path (sinceMinutes omitted): uses a 7-day window on both `date`
+   * and `updated_at` so recently-received AND recently-modified emails are covered.
+   *
+   * IDLE path (sinceMinutes provided): narrows to `updated_at >= :sinceTime` only,
+   * targeting only emails that were just synced.
+   *
+   * Returns newest-first so the most recent emails get bodies first.
+   */
+  getEmailsNeedingBodies(
+    accountId: number,
+    limit: number = 50,
+    sinceMinutes?: number,
+  ): Array<{ accountId: number; xGmMsgId: string; xGmThrid: string }> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    let sql: string;
+    let params: Record<string, number | string>;
+
+    // Use SQLite datetime() functions for time window comparisons to avoid format
+    // mismatches: `updated_at` is stored as `datetime('now')` format (YYYY-MM-DD HH:MM:SS),
+    // while JS `toISOString()` produces ISO 8601 (with T and Z). SQLite's lexicographic
+    // string comparison would give incorrect results across these two formats.
+
+    if (sinceMinutes !== undefined) {
+      sql = `
+        SELECT account_id, x_gm_msgid, x_gm_thrid
+        FROM emails
+        WHERE account_id = :accountId
+          AND (text_body IS NULL OR text_body = '')
+          AND (html_body IS NULL OR html_body = '')
+          AND updated_at >= datetime('now', '-' || :sinceMinutes || ' minutes')
+        ORDER BY date DESC
+        LIMIT :limit
+      `;
+      params = { ':accountId': accountId, ':sinceMinutes': sinceMinutes, ':limit': limit };
+    } else {
+      sql = `
+        SELECT account_id, x_gm_msgid, x_gm_thrid
+        FROM emails
+        WHERE account_id = :accountId
+          AND (text_body IS NULL OR text_body = '')
+          AND (html_body IS NULL OR html_body = '')
+          AND (date >= datetime('now', '-7 days') OR updated_at >= datetime('now', '-7 days'))
+        ORDER BY date DESC
+        LIMIT :limit
+      `;
+      params = { ':accountId': accountId, ':limit': limit };
+    }
+
+    const result = this.db.exec(sql, params);
+    if (result.length === 0) {
+      return [];
+    }
+    return result[0].values.map((row) => ({
+      accountId: row[0] as number,
+      xGmMsgId: row[1] as string,
+      xGmThrid: row[2] as string,
+    }));
+  }
+
+  /**
+   * Update only the body fields (text_body, html_body) for an existing email.
+   * The WHERE clause guards against overwriting a body that was fetched by another
+   * path (e.g. syncThread) between the query and this update — making it idempotent.
+   * Does NOT modify any other columns (flags, snippet, labels, etc.).
+   */
+  updateEmailBodyOnly(
+    accountId: number,
+    xGmMsgId: string,
+    textBody: string,
+    htmlBody: string,
+  ): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    this.db.run(
+      `UPDATE emails
+       SET text_body = :textBody,
+           html_body = :htmlBody,
+           updated_at = datetime('now')
+       WHERE account_id = :accountId
+         AND x_gm_msgid = :xGmMsgId
+         AND (text_body IS NULL OR text_body = '')
+         AND (html_body IS NULL OR html_body = '')`,
+      {
+        ':textBody': textBody || null,
+        ':htmlBody': htmlBody || null,
+        ':accountId': accountId,
+        ':xGmMsgId': xGmMsgId,
+      },
+    );
+    this.scheduleSave();
+  }
+
   // ---- Attachment CRUD ----
 
   /**

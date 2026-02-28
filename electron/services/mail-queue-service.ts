@@ -15,6 +15,7 @@ import { buildDraftMime } from './draft-mime';
 import { executeFetchOlder } from './fetch-older-handler';
 import { formatParticipant, formatParticipantList } from '../utils/format-participant';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
+import { BodyPrefetchService } from './body-prefetch-service';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,7 +34,8 @@ export type QueueOperationType =
   | 'sync-folder'
   | 'sync-thread'
   | 'sync-allmail'
-  | 'fetch-older';
+  | 'fetch-older'
+  | 'body-fetch';
 
 export type QueueItemStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
@@ -169,6 +171,14 @@ export interface DeleteLabelPayload {
   gmailLabelId: string;
 }
 
+export interface BodyFetchPayload {
+  /**
+   * Batch of emails whose bodies should be fetched from IMAP.
+   * accountId is on QueueItem.accountId — not duplicated here.
+   */
+  emails: Array<{ xGmMsgId: string; xGmThrid: string }>;
+}
+
 export type QueuePayload =
   | DraftPayload
   | DraftUpdatePayload
@@ -182,7 +192,8 @@ export type QueuePayload =
   | SyncFolderPayload
   | SyncThreadPayload
   | SyncAllMailPayload
-  | FetchOlderPayload;
+  | FetchOlderPayload
+  | BodyFetchPayload;
 
 export interface ServerIds {
   xGmMsgId: string;
@@ -595,6 +606,9 @@ export class MailQueueService {
         case 'delete-label':
           await this.processDeleteLabel(item);
           break;
+        case 'body-fetch':
+          await this.processBodyFetch(item);
+          break;
         default:
           throw new Error(`Unknown operation type: ${(item as QueueItem).type}`);
       }
@@ -602,7 +616,7 @@ export class MailQueueService {
       // Best-effort post-operation fetch: confirm server state and update local DB.
       // Failures are logged as warnings — the IMAP action already succeeded.
       // Sync and fetch-older operations handle their own post-processing inside their worker methods.
-      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older' && item.type !== 'add-labels' && item.type !== 'remove-labels' && item.type !== 'delete-label') {
+      if (item.type !== 'sync-folder' && item.type !== 'sync-thread' && item.type !== 'sync-allmail' && item.type !== 'fetch-older' && item.type !== 'add-labels' && item.type !== 'remove-labels' && item.type !== 'delete-label' && item.type !== 'body-fetch') {
         try {
           await this.postOpFetch(item);
         } catch (fetchErr) {
@@ -624,7 +638,7 @@ export class MailQueueService {
 
       // Sync and fetch-older operations fail immediately on any error — no retry/backoff.
       // Rationale: network blips are transient; the next timer tick or user scroll re-enqueues.
-      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older' || item.type === 'add-labels' || item.type === 'remove-labels') {
+      if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older' || item.type === 'add-labels' || item.type === 'remove-labels' || item.type === 'body-fetch') {
         item.status = 'failed';
         item.error = errMsg;
         item.completedAt = new Date().toISOString();
@@ -1300,6 +1314,21 @@ export class MailQueueService {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Body-fetch worker
+  // -----------------------------------------------------------------------
+
+  /**
+   * Process a body-fetch queue item.
+   * Delegates to BodyPrefetchService.fetchAndStoreBodies() which resolves UIDs,
+   * fetches bodies from [Gmail]/All Mail, and updates the DB.
+   */
+  private async processBodyFetch(item: QueueItem): Promise<void> {
+    const payload = item.payload as BodyFetchPayload;
+    const prefetchService = BodyPrefetchService.getInstance();
+    await prefetchService.fetchAndStoreBodies(item.accountId, payload.emails);
+  }
+
   private resolveSourceFoldersForMove(
     payload: MovePayload,
   ): string[] {
@@ -1561,6 +1590,36 @@ export class MailQueueService {
     // Emit folder-updated event so renderer reloads the folder list and thread list.
     if (result.folderChanged) {
       this.emitFolderUpdated(item.accountId, [payload.folder], 'sync', result.changeType, result.changeCount);
+    }
+
+    // After IDLE-triggered INBOX sync with new messages, enqueue body-fetch for freshly-synced
+    // emails so their bodies are pre-loaded before the user clicks the thread.
+    // Guard: only for IDLE-triggered INBOX syncs (showNotifications === true) with new messages.
+    if (
+      payload.folder === 'INBOX' &&
+      payload.showNotifications === true &&
+      result.folderChanged &&
+      (result.changeType === 'new_messages' || result.changeType === 'mixed')
+    ) {
+      try {
+        const prefetchService = BodyPrefetchService.getInstance();
+        // Use sinceMinutes: 5 to target only emails synced in the last 5 minutes.
+        const emailsNeedingBodies = prefetchService.getEmailsNeedingBodies(item.accountId, 50, 5);
+        if (emailsNeedingBodies.length > 0) {
+          const dedupKey = `body-fetch-idle:${item.accountId}`;
+          this.enqueue(
+            item.accountId,
+            'body-fetch',
+            { emails: emailsNeedingBodies.map((email) => ({ xGmMsgId: email.xGmMsgId, xGmThrid: email.xGmThrid })) },
+            `Prefetch ${emailsNeedingBodies.length} new email bodies`,
+            undefined,
+            dedupKey,
+          );
+          log.debug(`[MailQueue] processSyncFolder: enqueued IDLE body-fetch for account ${item.accountId} (${emailsNeedingBodies.length} emails)`);
+        }
+      } catch (idleBodyFetchErr) {
+        log.warn(`[MailQueue] processSyncFolder: failed to enqueue IDLE body-fetch for account ${item.accountId}:`, idleBodyFetchErr);
+      }
     }
   }
 

@@ -1,103 +1,235 @@
 <div class="queue-settings">
-  <h2>Mail Operation Queue</h2>
-  <p class="subtitle">View and manage queued mail operations.</p>
+  <h2>Queue Monitor</h2>
+  <p class="subtitle">View and manage queued mail operations and background body prefetch jobs.</p>
 
-  <!-- Statistics card -->
-  <div class="stats-card">
-    <div class="stat">
-      <span class="material-symbols-outlined stat-icon pending">hourglass_empty</span>
-      <span class="stat-value">{{ queueStore.pendingCount() }}</span>
-      <span class="stat-label">Pending</span>
-    </div>
-    <div class="stat">
-      <span class="material-symbols-outlined stat-icon processing">autorenew</span>
-      <span class="stat-value">{{ queueStore.processingCount() }}</span>
-      <span class="stat-label">Processing</span>
-    </div>
-    <div class="stat">
-      <span class="material-symbols-outlined stat-icon completed">check_circle</span>
-      <span class="stat-value">{{ queueStore.completedCount() }}</span>
-      <span class="stat-label">Done</span>
-    </div>
-    <div class="stat">
-      <span class="material-symbols-outlined stat-icon failed">error</span>
-      <span class="stat-value">{{ queueStore.failedCount() }}</span>
-      <span class="stat-label">Failed</span>
-    </div>
-  </div>
+  <mat-tab-group animationDuration="150ms" class="queue-tabs">
 
-  <!-- Action buttons -->
-  <div class="actions">
-    @if (queueStore.failedCount() > 0) {
-      <button mat-stroked-button color="warn" (click)="retryAll()">
-        <span class="material-symbols-outlined">refresh</span>
-        Retry All Failed
-      </button>
-    }
-    @if (queueStore.completedCount() > 0) {
-      <button mat-stroked-button (click)="clearCompleted()">
-        <span class="material-symbols-outlined">clear_all</span>
-        Clear Completed
-      </button>
-    }
-  </div>
-
-  <!-- Queue items -->
-  @if (queueStore.hasItems()) {
-    <div class="queue-list-container">
-      <div class="queue-list">
-        @for (item of paginatedItems(); track item.queueId) {
-        <div class="queue-item" [class]="'status-' + item.status">
-          <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
-          <div class="item-info">
-            <div class="item-description">{{ item.description }}</div>
-            @if (item.status === 'failed' && item.error) {
-              <div class="item-error">{{ item.error }}</div>
-            }
-            @if (item.status === 'completed' && item.error) {
-              <div class="item-error">{{ item.error }}</div>
-            }
-          </div>
-          <span class="status-badge" [class]="'badge-' + item.status">
-            {{ itemStatusLabel(item) }}
-          </span>
-          <span class="item-time">{{ relativeTime(item.createdAt) }}</span>
-          @if (item.status === 'failed') {
-            <div class="item-actions">
-              <button mat-icon-button (click)="retry(item.queueId)" title="Retry">
-                <span class="material-symbols-outlined">refresh</span>
-              </button>
-              <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
-                <span class="material-symbols-outlined">close</span>
-              </button>
-            </div>
+    <!-- ====================================================================
+         Tab 1 — Mail Operations
+    ===================================================================== -->
+    <mat-tab>
+      <ng-template mat-tab-label>
+        <span class="tab-label">
+          <span class="material-symbols-outlined tab-icon">mail</span>
+          Mail Operations
+          @if (mailActiveCount() > 0) {
+            <span class="tab-badge active">{{ mailActiveCount() }}</span>
           }
-          @if (item.status === 'cancelled') {
-            <div class="item-actions">
-              <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
-                <span class="material-symbols-outlined">close</span>
-              </button>
-            </div>
+          @if (mailFailedCount() > 0) {
+            <span class="tab-badge failed">{{ mailFailedCount() }}</span>
+          }
+        </span>
+      </ng-template>
+
+      <div class="tab-content">
+        <!-- Stats -->
+        <div class="stats-card">
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon pending">hourglass_empty</span>
+            <span class="stat-value">{{ mailPendingCount() }}</span>
+            <span class="stat-label">Pending</span>
+          </div>
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon processing">autorenew</span>
+            <span class="stat-value">{{ mailProcessingCount() }}</span>
+            <span class="stat-label">Processing</span>
+          </div>
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon completed">check_circle</span>
+            <span class="stat-value">{{ mailCompletedCount() }}</span>
+            <span class="stat-label">Done</span>
+          </div>
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon failed">error</span>
+            <span class="stat-value">{{ mailFailedCount() }}</span>
+            <span class="stat-label">Failed</span>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+          @if (mailFailedCount() > 0) {
+            <button mat-stroked-button color="warn" (click)="retryAll()">
+              <span class="material-symbols-outlined">refresh</span>
+              Retry All Failed
+            </button>
+          }
+          @if (mailCompletedCount() > 0) {
+            <button mat-stroked-button (click)="clearCompleted()">
+              <span class="material-symbols-outlined">clear_all</span>
+              Clear Completed
+            </button>
           }
         </div>
+
+        <!-- Queue list -->
+        @if (sortedMailItems().length > 0) {
+          <div class="queue-list-container">
+            <div class="queue-list">
+              @for (item of paginatedMailItems(); track item.queueId) {
+                <div class="queue-item" [class]="'status-' + item.status">
+                  <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
+                  <div class="item-info">
+                    <div class="item-description">{{ item.description }}</div>
+                    @if (item.status === 'failed' && item.error) {
+                      <div class="item-error">{{ item.error }}</div>
+                    }
+                    @if (item.status === 'completed' && item.error) {
+                      <div class="item-error">{{ item.error }}</div>
+                    }
+                  </div>
+                  <span class="status-badge" [class]="'badge-' + item.status">
+                    {{ itemStatusLabel(item) }}
+                  </span>
+                  <span class="item-time">{{ relativeTime(item.createdAt) }}</span>
+                  @if (item.status === 'failed') {
+                    <div class="item-actions">
+                      <button mat-icon-button (click)="retry(item.queueId)" title="Retry">
+                        <span class="material-symbols-outlined">refresh</span>
+                      </button>
+                      <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
+                        <span class="material-symbols-outlined">close</span>
+                      </button>
+                    </div>
+                  }
+                  @if (item.status === 'cancelled') {
+                    <div class="item-actions">
+                      <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
+                        <span class="material-symbols-outlined">close</span>
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+            @if (sortedMailItems().length > mailPageSize()) {
+              <mat-paginator
+                [length]="sortedMailItems().length"
+                [pageSize]="mailPageSize()"
+                [pageIndex]="mailPageIndex()"
+                [pageSizeOptions]="pageSizeOptions"
+                (page)="onMailPage($event)"
+                class="queue-paginator">
+              </mat-paginator>
+            }
+          </div>
+        } @else {
+          <div class="empty-state">
+            <span class="material-symbols-outlined empty-icon">check_circle</span>
+            <p>No pending operations</p>
+            <p class="empty-sub">All mail operations have been processed.</p>
+          </div>
         }
       </div>
-      @if (sortedItems().length > pageSize()) {
-        <mat-paginator
-          [length]="sortedItems().length"
-          [pageSize]="pageSize()"
-          [pageIndex]="pageIndex()"
-          [pageSizeOptions]="pageSizeOptions"
-          (page)="onPage($event)"
-          class="queue-paginator">
-        </mat-paginator>
-      }
-    </div>
-  } @else {
-    <div class="empty-state">
-      <span class="material-symbols-outlined empty-icon">check_circle</span>
-      <p>No pending operations</p>
-      <p class="empty-sub">All mail operations have been processed.</p>
-    </div>
-  }
+    </mat-tab>
+
+    <!-- ====================================================================
+         Tab 2 — Body Prefetch
+    ===================================================================== -->
+    <mat-tab>
+      <ng-template mat-tab-label>
+        <span class="tab-label">
+          <span class="material-symbols-outlined tab-icon">download</span>
+          Body Prefetch
+          @if (prefetchActiveCount() > 0) {
+            <span class="tab-badge active">{{ prefetchActiveCount() }}</span>
+          }
+          @if (prefetchFailedCount() > 0) {
+            <span class="tab-badge failed">{{ prefetchFailedCount() }}</span>
+          }
+        </span>
+      </ng-template>
+
+      <div class="tab-content">
+        <p class="tab-description">
+          Background jobs that proactively cache email bodies so threads open instantly.
+          Jobs run every 5 minutes and after new mail arrives via IDLE.
+        </p>
+
+        <!-- Stats -->
+        <div class="stats-card">
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon pending">hourglass_empty</span>
+            <span class="stat-value">{{ prefetchPendingCount() }}</span>
+            <span class="stat-label">Pending</span>
+          </div>
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon processing">autorenew</span>
+            <span class="stat-value">{{ prefetchProcessingCount() }}</span>
+            <span class="stat-label">Processing</span>
+          </div>
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon completed">check_circle</span>
+            <span class="stat-value">{{ prefetchCompletedCount() }}</span>
+            <span class="stat-label">Done</span>
+          </div>
+          <div class="stat">
+            <span class="material-symbols-outlined stat-icon failed">error</span>
+            <span class="stat-value">{{ prefetchFailedCount() }}</span>
+            <span class="stat-label">Failed</span>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        @if (prefetchCompletedCount() > 0) {
+          <div class="actions">
+            <button mat-stroked-button (click)="clearCompleted()" title="Clears completed items from both queues">
+              <span class="material-symbols-outlined">clear_all</span>
+              Clear All Completed
+            </button>
+          </div>
+        }
+
+        <!-- Queue list -->
+        @if (sortedPrefetchItems().length > 0) {
+          <div class="queue-list-container">
+            <div class="queue-list">
+              @for (item of paginatedPrefetchItems(); track item.queueId) {
+                <div class="queue-item" [class]="'status-' + item.status">
+                  <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
+                  <div class="item-info">
+                    <div class="item-description">{{ item.description }}</div>
+                    @if (item.status === 'failed' && item.error) {
+                      <div class="item-error">{{ item.error }}</div>
+                    }
+                    @if (item.status === 'completed' && item.error) {
+                      <div class="item-error">{{ item.error }}</div>
+                    }
+                  </div>
+                  <span class="status-badge" [class]="'badge-' + item.status">
+                    {{ itemStatusLabel(item) }}
+                  </span>
+                  <span class="item-time">{{ relativeTime(item.createdAt) }}</span>
+                  @if (item.status === 'cancelled') {
+                    <div class="item-actions">
+                      <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
+                        <span class="material-symbols-outlined">close</span>
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+            @if (sortedPrefetchItems().length > prefetchPageSize()) {
+              <mat-paginator
+                [length]="sortedPrefetchItems().length"
+                [pageSize]="prefetchPageSize()"
+                [pageIndex]="prefetchPageIndex()"
+                [pageSizeOptions]="pageSizeOptions"
+                (page)="onPrefetchPage($event)"
+                class="queue-paginator">
+              </mat-paginator>
+            }
+          </div>
+        } @else {
+          <div class="empty-state">
+            <span class="material-symbols-outlined empty-icon">cloud_download</span>
+            <p>No prefetch jobs</p>
+            <p class="empty-sub">Body prefetch jobs will appear here when they run.</p>
+          </div>
+        }
+      </div>
+    </mat-tab>
+
+  </mat-tab-group>
 </div>

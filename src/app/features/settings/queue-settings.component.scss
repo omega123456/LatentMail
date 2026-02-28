@@ -1,5 +1,5 @@
 .queue-settings {
-  max-width: 700px;
+  max-width: 740px;
 }
 
 h2 {
@@ -11,8 +11,78 @@ h2 {
 .subtitle {
   color: var(--color-text-secondary);
   font-size: 14px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
+
+// ---------------------------------------------------------------------------
+// Tab group
+// ---------------------------------------------------------------------------
+
+.queue-tabs {
+  // Remove the default mat-tab-group top margin/padding
+  ::ng-deep .mat-mdc-tab-body-wrapper {
+    margin-top: 0;
+  }
+
+  ::ng-deep .mat-mdc-tab-header {
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0;
+  }
+
+  // Tighten up the ink bar
+  ::ng-deep .mdc-tab-indicator__content--underline {
+    border-top-width: 2px;
+  }
+}
+
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+
+  .tab-icon {
+    font-size: 18px;
+  }
+}
+
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+
+  &.active {
+    background: var(--color-primary);
+    color: #fff;
+  }
+
+  &.failed {
+    background: #f44336;
+    color: #fff;
+  }
+}
+
+.tab-content {
+  padding-top: 20px;
+}
+
+.tab-description {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+// ---------------------------------------------------------------------------
+// Stats card
+// ---------------------------------------------------------------------------
 
 .stats-card {
   display: flex;
@@ -32,6 +102,7 @@ h2 {
 
 .stat-icon {
   font-size: 20px;
+
   &.pending { color: var(--color-accent, #ff9800); }
   &.processing { color: var(--color-primary); animation: spin 1s linear infinite; }
   &.completed { color: #4caf50; }
@@ -53,6 +124,10 @@ h2 {
   color: var(--color-text-secondary);
 }
 
+// ---------------------------------------------------------------------------
+// Action bar
+// ---------------------------------------------------------------------------
+
 .actions {
   display: flex;
   gap: 8px;
@@ -69,6 +144,10 @@ h2 {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Queue list
+// ---------------------------------------------------------------------------
 
 .queue-list-container {
   .queue-list {
@@ -103,6 +182,7 @@ h2 {
 .type-icon {
   font-size: 20px;
   color: var(--color-text-secondary);
+  flex-shrink: 0;
 }
 
 .item-info {
@@ -136,6 +216,7 @@ h2 {
   &.badge-processing { background: var(--color-primary-light, #2196f320); color: var(--color-primary); }
   &.badge-completed { background: #4caf5020; color: #4caf50; }
   &.badge-failed { background: #f4433620; color: #f44336; }
+  &.badge-cancelled { background: var(--color-surface-variant, #88888820); color: var(--color-text-secondary); }
 }
 
 .item-time {
@@ -147,7 +228,12 @@ h2 {
 .item-actions {
   display: flex;
   gap: 0;
+  flex-shrink: 0;
 }
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
 
 .empty-state {
   text-align: center;
