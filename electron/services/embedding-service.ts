@@ -177,6 +177,8 @@ export class EmbeddingService {
   /**
    * Cancel an in-progress build.
    * Emails fully embedded before cancel are committed (kept in vector_indexed_emails and vector DB).
+   * Clears build_interrupted for all active accounts so auto-resume is NOT triggered on next
+   * app start — cursor position is preserved so a manual restart resumes efficiently.
    */
   cancelBuild(): void {
     if (this.buildState !== 'building') {
@@ -188,6 +190,19 @@ export class EmbeddingService {
     this.buildState = 'idle';
     this.currentBuildTotal = 0;
     this.currentBuildIndexed = 0;
+
+    // Clear build_interrupted for all active accounts so the cancelled build
+    // is not auto-resumed on the next app start. Cursor (last_uid) is preserved
+    // so a manual "Build Index" can resume from where it left off.
+    const db = DatabaseService.getInstance();
+    try {
+      const accounts = db.getAccounts().filter((account) => account.is_active);
+      for (const account of accounts) {
+        db.setEmbeddingBuildInterrupted(account.id, false);
+      }
+    } catch (err) {
+      log.warn('[EmbeddingService] Failed to clear build_interrupted on cancel:', err);
+    }
   }
 
   /**
@@ -231,6 +246,7 @@ export class EmbeddingService {
 
     const db = DatabaseService.getInstance();
     db.clearAllVectorIndexedEmails();
+    db.clearAllEmbeddingCrawlProgress();
 
     log.info('[EmbeddingService] Model change complete — index cleared, re-index required');
   }
@@ -244,9 +260,19 @@ export class EmbeddingService {
    * Processes accounts sequentially. Within each account, processes UID batches
    * sequentially with a 1-second inter-batch delay.
    *
+   * Resume behaviour:
+   * - At account start: sets build_interrupted = 1 so crashes are detectable
+   * - Reads the stored cursor (last_uid) and calls searchUidsAfter(cursor)
+   *   so only UIDs above the cursor are returned from the IMAP server
+   * - Anomaly detection: if cursor > 0 and searchUidsAfter returns empty,
+   *   falls back to searchAllUids to distinguish complete vs UID-renumbered
+   * - Deferred sentinel commits: sentinel records are collected in memory and
+   *   committed together with worker results + cursor in one atomic transaction
+   * - On per-account completion: clears build_interrupted and cursor progress row
+   *
    * On IMAP connection failure: reconnects (up to MAX_RECONNECT_ATTEMPTS) and resumes.
    * vector_indexed_emails serves as the checkpoint — after reconnect, already-indexed
-   * emails are skipped even though all UIDs are re-traversed.
+   * emails are skipped even though remaining UIDs are re-traversed.
    */
   private async runBuildLoop(embeddingModel: string, vectorDimension: number): Promise<void> {
     const db = DatabaseService.getInstance();
@@ -275,6 +301,15 @@ export class EmbeddingService {
 
       log.info(`[EmbeddingService] Processing account ${account.id} (${account.email})`);
 
+      // Mark this account's build as interrupted at the start.
+      // If the app crashes before we complete, this flag stays set and triggers
+      // auto-resume on the next app start.
+      try {
+        db.setEmbeddingBuildInterrupted(account.id, true);
+      } catch (err) {
+        log.warn(`[EmbeddingService] Failed to set build_interrupted for account ${account.id}:`, err);
+      }
+
       // Connect dedicated IMAP connection for this account
       try {
         await crawlService.connect(String(account.id));
@@ -289,35 +324,73 @@ export class EmbeddingService {
       // Outer loop: reconnect-and-resume on IMAP failure
       while (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS && this.buildState === 'building') {
         try {
-          // 1. Get all UIDs from [Gmail]/All Mail
-          const allUids = await crawlService.searchAllUids(String(account.id));
-          log.info(`[EmbeddingService] Account ${account.id}: ${allUids.length} total UIDs in All Mail`);
+          // 1. Read the stored cursor (0 = fresh build, or last completed batch's max UID)
+          const cursor = db.getEmbeddingCrawlCursor(account.id);
+          log.info(`[EmbeddingService] Account ${account.id}: resume cursor = ${cursor}`);
 
-          // 2. Get the set of already-indexed xGmMsgIds (indexed + sentinels)
+          // 2. Get UIDs to process — only those above the cursor
+          let uidsToProcess = await crawlService.searchUidsAfter(String(account.id), cursor);
+          log.info(`[EmbeddingService] Account ${account.id}: ${uidsToProcess.length} UIDs above cursor`);
+
+          // 3. Anomaly detection: if cursor > 0 and searchUidsAfter returned empty,
+          //    distinguish between "genuinely complete" and "UID renumbering occurred"
+          if (cursor > 0 && uidsToProcess.length === 0) {
+            log.info(
+              `[EmbeddingService] Account ${account.id}: no UIDs above cursor ${cursor}, ` +
+              `checking for UID renumbering via full search`
+            );
+            const allUids = await crawlService.searchAllUids(String(account.id));
+            if (allUids.length === 0) {
+              // Mailbox is genuinely empty — nothing to do
+              log.info(`[EmbeddingService] Account ${account.id}: mailbox is empty, skipping`);
+              break;
+            }
+            const maxAllUid = Math.max(...allUids);
+            if (maxAllUid < cursor) {
+              // UID renumbering detected — reset cursor and re-index everything
+              log.warn(
+                `[EmbeddingService] Account ${account.id}: UID renumbering detected ` +
+                `(maxAllUid=${maxAllUid} < cursor=${cursor}). Resetting cursor and re-indexing.`
+              );
+              db.clearEmbeddingCrawlProgress(account.id);
+              // Re-assert build_interrupted so a crash during re-index is still detected
+              db.setEmbeddingBuildInterrupted(account.id, true);
+              uidsToProcess = allUids;
+            } else {
+              // The account appears to be fully indexed (all UIDs ≤ cursor are in indexedSet)
+              log.info(
+                `[EmbeddingService] Account ${account.id}: all UIDs already indexed ` +
+                `(maxAllUid=${maxAllUid}, cursor=${cursor})`
+              );
+              break;
+            }
+          }
+
+          // 4. Get the set of already-indexed xGmMsgIds (indexed + sentinels)
           const indexedSet = db.getIndexedMsgIds(account.id);
           log.info(`[EmbeddingService] Account ${account.id}: ${indexedSet.size} already indexed`);
 
-          // 3. Compute progress total contribution for this account
-          //    (estimate: UIDs minus already-indexed; exact count comes from fetching)
-          const estimatedUnindexed = Math.max(0, allUids.length - indexedSet.size);
+          // 5. Compute progress total contribution for this account
+          const estimatedUnindexed = Math.max(0, uidsToProcess.length - indexedSet.size);
           this.currentBuildTotal += estimatedUnindexed;
 
-          // 4. Resolve trash folder for filtering
+          // 6. Resolve trash folder for filtering
           const trashFolder = db.getTrashFolder(account.id);
 
-          // 5. Process UIDs in batches of EMAIL_BATCH_SIZE
+          // 7. Process UIDs in batches of EMAIL_BATCH_SIZE
           for (
             let batchStart = 0;
-            batchStart < allUids.length && this.buildState === 'building';
+            batchStart < uidsToProcess.length && this.buildState === 'building';
             batchStart += EMAIL_BATCH_SIZE
           ) {
-            const batchUids = allUids.slice(batchStart, batchStart + EMAIL_BATCH_SIZE);
+            const batchUids = uidsToProcess.slice(batchStart, batchStart + EMAIL_BATCH_SIZE);
 
             // Fetch full bodies for this batch
             const fetchedEmails = await crawlService.fetchBatch(String(account.id), batchUids);
 
-            // Categorize: skip already-indexed, sentinel for filtered, embed the rest
-            const sentinelRecords: Array<{ xGmMsgId: string; embeddingHash: string }> = [];
+            // Categorize: skip already-indexed, collect sentinel records in memory for
+            // deferred commit, prepare embedding items for the worker
+            const deferredSentinelRecords: Array<{ xGmMsgId: string; embeddingHash: string }> = [];
             const batchItems: EmailBatchItem[] = [];
 
             for (const email of fetchedEmails) {
@@ -334,10 +407,13 @@ export class EmbeddingService {
                 email.isDraft;
 
               if (isFiltered) {
-                sentinelRecords.push({
+                // Collect sentinel record but do NOT write to DB yet —
+                // will be committed atomically with worker results + cursor at batch end
+                deferredSentinelRecords.push({
                   xGmMsgId: email.xGmMsgId,
                   embeddingHash: SKIPPED_FILTERED,
                 });
+                // Update in-memory set immediately to prevent re-processing within this run
                 indexedSet.add(email.xGmMsgId);
               } else {
                 // Truncate body at MAX_BODY_CHARS before passing to chunker
@@ -368,21 +444,17 @@ export class EmbeddingService {
               }
             }
 
-            // Write sentinel records to DB
-            if (sentinelRecords.length > 0) {
-              db.batchInsertVectorIndexedEmails(account.id, sentinelRecords);
-              totalSentinels += sentinelRecords.length;
-              this.currentBuildIndexed += sentinelRecords.length;
-            }
+            // Compute the cursor advance for this batch (max UID in the batch)
+            const batchCursorUid = Math.max(...batchUids);
 
-            // Send non-filtered emails to the embedding worker
             if (batchItems.length > 0) {
+              // Send non-filtered emails to the embedding worker
               let batchDoneResults: BatchResult[] = [];
               try {
                 batchDoneResults = await this.sendBatchAndWait(
                   batchItems,
                   this.currentBuildTotal,
-                  totalSentinels,
+                  totalSentinels + deferredSentinelRecords.length,
                   isFirstBatch
                 );
                 isFirstBatch = false;
@@ -393,22 +465,37 @@ export class EmbeddingService {
                 break;
               }
 
-              // Write indexed records to DB
-              if (batchDoneResults.length > 0) {
-                db.batchInsertVectorIndexedEmails(
-                  account.id,
-                  batchDoneResults.map((result) => ({
-                    xGmMsgId: result.xGmMsgId,
-                    embeddingHash: result.hash,
-                  }))
-                );
-                this.currentBuildIndexed += batchDoneResults.length;
-                for (const result of batchDoneResults) {
-                  indexedSet.add(result.xGmMsgId);
-                }
+              // Merge sentinel records + worker results and commit atomically with cursor
+              const allRecordsForBatch = [
+                ...deferredSentinelRecords,
+                ...batchDoneResults.map((result) => ({
+                  xGmMsgId: result.xGmMsgId,
+                  embeddingHash: result.hash,
+                })),
+              ];
+
+              db.batchInsertVectorIndexedEmails(account.id, allRecordsForBatch, batchCursorUid);
+
+              totalSentinels += deferredSentinelRecords.length;
+              this.currentBuildIndexed += deferredSentinelRecords.length + batchDoneResults.length;
+              for (const result of batchDoneResults) {
+                indexedSet.add(result.xGmMsgId);
               }
-            } else if (sentinelRecords.length === 0) {
+            } else if (deferredSentinelRecords.length > 0) {
+              // Sentinel-only batch (all items were filtered, no embedding work needed)
+              // Commit sentinels + cursor atomically
+              db.batchInsertVectorIndexedEmails(
+                account.id,
+                deferredSentinelRecords,
+                batchCursorUid
+              );
+              totalSentinels += deferredSentinelRecords.length;
+              this.currentBuildIndexed += deferredSentinelRecords.length;
+              isFirstBatch = false;
+            } else {
               // Entirely skipped batch (all already indexed) — no progress to broadcast
+              // Still advance cursor to skip these UIDs on resume
+              db.upsertEmbeddingCrawlCursor(account.id, batchCursorUid);
               isFirstBatch = false;
             }
 
@@ -437,7 +524,7 @@ export class EmbeddingService {
             try {
               await crawlService.reconnect(String(account.id));
               // Reset this account's contribution to the total so it gets recomputed
-              // after SEARCH ALL is re-run on the next iteration
+              // after SEARCH is re-run on the next iteration
               this.currentBuildTotal = Math.max(0, this.currentBuildTotal);
             } catch (reconnectErr) {
               log.error(`[EmbeddingService] Reconnect failed for account ${account.id}:`, reconnectErr);
@@ -461,6 +548,19 @@ export class EmbeddingService {
       if (accountWorkerError) {
         globalWorkerError = accountWorkerError;
         break;
+      }
+
+      // Account completed successfully — clear build_interrupted and cursor progress.
+      // Only do this if the build is still active (not cancelled). If cancelled,
+      // buildState is 'idle' here and we must preserve the cursor for manual resume.
+      if (this.buildState === 'building') {
+        try {
+          db.setEmbeddingBuildInterrupted(account.id, false);
+          db.clearEmbeddingCrawlProgress(account.id);
+          log.info(`[EmbeddingService] Account ${account.id}: build complete, cursor cleared`);
+        } catch (err) {
+          log.warn(`[EmbeddingService] Failed to clear crawl progress for account ${account.id}:`, err);
+        }
       }
     }
 

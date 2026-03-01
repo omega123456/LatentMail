@@ -2724,17 +2724,25 @@ export class DatabaseService {
    * Uses INSERT OR REPLACE to handle re-indexing (e.g. after a model change that was
    * cancelled mid-build and then restarted with cleanup).
    *
+   * When cursorUid is provided, the embedding_crawl_progress cursor for this account
+   * is also upserted inside the same transaction, guaranteeing atomic consistency
+   * between indexed records and the resume cursor.
+   *
    * @param accountId - Account ID for all records
    * @param records - Array of { xGmMsgId, embeddingHash } pairs to insert
+   * @param cursorUid - Optional UID cursor to persist atomically with the records.
+   *                    When provided, upserts embedding_crawl_progress.last_uid
+   *                    inside the same BEGIN/COMMIT block.
    */
   batchInsertVectorIndexedEmails(
     accountId: number,
-    records: Array<{ xGmMsgId: string; embeddingHash: string }>
+    records: Array<{ xGmMsgId: string; embeddingHash: string }>,
+    cursorUid?: number
   ): void {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    if (records.length === 0) {
+    if (records.length === 0 && cursorUid === undefined) {
       return;
     }
 
@@ -2751,6 +2759,19 @@ export class DatabaseService {
           }
         );
       }
+
+      // Atomically update the resume cursor if provided
+      if (cursorUid !== undefined) {
+        this.db.run(
+          `INSERT INTO embedding_crawl_progress (account_id, last_uid, build_interrupted, updated_at)
+           VALUES (:accountId, :lastUid, 0, datetime('now'))
+           ON CONFLICT(account_id) DO UPDATE SET
+             last_uid   = excluded.last_uid,
+             updated_at = excluded.updated_at`,
+          { ':accountId': accountId, ':lastUid': cursorUid }
+        );
+      }
+
       this.db.run('COMMIT');
     } catch (err) {
       this.db.run('ROLLBACK');
@@ -2815,6 +2836,134 @@ export class DatabaseService {
     this.db.run('DELETE FROM vector_indexed_emails');
     this.scheduleSave();
     log.info('[DatabaseService] Cleared all vector index tracking globally');
+  }
+
+  // ---- Embedding crawl progress operations (embedding_crawl_progress) ----
+
+  /**
+   * Get the stored UID cursor for an account's embedding crawl progress.
+   * Returns 0 if no row exists (fresh build, no cursor stored yet).
+   *
+   * @param accountId - Account ID to query
+   * @returns The last_uid value (0 if not found)
+   */
+  getEmbeddingCrawlCursor(accountId: number): number {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = this.db.exec(
+      'SELECT last_uid FROM embedding_crawl_progress WHERE account_id = :accountId',
+      { ':accountId': accountId }
+    );
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return 0;
+    }
+    return result[0].values[0][0] as number;
+  }
+
+  /**
+   * Upsert the UID cursor for an account's embedding crawl progress.
+   * Creates the row if it does not exist. Preserves the existing build_interrupted
+   * value when updating — only last_uid and updated_at are changed.
+   *
+   * @param accountId - Account ID to update
+   * @param lastUid - The maximum UID from the last fully committed batch
+   */
+  upsertEmbeddingCrawlCursor(accountId: number, lastUid: number): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run(
+      `INSERT INTO embedding_crawl_progress (account_id, last_uid, build_interrupted, updated_at)
+       VALUES (:accountId, :lastUid, 0, datetime('now'))
+       ON CONFLICT(account_id) DO UPDATE SET
+         last_uid   = excluded.last_uid,
+         updated_at = excluded.updated_at`,
+      { ':accountId': accountId, ':lastUid': lastUid }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Set or clear the build_interrupted flag for an account.
+   * Creates the row if it does not exist. Preserves the existing last_uid value
+   * when updating — only build_interrupted and updated_at are changed.
+   *
+   * @param accountId - Account ID to update
+   * @param interrupted - true to set build_interrupted = 1, false to clear it to 0
+   */
+  setEmbeddingBuildInterrupted(accountId: number, interrupted: boolean): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const interruptedValue = interrupted ? 1 : 0;
+    this.db.run(
+      `INSERT INTO embedding_crawl_progress (account_id, last_uid, build_interrupted, updated_at)
+       VALUES (:accountId, 0, :interrupted, datetime('now'))
+       ON CONFLICT(account_id) DO UPDATE SET
+         build_interrupted = excluded.build_interrupted,
+         updated_at        = excluded.updated_at`,
+      { ':accountId': accountId, ':interrupted': interruptedValue }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Return the account IDs of all accounts that have build_interrupted = 1.
+   * Used at app startup to detect builds that were interrupted by crash or close.
+   *
+   * @returns Array of account IDs with interrupted builds
+   */
+  getInterruptedEmbeddingAccounts(): number[] {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = this.db.exec(
+      'SELECT account_id FROM embedding_crawl_progress WHERE build_interrupted = 1'
+    );
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return [];
+    }
+    return result[0].values.map((row) => row[0] as number);
+  }
+
+  /**
+   * Delete the embedding crawl progress row for a specific account.
+   * Called when a build completes successfully for that account.
+   *
+   * @param accountId - Account ID to clear progress for
+   */
+  clearEmbeddingCrawlProgress(accountId: number): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run(
+      'DELETE FROM embedding_crawl_progress WHERE account_id = :accountId',
+      { ':accountId': accountId }
+    );
+    this.scheduleSave();
+  }
+
+  /**
+   * Delete all embedding crawl progress rows across all accounts.
+   * Called when the user changes the embedding model — all crawl progress
+   * is invalid after a model change (different vector space).
+   */
+  clearAllEmbeddingCrawlProgress(): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run('DELETE FROM embedding_crawl_progress');
+    this.scheduleSave();
+    log.info('[DatabaseService] Cleared all embedding crawl progress globally');
   }
 
   /**

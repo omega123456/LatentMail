@@ -145,6 +145,43 @@ export class ImapCrawlService {
   }
 
   /**
+   * Search [Gmail]/All Mail for UIDs greater than cursorUid.
+   *
+   * When cursorUid is 0 (no cursor / fresh build), delegates to searchAllUids()
+   * to return the complete UID list — same behavior as before cursor support.
+   *
+   * When cursorUid > 0, issues a UID SEARCH UID <cursorUid+1>:* so only
+   * UIDs that have not yet been processed are returned from the IMAP server.
+   * This avoids transferring the full UID list and prevents fetchBatch from
+   * being called for already-indexed UIDs.
+   *
+   * @param accountId - Account to search
+   * @param cursorUid - The last fully-processed UID (0 for a fresh build)
+   * @returns Array of UIDs above the cursor (or all UIDs when cursor is 0)
+   */
+  async searchUidsAfter(accountId: string, cursorUid: number): Promise<number[]> {
+    if (cursorUid === 0) {
+      return this.searchAllUids(accountId);
+    }
+
+    const client = this.getConnection(accountId);
+    const lock = await client.getMailboxLock(ALL_MAIL_PATH);
+    try {
+      const uidRange = `${cursorUid + 1}:*`;
+      const result = await client.search(
+        { uid: uidRange } as any,
+        { uid: true }
+      ) as number[] | false;
+      if (!result || result.length === 0) {
+        return [];
+      }
+      return Array.from(result);
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Fetch a batch of emails from [Gmail]/All Mail by UID.
    * Fetches full source (body), parses via simpleParser, and returns structured results.
    * Any UIDs that fail to parse are silently skipped (logged at debug level).
