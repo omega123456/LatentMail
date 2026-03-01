@@ -2638,21 +2638,205 @@ export class DatabaseService {
     };
   }
 
-  // ---- Embedding tracking operations ----
+  // ---- Vector index tracking operations (vector_indexed_emails) ----
 
   /**
-   * Query emails that have not yet been embedded (embedding_hash IS NULL)
-   * and have at least one body (text_body or html_body is not null/empty).
-   * Excludes Trash/Spam/Drafts folders and emails with is_draft = 1.
+   * Get all indexed x_gm_msgid values for an account as a Set.
+   * Includes both successfully-embedded emails and SKIPPED_FILTERED sentinel rows.
+   * Used by EmbeddingService to determine which UIDs have already been processed.
    *
-   * Ordered by date DESC so the most recently received emails are indexed first,
-   * giving users faster semantic search results for recent mail.
-   *
-   * @param accountId - Account to query for
-   * @param batchSize - Maximum number of emails to return
-   * @returns Array of email records needed for embedding
+   * @param accountId - Account ID to query
+   * @returns Set of x_gm_msgid strings that have been indexed (or skipped)
    */
-  getEmailsNeedingEmbedding(
+  getIndexedMsgIds(accountId: number): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = this.db.exec(
+      'SELECT x_gm_msgid FROM vector_indexed_emails WHERE account_id = :accountId',
+      { ':accountId': accountId }
+    );
+
+    const indexed = new Set<string>();
+    if (result.length > 0) {
+      for (const row of result[0].values) {
+        const msgId = row[0];
+        if (typeof msgId === 'string') {
+          indexed.add(msgId);
+        }
+      }
+    }
+    return indexed;
+  }
+
+  /**
+   * Given a list of x_gm_msgid values, return the subset that are already
+   * recorded in vector_indexed_emails for a given account.
+   * Handles large lists by chunking into batches of 500.
+   *
+   * @param accountId - Account ID to scope the query
+   * @param xGmMsgIds - Candidate message IDs to check
+   * @returns Set of x_gm_msgid values that are already indexed
+   */
+  getAlreadyIndexedMsgIds(accountId: number, xGmMsgIds: string[]): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const uniqueIds = Array.from(new Set(xGmMsgIds.filter((id) => id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return new Set();
+    }
+
+    const indexed = new Set<string>();
+    const chunkSize = 500;
+
+    for (let start = 0; start < uniqueIds.length; start += chunkSize) {
+      const chunk = uniqueIds.slice(start, start + chunkSize);
+      const placeholders = chunk.map((_, index) => `:msgId${index}`).join(', ');
+      const params: Record<string, number | string> = { ':accountId': accountId };
+      for (let index = 0; index < chunk.length; index++) {
+        params[`:msgId${index}`] = chunk[index];
+      }
+
+      const result = this.db.exec(
+        `SELECT x_gm_msgid FROM vector_indexed_emails
+         WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
+        params
+      );
+
+      if (result.length > 0) {
+        for (const row of result[0].values) {
+          const msgId = row[0];
+          if (typeof msgId === 'string') {
+            indexed.add(msgId);
+          }
+        }
+      }
+    }
+
+    return indexed;
+  }
+
+  /**
+   * Batch insert indexed records into vector_indexed_emails within a single transaction.
+   * Uses INSERT OR REPLACE to handle re-indexing (e.g. after a model change that was
+   * cancelled mid-build and then restarted with cleanup).
+   *
+   * @param accountId - Account ID for all records
+   * @param records - Array of { xGmMsgId, embeddingHash } pairs to insert
+   */
+  batchInsertVectorIndexedEmails(
+    accountId: number,
+    records: Array<{ xGmMsgId: string; embeddingHash: string }>
+  ): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    if (records.length === 0) {
+      return;
+    }
+
+    this.db.run('BEGIN');
+    try {
+      for (const record of records) {
+        this.db.run(
+          `INSERT OR REPLACE INTO vector_indexed_emails (x_gm_msgid, account_id, embedding_hash)
+           VALUES (:xGmMsgId, :accountId, :embeddingHash)`,
+          {
+            ':xGmMsgId': record.xGmMsgId,
+            ':accountId': accountId,
+            ':embeddingHash': record.embeddingHash,
+          }
+        );
+      }
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+
+    this.scheduleSave();
+  }
+
+  /**
+   * Count the total number of indexed emails (including SKIPPED_FILTERED sentinel rows)
+   * for a given account.
+   *
+   * @param accountId - Account ID to count for
+   * @returns Total number of indexed email records
+   */
+  countVectorIndexedEmails(accountId: number): number {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = this.db.exec(
+      'SELECT COUNT(*) FROM vector_indexed_emails WHERE account_id = :accountId',
+      { ':accountId': accountId }
+    );
+
+    if (result.length > 0 && result[0].values.length > 0) {
+      return result[0].values[0][0] as number;
+    }
+    return 0;
+  }
+
+  /**
+   * Clear all vector_indexed_emails records for a specific account.
+   * Called when the user removes an account to clean up vector index tracking.
+   *
+   * @param accountId - Account ID to clear records for
+   */
+  clearVectorIndexedEmailsForAccount(accountId: number): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run(
+      'DELETE FROM vector_indexed_emails WHERE account_id = :accountId',
+      { ':accountId': accountId }
+    );
+    this.scheduleSave();
+    log.info(`[DatabaseService] Cleared vector index tracking for account ${accountId}`);
+  }
+
+  /**
+   * Clear all vector_indexed_emails records across all accounts.
+   * Called when the user changes the embedding model — a full re-index is required
+   * and all prior index state must be discarded.
+   */
+  clearAllVectorIndexedEmails(): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    this.db.run('DELETE FROM vector_indexed_emails');
+    this.scheduleSave();
+    log.info('[DatabaseService] Cleared all vector index tracking globally');
+  }
+
+  /**
+   * Find emails that have a body stored locally but have not yet been indexed
+   * into the vector database. Used for incremental indexing after body-fetch
+   * completes post-sync.
+   *
+   * An email qualifies if:
+   *   - Its account_id matches the given accountId
+   *   - It is not a draft (is_draft = 0)
+   *   - It has a non-empty text_body OR non-empty html_body
+   *   - It does NOT have a row in vector_indexed_emails for (x_gm_msgid, account_id)
+   *   - It exists in at least one folder that is NOT Trash, Spam, or Drafts
+   *     (mirrors the filter the full-crawl indexer applies when writing SKIPPED_FILTERED rows)
+   *
+   * Ordered by date DESC so the most recently received emails are indexed first.
+   *
+   * @param accountId - Account ID to query
+   * @param batchSize - Maximum number of emails to return
+   * @returns Array of email records with bodies ready for incremental embedding
+   */
+  getEmailsNeedingVectorIndexing(
     accountId: number,
     batchSize: number = 50
   ): Array<{
@@ -2667,23 +2851,19 @@ export class DatabaseService {
     }
 
     const trashFolder = this.getTrashFolder(accountId);
-    const params = {
-      ':accountId': accountId,
-      ':batchSize': batchSize,
-      ':trashFolder': trashFolder,
-      ':spamFolder': '[Gmail]/Spam',
-      ':draftsFolder': '[Gmail]/Drafts',
-    };
-
     const result = this.db.exec(
       `SELECT e.x_gm_msgid, e.account_id, e.subject, e.text_body, e.html_body
        FROM emails e
        WHERE e.account_id = :accountId
          AND e.is_draft = 0
-         AND e.embedding_hash IS NULL
          AND (
            (e.text_body IS NOT NULL AND e.text_body != '')
            OR (e.html_body IS NOT NULL AND e.html_body != '')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM vector_indexed_emails vie
+           WHERE vie.x_gm_msgid = e.x_gm_msgid
+             AND vie.account_id = e.account_id
          )
          AND EXISTS (
            SELECT 1 FROM email_folders ef
@@ -2693,7 +2873,13 @@ export class DatabaseService {
          )
        ORDER BY e.date DESC
        LIMIT :batchSize`,
-      params
+      {
+        ':accountId': accountId,
+        ':batchSize': batchSize,
+        ':trashFolder': trashFolder,
+        ':spamFolder': '[Gmail]/Spam',
+        ':draftsFolder': '[Gmail]/Drafts',
+      }
     );
 
     if (result.length === 0) {
@@ -2707,140 +2893,6 @@ export class DatabaseService {
       textBody: row[3] as string | null,
       htmlBody: row[4] as string | null,
     }));
-  }
-
-  /**
-   * Batch-update embedding_hash for a list of emails identified by x_gm_msgid.
-   * Called after the embedding worker successfully embeds a batch of emails.
-   *
-   * @param accountId - Account ID the emails belong to
-   * @param updates - Array of { xGmMsgId, hash } pairs to update
-   */
-  batchUpdateEmbeddingHash(
-    accountId: number,
-    updates: Array<{ xGmMsgId: string; hash: string }>
-  ): void {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-    if (updates.length === 0) {
-      return;
-    }
-
-    // Use sql.js transaction pattern
-    this.db.run('BEGIN');
-    try {
-      for (const update of updates) {
-        this.db.run(
-          'UPDATE emails SET embedding_hash = :hash WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
-          { ':hash': update.hash, ':accountId': accountId, ':xGmMsgId': update.xGmMsgId }
-        );
-      }
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-
-    this.scheduleSave();
-  }
-
-  /**
-   * Count embeddable vs. embedded emails for an account.
-   * An email is "embeddable" if it has at least one body.
-   * An email is "embedded" if embedding_hash is not NULL.
-   * Counts exclude Trash/Spam/Drafts folders and emails with is_draft = 1.
-   *
-   * @param accountId - Account ID to count for
-   * @returns { total: number of embeddable emails, embedded: number of embedded emails }
-   */
-  countEmbeddingStatus(accountId: number): { total: number; embedded: number } {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-
-    const trashFolder = this.getTrashFolder(accountId);
-    const params = {
-      ':accountId': accountId,
-      ':trashFolder': trashFolder,
-      ':spamFolder': '[Gmail]/Spam',
-      ':draftsFolder': '[Gmail]/Drafts',
-    };
-
-    const totalResult = this.db.exec(
-      `SELECT COUNT(*) FROM emails e
-       WHERE e.account_id = :accountId
-         AND e.is_draft = 0
-         AND (
-           (e.text_body IS NOT NULL AND e.text_body != '')
-           OR (e.html_body IS NOT NULL AND e.html_body != '')
-         )
-         AND EXISTS (
-           SELECT 1 FROM email_folders ef
-           WHERE ef.account_id = e.account_id
-             AND ef.x_gm_msgid = e.x_gm_msgid
-             AND ef.folder NOT IN (:trashFolder, :spamFolder, :draftsFolder)
-         )`,
-      params
-    );
-
-    const embeddedResult = this.db.exec(
-      `SELECT COUNT(*) FROM emails e
-       WHERE e.account_id = :accountId
-         AND e.is_draft = 0
-         AND e.embedding_hash IS NOT NULL
-         AND (
-           (e.text_body IS NOT NULL AND e.text_body != '')
-           OR (e.html_body IS NOT NULL AND e.html_body != '')
-         )
-         AND EXISTS (
-           SELECT 1 FROM email_folders ef
-           WHERE ef.account_id = e.account_id
-             AND ef.x_gm_msgid = e.x_gm_msgid
-             AND ef.folder NOT IN (:trashFolder, :spamFolder, :draftsFolder)
-         )`,
-      params
-    );
-
-    const total = (totalResult.length > 0 && totalResult[0].values.length > 0)
-      ? (totalResult[0].values[0][0] as number) : 0;
-    const embedded = (embeddedResult.length > 0 && embeddedResult[0].values.length > 0)
-      ? (embeddedResult[0].values[0][0] as number) : 0;
-
-    return { total, embedded };
-  }
-
-  /**
-   * Reset all embedding_hash values to NULL for an account.
-   * Called when the user switches embedding models — a full re-index is required.
-   *
-   * @param accountId - Account ID to reset embedding hashes for
-   */
-  resetEmbeddingHashes(accountId: number): void {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-
-    this.db.run(
-      'UPDATE emails SET embedding_hash = NULL WHERE account_id = :accountId',
-      { ':accountId': accountId }
-    );
-    this.scheduleSave();
-    log.info(`[DatabaseService] Reset all embedding hashes for account ${accountId}`);
-  }
-
-  /**
-   * Reset all embedding_hash values to NULL across all accounts.
-   * Used when performing a full global re-index.
-   */
-  resetAllEmbeddingHashes(): void {
-    if (!this.db) {
-      throw new Error('Database not initialized');
-    }
-
-    this.db.run('UPDATE emails SET embedding_hash = NULL');
-    this.scheduleSave();
-    log.info('[DatabaseService] Reset all embedding hashes globally');
   }
 
   /**
