@@ -191,7 +191,11 @@
             ></div>
           </div>
           <p class="progress-counter" aria-live="polite">
-            {{ aiStore.indexProgress()!.indexed | number }} / {{ aiStore.indexProgress()!.total | number }} emails indexed ({{ aiStore.indexProgress()!.percent }}%)
+            @if (isTotalKnown()) {
+              {{ aiStore.indexProgress()!.indexed | number }} / {{ aiStore.indexProgress()!.total | number }} emails indexed ({{ aiStore.indexProgress()!.percent }}%)
+            } @else {
+              {{ aiStore.indexProgress()!.indexed | number }} emails indexed
+            }
           </p>
         } @else if (aiStore.indexStatus() === 'building') {
           <div
@@ -235,6 +239,7 @@
             </button>
           }
         </div>
+        <p class="index-hint">Indexes your entire Gmail mailbox for semantic search</p>
       }
     </div>
   </div>

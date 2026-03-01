@@ -6,7 +6,9 @@
  * 2. Run cosine similarity search via VectorDbService, filtered by account_id
  * 3. Deduplicate by x_gm_msgid (multiple chunks from the same email → keep highest score)
  * 4. Filter out emails whose ONLY folder associations are Trash, Spam, or Drafts
- * 5. Return top 50 x_gm_msgid values sorted by similarity descending
+ * 5. For results not present in the local emails table, fetch envelope metadata from IMAP
+ *    on demand via ImapCrawlService and upsert into the emails table for caching
+ * 6. Return top 50 x_gm_msgid values sorted by similarity descending
  *
  * Fallback contract:
  * - Returns empty array if VectorDbService is unavailable, no embedding model is configured,
@@ -18,6 +20,7 @@ import { LoggerService } from './logger-service';
 import { OllamaService } from './ollama-service';
 import { VectorDbService } from './vector-db-service';
 import { DatabaseService } from './database-service';
+import { ImapCrawlService, CrawlFetchResult } from './imap-crawl-service';
 
 const log = LoggerService.getInstance();
 
@@ -136,13 +139,90 @@ export class SemanticSearchService {
 
     log.info(`[SemanticSearch] Semantic search: ${finalResults.length} results above threshold (${aboveThreshold.length} before folder filter)`);
 
+    // Resolve any results that are missing from the local emails table by fetching
+    // their envelope metadata from IMAP on demand. This handles the case where the
+    // vector index contains emails that were never locally synced (full-mailbox crawl).
+    await this.resolveUnknownEmails(db, accountId, finalResults);
+
     return finalResults;
+  }
+
+  /**
+   * For any x_gm_msgid values in the results that are not in the local emails table,
+   * fetch their envelope metadata from IMAP on demand and upsert into the emails table.
+   * Missing/unfetchable emails are silently ignored — the caller will get empty thread
+   * rows for those IDs when resolving via getThreadsByXGmMsgIds().
+   *
+   * @param db - DatabaseService instance
+   * @param accountId - Account ID
+   * @param xGmMsgIds - Result message IDs to check (relevance-ordered)
+   */
+  private async resolveUnknownEmails(
+    db: DatabaseService,
+    accountId: number,
+    xGmMsgIds: string[]
+  ): Promise<void> {
+    if (xGmMsgIds.length === 0) {
+      return;
+    }
+
+    let existingMsgIds: Set<string>;
+    try {
+      existingMsgIds = db.getEmailsExistingInLocalDb(accountId, xGmMsgIds);
+    } catch (err) {
+      log.warn('[SemanticSearch] Failed to check local email existence:', err);
+      return;
+    }
+
+    const missingMsgIds = xGmMsgIds.filter((msgId) => !existingMsgIds.has(msgId));
+    if (missingMsgIds.length === 0) {
+      return;
+    }
+
+    log.info(`[SemanticSearch] Fetching ${missingMsgIds.length} envelope(s) from IMAP for un-synced search results`);
+
+    const accountIdStr = String(accountId);
+    let envelopes: CrawlFetchResult[];
+    try {
+      envelopes = await ImapCrawlService.getInstance().fetchEnvelopes(accountIdStr, missingMsgIds);
+    } catch (err) {
+      log.warn('[SemanticSearch] Failed to fetch envelopes from IMAP:', err);
+      return;
+    }
+
+    // Upsert each fetched envelope into the local emails table
+    for (const envelope of envelopes) {
+      try {
+        db.upsertEmailFromEnvelope(accountId, {
+          xGmMsgId: envelope.xGmMsgId,
+          xGmThrid: envelope.xGmThrid,
+          messageId: envelope.messageId,
+          subject: envelope.subject,
+          fromAddress: envelope.fromAddress,
+          fromName: envelope.fromName,
+          toAddresses: envelope.toAddresses,
+          date: envelope.date,
+          isRead: envelope.isRead,
+          isStarred: envelope.isStarred,
+          isDraft: envelope.isDraft,
+          size: envelope.size,
+        });
+      } catch (err) {
+        log.warn(`[SemanticSearch] Failed to upsert envelope for ${envelope.xGmMsgId}:`, err);
+      }
+    }
+
+    log.info(`[SemanticSearch] Upserted ${envelopes.length} envelope(s) into local DB`);
   }
 
   /**
    * Filter out x_gm_msgid values that are ONLY in excluded folders (Trash, Spam, Drafts).
    * An email is included in results if it has at least one folder association that is
    * NOT in the excluded set.
+   *
+   * Emails with NO folder associations in email_folders (un-synced emails from the
+   * full-mailbox crawl) are always included — the vector indexer already filtered
+   * spam/trash/drafts at index time, so these are guaranteed to be valid emails.
    *
    * @param db - DatabaseService instance
    * @param accountId - Account ID
@@ -162,7 +242,12 @@ export class SemanticSearchService {
 
     try {
       const includedSet = db.getMsgIdsWithNonExcludedFolders(accountId, xGmMsgIds, excludedFolders);
-      return xGmMsgIds.filter((msgId) => includedSet.has(msgId));
+      // For results with no email_folders entries (un-synced emails from full-mailbox crawl),
+      // getMsgIdsWithNonExcludedFolders will return nothing. We need to identify which msgIds
+      // have NO folder records at all (distinct from having only excluded-folder records) so
+      // they can be passed through. Use a single batched query for this.
+      const hasAnyFolder = db.getMsgIdsWithAnyFolder(accountId, xGmMsgIds);
+      return xGmMsgIds.filter((msgId) => includedSet.has(msgId) || !hasAnyFolder.has(msgId));
     } catch (filterError) {
       log.warn('[SemanticSearch] Failed to filter by folder exclusions, returning unfiltered results:', filterError);
       // Return unfiltered rather than throwing — better to show some results than none

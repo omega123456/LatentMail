@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AiStore } from '../../store/ai.store';
@@ -16,6 +16,16 @@ export class AiSettingsComponent implements OnInit {
   readonly testingConnection = signal(false);
   /** Tracks whether the user has confirmed a model switch warning for a pending model */
   readonly pendingEmbeddingModel = signal<string | null>(null);
+
+  /**
+   * True when the progress total is known (during an active build).
+   * False outside of a build — in that case the indexed count is shown without a denominator.
+   * Relies on the convention that `total === 0` signals "no total available" from the backend.
+   */
+  readonly isTotalKnown = computed(() => {
+    const progress = this.aiStore.indexProgress();
+    return progress !== null && progress.total > 0;
+  });
 
   ngOnInit(): void {
     this.urlInput.set(this.aiStore.url());

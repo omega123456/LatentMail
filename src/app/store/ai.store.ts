@@ -127,12 +127,19 @@ export const AiStore = signalStore(
         const embeddingResponse = await electronService.aiGetEmbeddingStatus();
         if (embeddingResponse.success && embeddingResponse.data) {
           const embData = embeddingResponse.data as EmbeddingStatusData;
+          let indexProgress: { indexed: number; total: number; percent: number } | null = null;
+          if (embData.indexed > 0) {
+            if (embData.total > 0) {
+              indexProgress = { indexed: embData.indexed, total: embData.total, percent: Math.round((embData.indexed / embData.total) * 100) };
+            } else {
+              // total === 0 outside of a build: index exists but total is unknown
+              indexProgress = { indexed: embData.indexed, total: 0, percent: 100 };
+            }
+          }
           patchState(store, {
             embeddingModel: embData.embeddingModel || '',
             indexStatus: (embData.indexStatus as AiState['indexStatus']) || 'not_started',
-            indexProgress: embData.indexed > 0
-              ? { indexed: embData.indexed, total: embData.total, percent: embData.total > 0 ? Math.round((embData.indexed / embData.total) * 100) : 0 }
-              : null,
+            indexProgress,
           });
         }
       },
@@ -519,9 +526,17 @@ export const AiStore = signalStore(
         if (response.success && response.data) {
           const embData = response.data as EmbeddingStatusData;
           const indexStatus = (embData.indexStatus as AiState['indexStatus']) || 'not_started';
-          const indexProgress = embData.indexed > 0
-            ? { indexed: embData.indexed, total: embData.total, percent: embData.total > 0 ? Math.round((embData.indexed / embData.total) * 100) : 0 }
-            : null;
+          let indexProgress: { indexed: number; total: number; percent: number } | null = null;
+          if (embData.indexed > 0) {
+            if (embData.total > 0) {
+              // Active build with known total: show deterministic progress
+              indexProgress = { indexed: embData.indexed, total: embData.total, percent: Math.round((embData.indexed / embData.total) * 100) };
+            } else {
+              // Outside build (total === 0 signals "unknown total"): show indexed count only,
+              // percent = 100 so the progress bar appears filled
+              indexProgress = { indexed: embData.indexed, total: 0, percent: 100 };
+            }
+          }
           patchState(store, {
             embeddingModel: embData.embeddingModel || '',
             indexStatus,

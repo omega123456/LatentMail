@@ -2965,6 +2965,58 @@ export class DatabaseService {
   }
 
   /**
+   * Given a list of x_gm_msgid values, return the subset that have AT LEAST ONE
+   * folder association in email_folders for this account (regardless of which folder).
+   *
+   * Used by SemanticSearchService to distinguish "only in excluded folders" from
+   * "never locally synced (no email_folders rows at all)". Un-synced emails from the
+   * full-mailbox crawl have no rows in email_folders and should pass through the
+   * folder exclusion filter.
+   *
+   * @param accountId - Account ID to scope the query
+   * @param xGmMsgIds - Candidate message IDs to check
+   * @returns Set of x_gm_msgid values that have at least one email_folders entry
+   */
+  getMsgIdsWithAnyFolder(accountId: number, xGmMsgIds: string[]): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const uniqueIds = Array.from(new Set(xGmMsgIds.filter((id) => id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return new Set();
+    }
+
+    const CHUNK_SIZE = 500;
+    const hasFolder = new Set<string>();
+
+    for (let offset = 0; offset < uniqueIds.length; offset += CHUNK_SIZE) {
+      const chunk = uniqueIds.slice(offset, offset + CHUNK_SIZE);
+      const placeholders = chunk.map((_, index) => `:msgId${offset + index}`).join(', ');
+      const params: Record<string, number | string> = { ':accountId': accountId };
+      for (let index = 0; index < chunk.length; index++) {
+        params[`:msgId${offset + index}`] = chunk[index];
+      }
+
+      const result = this.db.exec(
+        `SELECT DISTINCT x_gm_msgid FROM email_folders WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
+        params
+      );
+
+      if (result.length > 0) {
+        for (const row of result[0].values) {
+          const msgId = row[0];
+          if (typeof msgId === 'string') {
+            hasFolder.add(msgId);
+          }
+        }
+      }
+    }
+
+    return hasFolder;
+  }
+
+  /**
    * Get threads (formatted as thread rows) for a given list of x_gm_msgid values.
    * Used to resolve semantic search results (which return x_gm_msgid values) into
    * full thread objects for the renderer.
@@ -3115,6 +3167,146 @@ export class DatabaseService {
     }
 
     return new Map(Array.from(threadBestMap.entries()).map(([thrid, { msgId }]) => [thrid, msgId]));
+  }
+
+  // ---- On-demand search result resolution ----
+
+  /**
+   * Given a list of x_gm_msgid values, return the subset that exist in the
+   * local `emails` table for a given account.
+   * Handles large lists by chunking into batches of 500.
+   *
+   * Used by SemanticSearchService to identify which search results are already
+   * cached locally and which need to be fetched from IMAP on demand.
+   *
+   * @param accountId - Account ID to scope the query
+   * @param xGmMsgIds - Candidate message IDs to check
+   * @returns Set of x_gm_msgid values that exist in the local emails table
+   */
+  getEmailsExistingInLocalDb(accountId: number, xGmMsgIds: string[]): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const uniqueIds = Array.from(new Set(xGmMsgIds.filter((id) => id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return new Set();
+    }
+
+    const existing = new Set<string>();
+    const CHUNK_SIZE = 500;
+
+    for (let offset = 0; offset < uniqueIds.length; offset += CHUNK_SIZE) {
+      const chunk = uniqueIds.slice(offset, offset + CHUNK_SIZE);
+      const placeholders = chunk.map((_, index) => `:msgId${offset + index}`).join(', ');
+      const params: Record<string, number | string> = { ':accountId': accountId };
+      for (let index = 0; index < chunk.length; index++) {
+        params[`:msgId${offset + index}`] = chunk[index];
+      }
+
+      const result = this.db.exec(
+        `SELECT x_gm_msgid FROM emails WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
+        params
+      );
+
+      if (result.length > 0) {
+        for (const row of result[0].values) {
+          const msgId = row[0];
+          if (typeof msgId === 'string') {
+            existing.add(msgId);
+          }
+        }
+      }
+    }
+
+    return existing;
+  }
+
+  /**
+   * Upsert email metadata from an IMAP envelope into the local emails table.
+   * Used by SemanticSearchService to cache search results that are not yet in the local DB.
+   *
+   * The upserted row has NULL body fields (text_body, html_body) — the body is fetched
+   * on demand when the user opens the email. Thread row is created if it doesn't exist.
+   *
+   * @param accountId - Account ID
+   * @param envelope - Parsed envelope metadata from ImapCrawlService.fetchEnvelopes()
+   */
+  upsertEmailFromEnvelope(accountId: number, envelope: {
+    xGmMsgId: string;
+    xGmThrid: string;
+    messageId: string;
+    subject: string;
+    fromAddress: string;
+    fromName: string;
+    toAddresses: string;
+    date: string;
+    isRead: boolean;
+    isStarred: boolean;
+    isDraft: boolean;
+    size: number;
+  }): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    // Upsert the email row (no body fields — NULL body fields are preserved on conflict
+    // via COALESCE(NULLIF(excluded.text_body, ''), text_body) logic in upsertEmail).
+    // We use a direct INSERT OR IGNORE here to avoid overwriting an existing full body.
+    this.db.run(
+      `INSERT INTO emails (account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
+         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
+         is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels, updated_at)
+       VALUES (:accountId, :xGmMsgId, :xGmThrid, :messageId, :fromAddress, :fromName,
+         :toAddresses, '', '', :subject, NULL, NULL, :date,
+         :isRead, :isStarred, 0, :isDraft, '', :size, 0, '', datetime('now'))
+       ON CONFLICT(account_id, x_gm_msgid) DO UPDATE SET
+         x_gm_thrid = excluded.x_gm_thrid,
+         message_id = COALESCE(NULLIF(excluded.message_id, ''), message_id),
+         from_address = excluded.from_address,
+         from_name = excluded.from_name,
+         to_addresses = excluded.to_addresses,
+         subject = excluded.subject,
+         date = excluded.date,
+         is_read = excluded.is_read,
+         is_starred = excluded.is_starred,
+         is_draft = MAX(is_draft, excluded.is_draft),
+         size = excluded.size,
+         updated_at = datetime('now')`,
+      {
+        ':accountId': accountId,
+        ':xGmMsgId': envelope.xGmMsgId,
+        ':xGmThrid': envelope.xGmThrid,
+        ':messageId': envelope.messageId || null,
+        ':fromAddress': envelope.fromAddress,
+        ':fromName': envelope.fromName || '',
+        ':toAddresses': envelope.toAddresses,
+        ':subject': envelope.subject || '',
+        ':date': envelope.date,
+        ':isRead': envelope.isRead ? 1 : 0,
+        ':isStarred': envelope.isStarred ? 1 : 0,
+        ':isDraft': envelope.isDraft ? 1 : 0,
+        ':size': envelope.size || 0,
+      }
+    );
+
+    // Upsert a thread row if it doesn't already exist.
+    this.db.run(
+      `INSERT INTO threads (account_id, x_gm_thrid, subject, last_message_date, participants, message_count, snippet, is_read, is_starred)
+       VALUES (:accountId, :xGmThrid, :subject, :lastMessageDate, :participants, 1, '', :isRead, :isStarred)
+       ON CONFLICT(account_id, x_gm_thrid) DO NOTHING`,
+      {
+        ':accountId': accountId,
+        ':xGmThrid': envelope.xGmThrid,
+        ':subject': envelope.subject || '',
+        ':lastMessageDate': envelope.date,
+        ':participants': envelope.fromAddress,
+        ':isRead': envelope.isRead ? 1 : 0,
+        ':isStarred': envelope.isStarred ? 1 : 0,
+      }
+    );
+
+    this.scheduleSave();
   }
 
   // ---- Close ----
