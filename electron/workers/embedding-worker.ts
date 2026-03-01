@@ -107,11 +107,6 @@ async function callOllamaEmbed(texts: string[]): Promise<number[][]> {
   const retryDelaysMs = [5_000, 15_000, 45_000];
   const payload = { model: config.embeddingModel, input: texts };
 
-  postLog('info', '[EmbeddingWorker] Contacting Ollama /api/embed', {
-    inputCount: texts.length,
-    baseUrl: config.ollamaBaseUrl,
-  });
-
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
     try {
       const controller = new AbortController();
@@ -138,8 +133,6 @@ async function callOllamaEmbed(texts: string[]): Promise<number[][]> {
     } catch (err) {
       const isLastAttempt = attempt >= retryDelaysMs.length;
       const errorMessage = err instanceof Error ? err.message : String(err);
-
-      postLog('warn', 'Ollama embed error — full request payload sent to /api/embed', payload);
 
       if (isLastAttempt) {
         throw new Error(`Ollama embed failed after ${retryDelaysMs.length + 1} attempts: ${errorMessage}`);
@@ -237,7 +230,7 @@ async function processEmail(email: EmailBatchItem): Promise<BatchResult | null> 
   const chunks = chunkEmailBody(email.textBody, email.htmlBody, email.subject);
 
   if (chunks.length === 0) {
-    postLog('info', `[EmbeddingWorker] No chunks for email ${email.xGmMsgId} — skipping`);
+    postLog('debug', `[EmbeddingWorker] No chunks for email ${email.xGmMsgId} — skipping`);
     return null;
   }
 
@@ -254,16 +247,7 @@ async function processEmail(email: EmailBatchItem): Promise<BatchResult | null> 
     await waitWhilePaused();
 
     const subBatch = chunks.slice(chunkStart, chunkStart + config.ollamaBatchSize);
-    postLog('info', '[EmbeddingWorker] Before callOllamaEmbed', {
-      xGmMsgId: email.xGmMsgId,
-      subBatchSize: subBatch.length,
-      chunkRange: `${chunkStart}-${Math.min(chunkStart + subBatch.length, chunks.length) - 1}`,
-    });
     const embeddings = await callOllamaEmbed(subBatch);
-    postLog('info', '[EmbeddingWorker] After callOllamaEmbed', {
-      xGmMsgId: email.xGmMsgId,
-      embeddingCount: embeddings.length,
-    });
     allEmbeddings.push(...embeddings);
   }
 
@@ -342,14 +326,6 @@ parentPort?.on('message', async (message: { type: string; emails?: EmailBatchIte
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
 
-        postLog('warn', `[EmbeddingWorker] Failed to embed email ${email.xGmMsgId}: ${errorMessage}`);
-        postLog('warn', '[EmbeddingWorker] Raw error details', {
-          xGmMsgId: email.xGmMsgId,
-          errorMessage,
-          stack: err instanceof Error ? err.stack : undefined,
-          errorString: String(err),
-        });
-
         // Check if this is a connection-level failure (retries exhausted)
         if (errorMessage.includes('after') && errorMessage.includes('attempts')) {
           postLog('error', `[EmbeddingWorker] Ollama connection lost: ${errorMessage}`);
@@ -358,6 +334,7 @@ parentPort?.on('message', async (message: { type: string; emails?: EmailBatchIte
         }
 
         // Skip this email and continue with the next one
+        postLog('warn', `[EmbeddingWorker] Failed to embed email ${email.xGmMsgId}: ${errorMessage}`);
       }
 
       // Post progress after each email
@@ -365,10 +342,6 @@ parentPort?.on('message', async (message: { type: string; emails?: EmailBatchIte
     }
 
     // Report batch results back to main thread so it can update embedding_hash in main DB
-    postLog('info', '[EmbeddingWorker] Batch complete', {
-      succeeded: batchResults.length,
-      batchSize: message.emails.length,
-    });
     parentPort?.postMessage({ type: 'batch-done', results: batchResults });
   }
 });
