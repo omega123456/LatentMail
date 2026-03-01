@@ -12,6 +12,8 @@ import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
 import { NativeDropService } from './services/native-drop-service';
 import { TrayService } from './services/tray-service';
+import { VectorDbService } from './services/vector-db-service';
+import { EmbeddingService } from './services/embedding-service';
 import { getAvatarCacheDir } from './services/avatar-cache-service';
 import { isMacOS, isWindows } from './utils/platform';
 
@@ -77,6 +79,17 @@ if (runApp) {
       LoggerService.getInstance().initialize();
     } catch (err) {
       logger.error('Failed to initialize database:', err);
+    }
+
+    // Initialize vector database (Phase 2 — semantic search)
+    try {
+      const vectorDbService = VectorDbService.getInstance();
+      vectorDbService.initialize();
+      // Initialize EmbeddingService with the VectorDbService instance
+      EmbeddingService.getInstance(vectorDbService);
+      logger.info('VectorDbService and EmbeddingService initialized');
+    } catch (err) {
+      logger.warn('Failed to initialize VectorDbService/EmbeddingService — semantic search will be unavailable:', err);
     }
 
     // Register IPC handlers

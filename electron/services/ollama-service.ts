@@ -44,6 +44,7 @@ export class OllamaService {
   private baseUrl: string = 'http://localhost:11434';
   private connected: boolean = false;
   private currentModel: string = '';
+  private currentEmbeddingModel: string = '';
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private readonly HEALTH_CHECK_INTERVAL = 30_000; // 30 seconds
 
@@ -69,6 +70,10 @@ export class OllamaService {
       const model = db.getSetting('ollamaModel');
       if (model) {
         this.currentModel = model;
+      }
+      const embeddingModel = db.getSetting('ollamaEmbeddingModel');
+      if (embeddingModel) {
+        this.currentEmbeddingModel = embeddingModel;
       }
     } catch (err) {
       log.warn('Failed to load Ollama settings from DB:', err);
@@ -128,11 +133,12 @@ export class OllamaService {
   }
 
   /** Get current connection status */
-  getStatus(): { connected: boolean; url: string; currentModel: string } {
+  getStatus(): { connected: boolean; url: string; currentModel: string; embeddingModel: string } {
     return {
       connected: this.connected,
       url: this.baseUrl,
       currentModel: this.currentModel,
+      embeddingModel: this.currentEmbeddingModel,
     };
   }
 
@@ -162,6 +168,84 @@ export class OllamaService {
   /** Get the currently selected model, or empty string if none */
   getModel(): string {
     return this.currentModel;
+  }
+
+  /** Get the currently selected embedding model, or empty string if none */
+  getEmbeddingModel(): string {
+    return this.currentEmbeddingModel;
+  }
+
+  /** Update selected embedding model (persists to DB) */
+  setEmbeddingModel(model: string): void {
+    this.currentEmbeddingModel = model;
+    try {
+      const db = DatabaseService.getInstance();
+      db.setSetting('ollamaEmbeddingModel', model);
+    } catch (err) {
+      log.warn('Failed to save Ollama embedding model to DB:', err);
+    }
+  }
+
+  /**
+   * Call Ollama's /api/embed endpoint with an array of text inputs.
+   * Returns a 2D array of float vectors (one vector per input string).
+   *
+   * @param texts - Array of strings to embed
+   * @param model - Embedding model name (defaults to currentEmbeddingModel)
+   * @param timeoutMs - Request timeout in milliseconds (default 60s)
+   */
+  async embed(texts: string[], model?: string, timeoutMs: number = 60_000): Promise<number[][]> {
+    const embeddingModel = model || this.currentEmbeddingModel;
+    if (!embeddingModel) {
+      throw new Error('No embedding model selected. Please select an embedding model in Settings > AI.');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/embed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: embeddingModel, input: texts }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Ollama embed failed (${response.status}): ${text}`);
+      }
+
+      const data = await response.json() as { embeddings: number[][] };
+      if (!Array.isArray(data.embeddings)) {
+        throw new Error('Ollama embed response missing embeddings array');
+      }
+      return data.embeddings;
+    } catch (err) {
+      clearTimeout(timeout);
+      throw err;
+    }
+  }
+
+  /**
+   * Validate that a model supports the /api/embed endpoint by performing a test embed.
+   * Returns the vector dimension on success, throws on failure.
+   *
+   * @param model - Model name to validate
+   * @returns Vector dimension (e.g. 768 for nomic-embed-text)
+   */
+  async validateEmbeddingModel(model: string): Promise<number> {
+    const embeddings = await this.embed(['test'], model, 10_000);
+    if (!embeddings[0] || embeddings[0].length === 0) {
+      throw new Error('Embedding model returned empty vector');
+    }
+    return embeddings[0].length;
+  }
+
+  /** Get the base URL for Ollama (used by worker threads that call Ollama directly) */
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   /** List available models from Ollama */

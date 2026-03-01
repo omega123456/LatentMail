@@ -293,6 +293,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 - Validate all IPC input (treat renderer as untrusted)
 - Use `electron-log` for all logging (auto-rotates, persists to file)
 - Use `safeStorage` for credentials (never store tokens in SQLite or files)
+- **Always use platform/arch helpers** for OS and CPU checks: import from `electron/utils/platform.ts` and use `isWindows()`, `isMacOS()`, `isLinux()`, `isX64()`, `isArm64()` (or `isPlatform()` / `isArch()` for other values). Do not compare `process.platform` or `process.arch` directly.
 
 ### Database
 
