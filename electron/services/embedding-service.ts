@@ -3,19 +3,31 @@
  *
  * Responsibilities:
  * - Spawns and manages the embedding worker thread
- * - Queries DatabaseService for un-embedded emails and feeds them to the worker
- * - Receives batch-done results from worker and updates embedding_hash in main DB
+ * - Full build: crawls [Gmail]/All Mail via ImapCrawlService, embeds emails on-the-fly,
+ *   discards bodies after embedding (fetch → embed → discard strategy)
+ * - Incremental build: reads emails with bodies from the local DB (post-body-fetch)
+ * - After embedding, writes indexed records to the vector_indexed_emails table
  * - Forwards progress events to all renderer windows
- * - Handles build/cancel/status lifecycle
- * - Provides scheduleIncrementalIndex() for post-sync hooks
+ * - Handles build/cancel/status lifecycle with reconnect-and-resume resilience
+ * - Provides scheduleIncrementalIndex() for post-body-fetch hooks
  *
- * Batch flow (sequential, one batch at a time):
- *   1. Main queries DB for a batch of un-embedded emails
- *   2. Main sends batch to worker via postMessage
- *   3. Worker chunks, embeds, stores vectors, sends back batch-done with results
- *   4. Main receives batch-done, updates embedding_hash in main DB
- *   5. Repeat until all emails are embedded
- *   6. Main terminates worker, broadcasts complete
+ * Full build flow (sequential, one batch at a time):
+ *   1. ImapCrawlService connects to [Gmail]/All Mail
+ *   2. SEARCH ALL → full UID list
+ *   3. getIndexedMsgIds() → set of already-indexed xGmMsgIds
+ *   4. For each UID batch (50 UIDs):
+ *      a. Fetch full bodies via ImapCrawlService.fetchBatch()
+ *      b. Filter out Spam/Trash/Draft → write SKIPPED_FILTERED sentinel to vector_indexed_emails
+ *      c. Truncate body text at 10,000 characters
+ *      d. Send batch to embedding worker
+ *      e. Worker embeds, stores vectors, returns batch-done
+ *      f. Write (xGmMsgId, account_id, hash) to vector_indexed_emails
+ *      g. Sleep 1 second
+ *   5. Disconnect ImapCrawlService
+ *   6. Broadcast complete
+ *
+ * On IMAP error: reconnect-and-resume (up to 3 attempts, exponential backoff).
+ * vector_indexed_emails is the checkpoint — re-runs skip already-indexed emails.
  */
 
 import { Worker } from 'worker_threads';
@@ -26,13 +38,32 @@ import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { VectorDbService } from './vector-db-service';
 import { OllamaService } from './ollama-service';
+import { ImapCrawlService } from './imap-crawl-service';
 import { getLastIpcActivityTimestamp } from '../ipc/ipc-activity-tracker';
 import type { EmailBatchItem, EmbeddingWorkerData, BatchResult } from '../workers/embedding-worker';
 
 const log = LoggerService.getInstance();
 
-/** Batch size: number of emails fetched from DB and sent to worker at once. */
+/** Batch size: number of emails fetched from IMAP / DB and sent to worker at once. */
 const EMAIL_BATCH_SIZE = 50;
+
+/** Maximum body text characters to pass to the chunker (after simpleParser extraction). */
+const MAX_BODY_CHARS = 10_000;
+
+/**
+ * Sentinel value written to vector_indexed_emails.embedding_hash for emails that
+ * are filtered out (Spam, Trash, or Drafts). They count as "indexed" for progress
+ * and are never re-fetched on subsequent builds.
+ */
+const SKIPPED_FILTERED = 'SKIPPED_FILTERED';
+
+/** Gmail paths used for spam/trash/draft filtering. */
+const SPAM_PATH = '[Gmail]/Spam';
+const DRAFTS_PATH = '[Gmail]/Drafts';
+
+/** Reconnect-and-resume configuration. */
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_DELAYS_MS = [5_000, 15_000, 45_000];
 
 /** Build state machine states. */
 type BuildState = 'idle' | 'building' | 'error';
@@ -49,6 +80,15 @@ export class EmbeddingService {
   private worker: Worker | null = null;
   private buildState: BuildState = 'idle';
   private incrementalScheduled: boolean = false;
+
+  /** Total emails to index in the current full build (IMAP-based UID count minus indexed). */
+  private currentBuildTotal: number = 0;
+
+  /**
+   * Emails indexed so far in the current full build.
+   * Includes both successfully-embedded emails and SKIPPED_FILTERED sentinels.
+   */
+  private currentBuildIndexed: number = 0;
 
   /**
    * Timestamp of the most recent mail or compose IPC invocation.
@@ -79,8 +119,25 @@ export class EmbeddingService {
   }
 
   /**
-   * Start a full index build.
-   * Queries all un-embedded emails across all active accounts and sends them to the worker.
+   * Total emails to index in the current full build (IMAP UID count minus already indexed).
+   * Returns 0 outside of an active build.
+   */
+  getCurrentBuildTotal(): number {
+    return this.currentBuildTotal;
+  }
+
+  /**
+   * Emails indexed so far in the current full build (sentinels + embedded).
+   * Returns 0 outside of an active build.
+   */
+  getCurrentBuildIndexed(): number {
+    return this.currentBuildIndexed;
+  }
+
+  /**
+   * Start a full index build using the IMAP crawl pipeline.
+   * Crawls [Gmail]/All Mail via a dedicated IMAP connection, embeds emails on-the-fly,
+   * and discards bodies after embedding.
    * Returns immediately; progress is reported via push events.
    *
    * @throws if a build is already in progress
@@ -106,7 +163,9 @@ export class EmbeddingService {
     }
 
     this.buildState = 'building';
-    log.info('[EmbeddingService] Starting full index build');
+    this.currentBuildTotal = 0;
+    this.currentBuildIndexed = 0;
+    log.info('[EmbeddingService] Starting full index build (IMAP crawl pipeline)');
 
     this.runBuildLoop(embeddingModel, vectorDimension).catch((err) => {
       log.error('[EmbeddingService] Build loop failed unexpectedly:', err);
@@ -117,7 +176,7 @@ export class EmbeddingService {
 
   /**
    * Cancel an in-progress build.
-   * Posts cancel to the worker and terminates it.
+   * Emails fully embedded before cancel are committed (kept in vector_indexed_emails and vector DB).
    */
   cancelBuild(): void {
     if (this.buildState !== 'building') {
@@ -127,11 +186,13 @@ export class EmbeddingService {
     log.info('[EmbeddingService] Cancelling index build');
     this.terminateWorker();
     this.buildState = 'idle';
+    this.currentBuildTotal = 0;
+    this.currentBuildIndexed = 0;
   }
 
   /**
    * Notify EmbeddingService to check for un-embedded emails on its next idle cycle.
-   * Called after a sync completes. Non-blocking (fire-and-forget).
+   * Called after body-fetch queue items complete. Non-blocking (fire-and-forget).
    * Waits until no mail or compose IPC activity in the last 30 seconds before starting.
    */
   scheduleIncrementalIndex(): void {
@@ -140,7 +201,7 @@ export class EmbeddingService {
     }
 
     this.incrementalScheduled = true;
-    log.debug('[EmbeddingService] Incremental index scheduled after sync');
+    log.debug('[EmbeddingService] Incremental index scheduled after body-fetch');
 
     setImmediate(() => {
       this.runIncrementalWhenIdle().catch((err) => {
@@ -151,7 +212,9 @@ export class EmbeddingService {
 
   /**
    * Handle an embedding model change.
-   * Clears all existing vectors, resets all embedding hashes, reconfigures with new dimension.
+   * Clears all existing vectors, clears all vector_indexed_emails records,
+   * and reconfigures with the new vector dimension.
+   * A fresh full build is required after this call.
    *
    * @param newModel - The new embedding model name
    * @param newDimension - Vector dimension for the new model
@@ -167,19 +230,27 @@ export class EmbeddingService {
     this.vectorDbService.clearAllAndReconfigure(newModel, newDimension);
 
     const db = DatabaseService.getInstance();
-    db.resetAllEmbeddingHashes();
+    db.clearAllVectorIndexedEmails();
 
     log.info('[EmbeddingService] Model change complete — index cleared, re-index required');
   }
 
-  // ---- Internal build loop ----
+  // ---- Internal build loop (full IMAP crawl) ----
 
   /**
-   * Main build loop: spawns the worker and feeds email batches until all are embedded
-   * or the build is cancelled. Fully sequential — one batch at a time.
+   * Main build loop: crawls [Gmail]/All Mail via ImapCrawlService, embeds all
+   * un-indexed emails, and writes completion records to vector_indexed_emails.
+   *
+   * Processes accounts sequentially. Within each account, processes UID batches
+   * sequentially with a 1-second inter-batch delay.
+   *
+   * On IMAP connection failure: reconnects (up to MAX_RECONNECT_ATTEMPTS) and resumes.
+   * vector_indexed_emails serves as the checkpoint — after reconnect, already-indexed
+   * emails are skipped even though all UIDs are re-traversed.
    */
   private async runBuildLoop(embeddingModel: string, vectorDimension: number): Promise<void> {
     const db = DatabaseService.getInstance();
+    const crawlService = ImapCrawlService.getInstance();
     const accounts = db.getAccounts().filter((account) => account.is_active);
 
     if (accounts.length === 0) {
@@ -188,22 +259,351 @@ export class EmbeddingService {
       return;
     }
 
-    // Count total emails needing embedding across all accounts
-    let totalToEmbed = 0;
-    for (const account of accounts) {
-      const counts = db.countEmbeddingStatus(account.id);
-      totalToEmbed += counts.total - counts.embedded;
+    // Spawn the embedding worker once for the entire build
+    if (!this.spawnWorker(embeddingModel, vectorDimension)) {
+      return; // spawnWorker sets error state internally
     }
 
-    if (totalToEmbed === 0) {
-      log.info('[EmbeddingService] All emails are already embedded');
+    let isFirstBatch = true;
+    let totalSentinels = 0;
+    let globalWorkerError: string | null = null;
+
+    for (const account of accounts) {
+      if (this.buildState !== 'building') {
+        break;
+      }
+
+      log.info(`[EmbeddingService] Processing account ${account.id} (${account.email})`);
+
+      // Connect dedicated IMAP connection for this account
+      try {
+        await crawlService.connect(String(account.id));
+      } catch (err) {
+        log.error(`[EmbeddingService] Failed to connect IMAP for account ${account.id}:`, err);
+        continue; // skip this account, try next
+      }
+
+      let accountWorkerError: string | null = null;
+      let reconnectAttempts = 0;
+
+      // Outer loop: reconnect-and-resume on IMAP failure
+      while (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS && this.buildState === 'building') {
+        try {
+          // 1. Get all UIDs from [Gmail]/All Mail
+          const allUids = await crawlService.searchAllUids(String(account.id));
+          log.info(`[EmbeddingService] Account ${account.id}: ${allUids.length} total UIDs in All Mail`);
+
+          // 2. Get the set of already-indexed xGmMsgIds (indexed + sentinels)
+          const indexedSet = db.getIndexedMsgIds(account.id);
+          log.info(`[EmbeddingService] Account ${account.id}: ${indexedSet.size} already indexed`);
+
+          // 3. Compute progress total contribution for this account
+          //    (estimate: UIDs minus already-indexed; exact count comes from fetching)
+          const estimatedUnindexed = Math.max(0, allUids.length - indexedSet.size);
+          this.currentBuildTotal += estimatedUnindexed;
+
+          // 4. Resolve trash folder for filtering
+          const trashFolder = db.getTrashFolder(account.id);
+
+          // 5. Process UIDs in batches of EMAIL_BATCH_SIZE
+          for (
+            let batchStart = 0;
+            batchStart < allUids.length && this.buildState === 'building';
+            batchStart += EMAIL_BATCH_SIZE
+          ) {
+            const batchUids = allUids.slice(batchStart, batchStart + EMAIL_BATCH_SIZE);
+
+            // Fetch full bodies for this batch
+            const fetchedEmails = await crawlService.fetchBatch(String(account.id), batchUids);
+
+            // Categorize: skip already-indexed, sentinel for filtered, embed the rest
+            const sentinelRecords: Array<{ xGmMsgId: string; embeddingHash: string }> = [];
+            const batchItems: EmailBatchItem[] = [];
+
+            for (const email of fetchedEmails) {
+              // Skip if already indexed (from a previous build or earlier in this run)
+              if (indexedSet.has(email.xGmMsgId)) {
+                continue;
+              }
+
+              // Filter Spam / Trash / Drafts
+              const isFiltered =
+                email.rawLabels.includes(SPAM_PATH) ||
+                email.rawLabels.includes(trashFolder) ||
+                email.rawLabels.includes(DRAFTS_PATH) ||
+                email.isDraft;
+
+              if (isFiltered) {
+                sentinelRecords.push({
+                  xGmMsgId: email.xGmMsgId,
+                  embeddingHash: SKIPPED_FILTERED,
+                });
+                indexedSet.add(email.xGmMsgId);
+              } else {
+                // Truncate body at MAX_BODY_CHARS before passing to chunker
+                const truncatedText =
+                  email.textBody.length > MAX_BODY_CHARS
+                    ? email.textBody.slice(0, MAX_BODY_CHARS)
+                    : email.textBody;
+                const truncatedHtml =
+                  email.htmlBody.length > MAX_BODY_CHARS
+                    ? email.htmlBody.slice(0, MAX_BODY_CHARS)
+                    : email.htmlBody;
+
+                const bodyContent = truncatedText || truncatedHtml || '';
+                const hash = crypto
+                  .createHash('sha256')
+                  .update(bodyContent)
+                  .digest('hex')
+                  .slice(0, 16);
+
+                batchItems.push({
+                  xGmMsgId: email.xGmMsgId,
+                  accountId: account.id,
+                  subject: email.subject,
+                  textBody: truncatedText || null,
+                  htmlBody: truncatedHtml || null,
+                  hash,
+                });
+              }
+            }
+
+            // Write sentinel records to DB
+            if (sentinelRecords.length > 0) {
+              db.batchInsertVectorIndexedEmails(account.id, sentinelRecords);
+              totalSentinels += sentinelRecords.length;
+              this.currentBuildIndexed += sentinelRecords.length;
+            }
+
+            // Send non-filtered emails to the embedding worker
+            if (batchItems.length > 0) {
+              let batchDoneResults: BatchResult[] = [];
+              try {
+                batchDoneResults = await this.sendBatchAndWait(
+                  batchItems,
+                  this.currentBuildTotal,
+                  totalSentinels,
+                  isFirstBatch
+                );
+                isFirstBatch = false;
+              } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                log.error('[EmbeddingService] Batch worker error:', errorMessage);
+                accountWorkerError = errorMessage;
+                break;
+              }
+
+              // Write indexed records to DB
+              if (batchDoneResults.length > 0) {
+                db.batchInsertVectorIndexedEmails(
+                  account.id,
+                  batchDoneResults.map((result) => ({
+                    xGmMsgId: result.xGmMsgId,
+                    embeddingHash: result.hash,
+                  }))
+                );
+                this.currentBuildIndexed += batchDoneResults.length;
+                for (const result of batchDoneResults) {
+                  indexedSet.add(result.xGmMsgId);
+                }
+              }
+            } else if (sentinelRecords.length === 0) {
+              // Entirely skipped batch (all already indexed) — no progress to broadcast
+              isFirstBatch = false;
+            }
+
+            // Inter-batch delay (reduce Gmail rate limiting pressure)
+            await sleep(1_000);
+          }
+
+          // Success — exit the reconnect loop
+          break;
+        } catch (err) {
+          // IMAP-level error (network, auth, etc.)
+          if (
+            reconnectAttempts < MAX_RECONNECT_ATTEMPTS &&
+            this.buildState === 'building' &&
+            accountWorkerError === null
+          ) {
+            const delayMs = RECONNECT_DELAYS_MS[reconnectAttempts];
+            reconnectAttempts++;
+            log.warn(
+              `[EmbeddingService] IMAP error for account ${account.id} ` +
+              `(attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}), ` +
+              `reconnecting in ${delayMs / 1000}s:`,
+              err
+            );
+            await sleep(delayMs);
+            try {
+              await crawlService.reconnect(String(account.id));
+              // Reset this account's contribution to the total so it gets recomputed
+              // after SEARCH ALL is re-run on the next iteration
+              this.currentBuildTotal = Math.max(0, this.currentBuildTotal);
+            } catch (reconnectErr) {
+              log.error(`[EmbeddingService] Reconnect failed for account ${account.id}:`, reconnectErr);
+              accountWorkerError = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
+              break;
+            }
+          } else {
+            log.error(
+              `[EmbeddingService] IMAP error exhausted retries for account ${account.id}:`,
+              err
+            );
+            accountWorkerError = err instanceof Error ? err.message : String(err);
+            break;
+          }
+        }
+      }
+
+      // Disconnect crawl connection for this account
+      await crawlService.disconnect(String(account.id));
+
+      if (accountWorkerError) {
+        globalWorkerError = accountWorkerError;
+        break;
+      }
+    }
+
+    // Terminate the worker now that all batches are processed
+    this.terminateWorker();
+
+    if (globalWorkerError) {
+      this.buildState = 'error';
+      this.currentBuildTotal = 0;
+      this.currentBuildIndexed = 0;
+      this.broadcastError(globalWorkerError);
+    } else if (this.buildState === 'building') {
       this.buildState = 'idle';
+      log.info(
+        `[EmbeddingService] Full index build complete. ` +
+        `Total indexed: ${this.currentBuildIndexed} (including ${totalSentinels} filtered sentinels)`
+      );
+      this.currentBuildTotal = 0;
+      this.currentBuildIndexed = 0;
       this.broadcastComplete();
+    }
+    // If buildState was changed to 'idle' by cancelBuild() during the loop, we exit cleanly.
+  }
+
+  // ---- Internal incremental loop (DB-based, post-body-fetch) ----
+
+  /**
+   * Incremental index loop: reads emails with bodies from the local DB that
+   * haven't been indexed yet (getEmailsNeedingVectorIndexing) and embeds them.
+   * No IMAP connection needed — bodies were just fetched by BodyPrefetchService.
+   */
+  private async runIncrementalLoop(embeddingModel: string, vectorDimension: number): Promise<void> {
+    const db = DatabaseService.getInstance();
+    const accounts = db.getAccounts().filter((account) => account.is_active);
+
+    if (accounts.length === 0) {
       return;
     }
 
-    log.info(`[EmbeddingService] Building index: ${totalToEmbed} emails across ${accounts.length} accounts`);
+    // Spawn worker for the incremental run
+    if (!this.spawnWorker(embeddingModel, vectorDimension)) {
+      return;
+    }
 
+    let isFirstBatch = true;
+    let totalIndexed = 0;
+    let workerError: string | null = null;
+
+    // Quick check: see if there is anything at all to embed before spawning work
+    const hasAny = accounts.some((account) => db.getEmailsNeedingVectorIndexing(account.id, 1).length > 0);
+    if (!hasAny) {
+      this.terminateWorker();
+      return;
+    }
+
+    // Total is not pre-computed for incremental runs (bodies arrive in small batches post-sync).
+    // The worker reports per-batch progress relative to each batch size.
+    const totalNeedingIndex = 0;
+
+    log.info('[EmbeddingService] Incremental index: starting (bodies available in local DB)');
+
+    for (const account of accounts) {
+      if (this.buildState !== 'building') {
+        break;
+      }
+
+      let hasMore = true;
+      while (hasMore && this.buildState === 'building') {
+        const emails = db.getEmailsNeedingVectorIndexing(account.id, EMAIL_BATCH_SIZE);
+
+        if (emails.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        const batchItems: EmailBatchItem[] = emails.map((email) => {
+          const bodyContent = email.textBody ?? email.htmlBody ?? '';
+          const hash = crypto.createHash('sha256').update(bodyContent).digest('hex').slice(0, 16);
+          return {
+            xGmMsgId: email.xGmMsgId,
+            accountId: email.accountId,
+            subject: email.subject,
+            textBody: email.textBody ?? null,
+            htmlBody: email.htmlBody ?? null,
+            hash,
+          };
+        });
+
+        let batchDoneResults: BatchResult[] = [];
+        try {
+          batchDoneResults = await this.sendBatchAndWait(
+            batchItems,
+            totalNeedingIndex,
+            0, // no sentinels in incremental path
+            isFirstBatch
+          );
+          isFirstBatch = false;
+        } catch (err) {
+          workerError = err instanceof Error ? err.message : String(err);
+          log.error('[EmbeddingService] Incremental batch error:', workerError);
+          break;
+        }
+
+        if (batchDoneResults.length > 0) {
+          db.batchInsertVectorIndexedEmails(
+            account.id,
+            batchDoneResults.map((result) => ({
+              xGmMsgId: result.xGmMsgId,
+              embeddingHash: result.hash,
+            }))
+          );
+          totalIndexed += batchDoneResults.length;
+        }
+
+        if (emails.length < EMAIL_BATCH_SIZE) {
+          hasMore = false;
+        }
+      }
+
+      if (workerError) {
+        break;
+      }
+    }
+
+    this.terminateWorker();
+
+    if (workerError) {
+      this.buildState = 'error';
+      this.broadcastError(workerError);
+    } else if (this.buildState === 'building') {
+      this.buildState = 'idle';
+      log.info(`[EmbeddingService] Incremental index complete. Embedded: ${totalIndexed}`);
+      this.broadcastComplete();
+    }
+  }
+
+  // ---- Worker management ----
+
+  /**
+   * Spawn the embedding worker thread. Sets error state and returns false on failure.
+   * Sets this.worker on success.
+   */
+  private spawnWorker(embeddingModel: string, vectorDimension: number): boolean {
     const workerData: EmbeddingWorkerData = {
       ollamaBaseUrl: OllamaService.getInstance().getBaseUrl(),
       embeddingModel,
@@ -221,7 +621,7 @@ export class EmbeddingService {
       log.error('[EmbeddingService] Failed to spawn embedding worker:', err);
       this.buildState = 'error';
       this.broadcastError(err instanceof Error ? err.message : 'Failed to spawn worker');
-      return;
+      return false;
     }
 
     // Forward worker log messages to electron-log
@@ -246,88 +646,7 @@ export class EmbeddingService {
       }
     });
 
-    // Process all accounts sequentially
-    let totalIndexed = 0;
-    let workerError: string | null = null;
-
-    for (const account of accounts) {
-      if (this.buildState !== 'building') {
-        break;
-      }
-
-      let hasMore = true;
-      while (hasMore && this.buildState === 'building') {
-        const emails = db.getEmailsNeedingEmbedding(account.id, EMAIL_BATCH_SIZE);
-
-        if (emails.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        // Compute hashes on main thread
-        const batchItems: EmailBatchItem[] = emails.map((email) => {
-          const bodyContent = email.textBody ?? email.htmlBody ?? '';
-          const hash = crypto.createHash('sha256').update(bodyContent).digest('hex').slice(0, 16);
-          return {
-            xGmMsgId: email.xGmMsgId,
-            accountId: email.accountId,
-            subject: email.subject,
-            textBody: email.textBody,
-            htmlBody: email.htmlBody,
-            hash,
-          };
-        });
-
-        // Send batch and wait for results
-        let batchDoneResults: BatchResult[] = [];
-        let batchError: string | null = null;
-
-        try {
-          const isFirstBatch = totalIndexed === 0;
-          batchDoneResults = await this.sendBatchAndWait(batchItems, totalToEmbed, totalIndexed, isFirstBatch);
-        } catch (err) {
-          batchError = err instanceof Error ? err.message : String(err);
-          log.error('[EmbeddingService] Batch processing error:', batchError);
-          workerError = batchError;
-          break;
-        }
-
-        // Update embedding hashes in main DB
-        if (batchDoneResults.length > 0) {
-          const updates = batchDoneResults.map((result) => ({
-            xGmMsgId: result.xGmMsgId,
-            hash: result.hash,
-          }));
-          try {
-            db.batchUpdateEmbeddingHash(account.id, updates);
-          } catch (err) {
-            log.warn('[EmbeddingService] Failed to update embedding hashes:', err);
-          }
-          totalIndexed += batchDoneResults.length;
-        }
-
-        if (emails.length < EMAIL_BATCH_SIZE) {
-          hasMore = false;
-        }
-      }
-
-      if (workerError) {
-        break;
-      }
-    }
-
-    // Terminate the worker now that all batches are processed
-    this.terminateWorker();
-
-    if (workerError) {
-      this.buildState = 'error';
-      this.broadcastError(workerError);
-    } else if (this.buildState === 'building') {
-      this.buildState = 'idle';
-      log.info(`[EmbeddingService] Full index build complete. Total indexed: ${totalIndexed}`);
-      this.broadcastComplete();
-    }
-    // If buildState was changed to 'idle' by cancelBuild() during the loop, we just exit cleanly.
+    return true;
   }
 
   /**
@@ -335,14 +654,15 @@ export class EmbeddingService {
    * Returns the results from the worker. Throws on worker error.
    *
    * @param batchItems - Emails to embed
-   * @param totalInRun - Total emails in this run (for progress display)
-   * @param indexedSoFar - Emails indexed before this batch
-   * @param isFirstBatch - True for the first batch of this build (worker resets progress)
+   * @param totalInRun - Total emails in this build run (for progress display)
+   * @param sentinelOffset - Number of sentinel-filtered emails already counted toward progress.
+   *                         Added to the worker's own indexed count for accurate display.
+   * @param isFirstBatch - True for the very first batch of this build (resets worker counter)
    */
   private sendBatchAndWait(
     batchItems: EmailBatchItem[],
     totalInRun: number,
-    indexedSoFar: number,
+    sentinelOffset: number,
     isFirstBatch: boolean
   ): Promise<BatchResult[]> {
     return new Promise((resolve, reject) => {
@@ -366,10 +686,12 @@ export class EmbeddingService {
         message?: string;
       }) => {
         if (message.type === 'progress') {
-          // Worker sends cumulative indexed count for the whole run; use it directly (do not add main's totalIndexed)
-          const indexed = message.indexed ?? 0;
-          const percent = totalInRun > 0 ? Math.round((indexed / totalInRun) * 100) : 0;
-          this.broadcastProgress(indexed, totalInRun, percent);
+          // Worker's indexed count (non-sentinel emails only); add sentinelOffset for accurate total
+          const workerIndexed = message.indexed ?? 0;
+          const totalIndexed = sentinelOffset + workerIndexed;
+          this.currentBuildIndexed = totalIndexed;
+          const percent = totalInRun > 0 ? Math.round((totalIndexed / totalInRun) * 100) : 0;
+          this.broadcastProgress(totalIndexed, totalInRun, percent);
           return; // Keep listening
         }
 
@@ -386,7 +708,7 @@ export class EmbeddingService {
           reject(new Error(message.message ?? 'Worker error'));
           return;
         }
-        // 'log' messages are handled by the permanent listener; ignore here.
+        // 'log' messages are handled by the permanent listener set up in spawnWorker(); ignore here.
       };
 
       this.worker.on('message', onMessage);
@@ -417,7 +739,7 @@ export class EmbeddingService {
 
   /**
    * Run an incremental index when the app is idle (no recent IPC activity).
-   * Called after sync cycles via scheduleIncrementalIndex().
+   * Called after body-fetch queue items complete via scheduleIncrementalIndex().
    */
   private async runIncrementalWhenIdle(): Promise<void> {
     const IDLE_THRESHOLD_MS = 30_000;
@@ -461,17 +783,17 @@ export class EmbeddingService {
 
     const db = DatabaseService.getInstance();
     const accounts = db.getAccounts().filter((account) => account.is_active);
-    let hasAnyUnembedded = false;
+    let hasAnyUnindexed = false;
 
     for (const account of accounts) {
-      const counts = db.countEmbeddingStatus(account.id);
-      if (counts.total > counts.embedded) {
-        hasAnyUnembedded = true;
+      const needsIndexing = db.getEmailsNeedingVectorIndexing(account.id, 1);
+      if (needsIndexing.length > 0) {
+        hasAnyUnindexed = true;
         break;
       }
     }
 
-    if (!hasAnyUnembedded) {
+    if (!hasAnyUnindexed) {
       log.debug('[EmbeddingService] Incremental index: nothing to embed');
       this.incrementalScheduled = false;
       return;
@@ -481,7 +803,7 @@ export class EmbeddingService {
     this.buildState = 'building';
 
     try {
-      await this.runBuildLoop(embeddingModel, vectorDimension);
+      await this.runIncrementalLoop(embeddingModel, vectorDimension);
     } finally {
       this.incrementalScheduled = false;
     }

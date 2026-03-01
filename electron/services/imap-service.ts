@@ -812,6 +812,45 @@ export class ImapService {
   }
 
   /**
+   * Create a dedicated (non-pooled) IMAP connection for the given account.
+   * The connection is NOT registered in the shared connections pool — the caller
+   * owns the connection lifecycle (connect, error handling, logout).
+   * Used by ImapCrawlService for the full-mailbox vector indexing pipeline.
+   */
+  async createDedicatedConnection(accountId: string): Promise<ImapFlow> {
+    const oauthService = OAuthService.getInstance();
+    const db = DatabaseService.getInstance();
+    const account = db.getAccountById(Number(accountId));
+
+    if (!account) {
+      throw new Error(`Account ${accountId} not found`);
+    }
+
+    const accessToken = await oauthService.getAccessToken(accountId);
+
+    const client = new ImapFlow({
+      host: 'imap.gmail.com',
+      port: 993,
+      secure: true,
+      auth: {
+        user: account.email,
+        accessToken: accessToken,
+      },
+      logger: {
+        debug: (msg: unknown) => log.debug(`[IMAP-CRAWL ${accountId}]`, msg),
+        info: (msg: unknown) => log.info(`[IMAP-CRAWL ${accountId}]`, msg),
+        warn: (msg: unknown) => log.warn(`[IMAP-CRAWL ${accountId}]`, msg),
+        error: (msg: unknown) => log.error(`[IMAP-CRAWL ${accountId}]`, msg),
+      },
+      emitLogs: false,
+    });
+
+    await client.connect();
+    log.info(`[IMAP] Dedicated crawl connection established for account ${accountId} (${account.email})`);
+    return client;
+  }
+
+  /**
    * Create a dedicated IMAP connection for IDLE (separate from shared pool).
    */
   async connectIdle(accountId: string): Promise<ImapFlow> {

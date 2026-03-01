@@ -341,7 +341,7 @@ parentPort?.on('message', async (message: { type: string; emails?: EmailBatchIte
       postProgress(indexedSoFar, totalEmailsInRun);
     }
 
-    // Report batch results back to main thread so it can update embedding_hash in main DB
+    // Report batch results back to main thread so it can write to vector_indexed_emails in main DB
     parentPort?.postMessage({ type: 'batch-done', results: batchResults });
   }
 });
