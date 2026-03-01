@@ -16,6 +16,8 @@ export class AiSettingsComponent implements OnInit {
   readonly testingConnection = signal(false);
   /** Tracks whether the user has confirmed a model switch warning for a pending model */
   readonly pendingEmbeddingModel = signal<string | null>(null);
+  /** True when the build-index confirmation is shown (user clicked Build/Rebuild but not yet confirmed) */
+  readonly showBuildIndexConfirmation = signal(false);
 
   /**
    * True when the progress total is known (during an active build).
@@ -93,8 +95,20 @@ export class AiSettingsComponent implements OnInit {
     this.pendingEmbeddingModel.set(null);
   }
 
-  async buildSearchIndex(): Promise<void> {
+  /** Show confirmation before starting a full index build (can take hours). */
+  requestBuildSearchIndex(): void {
+    this.showBuildIndexConfirmation.set(true);
+  }
+
+  /** User confirmed the build — start the index build. */
+  async confirmBuildSearchIndex(): Promise<void> {
+    this.showBuildIndexConfirmation.set(false);
     await this.aiStore.buildIndex();
+  }
+
+  /** User cancelled the build-index confirmation. */
+  cancelBuildSearchIndex(): void {
+    this.showBuildIndexConfirmation.set(false);
   }
 
   async cancelBuild(): Promise<void> {

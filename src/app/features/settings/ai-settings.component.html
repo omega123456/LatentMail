@@ -222,12 +222,26 @@
         </div>
       }
 
+      <!-- Build index confirmation (same style as embedding model switch warning) -->
+      @if (showBuildIndexConfirmation()) {
+        <div class="model-switch-warning">
+          <span class="material-symbols-outlined warning-icon">warning</span>
+          <div class="warning-content">
+            <p>Building the search index can take hours depending on the size of your mailbox. The app will continue indexing in the background. Continue?</p>
+            <div class="warning-actions">
+              <button class="action-btn" (click)="confirmBuildSearchIndex()">Build Index</button>
+              <button class="action-btn secondary" (click)="cancelBuildSearchIndex()">Cancel</button>
+            </div>
+          </div>
+        </div>
+      }
+
       <!-- Action buttons -->
       @if (aiStore.indexStatus() !== 'unavailable') {
         <div class="index-actions">
           <button
             class="action-btn"
-            (click)="buildSearchIndex()"
+            (click)="requestBuildSearchIndex()"
             [disabled]="!aiStore.embeddingModel() || aiStore.indexStatus() === 'building'"
           >
             <span class="material-symbols-outlined">play_circle</span>
