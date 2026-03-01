@@ -1168,13 +1168,11 @@ export class SyncService {
       const notification = new Notification({ title, body, ...(icon ? { icon } : {}) });
 
       notification.on('click', () => {
+        // Use TrayService so the main window is shown when app is in tray (window is hidden, not just minimized).
+        TrayService.getInstance().showAndFocusMainWindow();
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
           if (!win.isDestroyed()) {
-            if (win.isMinimized()) {
-              win.restore();
-            }
-            win.focus();
             win.webContents.send(IPC_EVENTS.MAIL_NOTIFICATION_CLICK, {
               accountId,
               xGmThrid: clickThreadId || '',

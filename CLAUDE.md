@@ -299,6 +299,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 - Use parameterized queries for all user input (`db.run()` / `db.exec()` with params)
 - **Use named placeholders only** — never positional `?`. Use `:name` in SQL and pass an object: `{ ':accountId': id, ':folder': folder }`. Keys must include the colon (per sql.js). This keeps queries readable and avoids parameter-order bugs.
+- **Trash folder**: Never hardcode `'[Gmail]/Trash'` or any trash path in SQL or application code. Always resolve the trash folder via `DatabaseService.getTrashFolder(accountId)` and pass it as a bound parameter (e.g. `:trashFolder`). This supports accounts that use `[Gmail]/Bin` or other locale- or provider-specific trash folders; inline `labels` joins for `special_use = '\Trash'` can fail and fall back incorrectly.
 - Wrap multi-statement transactions in `db.transaction(() => { ... })` (or `BEGIN`/`COMMIT`/`ROLLBACK` where used)
 - Always handle foreign key constraints (CASCADE deletes)
 - Use ISO 8601 format for timestamps (`datetime('now')`)
@@ -344,3 +345,4 @@ Use `sqlite3` CLI or DB Browser for SQLite to inspect.
 7. **Queue persistence**: Don't clear queue table manually; use `queue:clear-completed` IPC
 8. **Draft-send lifecycle**: Send operation must either succeed or leave draft untouched (no orphan drafts)
 9. **Gmail folder names**: Use `[Gmail]/...` paths, not localized names (e.g., `[Gmail]/Sent Mail`, not "Sent")
+10. **Trash folder**: Use `getTrashFolder(accountId)` and pass as `:trashFolder`; do not hardcode `[Gmail]/Trash` or join on `labels.special_use` in raw SQL (Bin/other locales break).

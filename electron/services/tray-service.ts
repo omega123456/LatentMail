@@ -316,7 +316,11 @@ export class TrayService {
     this.tray.setContextMenu(contextMenu);
   }
 
-  private showAndFocusMainWindow(): void {
+  /**
+   * Show and focus the main window. Used by tray click and by notification click
+   * when the app is in the system tray (window hidden).
+   */
+  showAndFocusMainWindow(): void {
     const win = this.resolveMainWindow();
     if (win === null) {
       return;

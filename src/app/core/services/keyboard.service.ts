@@ -1,5 +1,6 @@
-import { Injectable, NgZone } from '@angular/core';
+import { Injectable, NgZone, inject } from '@angular/core';
 import { Subject } from 'rxjs';
+import { ComposeStore } from '../../store/compose.store';
 
 export interface KeyboardShortcut {
   id: string;
@@ -11,6 +12,7 @@ export interface KeyboardShortcut {
 
 @Injectable({ providedIn: 'root' })
 export class KeyboardService {
+  private readonly composeStore = inject(ComposeStore);
   private shortcuts: Map<string, KeyboardShortcut> = new Map();
   private chordPrefix: string | null = null;
   private chordTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -33,9 +35,16 @@ export class KeyboardService {
   }
 
   private handleKeyDown(event: KeyboardEvent): void {
-    // Skip if typing in an input/textarea — except allow global shortcuts (e.g. Ctrl+K)
+    // When compose is open, only global shortcuts and Escape (no reply/forward etc.).
+    // When compose is closed, also skip non-global when focus is in input/textarea/contenteditable.
     const target = event.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+    const composeOpen = this.composeStore.isOpen();
+    const inComposeOverlay = target.closest?.('.compose-window') !== null;
+    const inEditable =
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.isContentEditable;
+    if (composeOpen || inEditable || inComposeOverlay) {
       const keyCombo = this.getKeyCombo(event);
       const globalShortcut = this.findShortcut(keyCombo, 'global');
       if (globalShortcut) {
