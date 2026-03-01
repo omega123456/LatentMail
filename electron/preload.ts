@@ -78,6 +78,14 @@ const electronAPI = {
       ipcRenderer.invoke('ai:generate-filter', description, accountId) as Promise<IpcResponse>,
     detectFollowUp: (emailContent: string) =>
       ipcRenderer.invoke('ai:detect-followup', emailContent) as Promise<IpcResponse>,
+    setEmbeddingModel: (model: string) =>
+      ipcRenderer.invoke('ai:set-embedding-model', model) as Promise<IpcResponse>,
+    getEmbeddingStatus: () =>
+      ipcRenderer.invoke('ai:get-embedding-status') as Promise<IpcResponse>,
+    buildIndex: () =>
+      ipcRenderer.invoke('ai:build-index') as Promise<IpcResponse>,
+    cancelIndex: () =>
+      ipcRenderer.invoke('ai:cancel-index') as Promise<IpcResponse>,
   },
 
   // Compose operations (signatures & contacts only — draft ops moved to queue)
@@ -200,6 +208,10 @@ const electronAPI = {
       'os-file:drag-enter',
       'os-file:drag-leave',
       'os-file:drop',
+      // Embedding / semantic index progress events
+      'embedding:progress',
+      'embedding:complete',
+      'embedding:error',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, callback);

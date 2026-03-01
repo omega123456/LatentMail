@@ -5,6 +5,8 @@ import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 const log = LoggerService.getInstance();
 import { OllamaService } from '../services/ollama-service';
 import { DatabaseService } from '../services/database-service';
+import { VectorDbService } from '../services/vector-db-service';
+import { EmbeddingService } from '../services/embedding-service';
 import { SearchIntent, SearchQueryGenerator } from '../utils/search-query-generator';
 
 function isAllowedOllamaUrl(rawUrl: string): boolean {
@@ -301,18 +303,18 @@ export function registerAiIpcHandlers(): void {
         intent = await ollama.extractSearchIntent(naturalQuery, userEmail, todayDate, folderContext);
       } catch (intentError) {
         log.warn('[AI] search intent extraction failed, falling back to raw query', intentError);
-        return ipcSuccess({ intent: null, queries: [naturalQuery] });
+        return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
       }
 
       if (!isSearchIntent(intent)) {
         log.warn('[AI] search intent validation failed, falling back to raw query');
-        return ipcSuccess({ intent: null, queries: [naturalQuery] });
+        return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
       }
 
       const queries = SearchQueryGenerator.generate(intent);
       if (!Array.isArray(queries) || queries.length === 0) {
         log.warn('[AI] search query generation returned no queries, falling back to raw query');
-        return ipcSuccess({ intent: null, queries: [naturalQuery] });
+        return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
       }
 
       log.info('[AI] search success', {
@@ -321,7 +323,11 @@ export function registerAiIpcHandlers(): void {
         direction: intent.direction,
         hasFolder: !!intent.folder,
       });
-      return ipcSuccess({ intent, queries });
+
+      // Semantic search is stubbed here and will be fully implemented in Phase 4.
+      // For now, always return empty semanticResults so the renderer falls through
+      // to keyword search as before.
+      return ipcSuccess({ intent, queries, semanticResults: [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
       log.error('[AI] search failed:', err);
@@ -478,6 +484,150 @@ export function registerAiIpcHandlers(): void {
         return ipcError('AI_NO_MODEL', message);
       }
       return ipcError('AI_DETECT_FOLLOWUP_FAILED', message);
+    }
+  });
+
+  // ---- Embedding / Semantic Search handlers ----
+
+  ipcMain.handle(IPC_CHANNELS.AI_SET_EMBEDDING_MODEL, async (_event, model: unknown) => {
+    log.info('[AI] set-embedding-model request', { model });
+    try {
+      if (!model || typeof model !== 'string') {
+        return ipcError('AI_INVALID_INPUT', 'Model name is required');
+      }
+      if (model.length > 256) {
+        return ipcError('AI_INVALID_INPUT', 'Model name too long (max 256 characters)');
+      }
+
+      // Validate that the model supports the embed endpoint (10s timeout)
+      let vectorDimension: number;
+      try {
+        vectorDimension = await ollama.validateEmbeddingModel(model);
+      } catch (validationErr) {
+        const message = validationErr instanceof Error ? validationErr.message : 'Model does not support embeddings';
+        log.warn('[AI] set-embedding-model validation failed:', { model, message });
+        return ipcError('AI_EMBEDDING_MODEL_INVALID', `Model does not support embeddings: ${message}`);
+      }
+
+      // Configure vector DB with the new model dimension.
+      // Do this BEFORE persisting so that a failure here does not leave the model
+      // saved in the DB with an incompatible or un-configured vector table.
+      const vectorDb = VectorDbService.getInstance();
+      if (vectorDb.vectorsAvailable) {
+        const previousModel = vectorDb.getCurrentModel();
+        if (previousModel && previousModel !== model) {
+          // Model changed — clear existing index and reconfigure
+          let embeddingService: EmbeddingService | null = null;
+          try {
+            embeddingService = EmbeddingService.getInstance();
+          } catch {
+            // EmbeddingService not initialized — log but continue with vector DB reconfiguration
+            log.warn('[AI] set-embedding-model: EmbeddingService not initialized; skipping hash reset');
+          }
+          if (embeddingService) {
+            await embeddingService.onModelChange(model, vectorDimension);
+          } else {
+            // Fallback: just reconfigure the vector DB without resetting hashes
+            vectorDb.clearAllAndReconfigure(model, vectorDimension);
+          }
+        } else {
+          // First-time model set (or same model) — configure dimension
+          vectorDb.configureModel(model, vectorDimension);
+        }
+      }
+
+      // Persist the model only after successful configuration
+      ollama.setEmbeddingModel(model);
+
+      log.info('[AI] set-embedding-model success', { model, vectorDimension });
+      return ipcSuccess({ embeddingModel: model, vectorDimension });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to set embedding model';
+      log.error('[AI] set-embedding-model failed:', { message }, err);
+      return ipcError('AI_SET_EMBEDDING_MODEL_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AI_GET_EMBEDDING_STATUS, async () => {
+    try {
+      const embeddingModel = ollama.getEmbeddingModel();
+      const vectorDb = VectorDbService.getInstance();
+
+      let indexStatus: string;
+      let indexed = 0;
+      let total = 0;
+
+      if (!vectorDb.vectorsAvailable) {
+        indexStatus = 'unavailable';
+      } else {
+        const db = DatabaseService.getInstance();
+        const accounts = db.getAccounts().filter((account) => account.is_active);
+
+        for (const account of accounts) {
+          const counts = db.countEmbeddingStatus(account.id);
+          total += counts.total;
+          indexed += counts.embedded;
+        }
+
+        if (total === 0 || !embeddingModel) {
+          indexStatus = 'not_started';
+        } else if (indexed === 0) {
+          indexStatus = 'not_started';
+        } else if (indexed < total) {
+          indexStatus = 'partial';
+        } else {
+          indexStatus = 'complete';
+        }
+
+        // If a build is currently in progress, override the status.
+        // Guard the getInstance() call since EmbeddingService may not be initialized yet.
+        try {
+          const embeddingService = EmbeddingService.getInstance();
+          if (embeddingService.getBuildState() === 'building') {
+            indexStatus = 'building';
+          }
+        } catch {
+          // EmbeddingService not initialized — treat as not building
+        }
+      }
+
+      // getVectorDimension() returns null when model is unconfigured — that is safe here
+      const vectorDimension = vectorDb.vectorsAvailable ? vectorDb.getVectorDimension() : null;
+
+      log.info('[AI] get-embedding-status', { embeddingModel: embeddingModel || null, indexStatus, indexed, total });
+      return ipcSuccess({ embeddingModel: embeddingModel || null, indexStatus, indexed, total, vectorDimension });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to get embedding status';
+      log.error('[AI] get-embedding-status failed:', { message }, err);
+      return ipcError('AI_GET_EMBEDDING_STATUS_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AI_BUILD_INDEX, async () => {
+    log.info('[AI] build-index request');
+    try {
+      const embeddingService = EmbeddingService.getInstance();
+      embeddingService.startBuild();
+      log.info('[AI] build-index started');
+      return ipcSuccess({ started: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start index build';
+      log.warn('[AI] build-index failed to start:', { message });
+      return ipcError('AI_BUILD_INDEX_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AI_CANCEL_INDEX, async () => {
+    log.info('[AI] cancel-index request');
+    try {
+      const embeddingService = EmbeddingService.getInstance();
+      embeddingService.cancelBuild();
+      log.info('[AI] cancel-index complete');
+      return ipcSuccess({ cancelled: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to cancel index build';
+      log.error('[AI] cancel-index failed:', { message }, err);
+      return ipcError('AI_CANCEL_INDEX_FAILED', message);
     }
   });
 }

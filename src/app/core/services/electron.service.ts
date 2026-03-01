@@ -78,6 +78,27 @@ export interface MailFetchOlderDonePayload {
   error?: string;
 }
 
+/** Payload for embedding:progress push event (sent during index build). */
+export interface EmbeddingProgressPayload {
+  indexed: number;
+  total: number;
+  percent: number;
+}
+
+/** Payload for embedding:error push event (sent when indexing fails). */
+export interface EmbeddingErrorPayload {
+  message: string;
+}
+
+/** Response data from ai:get-embedding-status IPC. */
+export interface EmbeddingStatusData {
+  embeddingModel: string | null;
+  indexStatus: 'not_started' | 'building' | 'complete' | 'partial' | 'unavailable' | string;
+  indexed: number;
+  total: number;
+  vectorDimension: number | null;
+}
+
 /** Payload for system:tray-action event (compose, sync, etc.). */
 export interface TrayActionPayload {
   action: string;
@@ -117,6 +138,10 @@ interface ElectronAPI {
     generateReplies: (threadContent: string) => Promise<IpcResponse>;
     generateFilter: (description: string, accountId: number) => Promise<IpcResponse>;
     detectFollowUp: (emailContent: string) => Promise<IpcResponse>;
+    setEmbeddingModel: (model: string) => Promise<IpcResponse>;
+    getEmbeddingStatus: () => Promise<IpcResponse>;
+    buildIndex: () => Promise<IpcResponse>;
+    cancelIndex: () => Promise<IpcResponse>;
   };
   compose: {
     searchContacts: (query: string) => Promise<IpcResponse>;
@@ -314,6 +339,22 @@ export class ElectronService {
 
   async aiDetectFollowUp(emailContent: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.ai.detectFollowUp(emailContent));
+  }
+
+  async aiSetEmbeddingModel(model: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.setEmbeddingModel(model));
+  }
+
+  async aiGetEmbeddingStatus(): Promise<IpcResponse<EmbeddingStatusData>> {
+    return this.invoke(() => this.api!.ai.getEmbeddingStatus()) as Promise<IpcResponse<EmbeddingStatusData>>;
+  }
+
+  async aiBuildIndex(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.buildIndex());
+  }
+
+  async aiCancelIndex(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.cancelIndex());
   }
 
   // ---- Compose operations (signatures & contacts only) ----

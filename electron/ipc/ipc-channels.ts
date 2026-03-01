@@ -89,6 +89,12 @@ export const IPC_CHANNELS = {
 
   // BIMI sender avatar (logo from domain BIMI DNS record)
   BIMI_GET_LOGO: 'bimi:get-logo',
+
+  // Embedding / semantic search operations
+  AI_SET_EMBEDDING_MODEL: 'ai:set-embedding-model',
+  AI_GET_EMBEDDING_STATUS: 'ai:get-embedding-status',
+  AI_BUILD_INDEX: 'ai:build-index',
+  AI_CANCEL_INDEX: 'ai:cancel-index',
 } as const;
 
 // Main → Renderer (push events)
@@ -110,6 +116,11 @@ export const IPC_EVENTS = {
   OS_FILE_DRAG_ENTER: 'os-file:drag-enter',
   OS_FILE_DRAG_LEAVE: 'os-file:drag-leave',
   OS_FILE_DROP: 'os-file:drop',
+
+  // Embedding / semantic index progress events (main → renderer)
+  EMBEDDING_PROGRESS: 'embedding:progress',
+  EMBEDDING_COMPLETE: 'embedding:complete',
+  EMBEDDING_ERROR: 'embedding:error',
 } as const;
 
 // IPC response envelope
