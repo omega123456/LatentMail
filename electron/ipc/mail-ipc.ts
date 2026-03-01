@@ -171,7 +171,7 @@ export function registerMailIpcHandlers(): void {
     const effectiveOffset = threadId != null && threadId !== '' ? 0 : offset;
     let threads = db.getThreadsByFolder(numAccountId, folderId, effectiveLimit, effectiveOffset, threadId);
     threads = attachThreadFolders(threads);
-    threads = attachThreadDraftStatus(threads, folderId);
+    threads = attachThreadDraftStatus(threads, folderId, numAccountId);
     return attachThreadLabels(threads, numAccountId);
   }
 
@@ -180,7 +180,11 @@ export function registerMailIpcHandlers(): void {
    * For each thread, checks if any constituent email has is_draft=1.
    * Excludes trashed drafts unless the current folder is Trash.
    */
-  const attachThreadDraftStatus = (threads: Array<Record<string, unknown>>, folderId: string): Array<Record<string, unknown>> => {
+  const attachThreadDraftStatus = (
+    threads: Array<Record<string, unknown>>,
+    folderId: string,
+    numAccountId: number
+  ): Array<Record<string, unknown>> => {
     const threadIds = threads
       .map((thread) => {
         const rawId = thread['id'];
@@ -199,7 +203,7 @@ export function registerMailIpcHandlers(): void {
       return threads;
     }
 
-    const draftThreadIds = db.getThreadIdsWithDrafts(threadIds, folderId);
+    const draftThreadIds = db.getThreadIdsWithDrafts(numAccountId, threadIds, folderId);
     if (draftThreadIds.size === 0) {
       return threads;
     }
@@ -746,7 +750,7 @@ export function registerMailIpcHandlers(): void {
         ? db.searchEmails(numAccountId, queries[0])
         : db.searchEmailsMulti(numAccountId, queries);
       let results = attachThreadFolders(rawResults);
-      results = attachThreadDraftStatus(results, '');
+      results = attachThreadDraftStatus(results, '', numAccountId);
       results = attachThreadLabels(results, numAccountId);
 
       // When searching for has:attachment, only return threads that have attachments (avoids stale/wrong DB data)
@@ -926,7 +930,7 @@ export function registerMailIpcHandlers(): void {
       );
 
       let threadsWithFolders = attachThreadFolders(threads);
-      threadsWithFolders = attachThreadDraftStatus(threadsWithFolders, '');
+      threadsWithFolders = attachThreadDraftStatus(threadsWithFolders, '', numAccountId);
       threadsWithFolders = attachThreadLabels(threadsWithFolders, numAccountId);
 
       // When searching for has:attachment, only return threads that have attachments (align with MAIL_SEARCH behavior)
