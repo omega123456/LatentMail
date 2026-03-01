@@ -7,8 +7,13 @@
  * - Prepending the email subject to the first chunk for contextual grounding
  */
 
+import { stripVTControlCharacters } from 'util';
+
+/** C0 control characters (excluding tab, newline, carriage return) to strip before chunking. */
+const C0_CONTROL_REGEX = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+
 /** Number of whitespace-delimited words per chunk. */
-const CHUNK_SIZE_WORDS = 300;
+const CHUNK_SIZE_WORDS = 200;
 
 /** Number of words of overlap between consecutive chunks. */
 const CHUNK_OVERLAP_WORDS = 50;
@@ -55,6 +60,8 @@ export function stripHtml(html: string): string {
   // Collapse runs of whitespace (spaces, tabs, newlines) into a single space
   text = text.replace(/\s+/g, ' ').trim();
 
+  text = text.split(/\s+/).map(word => word.length > 80 ? '[URL]' : word).join(' ');
+
   return text;
 }
 
@@ -80,7 +87,9 @@ export function chunkText(text: string | null | undefined, subject?: string): st
     );
   }
 
-  const words = text.trim().split(/\s+/);
+  const cleanText = stripVTControlCharacters(text).replace(C0_CONTROL_REGEX, '');
+  let words = cleanText.trim().split(/\s+/);
+  words = words.map(word => word.length > 80 ? '[URL]' : word);
   if (words.length === 0) {
     return [];
   }

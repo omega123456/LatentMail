@@ -87,6 +87,158 @@
     }
   </div>
 
+  <!-- Semantic Search Section -->
+  <div class="setting-section">
+    <h3>
+      <span class="material-symbols-outlined section-icon">manage_search</span>
+      Semantic Search
+    </h3>
+    <p class="section-description">
+      Use a dedicated embedding model to index your emails for meaning-based search.
+      This enables finding emails by concept, not just keywords.
+    </p>
+
+    <!-- Embedding Model Subsection -->
+    <div class="subsection">
+      <h4>Embedding Model</h4>
+      @if (aiStore.embeddingModelsLoading()) {
+        <div class="loading-state">
+          <span class="material-symbols-outlined spinning">sync</span>
+          Loading models...
+        </div>
+      } @else if (!aiStore.connected()) {
+        <div class="empty-state">
+          <span class="material-symbols-outlined">cloud_off</span>
+          <p>Connect to Ollama to see available models.</p>
+        </div>
+      } @else if (aiStore.embeddingModels().length === 0) {
+        <div class="empty-state">
+          <span class="material-symbols-outlined">model_training</span>
+          <p>No models found. Pull an embedding model using <code>ollama pull nomic-embed-text</code></p>
+        </div>
+      } @else {
+        <!-- Model switch warning -->
+        @if (pendingEmbeddingModel()) {
+          <div class="model-switch-warning">
+            <span class="material-symbols-outlined warning-icon">warning</span>
+            <div class="warning-content">
+              @if (aiStore.indexStatus() === 'building') {
+                <p>Changing the embedding model will cancel the current build, clear the existing index, and require a full rebuild. Continue?</p>
+              } @else {
+                <p>Changing the embedding model will clear the existing index and require a full rebuild. Continue?</p>
+              }
+              <div class="warning-actions">
+                <button class="action-btn" (click)="confirmEmbeddingModelSwitch()">Change Model</button>
+                <button class="action-btn secondary" (click)="cancelEmbeddingModelSwitch()">Cancel</button>
+              </div>
+            </div>
+          </div>
+        }
+        <div class="model-list">
+          @for (model of aiStore.embeddingModels(); track model.name) {
+            <div
+              class="model-card"
+              [class.selected]="model.name === aiStore.embeddingModel()"
+              (click)="selectEmbeddingModel(model.name)"
+            >
+              <div class="model-info">
+                <span class="model-name">{{ model.name }}</span>
+                @if (model.size) {
+                  <span class="model-size">{{ formatSize(model.size) }}</span>
+                }
+              </div>
+              @if (model.name === aiStore.embeddingModel()) {
+                <span class="material-symbols-outlined check-icon">check_circle</span>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <!-- Search Index Subsection -->
+    <div class="subsection">
+      <h4>Search Index</h4>
+
+      <!-- Status row -->
+      <div
+        class="index-status"
+        [class.status-building]="aiStore.indexStatus() === 'building'"
+        [class.status-complete]="aiStore.indexStatus() === 'complete'"
+        [class.status-unavailable]="aiStore.indexStatus() === 'unavailable'"
+      >
+        <span
+          class="material-symbols-outlined index-status-icon"
+          [class.spinning]="aiStore.indexStatus() === 'building'"
+          [class.icon-filled]="aiStore.indexStatus() === 'complete'"
+        >{{ indexStatusIcon }}</span>
+        <span class="index-status-text">Index Status: {{ indexStatusLabel }}</span>
+      </div>
+
+      <!-- Progress bar (deterministic when progress known, indeterminate when building without progress) -->
+      @if (aiStore.indexStatus() === 'building' || aiStore.indexStatus() === 'complete' || aiStore.indexStatus() === 'partial') {
+        @if (aiStore.indexProgress()) {
+          <div
+            class="progress-bar"
+            role="progressbar"
+            [attr.aria-valuenow]="aiStore.indexProgress()!.percent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div
+              class="progress-bar-fill"
+              [style.width.%]="aiStore.indexProgress()!.percent"
+            ></div>
+          </div>
+          <p class="progress-counter" aria-live="polite">
+            {{ aiStore.indexProgress()!.indexed | number }} / {{ aiStore.indexProgress()!.total | number }} emails indexed ({{ aiStore.indexProgress()!.percent }}%)
+          </p>
+        } @else if (aiStore.indexStatus() === 'building') {
+          <div
+            class="progress-bar indeterminate"
+            role="progressbar"
+            aria-valuetext="Preparing index..."
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div class="progress-bar-fill"></div>
+          </div>
+          <p class="progress-counter" aria-live="polite">Preparing index...</p>
+        }
+      }
+
+      <!-- Error banner -->
+      @if (aiStore.indexError()) {
+        <div class="error-banner index-error-banner">
+          <span class="material-symbols-outlined">error</span>
+          {{ aiStore.indexError() }}
+          <button class="dismiss-btn" aria-label="Dismiss error" (click)="aiStore.clearIndexError()">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      }
+
+      <!-- Action buttons -->
+      @if (aiStore.indexStatus() !== 'unavailable') {
+        <div class="index-actions">
+          <button
+            class="action-btn"
+            (click)="buildSearchIndex()"
+            [disabled]="!aiStore.embeddingModel() || aiStore.indexStatus() === 'building'"
+          >
+            <span class="material-symbols-outlined">play_circle</span>
+            {{ aiStore.indexStatus() === 'complete' ? 'Rebuild Index' : 'Build Search Index' }}
+          </button>
+          @if (aiStore.indexStatus() === 'building') {
+            <button class="action-btn secondary" (click)="cancelBuild()">
+              Cancel
+            </button>
+          }
+        </div>
+      }
+    </div>
+  </div>
+
   <!-- Features Info -->
   <div class="setting-section">
     <h3>Available Features</h3>
@@ -126,6 +278,13 @@
           <p>Automatically sort emails into categories</p>
         </div>
       </div>
+      <div class="feature-item" [class.disabled]="!aiStore.isEmbeddingAvailable()">
+        <span class="material-symbols-outlined">manage_search</span>
+        <div>
+          <strong>Semantic Search</strong>
+          <p>Find emails by meaning and concept, not just keywords</p>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -133,9 +292,10 @@
     <div class="error-banner">
       <span class="material-symbols-outlined">error</span>
       {{ aiStore.error() }}
-      <button class="dismiss-btn" (click)="aiStore.clearError()">
+      <button class="dismiss-btn" aria-label="Dismiss error" (click)="aiStore.clearError()">
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
   }
 </div>
+

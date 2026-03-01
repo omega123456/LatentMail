@@ -57,6 +57,7 @@ export class VectorDbService {
 
   private db: BetterSqlite3.Database | null = null;
   private dbPath: string = '';
+  private sqliteVecExtensionPath: string | null = null;
   private currentDimension: number | null = null;
   private currentModel: string | null = null;
 
@@ -74,6 +75,14 @@ export class VectorDbService {
    */
   getDbPath(): string {
     return this.dbPath;
+  }
+
+  /**
+   * Returns the path to the sqlite-vec extension binary, or null if not loaded.
+   * Used by the embedding worker to load the extension into its own DB connection.
+   */
+  getSqliteVecExtensionPath(): string | null {
+    return this.sqliteVecExtensionPath;
   }
 
   /**
@@ -152,7 +161,8 @@ export class VectorDbService {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const sqliteVec = require('sqlite-vec') as { load: (db: BetterSqlite3.Database) => void; getLoadablePath: () => string };
       sqliteVec.load(this.db);
-      log.info(`[VectorDbService] sqlite-vec extension loaded via package helper (${sqliteVec.getLoadablePath()})`);
+      this.sqliteVecExtensionPath = sqliteVec.getLoadablePath();
+      log.info(`[VectorDbService] sqlite-vec extension loaded via package helper (${this.sqliteVecExtensionPath})`);
       this.vectorsAvailable = true;
       return;
     } catch (error) {
@@ -165,6 +175,7 @@ export class VectorDbService {
       const extensionPath = this.resolveProductionExtensionPath();
       if (extensionPath) {
         this.db.loadExtension(extensionPath);
+        this.sqliteVecExtensionPath = extensionPath;
         log.info(`[VectorDbService] sqlite-vec extension loaded from production path: ${extensionPath}`);
         this.vectorsAvailable = true;
         return;
@@ -409,7 +420,7 @@ export class VectorDbService {
     if (!tableExists) {
       this.db.exec(`
         CREATE VIRTUAL TABLE email_embeddings USING vec0(
-          embedding float[${dimension}]
+          embedding float[${dimension}] distance_metric=cosine
         )
       `);
       log.info(`[VectorDbService] Created email_embeddings vec0 table (dim=${dimension})`);

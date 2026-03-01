@@ -210,6 +210,7 @@ export class EmbeddingService {
       vectorDbPath: this.vectorDbService.getDbPath(),
       vectorDimension,
       ollamaBatchSize: 32,
+      sqliteVecExtensionPath: this.vectorDbService.getSqliteVecExtensionPath() ?? undefined,
     };
 
     const workerPath = path.join(__dirname, '..', 'workers', 'embedding-worker.js');
@@ -282,7 +283,8 @@ export class EmbeddingService {
         let batchError: string | null = null;
 
         try {
-          batchDoneResults = await this.sendBatchAndWait(batchItems, totalToEmbed, totalIndexed);
+          const isFirstBatch = totalIndexed === 0;
+          batchDoneResults = await this.sendBatchAndWait(batchItems, totalToEmbed, totalIndexed, isFirstBatch);
         } catch (err) {
           batchError = err instanceof Error ? err.message : String(err);
           log.error('[EmbeddingService] Batch processing error:', batchError);
@@ -335,11 +337,13 @@ export class EmbeddingService {
    * @param batchItems - Emails to embed
    * @param totalInRun - Total emails in this run (for progress display)
    * @param indexedSoFar - Emails indexed before this batch
+   * @param isFirstBatch - True for the first batch of this build (worker resets progress)
    */
   private sendBatchAndWait(
     batchItems: EmailBatchItem[],
     totalInRun: number,
-    indexedSoFar: number
+    indexedSoFar: number,
+    isFirstBatch: boolean
   ): Promise<BatchResult[]> {
     return new Promise((resolve, reject) => {
       if (!this.worker) {
@@ -362,8 +366,8 @@ export class EmbeddingService {
         message?: string;
       }) => {
         if (message.type === 'progress') {
-          // Forward progress to renderer
-          const indexed = (indexedSoFar + (message.indexed ?? 0));
+          // Worker sends cumulative indexed count for the whole run; use it directly (do not add main's totalIndexed)
+          const indexed = message.indexed ?? 0;
           const percent = totalInRun > 0 ? Math.round((indexed / totalInRun) * 100) : 0;
           this.broadcastProgress(indexed, totalInRun, percent);
           return; // Keep listening
@@ -386,7 +390,12 @@ export class EmbeddingService {
       };
 
       this.worker.on('message', onMessage);
-      this.worker.postMessage({ type: 'batch', emails: batchItems, total: totalInRun });
+      this.worker.postMessage({
+        type: 'batch',
+        emails: batchItems,
+        total: totalInRun,
+        firstBatch: isFirstBatch,
+      });
     });
   }
 

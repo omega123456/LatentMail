@@ -10,10 +10,27 @@ h2 {
 }
 
 h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 15px;
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 12px;
+}
+
+h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.section-icon {
+  font-size: 18px;
+  color: var(--color-primary);
 }
 
 .section-description {
@@ -39,6 +56,22 @@ h3 {
 
   &:last-of-type {
     border-bottom: none;
+  }
+
+  // Override section-description margin inside a section (no bottom margin)
+  > .section-description {
+    margin-bottom: 16px;
+  }
+}
+
+.subsection {
+  margin-bottom: 20px;
+  padding: 16px;
+  background-color: var(--color-surface-variant);
+  border-radius: 8px;
+
+  &:last-child {
+    margin-bottom: 0;
   }
 }
 
@@ -201,6 +234,7 @@ h3 {
   border-radius: 8px;
   cursor: pointer;
   transition: all 120ms ease;
+  background-color: var(--color-surface);
 
   &:hover {
     background-color: var(--color-surface-variant);
@@ -234,6 +268,118 @@ h3 {
   font-size: 20px;
   font-variation-settings: 'FILL' 1;
 }
+
+// ─── Index Status Row ─────────────────────────────────────────────────────────
+
+.index-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+
+  &.status-building {
+    color: var(--color-primary);
+  }
+
+  &.status-complete {
+    color: var(--color-success, #388E3C);
+  }
+
+  &.status-unavailable {
+    color: var(--color-text-tertiary);
+  }
+}
+
+.index-status-icon {
+  font-size: 18px;
+
+  &.icon-filled {
+    font-variation-settings: 'FILL' 1;
+  }
+}
+
+.index-status-text {
+  font-weight: 500;
+}
+
+// ─── Progress Bar ─────────────────────────────────────────────────────────────
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+
+  &.indeterminate .progress-bar-fill {
+    width: 40% !important;
+    animation: indeterminate-slide 1.5s ease-in-out infinite;
+  }
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background-color: var(--color-primary);
+  border-radius: 3px;
+  transition: width 300ms ease;
+  min-width: 0;
+}
+
+.progress-counter {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 0 0 12px;
+}
+
+// ─── Index Actions Button Row ─────────────────────────────────────────────────
+
+.index-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+// ─── Model Switch Warning ─────────────────────────────────────────────────────
+
+.model-switch-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background-color: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.4);
+  border-radius: 8px;
+  font-size: 13px;
+
+  .warning-icon {
+    font-size: 18px;
+    color: #F57C00;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .warning-content {
+    flex: 1;
+
+    p {
+      margin: 0 0 10px;
+      color: var(--color-text-primary);
+      line-height: 1.4;
+    }
+
+    .warning-actions {
+      display: flex;
+      gap: 8px;
+    }
+  }
+}
+
+// ─── Feature List ─────────────────────────────────────────────────────────────
 
 .feature-list {
   display: flex;
@@ -274,6 +420,8 @@ h3 {
   }
 }
 
+// ─── Error Banner ─────────────────────────────────────────────────────────────
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -287,6 +435,11 @@ h3 {
 
   .material-symbols-outlined {
     font-size: 18px;
+  }
+
+  &.index-error-banner {
+    margin-top: 12px;
+    margin-bottom: 0;
   }
 }
 
@@ -308,6 +461,8 @@ h3 {
   }
 }
 
+// ─── Animations ───────────────────────────────────────────────────────────────
+
 .spinning {
   animation: spin 1s linear infinite;
 }
@@ -316,3 +471,9 @@ h3 {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-250%); }
+  100% { transform: translateX(350%); }
+}
+

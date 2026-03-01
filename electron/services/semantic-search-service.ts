@@ -22,7 +22,7 @@ import { DatabaseService } from './database-service';
 const log = LoggerService.getInstance();
 
 /** Minimum cosine similarity score for a result to be considered relevant. */
-const SIMILARITY_THRESHOLD = 0.6;
+const SIMILARITY_THRESHOLD = 0.5;
 
 /** Minimum number of results above the threshold before we use semantic results. */
 const MIN_RESULTS_THRESHOLD = 5;
@@ -59,6 +59,12 @@ export class SemanticSearchService {
   async search(naturalQuery: string, accountId: number): Promise<string[]> {
     const vectorDb = VectorDbService.getInstance();
 
+    log.info('[SemanticSearch] Request', {
+      query: naturalQuery.length > 200 ? naturalQuery.slice(0, 200) + '…' : naturalQuery,
+      queryLength: naturalQuery.length,
+      accountId,
+    });
+
     if (!vectorDb.vectorsAvailable) {
       log.debug('[SemanticSearch] Vector DB unavailable — skipping semantic search');
       return [];
@@ -86,6 +92,11 @@ export class SemanticSearchService {
         return [];
       }
       queryEmbedding = embeddings[0];
+      log.info('[SemanticSearch] Query embedded', {
+        dimension: queryEmbedding.length,
+        accountId,
+        limit: 100,
+      });
     } catch (embedError) {
       log.warn('[SemanticSearch] Failed to embed query:', embedError);
       return [];
@@ -93,6 +104,14 @@ export class SemanticSearchService {
 
     // Run similarity search — fetch more candidates than needed to allow for filtering
     const rawResults = vectorDb.search(queryEmbedding, accountId, 100);
+
+    log.info('[SemanticSearch] Vector search response', {
+      rawResultCount: rawResults.length,
+      topScores:
+        rawResults.length > 0
+          ? rawResults.map((result) => ({ xGmMsgId: result.xGmMsgId, similarity: result.similarity }))
+          : [],
+    });
 
     if (rawResults.length === 0) {
       log.info('[SemanticSearch] No vector search results — falling back to keywords');
@@ -114,6 +133,12 @@ export class SemanticSearchService {
       .sort((a, b) => b[1] - a[1])
       .map(([xGmMsgId]) => xGmMsgId);
 
+    log.info('[SemanticSearch] After dedup and threshold', {
+      aboveThresholdCount: aboveThreshold.length,
+      threshold: SIMILARITY_THRESHOLD,
+      minRequired: MIN_RESULTS_THRESHOLD,
+    });
+
     if (aboveThreshold.length < MIN_RESULTS_THRESHOLD) {
       log.info(
         `[SemanticSearch] Insufficient results: ${aboveThreshold.length} above threshold ` +
@@ -134,7 +159,11 @@ export class SemanticSearchService {
 
     const finalResults = filteredMsgIds.slice(0, MAX_RESULTS);
 
-    log.info(`[SemanticSearch] Semantic search: ${finalResults.length} results above threshold (${aboveThreshold.length} before folder filter)`);
+    log.info('[SemanticSearch] Final result', {
+      returnedCount: finalResults.length,
+      beforeFolderFilter: aboveThreshold.length,
+      maxResults: MAX_RESULTS,
+    });
 
     return finalResults;
   }

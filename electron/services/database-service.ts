@@ -2643,6 +2643,7 @@ export class DatabaseService {
   /**
    * Query emails that have not yet been embedded (embedding_hash IS NULL)
    * and have at least one body (text_body or html_body is not null/empty).
+   * Excludes Trash/Spam/Drafts folders and emails with is_draft = 1.
    *
    * Ordered by date DESC so the most recently received emails are indexed first,
    * giving users faster semantic search results for recent mail.
@@ -2665,19 +2666,34 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
+    const trashFolder = this.getTrashFolder(accountId);
+    const params = {
+      ':accountId': accountId,
+      ':batchSize': batchSize,
+      ':trashFolder': trashFolder,
+      ':spamFolder': '[Gmail]/Spam',
+      ':draftsFolder': '[Gmail]/Drafts',
+    };
+
     const result = this.db.exec(
-      `SELECT x_gm_msgid, account_id, subject, text_body, html_body
-       FROM emails
-       WHERE account_id = :accountId
-         AND embedding_hash IS NULL
+      `SELECT e.x_gm_msgid, e.account_id, e.subject, e.text_body, e.html_body
+       FROM emails e
+       WHERE e.account_id = :accountId
+         AND e.is_draft = 0
+         AND e.embedding_hash IS NULL
          AND (
-           (text_body IS NOT NULL AND text_body != '')
-           OR
-           (html_body IS NOT NULL AND html_body != '')
+           (e.text_body IS NOT NULL AND e.text_body != '')
+           OR (e.html_body IS NOT NULL AND e.html_body != '')
          )
-       ORDER BY date DESC
+         AND EXISTS (
+           SELECT 1 FROM email_folders ef
+           WHERE ef.account_id = e.account_id
+             AND ef.x_gm_msgid = e.x_gm_msgid
+             AND ef.folder NOT IN (:trashFolder, :spamFolder, :draftsFolder)
+         )
+       ORDER BY e.date DESC
        LIMIT :batchSize`,
-      { ':accountId': accountId, ':batchSize': batchSize }
+      params
     );
 
     if (result.length === 0) {
@@ -2733,6 +2749,7 @@ export class DatabaseService {
    * Count embeddable vs. embedded emails for an account.
    * An email is "embeddable" if it has at least one body.
    * An email is "embedded" if embedding_hash is not NULL.
+   * Counts exclude Trash/Spam/Drafts folders and emails with is_draft = 1.
    *
    * @param accountId - Account ID to count for
    * @returns { total: number of embeddable emails, embedded: number of embedded emails }
@@ -2742,27 +2759,47 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
+    const trashFolder = this.getTrashFolder(accountId);
+    const params = {
+      ':accountId': accountId,
+      ':trashFolder': trashFolder,
+      ':spamFolder': '[Gmail]/Spam',
+      ':draftsFolder': '[Gmail]/Drafts',
+    };
+
     const totalResult = this.db.exec(
-      `SELECT COUNT(*) FROM emails
-       WHERE account_id = :accountId
+      `SELECT COUNT(*) FROM emails e
+       WHERE e.account_id = :accountId
+         AND e.is_draft = 0
          AND (
-           (text_body IS NOT NULL AND text_body != '')
-           OR
-           (html_body IS NOT NULL AND html_body != '')
+           (e.text_body IS NOT NULL AND e.text_body != '')
+           OR (e.html_body IS NOT NULL AND e.html_body != '')
+         )
+         AND EXISTS (
+           SELECT 1 FROM email_folders ef
+           WHERE ef.account_id = e.account_id
+             AND ef.x_gm_msgid = e.x_gm_msgid
+             AND ef.folder NOT IN (:trashFolder, :spamFolder, :draftsFolder)
          )`,
-      { ':accountId': accountId }
+      params
     );
 
     const embeddedResult = this.db.exec(
-      `SELECT COUNT(*) FROM emails
-       WHERE account_id = :accountId
-         AND embedding_hash IS NOT NULL
+      `SELECT COUNT(*) FROM emails e
+       WHERE e.account_id = :accountId
+         AND e.is_draft = 0
+         AND e.embedding_hash IS NOT NULL
          AND (
-           (text_body IS NOT NULL AND text_body != '')
-           OR
-           (html_body IS NOT NULL AND html_body != '')
+           (e.text_body IS NOT NULL AND e.text_body != '')
+           OR (e.html_body IS NOT NULL AND e.html_body != '')
+         )
+         AND EXISTS (
+           SELECT 1 FROM email_folders ef
+           WHERE ef.account_id = e.account_id
+             AND ef.x_gm_msgid = e.x_gm_msgid
+             AND ef.folder NOT IN (:trashFolder, :spamFolder, :draftsFolder)
          )`,
-      { ':accountId': accountId }
+      params
     );
 
     const total = (totalResult.length > 0 && totalResult[0].values.length > 0)

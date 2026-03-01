@@ -1,7 +1,8 @@
 import { computed, inject } from '@angular/core';
-import { signalStore, withState, withComputed, withMethods, patchState } from '@ngrx/signals';
+import { signalStore, withState, withComputed, withMethods, patchState, withHooks } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
 import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult, SearchIntent } from '../core/models/ai.model';
+import { EmbeddingProgressPayload, EmbeddingErrorPayload, EmbeddingStatusData } from '../core/services/electron.service';
 
 export interface AiState {
   connected: boolean;
@@ -39,6 +40,13 @@ export interface AiState {
   followUpThreadId: string | null;
   // Category cache (threadId → category)
   categoryCache: Record<string, AiCategory>;
+  // Embedding / Semantic Search
+  embeddingModel: string;
+  embeddingModels: AiModel[];
+  embeddingModelsLoading: boolean;
+  indexStatus: 'not_started' | 'building' | 'complete' | 'partial' | 'unavailable';
+  indexProgress: { indexed: number; total: number; percent: number } | null;
+  indexError: string | null;
   // General
   error: string | null;
   modelsLoading: boolean;
@@ -74,6 +82,13 @@ const initialState: AiState = {
   categoryCache: {},
   error: null,
   modelsLoading: false,
+  // Embedding / Semantic Search
+  embeddingModel: '',
+  embeddingModels: [],
+  embeddingModelsLoading: false,
+  indexStatus: 'not_started',
+  indexProgress: null,
+  indexError: null,
 };
 
 export const AiStore = signalStore(
@@ -81,6 +96,7 @@ export const AiStore = signalStore(
   withState(initialState),
   withComputed((store) => ({
     isAvailable: computed(() => store.connected() && store.currentModel() !== ''),
+    isEmbeddingAvailable: computed(() => store.connected() && store.embeddingModel() !== ''),
     hasModels: computed(() => store.availableModels().length > 0),
     statusLabel: computed(() => {
       if (!store.connected()) {
@@ -105,6 +121,18 @@ export const AiStore = signalStore(
             connected: data.connected,
             url: data.url,
             currentModel: data.currentModel || '',
+          });
+        }
+        // Also refresh embedding status whenever AI status is checked
+        const embeddingResponse = await electronService.aiGetEmbeddingStatus();
+        if (embeddingResponse.success && embeddingResponse.data) {
+          const embData = embeddingResponse.data as EmbeddingStatusData;
+          patchState(store, {
+            embeddingModel: embData.embeddingModel || '',
+            indexStatus: (embData.indexStatus as AiState['indexStatus']) || 'not_started',
+            indexProgress: embData.indexed > 0
+              ? { indexed: embData.indexed, total: embData.total, percent: embData.total > 0 ? Math.round((embData.indexed / embData.total) * 100) : 0 }
+              : null,
           });
         }
       },
@@ -481,6 +509,135 @@ export const AiStore = signalStore(
       /** Clear search result */
       clearSearchResult(): void {
         patchState(store, { searchResult: null, searchLoading: false });
+      },
+
+      // ─── Embedding / Semantic Search ───────────────────────────────
+
+      /** Load embedding status from backend and patch store */
+      async loadEmbeddingStatus(): Promise<void> {
+        const response = await electronService.aiGetEmbeddingStatus();
+        if (response.success && response.data) {
+          const embData = response.data as EmbeddingStatusData;
+          const indexStatus = (embData.indexStatus as AiState['indexStatus']) || 'not_started';
+          const indexProgress = embData.indexed > 0
+            ? { indexed: embData.indexed, total: embData.total, percent: embData.total > 0 ? Math.round((embData.indexed / embData.total) * 100) : 0 }
+            : null;
+          patchState(store, {
+            embeddingModel: embData.embeddingModel || '',
+            indexStatus,
+            indexProgress,
+          });
+        }
+      },
+
+      /** Set the embedding model (validates with backend test embed call) */
+      async setEmbeddingModel(model: string): Promise<boolean> {
+        patchState(store, { error: null, indexError: null });
+        const response = await electronService.aiSetEmbeddingModel(model);
+        if (response.success) {
+          patchState(store, { embeddingModel: model });
+          return true;
+        } else {
+          patchState(store, {
+            error: response.error?.message || 'Model does not support embeddings',
+          });
+          return false;
+        }
+      },
+
+      /** Load the list of models available for embedding (same model list as chat models) */
+      async loadEmbeddingModels(): Promise<void> {
+        patchState(store, { embeddingModelsLoading: true });
+        const response = await electronService.aiGetModels();
+        if (response.success && response.data) {
+          const data = response.data as { models: AiModel[] };
+          patchState(store, {
+            embeddingModels: data.models || [],
+            embeddingModelsLoading: false,
+          });
+        } else {
+          patchState(store, {
+            embeddingModels: [],
+            embeddingModelsLoading: false,
+          });
+        }
+      },
+
+      /** Trigger a full index build */
+      async buildIndex(): Promise<void> {
+        patchState(store, { indexError: null, error: null, indexProgress: null });
+        const response = await electronService.aiBuildIndex();
+        if (response.success) {
+          patchState(store, { indexStatus: 'building' });
+        } else {
+          patchState(store, {
+            indexError: response.error?.message || 'Failed to start index build',
+          });
+        }
+      },
+
+      /** Cancel an in-progress index build */
+      async cancelIndex(): Promise<void> {
+        const response = await electronService.aiCancelIndex();
+        if (response.success) {
+          patchState(store, { indexStatus: 'partial' });
+        }
+      },
+
+      /** Handle embedding:progress push event */
+      onEmbeddingProgress(payload: EmbeddingProgressPayload): void {
+        patchState(store, {
+          indexStatus: 'building',
+          indexProgress: { indexed: payload.indexed, total: payload.total, percent: payload.percent },
+        });
+      },
+
+      /** Handle embedding:complete push event */
+      onEmbeddingComplete(): void {
+        const progress = store.indexProgress();
+        patchState(store, {
+          indexStatus: 'complete',
+          indexProgress: progress
+            ? { ...progress, percent: 100 }
+            : null,
+          indexError: null,
+        });
+      },
+
+      /** Handle embedding:error push event */
+      onEmbeddingError(payload: EmbeddingErrorPayload): void {
+        patchState(store, {
+          indexStatus: 'partial',
+          indexError: payload.message,
+        });
+      },
+
+      /** Dismiss the index error banner */
+      clearIndexError(): void {
+        patchState(store, { indexError: null });
+      },
+    };
+  }),
+  withHooks((store) => {
+    const electronService = inject(ElectronService);
+
+    return {
+      onInit(): void {
+        if (!electronService.isElectron) {
+          return;
+        }
+
+        electronService.onEvent<EmbeddingProgressPayload>('embedding:progress').subscribe((payload) => {
+          store.onEmbeddingProgress(payload);
+        });
+
+        electronService.onEvent<void>('embedding:complete').subscribe(() => {
+          store.onEmbeddingComplete();
+        });
+
+        electronService.onEvent<EmbeddingErrorPayload>('embedding:error').subscribe((payload) => {
+          store.onEmbeddingError(payload);
+        });
       },
     };
   })
