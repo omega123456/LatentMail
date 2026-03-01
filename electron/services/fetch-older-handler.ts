@@ -116,7 +116,7 @@ export async function executeFetchOlder(
     beforeDate,
     sanitizedLimit
   );
-  threads = attachThreadDraftStatus(db, threads);
+  threads = attachThreadDraftStatus(db, threads, folderId);
 
   const oldestEmailTs = emails.reduce((minTs, email) => {
     const ts = new Date(email.date).getTime();
@@ -147,7 +147,8 @@ export async function executeFetchOlder(
 
 function attachThreadDraftStatus(
   db: DatabaseService,
-  threads: Array<Record<string, unknown>>
+  threads: Array<Record<string, unknown>>,
+  folderId: string
 ): Array<Record<string, unknown>> {
   const threadIds = threads
     .map((thread) => {
@@ -167,7 +168,7 @@ function attachThreadDraftStatus(
     return threads;
   }
 
-  const draftThreadIds = db.getThreadIdsWithDrafts(threadIds);
+  const draftThreadIds = db.getThreadIdsWithDrafts(threadIds, folderId);
   if (draftThreadIds.size === 0) {
     return threads;
   }
