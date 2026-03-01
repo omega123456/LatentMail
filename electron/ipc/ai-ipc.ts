@@ -7,6 +7,7 @@ import { OllamaService } from '../services/ollama-service';
 import { DatabaseService } from '../services/database-service';
 import { VectorDbService } from '../services/vector-db-service';
 import { EmbeddingService } from '../services/embedding-service';
+import { SemanticSearchService } from '../services/semantic-search-service';
 import { SearchIntent, SearchQueryGenerator } from '../utils/search-query-generator';
 
 function isAllowedOllamaUrl(rawUrl: string): boolean {
@@ -208,7 +209,6 @@ export function registerAiIpcHandlers(): void {
 
   // Start health checks when IPC handlers are registered
   ollama.startHealthChecks();
-
   ipcMain.handle(IPC_CHANNELS.AI_SUMMARIZE, async (event, threadContent: string, requestId?: string) => {
     log.info('[AI] summarize request', { requestId, contentLen: threadContent?.length ?? 0 });
     try {
@@ -324,10 +324,35 @@ export function registerAiIpcHandlers(): void {
         hasFolder: !!intent.folder,
       });
 
-      // Semantic search is stubbed here and will be fully implemented in Phase 4.
-      // For now, always return empty semanticResults so the renderer falls through
-      // to keyword search as before.
-      return ipcSuccess({ intent, queries, semanticResults: [] });
+      // Attempt semantic search if the vector index is available and an embedding model is configured.
+      // If semantic search returns ≥5 results above the 0.6 similarity threshold, populate
+      // semanticResults. The renderer uses semanticResults when present, otherwise falls through
+      // to keyword search. Keyword intent+queries are ALWAYS generated regardless — they serve
+      // as fallback for the IMAP search phase.
+      let semanticResults: string[] = [];
+      const vectorDb = VectorDbService.getInstance();
+      const embeddingModel = ollama.getEmbeddingModel();
+      const semanticSearchAvailable =
+        vectorDb.vectorsAvailable &&
+        !!embeddingModel &&
+        !!vectorDb.getVectorDimension();
+
+      if (semanticSearchAvailable) {
+        try {
+          const semanticService = SemanticSearchService.getInstance();
+          semanticResults = await semanticService.search(naturalQuery, numAccountId);
+          if (semanticResults.length > 0) {
+            log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
+          } else {
+            log.info('[AI] search: semantic search insufficient results, falling back to keywords');
+          }
+        } catch (semanticErr) {
+          log.warn('[AI] search: semantic search failed, falling back to keywords:', semanticErr);
+          semanticResults = [];
+        }
+      }
+
+      return ipcSuccess({ intent, queries, semanticResults });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
       log.error('[AI] search failed:', err);

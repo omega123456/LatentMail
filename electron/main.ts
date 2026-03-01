@@ -14,6 +14,7 @@ import { NativeDropService } from './services/native-drop-service';
 import { TrayService } from './services/tray-service';
 import { VectorDbService } from './services/vector-db-service';
 import { EmbeddingService } from './services/embedding-service';
+import { patchIpcMainForActivityTracking } from './ipc/ipc-activity-tracker';
 import { getAvatarCacheDir } from './services/avatar-cache-service';
 import { isMacOS, isWindows } from './utils/platform';
 
@@ -91,6 +92,10 @@ if (runApp) {
     } catch (err) {
       logger.warn('Failed to initialize VectorDbService/EmbeddingService — semantic search will be unavailable:', err);
     }
+
+    // Patch ipcMain.handle to track activity on mail:* and compose:* channels.
+    // Must be called BEFORE registerAllIpcHandlers() so all handlers are wrapped.
+    patchIpcMainForActivityTracking();
 
     // Register IPC handlers
     registerAllIpcHandlers();

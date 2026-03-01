@@ -32,6 +32,8 @@ const electronAPI = {
       ipcRenderer.invoke('mail:search', accountId, query) as Promise<IpcResponse>,
     searchImap: (accountId: string, query: string | string[]) =>
       ipcRenderer.invoke('mail:search-imap', accountId, query) as Promise<IpcResponse>,
+    searchByMsgIds: (accountId: string, xGmMsgIds: string[]) =>
+      ipcRenderer.invoke('mail:search-by-msgids', accountId, xGmMsgIds) as Promise<IpcResponse>,
     syncAccount: (accountId: string) =>
       ipcRenderer.invoke('mail:sync-account', accountId) as Promise<IpcResponse>,
     getFolders: (accountId: string) =>

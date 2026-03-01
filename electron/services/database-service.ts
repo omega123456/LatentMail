@@ -2806,6 +2806,228 @@ export class DatabaseService {
     log.info('[DatabaseService] Reset all embedding hashes globally');
   }
 
+  /**
+   * Given a list of x_gm_msgid values, return the subset that have at least one
+   * email_folders entry whose folder is NOT in the excluded set.
+   *
+   * Used by SemanticSearchService to filter out emails that live ONLY in
+   * Trash, Spam, or Drafts from semantic search results.
+   *
+   * @param accountId - Account ID to scope the query
+   * @param xGmMsgIds - Candidate message IDs to check (may be large)
+   * @param excludedFolders - Folders to exclude (e.g. ['[Gmail]/Trash', '[Gmail]/Spam', '[Gmail]/Drafts'])
+   * @returns Set of x_gm_msgid values that have at least one non-excluded folder
+   */
+  getMsgIdsWithNonExcludedFolders(
+    accountId: number,
+    xGmMsgIds: string[],
+    excludedFolders: string[]
+  ): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const uniqueIds = Array.from(new Set(xGmMsgIds.filter((id) => id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return new Set();
+    }
+
+    // If no folders are excluded, every candidate msgId qualifies — return all of them.
+    if (excludedFolders.length === 0) {
+      return new Set(uniqueIds);
+    }
+
+    // Build dynamic placeholders for x_gm_msgid list
+    const msgIdPlaceholders = uniqueIds.map((_, index) => `:msgId${index}`).join(', ');
+
+    // Build dynamic placeholders for excluded folders list
+    const folderPlaceholders = excludedFolders.map((_, index) => `:excludedFolder${index}`).join(', ');
+
+    const params: Record<string, number | string> = { ':accountId': accountId };
+    for (let index = 0; index < uniqueIds.length; index++) {
+      params[`:msgId${index}`] = uniqueIds[index];
+    }
+    for (let index = 0; index < excludedFolders.length; index++) {
+      params[`:excludedFolder${index}`] = excludedFolders[index];
+    }
+
+    // Select x_gm_msgid values that have at least one folder NOT in the excluded list
+    const sql = `
+      SELECT DISTINCT ef.x_gm_msgid
+      FROM email_folders ef
+      WHERE ef.account_id = :accountId
+        AND ef.x_gm_msgid IN (${msgIdPlaceholders})
+        AND ef.folder NOT IN (${folderPlaceholders})
+    `;
+
+    const result = this.db.exec(sql, params);
+    if (result.length === 0) {
+      return new Set();
+    }
+
+    const included = new Set<string>();
+    for (const row of result[0].values) {
+      const msgId = row[0];
+      if (typeof msgId === 'string') {
+        included.add(msgId);
+      }
+    }
+    return included;
+  }
+
+  /**
+   * Get threads (formatted as thread rows) for a given list of x_gm_msgid values.
+   * Used to resolve semantic search results (which return x_gm_msgid values) into
+   * full thread objects for the renderer.
+   *
+   * The results are ordered by the relevance rank of the input msgIds array
+   * (index 0 = highest relevance). The DB query fetches in one batch; we then
+   * re-sort to preserve the caller's ordering.
+   *
+   * @param accountId - Account ID
+   * @param xGmMsgIds - x_gm_msgid values in relevance order (most relevant first)
+   * @returns Thread rows in the same order as xGmMsgIds (unmatched IDs are silently dropped)
+   */
+  getThreadsByXGmMsgIds(accountId: number, xGmMsgIds: string[]): Array<Record<string, unknown>> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    const uniqueIds = Array.from(new Set(xGmMsgIds.filter((id) => id.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = uniqueIds.map((_, index) => `:msgId${index}`).join(', ');
+    const params: Record<string, number | string | null> = {
+      ':accountId': accountId,
+      ':limit': uniqueIds.length,
+      ':trashFolder': this.getTrashFolder(accountId),
+    };
+    for (let index = 0; index < uniqueIds.length; index++) {
+      params[`:msgId${index}`] = uniqueIds[index];
+    }
+
+    // Join emails → threads via x_gm_msgid to resolve threads for the given message IDs
+    const sql = `
+      SELECT DISTINCT
+        t.id,
+        t.account_id,
+        t.x_gm_thrid,
+        t.subject,
+        t.last_message_date,
+        t.participants,
+        (SELECT COUNT(DISTINCT e2.x_gm_msgid)
+         FROM emails e2
+         JOIN email_folders ef2 ON ef2.account_id = e2.account_id AND ef2.x_gm_msgid = e2.x_gm_msgid
+         WHERE e2.account_id = :accountId AND e2.x_gm_thrid = t.x_gm_thrid
+           AND ef2.folder != :trashFolder
+        ) AS message_count,
+        t.snippet,
+        'search' AS folder,
+        t.is_read,
+        t.is_starred,
+        (SELECT MAX(e3.has_attachments) FROM emails e3
+         WHERE e3.account_id = :accountId AND e3.x_gm_thrid = t.x_gm_thrid
+        ) AS has_attachments
+      FROM emails e
+      JOIN threads t ON t.account_id = e.account_id AND t.x_gm_thrid = e.x_gm_thrid
+      WHERE e.account_id = :accountId
+        AND e.x_gm_msgid IN (${placeholders})
+      LIMIT :limit
+    `;
+
+    const result = this.db.exec(sql, params);
+    if (result.length === 0) {
+      return [];
+    }
+
+    const rows = result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+
+    // Re-sort to preserve the relevance ordering of the input xGmMsgIds.
+    // Build a map from x_gm_thrid → rank (using the first matching msgId's position).
+    // Since one thread may contain multiple msgIds, use the best (lowest) rank among matches.
+    const msgIdToRank = new Map<string, number>();
+    for (let index = 0; index < uniqueIds.length; index++) {
+      msgIdToRank.set(uniqueIds[index], index);
+    }
+
+    // We need to know which msgIds belong to each thread so we can assign a rank.
+    // The query joined emails to threads; we need to look up the emailMsgIds for each thread.
+    // Simpler approach: for each result thread, compute its rank by querying back.
+    // Even simpler: re-query the emails table for xGmThrid → msgId mapping for these threads.
+    const threadIds = rows.map((row) => row['xGmThrid'] as string);
+    const threadMsgIdMap = this.getFirstMatchingMsgIdForThreads(accountId, threadIds, uniqueIds);
+
+    const rankedRows = rows.map((row) => {
+      const xGmThrid = row['xGmThrid'] as string;
+      const firstMatchingMsgId = threadMsgIdMap.get(xGmThrid);
+      const rank = firstMatchingMsgId !== undefined ? (msgIdToRank.get(firstMatchingMsgId) ?? Infinity) : Infinity;
+      return { row, rank };
+    });
+
+    rankedRows.sort((a, b) => a.rank - b.rank);
+
+    return rankedRows.map(({ row }) => row);
+  }
+
+  /**
+   * Helper for getThreadsByXGmMsgIds: for each given thread, find the first (highest-ranked)
+   * x_gm_msgid from the candidate list that belongs to it.
+   */
+  private getFirstMatchingMsgIdForThreads(
+    accountId: number,
+    xGmThrids: string[],
+    candidateMsgIds: string[]
+  ): Map<string, string> {
+    if (!this.db || xGmThrids.length === 0 || candidateMsgIds.length === 0) {
+      return new Map();
+    }
+
+    const thridPlaceholders = xGmThrids.map((_, index) => `:thrid${index}`).join(', ');
+    const msgIdPlaceholders = candidateMsgIds.map((_, index) => `:cand${index}`).join(', ');
+
+    const params: Record<string, number | string> = { ':accountId': accountId };
+    for (let index = 0; index < xGmThrids.length; index++) {
+      params[`:thrid${index}`] = xGmThrids[index];
+    }
+    for (let index = 0; index < candidateMsgIds.length; index++) {
+      params[`:cand${index}`] = candidateMsgIds[index];
+    }
+
+    const sql = `
+      SELECT x_gm_thrid, x_gm_msgid
+      FROM emails
+      WHERE account_id = :accountId
+        AND x_gm_thrid IN (${thridPlaceholders})
+        AND x_gm_msgid IN (${msgIdPlaceholders})
+    `;
+
+    const result = this.db.exec(sql, params);
+    if (result.length === 0) {
+      return new Map();
+    }
+
+    // For each thread, keep track of the best-ranked (lowest index) matching msgId
+    const msgIdToRank = new Map<string, number>();
+    for (let index = 0; index < candidateMsgIds.length; index++) {
+      msgIdToRank.set(candidateMsgIds[index], index);
+    }
+
+    const threadBestMap = new Map<string, { msgId: string; rank: number }>();
+    for (const row of result[0].values) {
+      const thrid = row[0] as string;
+      const msgId = row[1] as string;
+      const rank = msgIdToRank.get(msgId) ?? Infinity;
+      const existing = threadBestMap.get(thrid);
+      if (existing === undefined || rank < existing.rank) {
+        threadBestMap.set(thrid, { msgId, rank });
+      }
+    }
+
+    return new Map(Array.from(threadBestMap.entries()).map(([thrid, { msgId }]) => [thrid, msgId]));
+  }
+
   // ---- Close ----
 
   close(): void {

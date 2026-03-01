@@ -30,8 +30,7 @@ export interface AiState {
   categorizeLoading: boolean;
   // Search
   searchLoading: boolean;
-  searchResult: { intent: SearchIntent | null; queries: string[] } | null;
-  // Filter generation
+  searchResult: { intent: SearchIntent | null; queries: string[] } | null;  // Filter generation
   filterSuggestion: AiFilterSuggestion | null;
   filterLoading: boolean;
   // Follow-up detection
@@ -404,14 +403,14 @@ export const AiStore = signalStore(
       },
 
       /** AI search: convert natural language into structured intent + query variants */
-      async aiSearch(accountId: string, query: string, folders?: string[]): Promise<{ intent: SearchIntent | null; queries: string[] } | null> {
+      async aiSearch(accountId: string, query: string, folders?: string[]): Promise<{ intent: SearchIntent | null; queries: string[]; semanticResults?: string[] } | null> {
         patchState(store, { searchLoading: true, searchResult: null, error: null });
         const response = await electronService.aiSearch(accountId, query, folders);
         if (response.success && response.data) {
-          const data = response.data as { intent: SearchIntent | null; queries: string[] };
+          const data = response.data as { intent: SearchIntent | null; queries: string[]; semanticResults?: string[] };
           patchState(store, {
             searchLoading: false,
-            searchResult: data,
+            searchResult: { intent: data.intent, queries: data.queries },
           });
           return data;
         } else {

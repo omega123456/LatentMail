@@ -473,7 +473,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  onSearch(event: { queries: string[]; originalQuery: string }): void {
+  onSearch(event: { queries: string[]; originalQuery: string; semanticResults?: string[] }): void {
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
       return;
@@ -486,7 +486,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     // Clear selection and start two-phase search
     this.emailsStore.clearSelection();
-    this.emailsStore.searchEmails(activeAccount.id, event.queries);
+    this.emailsStore.searchEmails(activeAccount.id, event.queries, event.semanticResults);
   }
 
   onSearchCleared(): void {

@@ -16,6 +16,7 @@ import { executeFetchOlder } from './fetch-older-handler';
 import { formatParticipant, formatParticipantList } from '../utils/format-participant';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 import { BodyPrefetchService } from './body-prefetch-service';
+import { EmbeddingService } from './embedding-service';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1679,6 +1680,15 @@ export class MailQueueService {
       }
     } catch (bodyFetchErr) {
       log.warn(`[MailQueue] processSyncAllMail: failed to enqueue body-fetch for account ${item.accountId}:`, bodyFetchErr);
+    }
+
+    // Schedule incremental embedding after sync completes (fire-and-forget).
+    // EmbeddingService will wait for user idle before starting the indexing run.
+    try {
+      const embeddingService = EmbeddingService.getInstance();
+      embeddingService.scheduleIncrementalIndex();
+    } catch {
+      // EmbeddingService may not be initialized (e.g. sqlite-vec unavailable) — skip silently
     }
   }
 

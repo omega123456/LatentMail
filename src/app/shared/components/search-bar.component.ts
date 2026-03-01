@@ -17,7 +17,7 @@ export class SearchBarComponent implements OnInit, OnDestroy {
   readonly aiStore = inject(AiStore);
   readonly accountsStore = inject(AccountsStore);
   readonly foldersStore = inject(FoldersStore);
-  readonly searchExecuted = output<{ queries: string[]; originalQuery: string }>();
+  readonly searchExecuted = output<{ queries: string[]; originalQuery: string; semanticResults?: string[] }>();
   readonly searchCleared = output<void>();
 
   readonly query = signal('');
@@ -88,7 +88,11 @@ export class SearchBarComponent implements OnInit, OnDestroy {
 
       const result = await this.aiStore.aiSearch(String(accountId), q, folderNames);
       if (result && Array.isArray(result.queries) && result.queries.length > 0) {
-        this.searchExecuted.emit({ queries: result.queries, originalQuery });
+        this.searchExecuted.emit({
+          queries: result.queries,
+          originalQuery,
+          semanticResults: result.semanticResults,
+        });
       } else {
         // Fallback: use original query
         this.searchExecuted.emit({ queries: [q], originalQuery });

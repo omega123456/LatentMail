@@ -767,6 +767,40 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
+  // Resolve semantic search results: given a list of x_gm_msgid values, return the
+  // corresponding threads in the same relevance order. Used by the renderer to convert
+  // semantic search x_gm_msgid results into displayable thread objects.
+  ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH_BY_MSGIDS, async (_event, accountId: string, xGmMsgIds: unknown) => {
+    try {
+      if (!accountId || isNaN(Number(accountId))) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Valid account ID is required');
+      }
+      if (!Array.isArray(xGmMsgIds) || xGmMsgIds.length === 0) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'At least one message ID is required');
+      }
+      if (!xGmMsgIds.every((id) => typeof id === 'string')) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'All message IDs must be strings');
+      }
+      if (xGmMsgIds.length > 200) {
+        return ipcError('MAIL_SEARCH_INVALID_INPUT', 'Too many message IDs (max 200)');
+      }
+
+      const numAccountId = Number(accountId);
+      log.info(`[MAIL_SEARCH_BY_MSGIDS] Resolving ${xGmMsgIds.length} message IDs for account ${accountId}`);
+
+      let results = db.getThreadsByXGmMsgIds(numAccountId, xGmMsgIds as string[]);
+      results = attachThreadFolders(results);
+      results = attachThreadDraftStatus(results, '', numAccountId);
+      results = attachThreadLabels(results, numAccountId);
+
+      log.info(`[MAIL_SEARCH_BY_MSGIDS] Resolved ${results.length} thread(s) for account ${accountId}`);
+      return ipcSuccess(results);
+    } catch (err) {
+      log.error('[MAIL_SEARCH_BY_MSGIDS] Failed:', err);
+      return ipcError('MAIL_SEARCH_BY_MSGIDS_FAILED', 'Failed to resolve message IDs');
+    }
+  });
+
   // Search emails via IMAP using Gmail X-GM-RAW — upserts results to DB, returns thread-grouped results
   ipcMain.handle(IPC_CHANNELS.MAIL_SEARCH_IMAP, async (_event, accountId: string, queryInput: string | string[]) => {
     try {

@@ -597,9 +597,13 @@ export const EmailsStore = signalStore(
       /**
        * Two-phase progressive search:
        * Phase 1: Local DB search (immediate results)
+       *   - When semanticXGmMsgIds is present (≥5 items from semantic search),
+       *     resolves those specific message IDs to threads instead of running keyword queries.
+       *   - Falls back to keyword queries when semanticXGmMsgIds is absent or has <5 entries.
        * Phase 2: IMAP search (background, merges progressively)
+       *   - Always uses keyword queries (semanticXGmMsgIds not used for IMAP phase).
        */
-      async searchEmails(accountId: number, query: string | string[]): Promise<void> {
+      async searchEmails(accountId: number, query: string | string[], semanticXGmMsgIds?: string[]): Promise<void> {
         const requestId = crypto.randomUUID();
         patchState(store, {
           loading: true,
@@ -614,8 +618,20 @@ export const EmailsStore = signalStore(
         });
 
         // Phase 1: Local DB search
+        // Use semantic results (msgid-based lookup) when available, otherwise fall back to keyword search.
+        const useSemanticResults = Array.isArray(semanticXGmMsgIds) && semanticXGmMsgIds.length >= 5;
         try {
-          const response = await electronService.searchEmails(String(accountId), query);
+          let response;
+          if (useSemanticResults) {
+            response = await electronService.searchEmailsByMsgIds(String(accountId), semanticXGmMsgIds!);
+            // If semantic lookup returns no local DB results (e.g. stale vector index),
+            // fall back to keyword search for Phase 1 so the user sees immediate results.
+            if (response.success && Array.isArray(response.data) && (response.data as Thread[]).length === 0) {
+              response = await electronService.searchEmails(String(accountId), query);
+            }
+          } else {
+            response = await electronService.searchEmails(String(accountId), query);
+          }
           if (response.success && response.data) {
             const results = response.data as Thread[];
             patchState(store, {
@@ -637,7 +653,7 @@ export const EmailsStore = signalStore(
           });
         }
 
-        // Phase 2: IMAP search (background)
+        // Phase 2: IMAP search (background) — always uses keyword queries
         patchState(store, { searchPhase: 'imap' });
         foldersStore.setSearchingImap(true);
 

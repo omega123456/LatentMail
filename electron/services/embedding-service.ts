@@ -26,6 +26,7 @@ import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { VectorDbService } from './vector-db-service';
 import { OllamaService } from './ollama-service';
+import { getLastIpcActivityTimestamp } from '../ipc/ipc-activity-tracker';
 import type { EmailBatchItem, EmbeddingWorkerData, BatchResult } from '../workers/embedding-worker';
 
 const log = LoggerService.getInstance();
@@ -51,8 +52,8 @@ export class EmbeddingService {
 
   /**
    * Timestamp of the most recent mail or compose IPC invocation.
-   * Set by the IPC tracking hook (wired in Phase 4).
-   * Used for idle-awareness: incremental indexing pauses when user is recently active.
+   * @deprecated Use getLastIpcActivityTimestamp() from ipc-activity-tracker instead.
+   *             Kept for backward compatibility; the tracker module is the canonical source.
    */
   lastIpcActivityTimestamp: number = 0;
 
@@ -419,9 +420,9 @@ export class EmbeddingService {
       return;
     }
 
-    // Wait until idle
+    // Wait until idle — no mail:* or compose:* IPC activity in the last 30 seconds
     let waitCount = 0;
-    while (Date.now() - this.lastIpcActivityTimestamp < IDLE_THRESHOLD_MS) {
+    while (Date.now() - getLastIpcActivityTimestamp() < IDLE_THRESHOLD_MS) {
       await sleep(5_000);
       waitCount++;
       if (waitCount > 60) {
