@@ -169,19 +169,18 @@ export class VectorDbService {
       log.debug('[VectorDbService] sqlite-vec package helper failed, trying production path:', error);
     }
 
-    // Strategy 2: Production path — extension is in app.asar.unpacked/node_modules/sqlite-vec-*/
-    // The platform-specific package name determines the extension file name.
-    try {
-      const extensionPath = this.resolveProductionExtensionPath();
-      if (extensionPath) {
+    // Strategy 2: Production paths — try top-level then nested under sqlite-vec (optionalDeps layout).
+    const productionPaths = this.getProductionExtensionPaths();
+    for (const extensionPath of productionPaths) {
+      try {
         this.db.loadExtension(extensionPath);
         this.sqliteVecExtensionPath = extensionPath;
         log.info(`[VectorDbService] sqlite-vec extension loaded from production path: ${extensionPath}`);
         this.vectorsAvailable = true;
         return;
+      } catch (error) {
+        log.debug(`[VectorDbService] Production path failed (${extensionPath}):`, error);
       }
-    } catch (error) {
-      log.debug('[VectorDbService] Production path extension load failed:', error);
     }
 
     log.warn(
@@ -193,36 +192,23 @@ export class VectorDbService {
   }
 
   /**
-   * Resolve the sqlite-vec extension binary path for packaged (production) builds.
-   * Returns null if the path cannot be determined.
-   *
-   * In packaged builds, node_modules is inside app.asar, but native binaries are
-   * unpacked to app.asar.unpacked/node_modules/sqlite-vec-<platform>/.
+   * Return candidate paths for the sqlite-vec extension in packaged (production) builds.
+   * Tries top-level node_modules first, then nested under sqlite-vec (optionalDeps layout).
    */
-  private resolveProductionExtensionPath(): string | null {
-    // Determine platform-specific package name and extension filename
+  private getProductionExtensionPaths(): string[] {
     const platformPackage = this.getSqliteVecPlatformPackage();
-    if (!platformPackage) {
-      return null;
-    }
-
-    // The extension file (e.g. vec0.dll on Windows, vec0.so on Linux, vec0.dylib on macOS)
     const extensionFilename = this.getSqliteVecExtensionFilename();
-    if (!extensionFilename) {
-      return null;
+    if (!platformPackage || !extensionFilename) {
+      return [];
     }
 
-    // Production path: app.asar.unpacked/node_modules/<platform-package>/<filename>
     const resourcesPath = process.resourcesPath || '';
-    const productionPath = path.join(
-      resourcesPath,
-      'app.asar.unpacked',
-      'node_modules',
-      platformPackage,
-      extensionFilename
-    );
+    const unpacked = path.join(resourcesPath, 'app.asar.unpacked', 'node_modules');
 
-    return productionPath;
+    return [
+      path.join(unpacked, platformPackage, extensionFilename),
+      path.join(unpacked, 'sqlite-vec', 'node_modules', platformPackage, extensionFilename),
+    ];
   }
 
   /**

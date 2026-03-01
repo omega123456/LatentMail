@@ -122,7 +122,12 @@ async function callOllamaEmbed(texts: string[]): Promise<number[][]> {
 
       if (!response.ok) {
         const body = await response.text().catch(() => '');
-        throw new Error(`Ollama embed HTTP ${response.status}: ${body.slice(0, 200)}`);
+        const errorText = body.slice(0, 500);
+        // Context-length errors are non-retryable; throw with a recognizable message so the batch handler can skip this email
+        if (response.status === 400 && /context length|input length exceeds/i.test(errorText)) {
+          throw new Error(`Ollama embed context length exceeded: ${errorText.slice(0, 200)}`);
+        }
+        throw new Error(`Ollama embed HTTP ${response.status}: ${errorText.slice(0, 200)}`);
       }
 
       const data = await response.json() as { embeddings: number[][] };
@@ -131,9 +136,13 @@ async function callOllamaEmbed(texts: string[]): Promise<number[][]> {
       }
       return data.embeddings;
     } catch (err) {
-      const isLastAttempt = attempt >= retryDelaysMs.length;
       const errorMessage = err instanceof Error ? err.message : String(err);
+      // Context length exceeded is non-retryable; rethrow so the batch handler can skip this email
+      if (/context length exceeded|exceeds the context length/i.test(errorMessage)) {
+        throw err;
+      }
 
+      const isLastAttempt = attempt >= retryDelaysMs.length;
       if (isLastAttempt) {
         throw new Error(`Ollama embed failed after ${retryDelaysMs.length + 1} attempts: ${errorMessage}`);
       }
@@ -326,14 +335,21 @@ parentPort?.on('message', async (message: { type: string; emails?: EmailBatchIte
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
 
-        // Check if this is a connection-level failure (retries exhausted)
+        // Context length exceeded: skip this email and continue (non-fatal)
+        if (/context length exceeded|exceeds the context length/i.test(errorMessage)) {
+          postLog('warn', `[EmbeddingWorker] Skipping email ${email.xGmMsgId} (context length exceeded): ${errorMessage}`);
+          postProgress(indexedSoFar, totalEmailsInRun);
+          continue;
+        }
+
+        // Connection-level failure (retries exhausted): stop the run
         if (errorMessage.includes('after') && errorMessage.includes('attempts')) {
           postLog('error', `[EmbeddingWorker] Ollama connection lost: ${errorMessage}`);
           parentPort?.postMessage({ type: 'error', message: errorMessage });
           return;
         }
 
-        // Skip this email and continue with the next one
+        // Other errors: skip this email and continue
         postLog('warn', `[EmbeddingWorker] Failed to embed email ${email.xGmMsgId}: ${errorMessage}`);
       }
 
