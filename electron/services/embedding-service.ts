@@ -72,6 +72,7 @@ type BuildState = 'idle' | 'building' | 'error';
 const EMBEDDING_PROGRESS_CHANNEL = 'embedding:progress';
 const EMBEDDING_COMPLETE_CHANNEL = 'embedding:complete';
 const EMBEDDING_ERROR_CHANNEL = 'embedding:error';
+const EMBEDDING_RESUME_CHANNEL = 'embedding:resume';
 
 export class EmbeddingService {
   private static instance: EmbeddingService;
@@ -249,6 +250,100 @@ export class EmbeddingService {
     db.clearAllEmbeddingCrawlProgress();
 
     log.info('[EmbeddingService] Model change complete — index cleared, re-index required');
+  }
+
+  /**
+   * Check for interrupted builds on app startup and automatically resume them.
+   *
+   * Called once from main.ts after all services are initialized. Checks prerequisites
+   * (model configured, Ollama reachable, vector DB available) before attempting resume.
+   * If prerequisites are not met, the method returns silently — the build_interrupted flag
+   * remains set and auto-resume will be attempted on the next app start.
+   *
+   * Delay strategy: this method waits 15 seconds internally (plus the 5-second setTimeout
+   * in main.ts) for ~20 seconds total before startBuild() fires, giving IMAP connections,
+   * OAuth token refreshes, and the SyncQueueBridge's first cycle time to settle.
+   */
+  async autoResumeInterruptedBuilds(): Promise<void> {
+    try {
+      const db = DatabaseService.getInstance();
+      const interruptedAccountIds = db.getInterruptedEmbeddingAccounts();
+
+      if (interruptedAccountIds.length === 0) {
+        log.debug('[EmbeddingService] Auto-resume: no interrupted builds found');
+        return;
+      }
+
+      // Only consider accounts that are currently active — an interrupted account
+      // that was subsequently disabled should not trigger a build on every startup.
+      const activeAccounts = db.getAccounts().filter((account) => account.is_active);
+      const activeInterruptedIds = interruptedAccountIds.filter((interruptedId) =>
+        activeAccounts.some((account) => account.id === interruptedId)
+      );
+
+      if (activeInterruptedIds.length === 0) {
+        log.info(
+          '[EmbeddingService] Auto-resume skipped: interrupted account(s) are no longer active'
+        );
+        return;
+      }
+
+      log.info(
+        `[EmbeddingService] Auto-resume: found ${activeInterruptedIds.length} active interrupted ` +
+        `account(s): ${activeInterruptedIds.join(', ')}`
+      );
+
+      // Check prerequisites: embedding model configured
+      const ollama = OllamaService.getInstance();
+      const embeddingModel = ollama.getEmbeddingModel();
+      if (!embeddingModel) {
+        log.info('[EmbeddingService] Auto-resume skipped: no embedding model configured');
+        return;
+      }
+
+      // Check prerequisites: vector DB available
+      if (!this.vectorDbService.vectorsAvailable) {
+        log.info('[EmbeddingService] Auto-resume skipped: vector DB unavailable');
+        return;
+      }
+
+      // Check prerequisites: vector dimension configured
+      const vectorDimension = this.vectorDbService.getVectorDimension();
+      if (!vectorDimension) {
+        log.info('[EmbeddingService] Auto-resume skipped: vector dimension not configured');
+        return;
+      }
+
+      // Check prerequisites: Ollama is reachable
+      const isHealthy = await ollama.checkHealth();
+      if (!isHealthy) {
+        log.info('[EmbeddingService] Auto-resume skipped: Ollama is not reachable');
+        return;
+      }
+
+      // Wait 15 seconds to let normal sync and IMAP connections settle
+      log.info('[EmbeddingService] Auto-resume: waiting 15s before resuming build...');
+      await sleep(15_000);
+
+      // Re-check: user may have started a manual build during the delay
+      if (this.buildState !== 'idle') {
+        log.info(
+          `[EmbeddingService] Auto-resume skipped: build already in state '${this.buildState}'`
+        );
+        return;
+      }
+
+      log.info('[EmbeddingService] Auto-resume: starting build...');
+
+      // startBuild() may throw (e.g., vector DB reconfigured, no model). Broadcast the
+      // resume event only after we confirm the build started successfully so the renderer
+      // does not show a "Resuming…" toast for a build that never actually runs.
+      this.startBuild();
+      this.broadcastResume();
+    } catch (err) {
+      // Auto-resume must never crash the app
+      log.warn('[EmbeddingService] Auto-resume encountered an error:', err);
+    }
   }
 
   // ---- Internal build loop (full IMAP crawl) ----
@@ -931,6 +1026,14 @@ export class EmbeddingService {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(EMBEDDING_ERROR_CHANNEL, { message });
+      }
+    }
+  }
+
+  private broadcastResume(): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(EMBEDDING_RESUME_CHANNEL);
       }
     }
   }

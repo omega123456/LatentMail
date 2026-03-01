@@ -122,6 +122,7 @@ export const IPC_EVENTS = {
   EMBEDDING_PROGRESS: 'embedding:progress',
   EMBEDDING_COMPLETE: 'embedding:complete',
   EMBEDDING_ERROR: 'embedding:error',
+  EMBEDDING_RESUME: 'embedding:resume',
 } as const;
 
 // IPC response envelope

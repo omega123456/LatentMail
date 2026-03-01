@@ -214,6 +214,7 @@ const electronAPI = {
       'embedding:progress',
       'embedding:complete',
       'embedding:error',
+      'embedding:resume',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, callback);

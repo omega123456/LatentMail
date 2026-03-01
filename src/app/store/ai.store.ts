@@ -1,6 +1,7 @@
 import { computed, inject } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState, withHooks } from '@ngrx/signals';
 import { ElectronService } from '../core/services/electron.service';
+import { ToastService } from '../core/services/toast.service';
 import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult, SearchIntent } from '../core/models/ai.model';
 import { EmbeddingProgressPayload, EmbeddingErrorPayload, EmbeddingStatusData } from '../core/services/electron.service';
 
@@ -635,6 +636,7 @@ export const AiStore = signalStore(
   }),
   withHooks((store) => {
     const electronService = inject(ElectronService);
+    const toastService = inject(ToastService);
 
     return {
       onInit(): void {
@@ -652,6 +654,13 @@ export const AiStore = signalStore(
 
         electronService.onEvent<EmbeddingErrorPayload>('embedding:error').subscribe((payload) => {
           store.onEmbeddingError(payload);
+        });
+
+        electronService.onEvent<void>('embedding:resume').subscribe(() => {
+          // Show informational toast so the user knows indexing is resuming
+          toastService.info('Resuming index build...');
+          // Patch state so the UI immediately reflects that a build is starting
+          patchState(store, { indexStatus: 'building' });
         });
       },
     };

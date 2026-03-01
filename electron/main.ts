@@ -166,6 +166,21 @@ if (runApp) {
       logger.warn('Failed to start SyncQueueBridge:', err);
     }
 
+    // Auto-resume any embedding builds that were interrupted (crash/unexpected close).
+    // A 5-second initial delay here, plus a 15-second internal delay inside
+    // autoResumeInterruptedBuilds(), gives ~20 seconds total for IMAP connections,
+    // OAuth token refreshes, and the first SyncQueueBridge cycle to settle before
+    // the crawl connection is opened.
+    setTimeout(() => {
+      try {
+        EmbeddingService.getInstance().autoResumeInterruptedBuilds().catch((err: unknown) => {
+          logger.warn('Auto-resume embedding build failed:', err);
+        });
+      } catch (err) {
+        logger.warn('Failed to schedule embedding auto-resume:', err);
+      }
+    }, 5_000);
+
     // Create the main window
     createMainWindow();
 
