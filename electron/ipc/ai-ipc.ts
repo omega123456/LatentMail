@@ -586,33 +586,41 @@ export function registerAiIpcHandlers(): void {
         indexStatus = 'unavailable';
       } else {
         const db = DatabaseService.getInstance();
-        const accounts = db.getAccounts().filter((account) => account.is_active);
 
-        for (const account of accounts) {
-          const counts = db.countEmbeddingStatus(account.id);
-          total += counts.total;
-          indexed += counts.embedded;
-        }
-
-        if (total === 0 || !embeddingModel) {
-          indexStatus = 'not_started';
-        } else if (indexed === 0) {
-          indexStatus = 'not_started';
-        } else if (indexed < total) {
-          indexStatus = 'partial';
-        } else {
-          indexStatus = 'complete';
-        }
-
-        // If a build is currently in progress, override the status.
-        // Guard the getInstance() call since EmbeddingService may not be initialized yet.
+        // Check if a build is currently active — used for both status and count source.
+        let isBuilding = false;
+        let embeddingService: EmbeddingService | null = null;
         try {
-          const embeddingService = EmbeddingService.getInstance();
-          if (embeddingService.getBuildState() === 'building') {
-            indexStatus = 'building';
-          }
+          embeddingService = EmbeddingService.getInstance();
+          isBuilding = embeddingService.getBuildState() === 'building';
         } catch {
           // EmbeddingService not initialized — treat as not building
+        }
+
+        if (isBuilding && embeddingService !== null) {
+          // During an active build: use live counters from EmbeddingService.
+          // These reflect the IMAP-based total and the number embedded so far.
+          total = embeddingService.getCurrentBuildTotal();
+          indexed = embeddingService.getCurrentBuildIndexed();
+          indexStatus = 'building';
+        } else {
+          // Outside a build: use the vector_indexed_emails table for the indexed count.
+          // No total is available without an IMAP SEARCH ALL — report 0 to signal "unknown".
+          // Only load accounts in the non-building path to avoid unnecessary DB reads during builds.
+          const accounts = db.getAccounts().filter((account) => account.is_active);
+          for (const account of accounts) {
+            indexed += db.countVectorIndexedEmails(account.id);
+          }
+          total = 0; // Signals "no total available" to the renderer
+
+          if (!embeddingModel || indexed === 0) {
+            indexStatus = 'not_started';
+          } else {
+            // Any indexed emails with a completed (non-building) state means the last build finished.
+            // A cancelled partial build also shows as 'complete' here — the "Rebuild Index" button
+            // lets the user re-run. More accurate partial detection would require persisted build state.
+            indexStatus = 'complete';
+          }
         }
       }
 

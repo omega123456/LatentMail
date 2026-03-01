@@ -1328,6 +1328,17 @@ export class MailQueueService {
     const payload = item.payload as BodyFetchPayload;
     const prefetchService = BodyPrefetchService.getInstance();
     await prefetchService.fetchAndStoreBodies(item.accountId, payload.emails);
+
+    // Schedule incremental vector indexing after bodies are stored.
+    // EmbeddingService will wait for user idle before starting the indexing run.
+    // The incrementalScheduled guard in EmbeddingService prevents duplicate scheduling
+    // when multiple body-fetch items complete in rapid succession.
+    try {
+      const embeddingService = EmbeddingService.getInstance();
+      embeddingService.scheduleIncrementalIndex();
+    } catch {
+      // EmbeddingService may not be initialized (e.g. sqlite-vec unavailable) — skip silently
+    }
   }
 
   private resolveSourceFoldersForMove(
@@ -1680,15 +1691,6 @@ export class MailQueueService {
       }
     } catch (bodyFetchErr) {
       log.warn(`[MailQueue] processSyncAllMail: failed to enqueue body-fetch for account ${item.accountId}:`, bodyFetchErr);
-    }
-
-    // Schedule incremental embedding after sync completes (fire-and-forget).
-    // EmbeddingService will wait for user idle before starting the indexing run.
-    try {
-      const embeddingService = EmbeddingService.getInstance();
-      embeddingService.scheduleIncrementalIndex();
-    } catch {
-      // EmbeddingService may not be initialized (e.g. sqlite-vec unavailable) — skip silently
     }
   }
 
