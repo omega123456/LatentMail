@@ -298,6 +298,44 @@ export function registerAiIpcHandlers(): void {
         folderCount: folderContext.length,
       });
 
+      const vectorDb = VectorDbService.getInstance();
+      const isSemanticPipelineReady = (
+        vectorDb.vectorsAvailable &&
+        vectorDb.getVectorDimension() !== null &&
+        ollama.getStatus().connected &&
+        ollama.getModel() !== '' &&
+        ollama.getEmbeddingModel() !== ''
+      );
+
+      // Semantic-first: try semantic search first (one LLM call: extractSemanticIntent).
+      // Keyword intent is only extracted when falling back (semantic unavailable, error, or no results).
+      if (isSemanticPipelineReady) {
+        try {
+          const semanticService = SemanticSearchService.getInstance();
+          const semanticResults = await semanticService.search(
+            naturalQuery,
+            numAccountId,
+            userEmail,
+            todayDate,
+            folderContext
+          );
+          if (semanticResults.length > 0) {
+            log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
+            return ipcSuccess({
+              intent: null,
+              queries: [naturalQuery],
+              semanticResults,
+            });
+          }
+          log.info('[AI] search: semantic returned no results, falling back to keyword search');
+        } catch (semanticErr) {
+          log.warn('[AI] search: semantic search failed, falling back to keyword search:', semanticErr);
+        }
+      } else {
+        log.debug('[AI] search: semantic pipeline not ready, using keyword search');
+      }
+
+      // Fallback path: extract keyword intent and generate queries (one LLM call).
       let intent: SearchIntent;
       try {
         intent = await ollama.extractSearchIntent(naturalQuery, userEmail, todayDate, folderContext);
@@ -317,51 +355,14 @@ export function registerAiIpcHandlers(): void {
         return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
       }
 
-      log.info('[AI] search success', {
+      log.info('[AI] search success (keyword path)', {
         accountId,
         queryCount: queries.length,
         direction: intent.direction,
         hasFolder: !!intent.folder,
       });
 
-      // Attempt semantic search if the vector index is available, an embedding model is configured,
-      // the Ollama service is connected, and a main model is selected.
-      // If semantic search returns results, populate semanticResults. The renderer uses
-      // semanticResults when present, otherwise falls through to keyword search.
-      // Keyword intent+queries are ALWAYS generated regardless — they serve as fallback
-      // for the IMAP search phase.
-      let semanticResults: string[] = [];
-      const vectorDb = VectorDbService.getInstance();
-      const isSemanticPipelineReady = (
-        vectorDb.vectorsAvailable &&
-        vectorDb.getVectorDimension() !== null &&
-        ollama.getStatus().connected &&
-        ollama.getModel() !== '' &&
-        ollama.getEmbeddingModel() !== ''
-      );
-
-      if (isSemanticPipelineReady) {
-        try {
-          const semanticService = SemanticSearchService.getInstance();
-          semanticResults = await semanticService.search(
-            naturalQuery,
-            numAccountId,
-            userEmail,
-            todayDate,
-            folderContext
-          );
-          if (semanticResults.length > 0) {
-            log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
-          } else {
-            log.info('[AI] search: semantic search insufficient results, falling back to keywords');
-          }
-        } catch (semanticErr) {
-          log.warn('[AI] search: semantic search failed, falling back to keywords:', semanticErr);
-          semanticResults = [];
-        }
-      }
-
-      return ipcSuccess({ intent, queries, semanticResults });
+      return ipcSuccess({ intent, queries, semanticResults: [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
       log.error('[AI] search failed:', err);

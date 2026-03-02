@@ -597,9 +597,9 @@ export const EmailsStore = signalStore(
       /**
        * Two-phase progressive search:
        * Phase 1: Local DB search (immediate results)
-       *   - When semanticXGmMsgIds is present (≥5 items from semantic search),
-       *     resolves those specific message IDs to threads instead of running keyword queries.
-       *   - Falls back to keyword queries when semanticXGmMsgIds is absent or has <5 entries.
+       *   - When semanticXGmMsgIds is present (any length), resolves those message IDs to threads
+       *     instead of running keyword queries.
+       *   - Falls back to keyword queries when semanticXGmMsgIds is absent or empty.
        * Phase 2: IMAP search (background, merges progressively)
        *   - Always uses keyword queries (semanticXGmMsgIds not used for IMAP phase).
        */
@@ -618,8 +618,8 @@ export const EmailsStore = signalStore(
         });
 
         // Phase 1: Local DB search
-        // Use semantic results (msgid-based lookup) when available, otherwise fall back to keyword search.
-        const useSemanticResults = Array.isArray(semanticXGmMsgIds) && semanticXGmMsgIds.length >= 5;
+        // Use semantic results (msgid-based lookup) when the backend returned any; otherwise use keyword search.
+        const useSemanticResults = Array.isArray(semanticXGmMsgIds) && semanticXGmMsgIds.length > 0;
         try {
           let response;
           if (useSemanticResults) {

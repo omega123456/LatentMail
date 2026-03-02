@@ -36,7 +36,7 @@ const log = LoggerService.getInstance();
 const SIMILARITY_THRESHOLD = 0.5;
 
 /** Maximum number of results returned after deduplication and filtering. */
-const MAX_RESULTS = 100;
+const MAX_RESULTS = 50;
 
 /** Spam folder path (static, same across Gmail accounts). */
 const SPAM_FOLDER = '[Gmail]/Spam';
