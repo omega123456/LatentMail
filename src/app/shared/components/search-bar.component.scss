@@ -60,6 +60,16 @@
   }
 }
 
+// Streaming state: readonly input and busy container
+.search-bar-input[readonly] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-bar[aria-busy='true'] {
+  background: rgba(var(--color-primary-rgb, 25, 118, 210), 0.04);
+}
+
 .search-action-btn {
   display: flex;
   align-items: center;

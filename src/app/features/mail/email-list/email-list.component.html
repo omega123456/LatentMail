@@ -4,13 +4,39 @@
       <span class="material-symbols-outlined spinning">sync</span>
       <p>Loading emails...</p>
     </div>
-  } @else if (emailsStore.isEmpty()) {
+  } @else if (emailsStore.isEmpty() && aiStore.searchStreamStatus() !== 'searching') {
     <div class="email-list-empty">
       <span class="material-symbols-outlined">inbox</span>
       <p>No emails yet</p>
       <p class="hint">Emails will appear here after syncing</p>
     </div>
   } @else {
+    @if (showSearchStreamHeader()) {
+      <div class="search-stream-header">
+        @if (aiStore.searchStreamStatus() === 'searching') {
+          <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+        }
+        @if (searchCountLabel()) {
+          <div class="search-stream-count"
+               role="status"
+               aria-live="polite"
+               aria-atomic="true">
+            {{ searchCountLabel() }}
+          </div>
+        }
+        @if ((aiStore.searchStreamStatus() === 'partial' || aiStore.searchStreamStatus() === 'error') && !aiStore.searchStreamWarningDismissed()) {
+          <div class="search-stream-warning"
+               role="alert"
+               aria-live="assertive">
+            <span class="material-symbols-outlined warning-icon">warning</span>
+            <span class="warning-text">Some results may be missing due to a connection error.</span>
+            <button class="warning-dismiss" (click)="aiStore.dismissSearchWarning()" aria-label="Dismiss warning">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        }
+      </div>
+    }
     <cdk-virtual-scroll-viewport
       [itemSize]="uiStore.densityHeight()"
       [class.viewport-overlay-visible]="emailsStore.anyLoadingMore() || !!emailsStore.fetchError()"
@@ -25,6 +51,7 @@
         [showFolderBadge]="foldersStore.searchActive()"
         [activeFolderId]="foldersStore.activeFolderId()"
         [showStarAction]="foldersStore.activeFolderId() !== foldersStore.trashFolderId()"
+        [class.newly-added]="isNewlyAdded(thread.xGmThrid)"
         (clicked)="onThreadClick($event)"
         (starToggled)="onStarToggle(thread)"
         (contextMenuRequested)="onItemContextMenu($event)"

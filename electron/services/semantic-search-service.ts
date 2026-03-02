@@ -76,26 +76,35 @@ export class SemanticSearchService {
    * embeds the topic query, runs vector search, then applies filterAndResolve to handle
    * both the filter and no-filter paths in a unified way.
    *
+   * Results are delivered incrementally via the onBatch callback rather than returned
+   * as a single array. The callback is called at least once with the local-phase results
+   * (which may be an empty array) and then once per IMAP round with newly confirmed IDs.
+   *
    * @param naturalQuery - The user's search query (natural language)
    * @param accountId - The account to search within
    * @param userEmail - The account's email address (for LLM context)
    * @param todayDate - Today's date as YYYY-MM-DD (for LLM relative-date resolution)
    * @param folders - List of folder names for LLM context
-   * @returns Array of x_gm_msgid values sorted by relevance or date,
-   *          or empty array only if semantic search is unavailable or returns no raw results.
+   * @param onBatch - Callback invoked with each incremental batch of confirmed message IDs.
+   *                  Called at least once with phase 'local' (before IMAP work begins),
+   *                  then once per IMAP round with phase 'imap'. Batches may be empty.
+   * @returns 'complete' if all phases succeeded, 'partial' if some IMAP rounds failed
+   *          but some results were emitted, 'error' if the search failed entirely before
+   *          any results could be produced.
    */
   async search(
     naturalQuery: string,
     accountId: number,
     userEmail: string,
     todayDate: string,
-    folders: string[]
-  ): Promise<string[]> {
+    folders: string[],
+    onBatch: (msgIds: string[], phase: 'local' | 'imap') => void
+  ): Promise<'complete' | 'partial' | 'error'> {
     const vectorDb = VectorDbService.getInstance();
 
     if (!vectorDb.vectorsAvailable) {
       log.debug('[SemanticSearch] Vector DB unavailable — skipping semantic search');
-      return [];
+      return 'error';
     }
 
     const ollama = OllamaService.getInstance();
@@ -103,12 +112,12 @@ export class SemanticSearchService {
 
     if (!embeddingModel) {
       log.debug('[SemanticSearch] No embedding model configured — skipping semantic search');
-      return [];
+      return 'error';
     }
 
     if (!vectorDb.getVectorDimension()) {
       log.debug('[SemanticSearch] Vector dimension not configured — skipping semantic search');
-      return [];
+      return 'error';
     }
 
     // Step 1: Extract structured semantic intent (topic query + structured filters).
@@ -129,12 +138,12 @@ export class SemanticSearchService {
       const embeddings = await ollama.embed([intent.semanticQuery]);
       if (!embeddings[0] || embeddings[0].length === 0) {
         log.warn('[SemanticSearch] Empty embedding returned for query');
-        return [];
+        return 'error';
       }
       queryEmbedding = embeddings[0];
     } catch (embedError) {
       log.warn('[SemanticSearch] Failed to embed query:', embedError);
-      return [];
+      return 'error';
     }
 
     // Step 3: Run similarity search — fetch more candidates than needed to allow for filtering.
@@ -142,7 +151,7 @@ export class SemanticSearchService {
 
     if (rawResults.length === 0) {
       log.info('[SemanticSearch] No vector search results');
-      return [];
+      return 'complete';
     }
 
     // Step 4: Deduplicate by x_gm_msgid: keep the highest similarity score per email.
@@ -176,15 +185,16 @@ export class SemanticSearchService {
       `(${sortedBySimilarity.length} before folder filter)`
     );
 
-    const finalResults = await this.filterAndResolve(
+    const status = await this.filterAndResolve(
       accountId,
       folderFilteredCandidates,
       intent.filters,
-      excludedFolders
+      excludedFolders,
+      onBatch
     );
 
-    log.info(`[SemanticSearch] ${finalResults.length} final results`);
-    return finalResults;
+    log.info(`[SemanticSearch] search complete with status: ${status}`);
+    return status;
   }
 
   /**
@@ -198,6 +208,8 @@ export class SemanticSearchService {
    *     failed the SQL filter so they never consume batch slots during the loop.
    *   - Build the X-GM-RAW query string once (filter query + folder exclusions).
    *   - Open IMAP connection only if missing candidates exist.
+   *   - Emit all locally-confirmed msgIds as a 'local' phase batch via onBatch
+   *     (even if empty — signals local phase completion to the receiver).
    *
    * Iterative loop:
    *   Each round takes a deficit-sized batch (deficit = MAX_RESULTS - confirmed.size)
@@ -207,23 +219,26 @@ export class SemanticSearchService {
    *   Surviving UIDs are then FETCHed for envelopes and upserted, all within a single
    *   mailbox lock per round. Confirmed results are merged across rounds. The loop exits
    *   when MAX_RESULTS are confirmed or all eligible candidates are exhausted.
-   *
-   * Post-loop:
-   *   Final result is built by walking eligibleCandidates in order (preserving similarity
-   *   rank), picking confirmed items up to MAX_RESULTS, then sorting by date descending.
+   *   After each round's mailbox lock resolves, newly confirmed msgIds (diff vs. the set
+   *   before the round) are date-sorted and emitted as an 'imap' phase batch via onBatch.
    *
    * @param accountId - Account ID to scope queries
    * @param candidates - Candidate message IDs (similarity-ordered, already folder-filtered)
    * @param filters - Structured filter constraints from LLM intent extraction (may be empty)
    * @param excludedFolders - Folders to exclude (Trash, Spam, Drafts — resolved for this account)
-   * @returns Ordered list of x_gm_msgid strings (top MAX_RESULTS, date-sorted for display)
+   * @param onBatch - Callback invoked with each incremental batch of confirmed message IDs.
+   *                  Called once with phase 'local' before IMAP work begins (may be empty),
+   *                  then once per IMAP round with phase 'imap'.
+   * @returns 'complete' if all IMAP rounds succeeded, 'partial' if some rounds failed,
+   *          'error' if the method itself threw before any results were emitted.
    */
   private async filterAndResolve(
     accountId: number,
     candidates: string[],
     filters: SemanticSearchFilters | undefined,
-    excludedFolders: string[]
-  ): Promise<string[]> {
+    excludedFolders: string[],
+    onBatch: (msgIds: string[], phase: 'local' | 'imap') => void
+  ): Promise<'complete' | 'partial' | 'error'> {
     const db = DatabaseService.getInstance();
 
     // --- Upfront Step 1: Partition candidates into local (in DB) vs missing (not in DB) ---
@@ -290,29 +305,38 @@ export class SemanticSearchService {
       }
     }
 
+    // --- Emit local phase batch ---
+    // Date-sort the locally-confirmed candidates and emit them before any IMAP work begins.
+    // Always emit even if empty — it signals to the receiver that the local phase is complete.
+    const localConfirmedMsgIds = eligibleCandidates.filter((msgId) => filteredLocalMsgIds.has(msgId));
+    const sortedLocalBatch = this.sortByDate(accountId, localConfirmedMsgIds);
+    onBatch(sortedLocalBatch, 'local');
+
+    // Pre-build list of missing eligible candidates (those not already locally confirmed).
+    // This is what the iterative loop will process — local ones are already confirmed above.
+    const missingEligibleCandidates = eligibleCandidates.filter(
+      (msgId) => !filteredLocalMsgIds.has(msgId)
+    );
+
     // --- State persisted across all rounds ---
-    const confirmed = new Set<string>();
+    const confirmed = new Set<string>(localConfirmedMsgIds);
     let imapConfirmedCount = 0;
-    let cursor = 0;
+    let missingCursor = 0;
     let roundCounter = 0;
+    // Mark as error if IMAP is unavailable but there are missing candidates —
+    // those candidates could not be verified server-side, so results are partial.
+    let hadImapRoundError = !imapAvailable && missingEligibleCandidates.length > 0;
 
     try {
-      // --- Iterative loop: process candidates in deficit-sized rounds ---
-      while (confirmed.size < MAX_RESULTS && cursor < eligibleCandidates.length) {
-        const deficit = MAX_RESULTS;
-        const batch = eligibleCandidates.slice(cursor, cursor + deficit);
-        cursor += batch.length;
+      // --- Iterative loop: process missing candidates in deficit-sized rounds ---
+      while (confirmed.size < MAX_RESULTS && missingCursor < missingEligibleCandidates.length) {
+        const deficit = MAX_RESULTS - confirmed.size;
+        const batch = missingEligibleCandidates.slice(missingCursor, missingCursor + deficit);
+        missingCursor += batch.length;
         roundCounter += 1;
 
-        // Split batch into local-confirmed and missing
-        const missingBatch: string[] = [];
-        for (const msgId of batch) {
-          if (filteredLocalMsgIds.has(msgId)) {
-            confirmed.add(msgId);
-          } else {
-            missingBatch.push(msgId);
-          }
-        }
+        // All items in this batch are missing (local ones are already confirmed pre-loop).
+        const missingBatch = batch;
 
         // IMAP SEARCH + FETCH for missing items in this round
         if (missingBatch.length > 0 && imapAvailable) {
@@ -320,6 +344,9 @@ export class SemanticSearchService {
             `[SemanticSearch] Round ${roundCounter}: IMAP resolving ` +
             `${missingBatch.length} missing candidates`
           );
+
+          // Snapshot confirmed set before the lock — used to diff newly confirmed after.
+          const confirmedBeforeRound = new Set<string>(confirmed);
 
           try {
             await crawlService.withMailboxLock(
@@ -397,30 +424,37 @@ export class SemanticSearchService {
               }
             );
           } catch (roundError) {
+            hadImapRoundError = true;
             log.warn(
               `[SemanticSearch] Round ${roundCounter} failed, ` +
               `skipping ${missingBatch.length} candidates:`,
               roundError
             );
           }
+
+          // Emit newly confirmed msgIds from this IMAP round (diff vs. pre-round snapshot).
+          // Done OUTSIDE the mailbox lock so we never block the lock with callback work.
+          const newlyConfirmedInRound = Array.from(confirmed).filter(
+            (msgId) => !confirmedBeforeRound.has(msgId)
+          );
+          const sortedImapBatch = this.sortByDate(accountId, newlyConfirmedInRound);
+          onBatch(sortedImapBatch, 'imap');
         }
       }
 
       log.info(
         `[SemanticSearch] Loop complete: ${confirmed.size} confirmed ` +
         `(${confirmed.size - imapConfirmedCount} local + ${imapConfirmedCount} IMAP) ` +
-        `across ${roundCounter} round(s), cursor at ${cursor}/${eligibleCandidates.length}`
+        `across ${roundCounter} round(s), cursor at ${missingCursor}/${missingEligibleCandidates.length}`
       );
 
-      // --- Final result construction ---
-      // Walk eligibleCandidates in order (preserves similarity rank), pick confirmed, take MAX_RESULTS.
-      const topSelected = eligibleCandidates
-        .filter((msgId) => confirmed.has(msgId))
-        .slice(0, MAX_RESULTS);
-
-      // Sort by date descending for display.
-      const dateSortedResults = this.sortByDate(accountId, topSelected);
-      return dateSortedResults;
+      if (hadImapRoundError && confirmed.size > 0) {
+        return 'partial';
+      }
+      if (hadImapRoundError && confirmed.size === 0) {
+        return 'error';
+      }
+      return 'complete';
 
     } finally {
       if (connectionOpened) {

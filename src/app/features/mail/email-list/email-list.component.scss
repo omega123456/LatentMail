@@ -209,3 +209,56 @@
     background-color: var(--color-surface-variant);
   }
 }
+
+// ─── Streaming Search Header ──────────────────────────────────────────────────
+
+.search-stream-header {
+  flex-shrink: 0; // don't compress if parent is a flex column
+}
+
+.search-stream-count {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  padding: 8px 16px;
+}
+
+.search-stream-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(var(--color-error-rgb, 211, 47, 47), 0.05);
+  border-left: 3px solid var(--color-error);
+  margin: 0 0 4px;
+
+  .warning-icon {
+    font-size: 18px;
+    color: var(--color-error);
+    flex-shrink: 0;
+  }
+
+  .warning-text {
+    font-size: 13px;
+    color: var(--color-text-primary);
+    flex: 1;
+  }
+
+  .warning-dismiss {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    color: var(--color-text-tertiary);
+    display: flex;
+    align-items: center;
+
+    &:hover {
+      color: var(--color-text-secondary);
+    }
+
+    .material-symbols-outlined {
+      font-size: 16px;
+    }
+  }
+}

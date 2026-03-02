@@ -104,6 +104,20 @@ export interface TrayActionPayload {
   action: string;
 }
 
+/** Payload for ai:search:batch push event — a batch of matching message IDs from one search phase. */
+export interface SearchBatchPayload {
+  searchToken: string;
+  msgIds: string[];
+  phase: 'local' | 'imap';
+}
+
+/** Payload for ai:search:complete push event — final status after all search phases finish. */
+export interface SearchCompletePayload {
+  searchToken: string;
+  status: 'complete' | 'partial' | 'error';
+  totalResults: number;
+}
+
 interface ElectronAPI {
   mail: {
     fetchEmails: (accountId: string, folderId: string, options?: { limit?: number; offset?: number }) => Promise<IpcResponse>;
@@ -573,6 +587,16 @@ export class ElectronService {
   /** Fires when the user chooses an action from the system tray context menu (e.g. compose, sync). */
   onTrayAction(): Observable<TrayActionPayload> {
     return this.onEvent<TrayActionPayload>('system:tray-action');
+  }
+
+  /** Fires when a batch of matching message IDs arrives during an AI semantic search (local or IMAP phase). */
+  onAiSearchBatch(): Observable<SearchBatchPayload> {
+    return this.onEvent<SearchBatchPayload>('ai:search:batch');
+  }
+
+  /** Fires when all phases of an AI semantic search have finished (complete, partial, or error). */
+  onAiSearchComplete(): Observable<SearchCompletePayload> {
+    return this.onEvent<SearchCompletePayload>('ai:search:complete');
   }
 
   onEvent<T = unknown>(channel: string): Observable<T> {

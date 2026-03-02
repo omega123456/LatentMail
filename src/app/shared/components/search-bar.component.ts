@@ -17,7 +17,7 @@ export class SearchBarComponent implements OnInit, OnDestroy {
   readonly aiStore = inject(AiStore);
   readonly accountsStore = inject(AccountsStore);
   readonly foldersStore = inject(FoldersStore);
-  readonly searchExecuted = output<{ queries: string[]; originalQuery: string; semanticResults?: string[] }>();
+  readonly searchExecuted = output<{ queries: string[]; originalQuery: string; semanticResults?: string[]; streaming?: boolean }>();
   readonly searchCleared = output<void>();
 
   readonly query = signal('');
@@ -65,10 +65,15 @@ export class SearchBarComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // Guard: do not start a new search while a streaming search is in progress
+    if (this.aiStore.searchStreamStatus() === 'searching') {
+      return;
+    }
+
     const originalQuery = q;
 
     if (this.aiMode() && this.aiStore.isAvailable()) {
-      // Use AI to extract intent and generate multiple query variants
+      // Use AI streaming semantic search
       const accountId = this.accountsStore.activeAccountId();
       if (!accountId) {
         // Fallback: use original query if no active account
@@ -86,19 +91,21 @@ export class SearchBarComponent implements OnInit, OnDestroy {
         )
       );
 
-      const result = await this.aiStore.aiSearch(String(accountId), q, folderNames);
-      if (result && Array.isArray(result.queries) && result.queries.length > 0) {
+      const result = await this.aiStore.startStreamingSearch(String(accountId), q, folderNames);
+      if (result) {
+        // Streaming search started — emit event with streaming flag so mail-shell
+        // activates search mode immediately without waiting for results
         this.searchExecuted.emit({
-          queries: result.queries,
+          queries: [q],
           originalQuery,
-          semanticResults: result.semanticResults,
+          streaming: true,
         });
       } else {
-        // Fallback: use original query
+        // startStreamingSearch returned null (locked or IPC failed) — fallback to keyword search
         this.searchExecuted.emit({ queries: [q], originalQuery });
       }
     } else {
-      // Direct search — query and originalQuery are the same
+      // Direct keyword search — query and originalQuery are the same
       this.searchExecuted.emit({ queries: [q], originalQuery });
     }
   }

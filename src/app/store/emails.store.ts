@@ -733,6 +733,53 @@ export const EmailsStore = signalStore(
         });
       },
 
+      /**
+       * Clear the threads list and reset search metadata without triggering any
+       * fetch. Used to prepare a clean slate before streaming search results arrive.
+       */
+      clearThreadsForStreaming(): void {
+        patchState(store, {
+          threads: [],
+          searchActive: false,
+          searchQuery: null,
+          searchPhase: 'idle',
+          searchRequestId: null,
+          loading: false,
+          error: null,
+        });
+      },
+
+      /**
+       * Merge a batch of threads from a streaming semantic search into the current
+       * threads list. Deduplicates by xGmThrid (new version replaces existing),
+       * then re-sorts by date descending.
+       * Called by AiStore.onSearchBatch() as each push event arrives.
+       */
+      appendStreamingBatch(newThreads: Thread[]): void {
+        if (newThreads.length === 0) {
+          return;
+        }
+
+        const existingThreads = store.threads();
+
+        // Build a map of existing threads keyed by xGmThrid for O(1) deduplication
+        const existingMap = new Map<string, Thread>(
+          existingThreads.map((thread) => [thread.xGmThrid, thread])
+        );
+
+        // Overwrite existing entries with new versions, then add truly new ones
+        for (const thread of newThreads) {
+          existingMap.set(thread.xGmThrid, thread);
+        }
+
+        // Convert map back to array and sort by date descending (same comparator as searchEmails)
+        const merged = Array.from(existingMap.values()).sort(
+          (a, b) => new Date(b.lastMessageDate).getTime() - new Date(a.lastMessageDate).getTime()
+        );
+
+        patchState(store, { threads: merged });
+      },
+
       /** Trigger sync for an account */
       async syncAccount(accountId: number): Promise<void> {
         patchState(store, { syncing: true, syncProgress: 0 });

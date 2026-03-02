@@ -1,9 +1,11 @@
 import { computed, inject } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState, withHooks } from '@ngrx/signals';
-import { ElectronService } from '../core/services/electron.service';
+import { ElectronService, SearchBatchPayload, SearchCompletePayload } from '../core/services/electron.service';
 import { ToastService } from '../core/services/toast.service';
 import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult, SearchIntent } from '../core/models/ai.model';
 import { EmbeddingProgressPayload, EmbeddingErrorPayload, EmbeddingStatusData } from '../core/services/electron.service';
+import { Thread } from '../core/models/email.model';
+import { EmailsStore } from './emails.store';
 
 export interface AiState {
   connected: boolean;
@@ -32,7 +34,14 @@ export interface AiState {
   categorizeLoading: boolean;
   // Search
   searchLoading: boolean;
-  searchResult: { intent: SearchIntent | null; queries: string[] } | null;  // Filter generation
+  searchResult: { intent: SearchIntent | null; queries: string[] } | null;
+  // Streaming search state
+  searchToken: string | null;
+  searchStreamStatus: 'idle' | 'searching' | 'complete' | 'partial' | 'error';
+  searchStreamResultCount: number;
+  searchStreamWarningDismissed: boolean;
+  searchAccountId: string | null;
+  // Filter generation
   filterSuggestion: AiFilterSuggestion | null;
   filterLoading: boolean;
   // Follow-up detection
@@ -75,6 +84,12 @@ const initialState: AiState = {
   categorizeLoading: false,
   searchLoading: false,
   searchResult: null,
+  // Streaming search state
+  searchToken: null,
+  searchStreamStatus: 'idle',
+  searchStreamResultCount: 0,
+  searchStreamWarningDismissed: false,
+  searchAccountId: null,
   filterSuggestion: null,
   filterLoading: false,
   followUpResult: null,
@@ -111,6 +126,7 @@ export const AiStore = signalStore(
   })),
   withMethods((store) => {
     const electronService = inject(ElectronService);
+    const emailsStore = inject(EmailsStore);
 
     return {
       /** Check AI connection status */
@@ -519,6 +535,129 @@ export const AiStore = signalStore(
         patchState(store, { searchResult: null, searchLoading: false });
       },
 
+      // ─── Streaming Search ──────────────────────────────────────────
+
+      /**
+       * Start a streaming semantic search.
+       * Resets all prior streaming state, invokes ai:search (which now returns a
+       * searchToken immediately), and patches the token into the store.
+       * Actual results arrive as push events (ai:search:batch / ai:search:complete).
+       *
+       * Returns { searchToken, query } so the caller knows the search started,
+       * or null if already searching (search lock) or if the IPC call fails.
+       */
+      async startStreamingSearch(
+        accountId: string,
+        query: string,
+        folders?: string[],
+      ): Promise<{ searchToken: string; query: string } | null> {
+        // Search lock — prevent concurrent searches
+        if (store.searchStreamStatus() === 'searching') {
+          return null;
+        }
+
+        // Reset all prior streaming state before starting
+        patchState(store, {
+          searchToken: null,
+          searchStreamStatus: 'searching',
+          searchStreamResultCount: 0,
+          searchStreamWarningDismissed: false,
+          searchAccountId: accountId,
+        });
+
+        try {
+          const response = await electronService.aiSearch(accountId, query, folders);
+          if (response.success && response.data) {
+            const data = response.data as { searchToken?: string };
+            if (!data.searchToken) {
+              // The IPC handler returned a keyword fallback response (no searchToken).
+              // This search is not streaming — reset to idle and let the caller fall back.
+              patchState(store, {
+                searchStreamStatus: 'idle',
+                searchAccountId: null,
+              });
+              return null;
+            }
+            patchState(store, { searchToken: data.searchToken });
+            return { searchToken: data.searchToken, query };
+          } else {
+            patchState(store, { searchStreamStatus: 'error' });
+            return null;
+          }
+        } catch {
+          patchState(store, { searchStreamStatus: 'error' });
+          return null;
+        }
+      },
+
+      /**
+       * Handle an incoming ai:search:batch push event.
+       * Resolves the batch of msgIds to Thread objects and merges them into the
+       * emails store. Silently ignores events for stale search tokens.
+       */
+      async onSearchBatch(payload: SearchBatchPayload): Promise<void> {
+        // Ignore stale events from previous searches
+        if (payload.searchToken !== store.searchToken()) {
+          return;
+        }
+
+        // Empty batch (e.g. empty local phase) — nothing to merge
+        if (payload.msgIds.length === 0) {
+          return;
+        }
+
+        const currentAccountId = store.searchAccountId();
+        if (!currentAccountId) {
+          return;
+        }
+
+        try {
+          const response = await electronService.searchEmailsByMsgIds(currentAccountId, payload.msgIds);
+          if (response.success && response.data) {
+            const resolvedThreads = response.data as Thread[];
+            emailsStore.appendStreamingBatch(resolvedThreads);
+            // Use the merged thread count as the displayed count — deduplication in
+            // appendStreamingBatch means resolved batch size may exceed new unique threads.
+            patchState(store, {
+              searchStreamResultCount: emailsStore.threads().length,
+            });
+          }
+        } catch {
+          // Swallow batch resolution errors — partial batch failure should not break
+          // the streaming flow; remaining batches will continue to arrive normally.
+        }
+      },
+
+      /**
+       * Handle an incoming ai:search:complete push event.
+       * Transitions searchStreamStatus to the final status reported by the backend.
+       * Silently ignores events for stale search tokens.
+       */
+      onSearchComplete(payload: SearchCompletePayload): void {
+        // Ignore stale events from previous searches
+        if (payload.searchToken !== store.searchToken()) {
+          return;
+        }
+
+        patchState(store, { searchStreamStatus: payload.status });
+      },
+
+      /** Reset all streaming search state to idle. Call on search clear/dismiss. */
+      clearStreamingSearch(): void {
+        patchState(store, {
+          searchToken: null,
+          searchStreamStatus: 'idle',
+          searchStreamResultCount: 0,
+          searchStreamWarningDismissed: false,
+          searchAccountId: null,
+        });
+      },
+
+      /** Dismiss the partial/error warning banner shown during streaming search. */
+      dismissSearchWarning(): void {
+        patchState(store, { searchStreamWarningDismissed: true });
+      },
+
       // ─── Embedding / Semantic Search ───────────────────────────────
 
       /** Load embedding status from backend and patch store */
@@ -661,6 +800,17 @@ export const AiStore = signalStore(
           toastService.info('Resuming index build...');
           // Patch state so the UI immediately reflects that a build is starting
           patchState(store, { indexStatus: 'building' });
+        });
+
+        // Subscribe to streaming semantic search push events
+        electronService.onAiSearchBatch().subscribe((payload) => {
+          void store.onSearchBatch(payload).catch((batchError: unknown) => {
+            console.warn('[AiStore] Unhandled error in onSearchBatch:', batchError);
+          });
+        });
+
+        electronService.onAiSearchComplete().subscribe((payload) => {
+          store.onSearchComplete(payload);
         });
       },
     };

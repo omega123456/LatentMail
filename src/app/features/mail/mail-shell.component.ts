@@ -473,9 +473,21 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  onSearch(event: { queries: string[]; originalQuery: string; semanticResults?: string[] }): void {
+  onSearch(event: { queries: string[]; originalQuery: string; semanticResults?: string[]; streaming?: boolean }): void {
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
+      return;
+    }
+
+    if (event.streaming === true) {
+      // Streaming semantic search path — results arrive via push events (ai:search:batch / ai:search:complete)
+      // Activate search mode immediately so the virtual search folder appears
+      this.foldersStore.activateSearch(event.originalQuery, event.originalQuery);
+
+      // Clear the thread list and reset search metadata so we start fresh for streaming results
+      this.emailsStore.clearThreadsForStreaming();
+      this.emailsStore.clearSelection();
+      // Do NOT call emailsStore.searchEmails() — results arrive via AiStore.onSearchBatch()
       return;
     }
 
@@ -498,6 +510,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     const previousFolderId = this.foldersStore.previousFolderId();
     this.foldersStore.deactivateSearch();
     this.emailsStore.clearSearch();
+    this.aiStore.clearStreamingSearch();
 
     // Reload threads for the restored folder
     const activeAccount = this.accountsStore.activeAccount();

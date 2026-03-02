@@ -123,6 +123,10 @@ export const IPC_EVENTS = {
   EMBEDDING_COMPLETE: 'embedding:complete',
   EMBEDDING_ERROR: 'embedding:error',
   EMBEDDING_RESUME: 'embedding:resume',
+
+  // AI semantic search streaming events (main → renderer)
+  AI_SEARCH_BATCH: 'ai:search:batch',
+  AI_SEARCH_COMPLETE: 'ai:search:complete',
 } as const;
 
 // IPC response envelope

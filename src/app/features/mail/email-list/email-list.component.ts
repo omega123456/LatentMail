@@ -1,6 +1,7 @@
 import { Component, viewChild, inject, output, effect, signal, computed, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CdkVirtualScrollViewport, ScrollingModule } from '@angular/cdk/scrolling';
+import { MatProgressBar } from '@angular/material/progress-bar';
 import { Subscription } from 'rxjs';
 import { EmailsStore } from '../../../store/emails.store';
 import { UiStore } from '../../../store/ui.store';
@@ -15,7 +16,7 @@ import { CommandRegistryService } from '../../../core/services/command-registry.
 @Component({
   selector: 'app-email-list',
   standalone: true,
-  imports: [CommonModule, ScrollingModule, EmailListItemComponent],
+  imports: [CommonModule, ScrollingModule, EmailListItemComponent, MatProgressBar],
   templateUrl: './email-list.component.html',
   styleUrl: './email-list.component.scss',
 })
@@ -66,6 +67,38 @@ export class EmailListComponent implements OnDestroy {
    * during merge-mode background refreshes so scroll position can be compensated.
    */
   private previousThreadIds: string[] = [];
+
+  /**
+   * Tracks the full set of thread IDs that have been seen across streaming batches.
+   * Used to diff against new arrivals so we can identify and animate newly added rows.
+   * Reset when streaming search transitions to idle.
+   */
+  private knownStreamingThreadIds = new Set<string>();
+
+  /** Set of thread IDs currently animating as newly-added (cleared after 500ms). */
+  protected readonly newlyAddedThreadIds = signal(new Set<string>());
+
+  /** Computed label text for the streaming search result count. */
+  protected readonly searchCountLabel = computed(() => {
+    const status = this.aiStore.searchStreamStatus();
+    const count = this.aiStore.searchStreamResultCount();
+    if (status === 'searching' && count === 0) {
+      return 'Searching\u2026';
+    }
+    if (status === 'searching' && count > 0) {
+      return `${count} results so far\u2026`;
+    }
+    if (status === 'complete' || status === 'partial' || status === 'error') {
+      return `${count} results`;
+    }
+    return null; // idle — don't show the label
+  });
+
+  /** Whether to show the streaming search header (progress bar, count, warning). */
+  protected readonly showSearchStreamHeader = computed(() => {
+    const status = this.aiStore.searchStreamStatus();
+    return status === 'searching' || status === 'complete' || status === 'partial' || status === 'error';
+  });
 
   private commandSub?: Subscription;
 
@@ -176,6 +209,44 @@ export class EmailListComponent implements OnDestroy {
 
       onCleanup(() => subscription.unsubscribe());
     });
+
+    // Streaming search animation: watch for newly appended threads and briefly tag
+    // them with the animation class via `newlyAddedThreadIds`, then clear after 500ms.
+    //
+    // Uses a private Set (`knownStreamingThreadIds`) as a mutable accumulator across
+    // batches to diff each new threads() snapshot against what we've already seen.
+    // When status returns to 'idle' (search cleared), the known set is reset so the
+    // next search starts fresh.
+    effect(() => {
+      const status = this.aiStore.searchStreamStatus();
+      if (status === 'idle') {
+        // Search cleared — reset so next search starts with a clean slate.
+        this.knownStreamingThreadIds.clear();
+        return;
+      }
+
+      if (status !== 'searching') {
+        // 'complete', 'partial', 'error' — no new batches expected, skip diffing.
+        return;
+      }
+
+      const currentThreads = this.emailsStore.threads();
+      const newIds: string[] = [];
+
+      for (const thread of currentThreads) {
+        if (!this.knownStreamingThreadIds.has(thread.xGmThrid)) {
+          newIds.push(thread.xGmThrid);
+          this.knownStreamingThreadIds.add(thread.xGmThrid);
+        }
+      }
+
+      if (newIds.length > 0) {
+        this.newlyAddedThreadIds.set(new Set(newIds));
+        setTimeout(() => {
+          this.newlyAddedThreadIds.set(new Set<string>());
+        }, 500);
+      }
+    }, { allowSignalWrites: true });
 
     // Subscribe to command registry events for vim-style keyboard navigation.
     // All actions that operate on the email list are delegated here so that the
@@ -596,6 +667,14 @@ export class EmailListComponent implements OnDestroy {
 
   trackByThreadId(_index: number, thread: Thread): string {
     return thread.xGmThrid;
+  }
+
+  /**
+   * Returns true when `threadId` is in the set of newly-arrived streaming batch threads
+   * that are currently animating in. The set is cleared 500ms after each batch arrives.
+   */
+  protected isNewlyAdded(threadId: string): boolean {
+    return this.newlyAddedThreadIds().has(threadId);
   }
 
   onThreadClick(event: { thread: Thread; ctrlKey: boolean; shiftKey: boolean }): void {

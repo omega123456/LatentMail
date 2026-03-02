@@ -215,6 +215,9 @@ const electronAPI = {
       'embedding:complete',
       'embedding:error',
       'embedding:resume',
+      // AI semantic search streaming events
+      'ai:search:batch',
+      'ai:search:complete',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, callback);

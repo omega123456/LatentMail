@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow } from 'electron';
+import { randomUUID } from 'crypto';
 import { LoggerService } from '../services/logger-service';
-import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
+import { IPC_CHANNELS, IPC_EVENTS, ipcSuccess, ipcError } from './ipc-channels';
 
 const log = LoggerService.getInstance();
 import { OllamaService } from '../services/ollama-service';
@@ -271,7 +272,7 @@ export function registerAiIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (_event, accountId: string, naturalQuery: string, folders?: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (event, accountId: string, naturalQuery: string, folders?: unknown) => {
     try {
       if (!accountId || isNaN(Number(accountId))) {
         return ipcError('AI_INVALID_INPUT', 'Valid account ID is required');
@@ -307,33 +308,80 @@ export function registerAiIpcHandlers(): void {
         ollama.getEmbeddingModel() !== ''
       );
 
+      /** Maximum number of msgIds to emit across all batches for a single search. */
+      const MAX_RESULTS = 50;
+
       // Semantic-first: when the semantic pipeline is ready, always use it and never fall through.
       // The contract: if isSemanticPipelineReady, this block always returns — success or error.
-      // The `semanticResults` field in the response signals to the renderer that semantic was used.
+      // Results are delivered incrementally via push events (ai:search:batch / ai:search:complete).
+      // The invoke returns { searchToken } immediately so the renderer can correlate push events.
       if (isSemanticPipelineReady) {
-        try {
-          const semanticService = SemanticSearchService.getInstance();
-          const semanticResults = await semanticService.search(
-            naturalQuery,
-            numAccountId,
-            userEmail,
-            todayDate,
-            folderContext
-          );
-          log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
-          return ipcSuccess({
-            intent: null,
-            queries: [naturalQuery],
-            semanticResults,
+        const searchToken = randomUUID();
+        const browserWindow = BrowserWindow.fromWebContents(event.sender);
+
+        // Return the search token immediately — the renderer uses this to correlate push events.
+        const immediateResponse = ipcSuccess({ searchToken });
+
+        // Fire-and-forget: run the search in the background and push incremental results.
+        // Wrapped in .catch() to prevent unhandled promise rejections.
+        const semanticService = SemanticSearchService.getInstance();
+
+        let emittedCount = 0;
+
+        semanticService.search(
+          naturalQuery,
+          numAccountId,
+          userEmail,
+          todayDate,
+          folderContext,
+          (msgIds: string[], phase: 'local' | 'imap') => {
+            // Guard: window may have been closed before results arrive.
+            if (!browserWindow || browserWindow.isDestroyed()) {
+              return;
+            }
+
+            // Enforce MAX_RESULTS cap — stop emitting once the total is reached.
+            // Still call onBatch (no-op here) but send nothing to the renderer.
+            if (emittedCount >= MAX_RESULTS) {
+              return;
+            }
+
+            // Trim the batch if it would push us over the cap.
+            const remaining = MAX_RESULTS - emittedCount;
+            const cappedMsgIds = msgIds.slice(0, remaining);
+            emittedCount += cappedMsgIds.length;
+
+            browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_BATCH, {
+              searchToken,
+              msgIds: cappedMsgIds,
+              phase,
+            });
+          }
+        )
+          .then((status) => {
+            if (!browserWindow || browserWindow.isDestroyed()) {
+              return;
+            }
+            log.info(`[AI] search: semantic search finished with status=${status}, totalResults=${emittedCount}`);
+            browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
+              searchToken,
+              status,
+              totalResults: emittedCount,
+            });
+          })
+          .catch((semanticErr) => {
+            log.warn('[AI] search: semantic search threw unexpectedly:', semanticErr);
+            if (!browserWindow || browserWindow.isDestroyed()) {
+              return;
+            }
+            browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
+              searchToken,
+              status: 'error',
+              totalResults: emittedCount,
+            });
           });
-        } catch (semanticErr) {
-          log.warn('[AI] search: semantic search failed, returning empty semantic results:', semanticErr);
-          return ipcSuccess({
-            intent: null,
-            queries: [naturalQuery],
-            semanticResults: [],
-          });
-        }
+
+        return immediateResponse;
       } else {
         log.debug('[AI] search: semantic pipeline not ready, using keyword search');
       }
