@@ -33,6 +33,8 @@ export class EmailListItemComponent {
   readonly activeFolderId = input<string | null>(null);
   /** When false (e.g. when viewing Trash), the star icon and toggle are hidden. */
   readonly showStarAction = input<boolean>(true);
+  /** When true, show Material-style skeleton loading state (used for streamed-in search results). */
+  readonly newlyAdded = input<boolean>(false);
   /** Whether this item is part of the active multi-selection. */
   readonly isMultiSelected = input<boolean>(false);
   readonly clicked = output<{ thread: Thread; ctrlKey: boolean; shiftKey: boolean }>();

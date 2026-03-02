@@ -290,36 +290,106 @@
   color: var(--color-text-tertiary);
 }
 
-// ─── Streaming search: fade-in animation for newly arrived items ──────────────
-// Initial state and duration are aligned with newlyAddedThreadIds timeout in
-// email-list.component.ts so the class is not removed mid-animation.
-// contain + backface-visibility reduce repaint flicker during the animation.
+// ─── Streaming search: Material-style skeleton loading for newly arrived items ─
 
-@keyframes newly-added-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+  100% {
+    background-position: -200% 0;
   }
 }
 
-:host(.newly-added) {
-  opacity: 0;
-  transform: translateY(6px);
-  animation: newly-added-fade-in 1s ease-out both;
-  will-change: opacity, transform;
-  contain: layout style;
-  backface-visibility: hidden;
+.email-item-skeleton {
+  pointer-events: none;
+  min-height: 52px;
+
+  .skeleton-avatar {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-variant, #e0e0e0) 0%,
+      color-mix(in srgb, var(--color-surface-variant, #e0e0e0) 80%, white) 50%,
+      var(--color-surface-variant, #e0e0e0) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  }
+
+  .skeleton-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 2px;
+  }
+
+  .skeleton-line {
+    height: 14px;
+    border-radius: 4px;
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-variant, #e0e0e0) 0%,
+      color-mix(in srgb, var(--color-surface-variant, #e0e0e0) 70%, white) 50%,
+      var(--color-surface-variant, #e0e0e0) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  }
+
+  .skeleton-sender {
+    width: 45%;
+    max-width: 180px;
+  }
+
+  .skeleton-subject {
+    width: 85%;
+    max-width: 320px;
+  }
+
+  &.compact {
+    min-height: 40px;
+
+    .skeleton-avatar {
+      width: 28px;
+      height: 28px;
+    }
+
+    .skeleton-content {
+      gap: 6px;
+    }
+
+    .skeleton-line {
+      height: 12px;
+    }
+  }
+
+  &.spacious {
+    min-height: 60px;
+
+    .skeleton-avatar {
+      width: 40px;
+      height: 40px;
+    }
+
+    .skeleton-content {
+      gap: 10px;
+    }
+
+    .skeleton-line {
+      height: 16px;
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :host(.newly-added) {
+  .email-item-skeleton .skeleton-avatar,
+  .email-item-skeleton .skeleton-line {
     animation: none;
-    opacity: 1;
-    transform: none;
-    will-change: auto;
   }
 }

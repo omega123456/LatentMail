@@ -51,7 +51,7 @@
         [showFolderBadge]="foldersStore.searchActive()"
         [activeFolderId]="foldersStore.activeFolderId()"
         [showStarAction]="foldersStore.activeFolderId() !== foldersStore.trashFolderId()"
-        [class.newly-added]="isNewlyAdded(thread.xGmThrid)"
+        [newlyAdded]="isNewlyAdded(thread.xGmThrid)"
         (clicked)="onThreadClick($event)"
         (starToggled)="onStarToggle(thread)"
         (contextMenuRequested)="onItemContextMenu($event)"

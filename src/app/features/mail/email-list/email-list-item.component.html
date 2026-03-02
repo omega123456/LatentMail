@@ -1,3 +1,18 @@
+@if (newlyAdded()) {
+  <div
+    class="email-item email-item-skeleton"
+    [class.compact]="density() === 'compact'"
+    [class.spacious]="density() === 'spacious'"
+    role="presentation"
+    aria-hidden="true"
+  >
+    <div class="skeleton-avatar"></div>
+    <div class="skeleton-content">
+      <div class="skeleton-line skeleton-sender"></div>
+      <div class="skeleton-line skeleton-subject"></div>
+    </div>
+  </div>
+} @else {
 <div
   class="email-item"
   [class.unread]="!thread().isRead"
@@ -103,3 +118,4 @@
     </div>
   </div>
 </div>
+}
