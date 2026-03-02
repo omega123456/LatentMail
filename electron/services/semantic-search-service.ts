@@ -9,23 +9,26 @@
  * 5. Filter by similarity threshold, then sort by similarity descending.
  * 6. Filter out emails whose ONLY folder associations are Trash, Spam, or Drafts (local DB check).
  *    Un-synced emails (no email_folders rows) pass through here and are re-checked after IMAP fetch.
- * 7a. If structured filters present: apply via SQL (local DB) + IMAP (missing emails),
- *     fetch envelopes for missing emails, check rawLabels + isDraft to exclude Trash/Spam/Drafts-only,
- *     upsert only non-excluded envelopes, then sort by date descending.
- * 7b. If no structured filters: resolve unknown emails via ImapCrawlService, check rawLabels +
- *     isDraft for each fetched envelope and exclude Trash/Spam/Drafts-only, upsert only non-excluded,
- *     backfill from remaining candidates if any were excluded to maintain up to MAX_RESULTS,
- *     return similarity-sorted results (no minimum-count gate).
+ * 7. Resolve and filter via filterAndResolve (batch-and-iterate):
+ *    - Upfront: partition all candidates into local vs missing, SQL-filter local candidates
+ *      once, pre-filter out local items that failed the SQL filter to build eligibleCandidates.
+ *    - Iterative loop: each round takes a deficit-sized batch from eligibleCandidates,
+ *      splits into local-confirmed (instant) and missing (single batched IMAP SEARCH
+ *      with OR'd X-GM-MSGIDs + X-GM-RAW filter, then FETCH for surviving UIDs),
+ *      merges confirmed results, and repeats until MAX_RESULTS are confirmed or
+ *      candidates are exhausted.
+ *    - Single FETCH after the loop for all IMAP-confirmed items across all rounds.
+ *    - Final result preserves similarity order, then sorted by date descending for display.
  *
  * Returns empty array only when VectorDbService is unavailable, no embedding model is
  * configured, or the similarity search returns no raw results. No fallback to keyword search.
  */
 
+import { FetchQueryObject } from 'imapflow';
 import { LoggerService } from './logger-service';
 import { OllamaService } from './ollama-service';
 import { VectorDbService } from './vector-db-service';
 import { DatabaseService } from './database-service';
-import { ImapService } from './imap-service';
 import { ImapCrawlService, CrawlFetchResult } from './imap-crawl-service';
 import {
   SemanticSearchFilters,
@@ -51,6 +54,9 @@ const DRAFTS_FOLDER = '[Gmail]/Drafts';
 /** Maximum number of results returned from vector search. */
 const MAX_VECTOR_SEARCH_RESULTS = 450;
 
+/** Mailbox path used for all IMAP resolution operations. */
+const ALL_MAIL_PATH = '[Gmail]/All Mail';
+
 export class SemanticSearchService {
   private static instance: SemanticSearchService;
 
@@ -67,9 +73,8 @@ export class SemanticSearchService {
    * Run a semantic similarity search for the given natural language query.
    *
    * Extracts structured intent (topic query + filters) from the natural language query,
-   * embeds the topic query, runs vector search, then applies either a structured filter
-   * path (SQL + IMAP) or a threshold quality gate path depending on whether the LLM
-   * extracted any filters.
+   * embeds the topic query, runs vector search, then applies filterAndResolve to handle
+   * both the filter and no-filter paths in a unified way.
    *
    * @param naturalQuery - The user's search query (natural language)
    * @param accountId - The account to search within
@@ -163,176 +168,379 @@ export class SemanticSearchService {
     const trashFolder = db.getTrashFolder(accountId);
     const excludedFolders = [trashFolder, SPAM_FOLDER, DRAFTS_FOLDER];
 
-    const folderFilteredMsgIds = this.filterExcludedFolders(db, accountId, sortedBySimilarity, excludedFolders);
+    const folderFilteredCandidates = this.filterExcludedFolders(db, accountId, sortedBySimilarity, excludedFolders);
 
-    // Step 7: Branch on whether the LLM extracted any structured filters.
-    if (hasFilters(intent.filters)) {
-      // Structured filter path: apply SQL + IMAP filters, sort by date descending.
-      log.info(
-        `[SemanticSearch] Applying structured filters to ${folderFilteredMsgIds.length} candidates ` +
-        `(${sortedBySimilarity.length} before folder filter)`
-      );
-      const filteredMsgIds = await this.applyStructuredFilters(
-        accountId,
-        folderFilteredMsgIds,
-        intent.filters,
-        excludedFolders
-      );
-      const sortedMsgIds = this.sortByDate(accountId, filteredMsgIds);
-      const finalResults = sortedMsgIds.slice(0, MAX_RESULTS);
-
-      log.info(`[SemanticSearch] Structured filter path: ${finalResults.length} final results`);
-      return finalResults;
-    }
-
-    // No-filter path: resolve unknown emails and return similarity-sorted results.
-    // Use a backfill loop: if some resolved emails turn out to be Trash/Spam/Drafts-only,
-    // replace them from the remaining candidates in folderFilteredMsgIds to maintain MAX_RESULTS.
-    let verifiedResults: string[] = [];
-    let candidateOffset = 0;
-    const allCandidates = folderFilteredMsgIds; // Full pre-slice candidate list (similarity-ordered)
-
-    while (verifiedResults.length < MAX_RESULTS && candidateOffset < allCandidates.length) {
-      // How many more results we still need.
-      const remaining = MAX_RESULTS - verifiedResults.length;
-      // Take the next batch of candidates.
-      const batch = allCandidates.slice(candidateOffset, candidateOffset + remaining);
-      candidateOffset += batch.length;
-
-      // Resolve this batch: fetch envelopes for un-synced emails, filter by excluded folders.
-      const excludedInBatch = await this.resolveUnknownEmails(db, accountId, batch, excludedFolders);
-
-      // Keep only the non-excluded candidates from this batch.
-      const verifiedBatch = batch.filter((msgId) => !excludedInBatch.has(msgId));
-      verifiedResults = verifiedResults.concat(verifiedBatch);
-
-      // If no exclusions occurred there is no point taking more candidates.
-      if (excludedInBatch.size === 0) {
-        break;
-      }
-    }
-
+    // Step 7: Unified resolve + filter path (handles both filter and no-filter cases).
     log.info(
-      `[SemanticSearch] Semantic search: ${verifiedResults.length} results ` +
-      `(${sortedBySimilarity.length} before folder filter, ${allCandidates.length} after local folder filter)`
+      `[SemanticSearch] filterAndResolve: ${folderFilteredCandidates.length} candidates ` +
+      `(${sortedBySimilarity.length} before folder filter)`
     );
 
-    return verifiedResults;
+    const finalResults = await this.filterAndResolve(
+      accountId,
+      folderFilteredCandidates,
+      intent.filters,
+      excludedFolders
+    );
+
+    log.info(`[SemanticSearch] ${finalResults.length} final results`);
+    return finalResults;
   }
 
   /**
-   * Apply structured filters to a list of candidate x_gm_msgid values.
+   * Unified resolution and filtering method that handles both the structured-filter
+   * and no-filter paths using a batch-and-iterate algorithm.
    *
-   * Partitions the candidates into locally-present vs. missing (in vector index
-   * but not yet in local DB). Local candidates are filtered via SQL. Missing
-   * candidates are filtered via IMAP X-GM-RAW search and then fetched as envelopes
-   * so they are available in the local DB for subsequent rendering.
+   * Upfront work (before the loop):
+   *   - Partition ALL candidates into local vs missing (single DB call).
+   *   - SQL-filter local candidates once (single DB call, only when filters are active).
+   *   - Pre-filter candidates to build eligibleCandidates: removes local items that
+   *     failed the SQL filter so they never consume batch slots during the loop.
+   *   - Build the X-GM-RAW query string once (filter query + folder exclusions).
+   *   - Open IMAP connection only if missing candidates exist.
    *
-   * After fetching envelopes, each one is checked against rawLabels + isDraft to
-   * exclude Trash/Spam/Drafts-only emails (server-side authoritative folder check).
-   * Only non-excluded envelopes are upserted into the local DB.
-   * If fetchEnvelopes() fails, all missing IDs are dropped (cannot verify folder status).
+   * Iterative loop:
+   *   Each round takes a deficit-sized batch (deficit = MAX_RESULTS - confirmed.size)
+   *   from the eligibleCandidates array via a cursor. Items in filteredLocalMsgIds are
+   *   confirmed instantly; missing items are resolved via a single batched IMAP SEARCH
+   *   that OR's all candidate X-GM-MSGIDs together with the X-GM-RAW filter query.
+   *   Surviving UIDs are then FETCHed for envelopes and upserted, all within a single
+   *   mailbox lock per round. Confirmed results are merged across rounds. The loop exits
+   *   when MAX_RESULTS are confirmed or all eligible candidates are exhausted.
+   *
+   * Post-loop:
+   *   Final result is built by walking eligibleCandidates in order (preserving similarity
+   *   rank), picking confirmed items up to MAX_RESULTS, then sorting by date descending.
    *
    * @param accountId - Account ID to scope queries
-   * @param msgIds - Candidate message IDs (similarity-ordered)
-   * @param filters - Structured filter constraints from LLM intent extraction
+   * @param candidates - Candidate message IDs (similarity-ordered, already folder-filtered)
+   * @param filters - Structured filter constraints from LLM intent extraction (may be empty)
    * @param excludedFolders - Folders to exclude (Trash, Spam, Drafts — resolved for this account)
-   * @returns Merged array of message IDs that satisfy the filter constraints
+   * @returns Ordered list of x_gm_msgid strings (top MAX_RESULTS, date-sorted for display)
    */
-  private async applyStructuredFilters(
+  private async filterAndResolve(
     accountId: number,
-    msgIds: string[],
-    filters: SemanticSearchFilters,
+    candidates: string[],
+    filters: SemanticSearchFilters | undefined,
     excludedFolders: string[]
   ): Promise<string[]> {
     const db = DatabaseService.getInstance();
 
-    // Partition into locally-present vs. missing IDs.
-    let localMsgIds: Set<string>;
+    // --- Upfront Step 1: Partition candidates into local (in DB) vs missing (not in DB) ---
+    let localCandidateSet: Set<string>;
     try {
-      localMsgIds = db.getEmailsExistingInLocalDb(accountId, msgIds);
-    } catch (err) {
-      log.warn('[SemanticSearch] Failed to check local email existence in applyStructuredFilters:', err);
-      localMsgIds = new Set<string>();
+      localCandidateSet = db.getEmailsExistingInLocalDb(accountId, candidates);
+    } catch (partitionError) {
+      log.warn('[SemanticSearch] filterAndResolve: failed to partition local/missing candidates:', partitionError);
+      localCandidateSet = new Set<string>();
     }
 
-    const missingMsgIds = msgIds.filter((msgId) => !localMsgIds.has(msgId));
+    const localCandidates = candidates.filter((msgId) => localCandidateSet.has(msgId));
+    const missingCount = candidates.length - localCandidates.length;
 
-    // Filter locally-present emails via SQL.
+    log.info(
+      `[SemanticSearch] filterAndResolve: ${localCandidates.length} local, ` +
+      `${missingCount} missing candidates`
+    );
+
+    // --- Upfront Step 2: SQL-filter local candidates (single call, only when filters active) ---
+    const filtersActive = filters !== undefined && hasFilters(filters);
     let filteredLocalMsgIds: Set<string>;
+
+    if (filtersActive && filters !== undefined) {
+      try {
+        filteredLocalMsgIds = db.filterEmailsByMsgIds(accountId, localCandidates, filters);
+      } catch (sqlFilterError) {
+        log.warn('[SemanticSearch] filterAndResolve: SQL filter failed, using unfiltered local candidates:', sqlFilterError);
+        filteredLocalMsgIds = localCandidateSet;
+      }
+    } else {
+      filteredLocalMsgIds = new Set<string>(localCandidates);
+    }
+
+    // --- Upfront Step 3: Build eligible candidates (remove local-but-failed items) ---
+    // Items that are in localCandidateSet but NOT in filteredLocalMsgIds failed the SQL filter
+    // and should never consume batch slots. The resulting array preserves similarity order.
+    const eligibleCandidates = candidates.filter(
+      (msgId) => filteredLocalMsgIds.has(msgId) || !localCandidateSet.has(msgId)
+    );
+
+    // --- Upfront Step 4: Build X-GM-RAW query string once ---
+    const filterQuery = filters !== undefined ? translateFiltersToGmailQuery(filters).trim() : '';
+    const folderExclusionClause = '-in:trash -in:spam -in:drafts';
+    const gmRaw = [filterQuery, folderExclusionClause]
+      .filter((part) => part.length > 0)
+      .join(' ');
+
+    // --- Upfront Step 5: Open IMAP connection (only if missing candidates exist) ---
+    const crawlService = ImapCrawlService.getInstance();
+    const accountIdStr = String(accountId);
+    let connectionOpened = false;
+    let imapAvailable = false;
+
+    if (missingCount > 0) {
+      try {
+        if (!crawlService.isConnected(accountIdStr)) {
+          await crawlService.connect(accountIdStr);
+          connectionOpened = true;
+        }
+        imapAvailable = true;
+      } catch (connectError) {
+        log.warn('[SemanticSearch] Failed to open crawl connection for IMAP resolution:', connectError);
+      }
+    }
+
+    // --- State persisted across all rounds ---
+    const confirmed = new Set<string>();
+    let imapConfirmedCount = 0;
+    let cursor = 0;
+    let roundCounter = 0;
+
     try {
-      filteredLocalMsgIds = db.filterEmailsByMsgIds(accountId, Array.from(localMsgIds), filters);
-    } catch (err) {
-      log.warn('[SemanticSearch] SQL filter failed, using unfiltered local IDs:', err);
-      filteredLocalMsgIds = localMsgIds;
-    }
+      // --- Iterative loop: process candidates in deficit-sized rounds ---
+      while (confirmed.size < MAX_RESULTS && cursor < eligibleCandidates.length) {
+        const deficit = MAX_RESULTS;
+        const batch = eligibleCandidates.slice(cursor, cursor + deficit);
+        cursor += batch.length;
+        roundCounter += 1;
 
-    // Filter missing emails via IMAP X-GM-RAW search.
-    const gmailQuery = translateFiltersToGmailQuery(filters);
-    let intersectedMissingMsgIds: string[] = [];
-
-    if (missingMsgIds.length > 0) {
-      if (!gmailQuery) {
-        // No translatable filters — accept all missing IDs without IMAP round-trip.
-        intersectedMissingMsgIds = missingMsgIds;
-      } else {
-        try {
-          const imap = ImapService.getInstance();
-          const imapResults = await imap.searchEmails(String(accountId), gmailQuery, 200);
-          const imapMsgIdSet = new Set<string>(imapResults.map((result) => result.xGmMsgId));
-          intersectedMissingMsgIds = missingMsgIds.filter((msgId) => imapMsgIdSet.has(msgId));
-        } catch (imapErr) {
-          log.warn('[SemanticSearch] IMAP filter failed, using local results only:', imapErr);
-          intersectedMissingMsgIds = [];
-        }
-      }
-
-      // Fetch envelopes for missing IDs, check excluded folders, and upsert non-excluded ones.
-      // The gmailQuery === null path (all missing IDs accepted) also requires the folder check —
-      // rawLabels filtering applies uniformly after fetchEnvelopes() regardless of gmailQuery.
-      if (intersectedMissingMsgIds.length > 0) {
-        let envelopes: CrawlFetchResult[];
-        try {
-          envelopes = await ImapCrawlService.getInstance().fetchEnvelopes(
-            String(accountId),
-            intersectedMissingMsgIds
-          );
-        } catch (fetchErr) {
-          log.warn('[SemanticSearch] Failed to fetch envelopes for missing IDs — dropping all un-verifiable IDs:', fetchErr);
-          // Deliberate behavioral change: drop all un-verifiable IDs rather than risk showing
-          // Trash/Spam emails. Non-fatal network errors may cause some valid results to be lost.
-          intersectedMissingMsgIds = [];
-          envelopes = [];
+        // Split batch into local-confirmed and missing
+        const missingBatch: string[] = [];
+        for (const msgId of batch) {
+          if (filteredLocalMsgIds.has(msgId)) {
+            confirmed.add(msgId);
+          } else {
+            missingBatch.push(msgId);
+          }
         }
 
-        if (envelopes.length > 0) {
-          const { excludedMsgIds, upsertedCount } = this.filterEnvelopesAndUpsert(
-            db,
-            accountId,
-            envelopes,
-            excludedFolders
-          );
-
+        // IMAP SEARCH + FETCH for missing items in this round
+        if (missingBatch.length > 0 && imapAvailable) {
           log.info(
-            `[SemanticSearch] applyStructuredFilters: ${upsertedCount} envelope(s) upserted, ` +
-            `${excludedMsgIds.size} excluded (Trash/Spam/Drafts-only)`
+            `[SemanticSearch] Round ${roundCounter}: IMAP resolving ` +
+            `${missingBatch.length} missing candidates`
           );
 
-          // Remove excluded IDs from the intersected missing list.
-          intersectedMissingMsgIds = intersectedMissingMsgIds.filter(
-            (msgId) => !excludedMsgIds.has(msgId)
-          );
+          try {
+            await crawlService.withMailboxLock(
+              accountIdStr,
+              ALL_MAIL_PATH,
+              async (client) => {
+                // Batch SEARCH: OR all candidate emailIds together with the gmRaw filter.
+                // One IMAP command resolves + filters all missing candidates at once.
+                const orCriteria = missingBatch.map((msgId) => ({ emailId: msgId }));
+                let survivingUids: number[];
+
+                try {
+                  const searchResult = await client.search(
+                    { or: orCriteria, gmraw: gmRaw } as Record<string, unknown>,
+                    { uid: true }
+                  ) as number[] | false;
+
+                  survivingUids = searchResult ? Array.from(searchResult) : [];
+                } catch (searchError) {
+                  log.warn(
+                    `[SemanticSearch] Round ${roundCounter}: batch SEARCH failed:`,
+                    searchError
+                  );
+                  return;
+                }
+
+                log.info(
+                  `[SemanticSearch] Round ${roundCounter}: ` +
+                  `${survivingUids.length}/${missingBatch.length} candidates survived SEARCH`
+                );
+
+                if (survivingUids.length === 0) {
+                  return;
+                }
+
+                // FETCH surviving UIDs to get envelopes + xGmMsgId mapping.
+                // This identifies which msgIds survived and upserts their data in one step.
+                const fetchedEnvelopes = await this.fetchEnvelopesForUids(client, survivingUids);
+
+                log.info(
+                  `[SemanticSearch] Round ${roundCounter}: ` +
+                  `fetched ${fetchedEnvelopes.length}/${survivingUids.length} envelopes`
+                );
+
+                for (const envelope of fetchedEnvelopes) {
+                  if (envelope.xGmMsgId) {
+                    confirmed.add(envelope.xGmMsgId);
+                    imapConfirmedCount += 1;
+
+                    try {
+                      db.upsertEmailFromEnvelope(accountId, {
+                        xGmMsgId: envelope.xGmMsgId,
+                        xGmThrid: envelope.xGmThrid,
+                        messageId: envelope.messageId,
+                        subject: envelope.subject,
+                        fromAddress: envelope.fromAddress,
+                        fromName: envelope.fromName,
+                        toAddresses: envelope.toAddresses,
+                        date: envelope.date,
+                        isRead: envelope.isRead,
+                        isStarred: envelope.isStarred,
+                        isDraft: envelope.isDraft,
+                        size: envelope.size,
+                        rawLabels: envelope.rawLabels,
+                      });
+                    } catch (upsertError) {
+                      log.warn(
+                        `[SemanticSearch] Round ${roundCounter}: failed to upsert envelope ` +
+                        `for ${envelope.xGmMsgId}:`,
+                        upsertError
+                      );
+                    }
+                  }
+                }
+              }
+            );
+          } catch (roundError) {
+            log.warn(
+              `[SemanticSearch] Round ${roundCounter} failed, ` +
+              `skipping ${missingBatch.length} candidates:`,
+              roundError
+            );
+          }
+        }
+      }
+
+      log.info(
+        `[SemanticSearch] Loop complete: ${confirmed.size} confirmed ` +
+        `(${confirmed.size - imapConfirmedCount} local + ${imapConfirmedCount} IMAP) ` +
+        `across ${roundCounter} round(s), cursor at ${cursor}/${eligibleCandidates.length}`
+      );
+
+      // --- Final result construction ---
+      // Walk eligibleCandidates in order (preserves similarity rank), pick confirmed, take MAX_RESULTS.
+      const topSelected = eligibleCandidates
+        .filter((msgId) => confirmed.has(msgId))
+        .slice(0, MAX_RESULTS);
+
+      // Sort by date descending for display.
+      const dateSortedResults = this.sortByDate(accountId, topSelected);
+      return dateSortedResults;
+
+    } finally {
+      if (connectionOpened) {
+        try {
+          await crawlService.disconnect(accountIdStr);
+        } catch (disconnectError) {
+          log.warn('[SemanticSearch] filterAndResolve: failed to disconnect crawl connection:', disconnectError);
         }
       }
     }
+  }
 
-    // Merge: combine SQL-filtered local IDs + IMAP-intersected missing IDs (deduplicated).
-    const mergedSet = new Set<string>(filteredLocalMsgIds);
-    for (const msgId of intersectedMissingMsgIds) {
-      mergedSet.add(msgId);
+  /**
+   * Fetch envelopes (no body) for a list of UIDs from the currently-open mailbox.
+   * Issues a single FETCH command for all UIDs at once.
+   * Any messages that fail to parse are silently skipped.
+   *
+   * The caller is responsible for holding the mailbox lock before calling this method.
+   *
+   * @param client - ImapFlow client with an open mailbox lock
+   * @param uids - IMAP UIDs to fetch (from [Gmail]/All Mail)
+   * @returns Array of parsed envelopes (may be shorter than uids if some fail to parse)
+   */
+  private async fetchEnvelopesForUids(
+    client: import('imapflow').ImapFlow,
+    uids: number[]
+  ): Promise<CrawlFetchResult[]> {
+    if (uids.length === 0) {
+      return [];
     }
 
-    return Array.from(mergedSet);
+    const uidRange = uids.join(',');
+    const fetchedEnvelopes: CrawlFetchResult[] = [];
+
+    // Fix 3b: Use the proper FetchQueryObject type instead of `as any`.
+    // emailId is not a valid FetchQueryObject field — it is populated in the response
+    // automatically by the X-GM-EXT-1 extension when labels are requested.
+    const fetchQuery: FetchQueryObject = {
+      uid: true,
+      envelope: true,
+      flags: true,
+      source: false,
+      labels: true,
+      threadId: true,
+      size: true,
+    };
+
+    for await (const msg of client.fetch(uidRange, fetchQuery, { uid: true })) {
+      if (!msg) {
+        continue;
+      }
+      try {
+        const envelope = this.parseEnvelopeFromMessage(msg);
+        if (envelope) {
+          fetchedEnvelopes.push(envelope);
+        }
+      } catch (parseError) {
+        log.debug('[SemanticSearch] fetchEnvelopesForUids: failed to parse envelope:', parseError);
+      }
+    }
+
+    return fetchedEnvelopes;
+  }
+
+  /**
+   * Parse an ImapFlow message object (fetched without source) into a CrawlFetchResult.
+   * Mirrors the logic in ImapCrawlService.parseEnvelopeOnly() since that method is private.
+   * Returns null if the message is missing required fields (envelope or xGmMsgId).
+   *
+   * @param msg - ImapFlow message object from a fetch without source
+   * @returns Parsed CrawlFetchResult or null if parsing failed
+   */
+  private parseEnvelopeFromMessage(msg: import('imapflow').FetchMessageObject): CrawlFetchResult | null {
+    const envelope = msg.envelope;
+    if (!envelope) {
+      return null;
+    }
+
+    const xGmMsgId = (msg as unknown as { emailId?: string }).emailId || '';
+    if (!xGmMsgId) {
+      return null;
+    }
+
+    const flags = msg.flags ? Array.from(msg.flags) : [];
+    const labels = msg.labels ? Array.from(msg.labels) : [];
+    const xGmThrid = msg.threadId || '';
+
+    let messageId = (envelope.messageId ?? '').trim();
+    if (messageId) {
+      const angleMatch = messageId.match(/<[^>]+>/);
+      if (angleMatch) {
+        messageId = angleMatch[0];
+      }
+    }
+
+    const from = envelope.from?.[0];
+    const fromAddress = from?.address || '';
+    const fromName = from?.name || fromAddress;
+    const toAddresses = (envelope.to || [])
+      .map((recipient) => recipient.address || '')
+      .filter(Boolean)
+      .join(', ');
+
+    return {
+      xGmMsgId,
+      xGmThrid,
+      messageId,
+      subject: envelope.subject || '(no subject)',
+      textBody: '',
+      htmlBody: '',
+      rawLabels: labels,
+      fromAddress,
+      fromName,
+      toAddresses,
+      date: envelope.date?.toISOString() || new Date().toISOString(),
+      isRead: flags.includes('\\Seen'),
+      isStarred: flags.includes('\\Flagged'),
+      isDraft: flags.includes('\\Draft'),
+      size: msg.size || 0,
+    };
   }
 
   /**
@@ -374,122 +582,6 @@ export class SemanticSearchService {
   }
 
   /**
-   * For any x_gm_msgid values in the results that are not in the local emails table,
-   * fetch their envelope metadata from IMAP on demand and upsert into the emails table.
-   *
-   * Each fetched envelope is checked against excludedFolders using rawLabels + isDraft:
-   * emails that exist only in Trash/Spam/Drafts are not upserted and their msgIds are
-   * returned in the excluded set. Emails with empty rawLabels and isDraft === false are
-   * passed through (safer to show than suppress when folder data is ambiguous).
-   *
-   * Missing/unfetchable emails are silently ignored — the caller will get empty thread
-   * rows for those IDs when resolving via getThreadsByXGmMsgIds().
-   *
-   * @param db - DatabaseService instance
-   * @param accountId - Account ID
-   * @param xGmMsgIds - Result message IDs to check (relevance-ordered)
-   * @param excludedFolders - Folders to exclude (Trash, Spam, Drafts — resolved for this account)
-   * @returns Set of msgIds that were excluded due to being Trash/Spam/Drafts-only
-   */
-  private async resolveUnknownEmails(
-    db: DatabaseService,
-    accountId: number,
-    xGmMsgIds: string[],
-    excludedFolders: string[]
-  ): Promise<Set<string>> {
-    if (xGmMsgIds.length === 0) {
-      return new Set<string>();
-    }
-
-    let existingMsgIds: Set<string>;
-    try {
-      existingMsgIds = db.getEmailsExistingInLocalDb(accountId, xGmMsgIds);
-    } catch (err) {
-      log.warn('[SemanticSearch] Failed to check local email existence:', err);
-      return new Set<string>();
-    }
-
-    const missingMsgIds = xGmMsgIds.filter((msgId) => !existingMsgIds.has(msgId));
-    if (missingMsgIds.length === 0) {
-      return new Set<string>();
-    }
-
-    log.info(`[SemanticSearch] Fetching ${missingMsgIds.length} envelope(s) from IMAP for un-synced search results`);
-
-    const accountIdStr = String(accountId);
-    let envelopes: CrawlFetchResult[];
-    try {
-      envelopes = await ImapCrawlService.getInstance().fetchEnvelopes(accountIdStr, missingMsgIds);
-    } catch (err) {
-      log.warn('[SemanticSearch] Failed to fetch envelopes from IMAP:', err);
-      return new Set<string>();
-    }
-
-    const { excludedMsgIds: toExclude, upsertedCount } = this.filterEnvelopesAndUpsert(
-      db,
-      accountId,
-      envelopes,
-      excludedFolders
-    );
-
-    log.info(
-      `[SemanticSearch] resolveUnknownEmails: ${upsertedCount} envelope(s) upserted, ` +
-      `${toExclude.size} excluded (Trash/Spam/Drafts-only)`
-    );
-
-    return toExclude;
-  }
-
-  /**
-   * Filter envelopes by excluded folders (Trash/Spam/Drafts) and upsert non-excluded ones
-   * into the local DB. Used by applyStructuredFilters and resolveUnknownEmails.
-   *
-   * @param db - DatabaseService instance
-   * @param accountId - Account ID
-   * @param envelopes - Fetched envelopes from ImapCrawlService
-   * @param excludedFolders - Folders to exclude (Trash, Spam, Drafts — resolved for this account)
-   * @returns Set of excluded msgIds and count of envelopes upserted
-   */
-  private filterEnvelopesAndUpsert(
-    db: DatabaseService,
-    accountId: number,
-    envelopes: CrawlFetchResult[],
-    excludedFolders: string[]
-  ): { excludedMsgIds: Set<string>; upsertedCount: number } {
-    const excludedMsgIds = new Set<string>();
-    let upsertedCount = 0;
-
-    for (const envelope of envelopes) {
-      if (this.isOnlyInExcludedFolders(envelope, excludedFolders)) {
-        excludedMsgIds.add(envelope.xGmMsgId);
-      } else {
-        try {
-          db.upsertEmailFromEnvelope(accountId, {
-            xGmMsgId: envelope.xGmMsgId,
-            xGmThrid: envelope.xGmThrid,
-            messageId: envelope.messageId,
-            subject: envelope.subject,
-            fromAddress: envelope.fromAddress,
-            fromName: envelope.fromName,
-            toAddresses: envelope.toAddresses,
-            date: envelope.date,
-            isRead: envelope.isRead,
-            isStarred: envelope.isStarred,
-            isDraft: envelope.isDraft,
-            size: envelope.size,
-            rawLabels: envelope.rawLabels,
-          });
-          upsertedCount++;
-        } catch (err) {
-          log.warn(`[SemanticSearch] Failed to upsert envelope for ${envelope.xGmMsgId}:`, err);
-        }
-      }
-    }
-
-    return { excludedMsgIds, upsertedCount };
-  }
-
-  /**
    * Filter out x_gm_msgid values that are ONLY in excluded folders (Trash, Spam, Drafts).
    * An email is included in results if it has at least one folder association that is
    * NOT in the excluded set.
@@ -497,7 +589,7 @@ export class SemanticSearchService {
    * Emails with NO folder associations in email_folders (un-synced emails from the
    * full-mailbox crawl) are always included here — they have no local folder data.
    * These un-synced emails are subsequently re-checked after fetching from IMAP using
-   * their server-side rawLabels (in resolveUnknownEmails or applyStructuredFilters).
+   * their server-side rawLabels (via the X-GM-RAW filter in filterAndResolve).
    *
    * @param db - DatabaseService instance
    * @param accountId - Account ID
@@ -528,37 +620,5 @@ export class SemanticSearchService {
       // Return unfiltered rather than throwing — better to show some results than none
       return xGmMsgIds;
     }
-  }
-
-  /**
-   * Determine whether a server-fetched envelope exists only in excluded folders.
-   *
-   * Uses rawLabels from CrawlFetchResult as the authoritative server-side folder info.
-   * For Spam and Trash, rawLabels contains folder path strings (e.g., '[Gmail]/Spam').
-   * For Drafts, the '\Draft' system flag is more reliable than the folder path, so we
-   * also check isDraft — following the same pattern as embedding-service.ts.
-   *
-   * Edge cases:
-   * - rawLabels empty + isDraft false → pass through (ambiguous; safer to show than suppress)
-   * - rawLabels empty + isDraft true → exclude (draft with no other folder)
-   * - rawLabels has at least one non-excluded label → pass through (email is visible elsewhere)
-   *
-   * @param envelope - Server-fetched envelope from ImapCrawlService.fetchEnvelopes()
-   * @param excludedFolders - Folders to treat as excluded (Trash, Spam, Drafts paths)
-   * @returns true if the email should be excluded from search results; false otherwise
-   */
-  private isOnlyInExcludedFolders(
-    envelope: CrawlFetchResult,
-    excludedFolders: string[]
-  ): boolean {
-    const excludedSet = new Set<string>(excludedFolders);
-
-    if (envelope.rawLabels.length === 0) {
-      // No folder path labels: exclude only if the \Draft system flag is set.
-      return envelope.isDraft;
-    }
-
-    // Exclude if every label is in the excluded set (email lives only in excluded folders).
-    return envelope.rawLabels.every((label) => excludedSet.has(label));
   }
 }

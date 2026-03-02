@@ -307,8 +307,9 @@ export function registerAiIpcHandlers(): void {
         ollama.getEmbeddingModel() !== ''
       );
 
-      // Semantic-first: try semantic search first (one LLM call: extractSemanticIntent).
-      // Keyword intent is only extracted when falling back (semantic unavailable, error, or no results).
+      // Semantic-first: when the semantic pipeline is ready, always use it and never fall through.
+      // The contract: if isSemanticPipelineReady, this block always returns — success or error.
+      // The `semanticResults` field in the response signals to the renderer that semantic was used.
       if (isSemanticPipelineReady) {
         try {
           const semanticService = SemanticSearchService.getInstance();
@@ -319,40 +320,44 @@ export function registerAiIpcHandlers(): void {
             todayDate,
             folderContext
           );
-          if (semanticResults.length > 0) {
-            log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
-            return ipcSuccess({
-              intent: null,
-              queries: [naturalQuery],
-              semanticResults,
-            });
-          }
-          log.info('[AI] search: semantic returned no results, falling back to keyword search');
+          log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
+          return ipcSuccess({
+            intent: null,
+            queries: [naturalQuery],
+            semanticResults,
+          });
         } catch (semanticErr) {
-          log.warn('[AI] search: semantic search failed, falling back to keyword search:', semanticErr);
+          log.warn('[AI] search: semantic search failed, returning empty semantic results:', semanticErr);
+          return ipcSuccess({
+            intent: null,
+            queries: [naturalQuery],
+            semanticResults: [],
+          });
         }
       } else {
         log.debug('[AI] search: semantic pipeline not ready, using keyword search');
       }
 
-      // Fallback path: extract keyword intent and generate queries (one LLM call).
+      // Keyword path: only reached when semantic pipeline is not ready.
+      // Responses on this path do NOT include the `semanticResults` field — its absence signals
+      // to the renderer that the keyword pipeline was used (not semantic).
       let intent: SearchIntent;
       try {
         intent = await ollama.extractSearchIntent(naturalQuery, userEmail, todayDate, folderContext);
       } catch (intentError) {
         log.warn('[AI] search intent extraction failed, falling back to raw query', intentError);
-        return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
+        return ipcSuccess({ intent: null, queries: [naturalQuery] });
       }
 
       if (!isSearchIntent(intent)) {
         log.warn('[AI] search intent validation failed, falling back to raw query');
-        return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
+        return ipcSuccess({ intent: null, queries: [naturalQuery] });
       }
 
       const queries = SearchQueryGenerator.generate(intent);
       if (!Array.isArray(queries) || queries.length === 0) {
         log.warn('[AI] search query generation returned no queries, falling back to raw query');
-        return ipcSuccess({ intent: null, queries: [naturalQuery], semanticResults: [] });
+        return ipcSuccess({ intent: null, queries: [naturalQuery] });
       }
 
       log.info('[AI] search success (keyword path)', {
@@ -362,7 +367,7 @@ export function registerAiIpcHandlers(): void {
         hasFolder: !!intent.folder,
       });
 
-      return ipcSuccess({ intent, queries, semanticResults: [] });
+      return ipcSuccess({ intent, queries });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
       log.error('[AI] search failed:', err);

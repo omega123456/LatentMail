@@ -318,6 +318,36 @@ export class ImapCrawlService {
     return results;
   }
 
+  // ---- Public lock helper ----
+
+  /**
+   * Acquire a mailbox lock on the given mailbox path and execute a callback
+   * with the open ImapFlow client. The lock is released in a finally block
+   * after the callback completes (or throws).
+   *
+   * A connection for `accountId` must already be open before calling this
+   * method (i.e. `connect()` must have been called). Throws if no connection
+   * exists.
+   *
+   * @param accountId - Account ID string (as used throughout ImapCrawlService)
+   * @param mailbox - Mailbox path to open the lock on (e.g. '[Gmail]/All Mail')
+   * @param callback - Async function that receives the open ImapFlow client
+   * @returns The value returned by the callback
+   */
+  public async withMailboxLock<T>(
+    accountId: string,
+    mailbox: string,
+    callback: (client: ImapFlow) => Promise<T>
+  ): Promise<T> {
+    const client = this.getConnection(accountId);
+    const lock = await client.getMailboxLock(mailbox);
+    try {
+      return await callback(client);
+    } finally {
+      lock.release();
+    }
+  }
+
   // ---- Private helpers ----
 
   /** Get the active connection or throw if not connected. */

@@ -597,10 +597,11 @@ export const EmailsStore = signalStore(
       /**
        * Two-phase progressive search:
        * Phase 1: Local DB search (immediate results)
-       *   - When semanticXGmMsgIds is present (any length), resolves those message IDs to threads
-       *     instead of running keyword queries.
-       *   - Falls back to keyword queries when semanticXGmMsgIds is absent or empty.
+       *   - When semanticXGmMsgIds is defined (any length, including empty), resolves those message
+       *     IDs to threads instead of running keyword queries. No fallback to keyword search.
+       *   - When semanticXGmMsgIds is undefined, runs keyword queries against local DB.
        * Phase 2: IMAP search (background, merges progressively)
+       *   - Skipped entirely when semanticXGmMsgIds is defined (semantic results are complete).
        *   - Always uses keyword queries (semanticXGmMsgIds not used for IMAP phase).
        */
       async searchEmails(accountId: number, query: string | string[], semanticXGmMsgIds?: string[]): Promise<void> {
@@ -617,19 +618,31 @@ export const EmailsStore = signalStore(
           preserveListPosition: false,
         });
 
-        // Phase 1: Local DB search
-        // Use semantic results (msgid-based lookup) when the backend returned any; otherwise use keyword search.
-        const useSemanticResults = Array.isArray(semanticXGmMsgIds) && semanticXGmMsgIds.length > 0;
+        // Phase 1: Local DB search.
+        // semanticXGmMsgIds defined (even if empty) means the semantic pipeline was used.
+        // semanticXGmMsgIds undefined means the keyword pipeline was used.
+        const isSemanticSearch = semanticXGmMsgIds !== undefined;
+
+        if (isSemanticSearch && semanticXGmMsgIds!.length === 0) {
+          // Semantic pipeline ran but found no matches — show empty results immediately.
+          // Do not start Phase 2 (IMAP keyword search) when semantic was used.
+          patchState(store, {
+            threads: [],
+            loading: false,
+            searchPhase: 'done',
+          });
+          foldersStore.updateSearchResultCount(0);
+          return;
+        }
+
         try {
           let response;
-          if (useSemanticResults) {
+          if (isSemanticSearch) {
+            // Semantic search: resolve the returned message IDs to threads from local DB.
+            // Do NOT fall back to keyword search if the DB lookup returns empty results.
             response = await electronService.searchEmailsByMsgIds(String(accountId), semanticXGmMsgIds!);
-            // If semantic lookup returns no local DB results (e.g. stale vector index),
-            // fall back to keyword search for Phase 1 so the user sees immediate results.
-            if (response.success && Array.isArray(response.data) && (response.data as Thread[]).length === 0) {
-              response = await electronService.searchEmails(String(accountId), query);
-            }
           } else {
+            // Keyword search: query local DB with the generated keyword queries.
             response = await electronService.searchEmails(String(accountId), query);
           }
           if (response.success && response.data) {
@@ -653,7 +666,13 @@ export const EmailsStore = signalStore(
           });
         }
 
-        // Phase 2: IMAP search (background) — always uses keyword queries
+        // Phase 2: IMAP search (background) — skipped when semantic pipeline was used.
+        // The semantic pipeline returns complete results; no supplemental IMAP search needed.
+        if (isSemanticSearch) {
+          patchState(store, { searchPhase: 'done' });
+          return;
+        }
+
         patchState(store, { searchPhase: 'imap' });
         foldersStore.setSearchingImap(true);
 
