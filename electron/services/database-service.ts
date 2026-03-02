@@ -3378,6 +3378,8 @@ export class DatabaseService {
    *
    * The upserted row has NULL body fields (text_body, html_body) — the body is fetched
    * on demand when the user opens the email. Thread row is created if it doesn't exist.
+   * When rawLabels is provided, email_folders and thread_folders are populated for each
+   * label; UIDs are left NULL (envelope-only fetch does not provide per-folder UIDs).
    *
    * @param accountId - Account ID
    * @param envelope - Parsed envelope metadata from ImapCrawlService.fetchEnvelopes()
@@ -3395,6 +3397,8 @@ export class DatabaseService {
     isStarred: boolean;
     isDraft: boolean;
     size: number;
+    /** Optional Gmail label paths (e.g. '[Gmail]/Inbox') — when set, email_folders and thread_folders are populated. */
+    rawLabels?: string[];
   }): void {
     if (!this.db) {
       throw new Error('Database not initialized');
@@ -3455,6 +3459,24 @@ export class DatabaseService {
         ':isStarred': envelope.isStarred ? 1 : 0,
       }
     );
+
+    // Insert folder links when rawLabels are provided (envelope-only fetch has no UIDs).
+    // [Gmail]/All Mail is a discovery scope, not a persisted folder association — skip it like elsewhere.
+    if (envelope.rawLabels && envelope.rawLabels.length > 0) {
+      for (const folder of envelope.rawLabels) {
+        if (folder === ALL_MAIL_PATH) {
+          continue;
+        }
+        this.db.run(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
+          { ':accountId': accountId, ':xGmMsgId': envelope.xGmMsgId, ':folder': folder }
+        );
+        this.db.run(
+          'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)',
+          { ':accountId': accountId, ':xGmThrid': envelope.xGmThrid, ':folder': folder }
+        );
+      }
+    }
 
     this.scheduleSave();
   }

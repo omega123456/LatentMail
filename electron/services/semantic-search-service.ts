@@ -477,6 +477,7 @@ export class SemanticSearchService {
             isStarred: envelope.isStarred,
             isDraft: envelope.isDraft,
             size: envelope.size,
+            rawLabels: envelope.rawLabels,
           });
           upsertedCount++;
         } catch (err) {
