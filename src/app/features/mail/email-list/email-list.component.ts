@@ -75,8 +75,11 @@ export class EmailListComponent implements OnDestroy {
    */
   private knownStreamingThreadIds = new Set<string>();
 
-  /** Set of thread IDs currently animating as newly-added (cleared after 500ms). */
+  /** Set of thread IDs currently animating as newly-added (cleared 1100ms after last batch). */
   protected readonly newlyAddedThreadIds = signal(new Set<string>());
+
+  /** Timeout handle for clearing newlyAddedThreadIds; reset each time a new batch arrives. */
+  private newlyAddedClearTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** Computed label text for the streaming search result count. */
   protected readonly searchCountLabel = computed(() => {
@@ -210,23 +213,23 @@ export class EmailListComponent implements OnDestroy {
       onCleanup(() => subscription.unsubscribe());
     });
 
-    // Streaming search animation: watch for newly appended threads and briefly tag
-    // them with the animation class via `newlyAddedThreadIds`, then clear after 500ms.
-    //
-    // Uses a private Set (`knownStreamingThreadIds`) as a mutable accumulator across
-    // batches to diff each new threads() snapshot against what we've already seen.
-    // When status returns to 'idle' (search cleared), the known set is reset so the
-    // next search starts fresh.
+    // Streaming search animation: watch for newly appended threads and tag them with
+    // the animation class via `newlyAddedThreadIds`. Accumulate IDs across batches so
+    // earlier items keep the class until the clear runs; clear 1100ms after the last
+    // batch so no item loses the class mid-animation (avoids flicker when batch N+1 arrives).
     effect(() => {
       const status = this.aiStore.searchStreamStatus();
       if (status === 'idle') {
-        // Search cleared — reset so next search starts with a clean slate.
         this.knownStreamingThreadIds.clear();
+        if (this.newlyAddedClearTimeout != null) {
+          clearTimeout(this.newlyAddedClearTimeout);
+          this.newlyAddedClearTimeout = null;
+        }
+        this.newlyAddedThreadIds.set(new Set<string>());
         return;
       }
 
       if (status !== 'searching') {
-        // 'complete', 'partial', 'error' — no new batches expected, skip diffing.
         return;
       }
 
@@ -241,10 +244,20 @@ export class EmailListComponent implements OnDestroy {
       }
 
       if (newIds.length > 0) {
-        this.newlyAddedThreadIds.set(new Set(newIds));
-        setTimeout(() => {
+        this.newlyAddedThreadIds.update((prev) => {
+          const next = new Set(prev);
+          for (const id of newIds) {
+            next.add(id);
+          }
+          return next;
+        });
+        if (this.newlyAddedClearTimeout != null) {
+          clearTimeout(this.newlyAddedClearTimeout);
+        }
+        this.newlyAddedClearTimeout = setTimeout(() => {
           this.newlyAddedThreadIds.set(new Set<string>());
-        }, 500);
+          this.newlyAddedClearTimeout = null;
+        }, 1100);
       }
     }, { allowSignalWrites: true });
 
@@ -258,6 +271,10 @@ export class EmailListComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.commandSub?.unsubscribe();
+    if (this.newlyAddedClearTimeout != null) {
+      clearTimeout(this.newlyAddedClearTimeout);
+      this.newlyAddedClearTimeout = null;
+    }
   }
 
   // ---------------------------------------------------------------------------

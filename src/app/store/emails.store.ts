@@ -778,6 +778,8 @@ export const EmailsStore = signalStore(
         );
 
         patchState(store, { threads: merged });
+        // Keep the sidebar search result count in sync with each incoming batch.
+        foldersStore.updateSearchResultCount(merged.length);
       },
 
       /** Trigger sync for an account */

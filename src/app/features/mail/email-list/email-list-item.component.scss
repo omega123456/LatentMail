@@ -291,11 +291,14 @@
 }
 
 // ─── Streaming search: fade-in animation for newly arrived items ──────────────
+// Initial state and duration are aligned with newlyAddedThreadIds timeout in
+// email-list.component.ts so the class is not removed mid-animation.
+// contain + backface-visibility reduce repaint flicker during the animation.
 
 @keyframes newly-added-fade-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -303,13 +306,20 @@
   }
 }
 
-.newly-added {
-  animation: newly-added-fade-in 200ms ease-out both;
+:host(.newly-added) {
+  opacity: 0;
+  transform: translateY(6px);
+  animation: newly-added-fade-in 1s ease-out both;
+  will-change: opacity, transform;
+  contain: layout style;
+  backface-visibility: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .newly-added {
+  :host(.newly-added) {
     animation: none;
     opacity: 1;
+    transform: none;
+    will-change: auto;
   }
 }
