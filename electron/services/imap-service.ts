@@ -8,6 +8,21 @@ import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { formatParticipant } from '../utils/format-participant';
 
+/**
+ * RFC 6154 special-use attribute → IMAP mailbox path for SELECT.
+ * Some servers (or DB legacy) may store the attribute (e.g. \Sent) instead of the
+ * real path; SELECT requires the actual mailbox path (e.g. [Gmail]/Sent Mail).
+ */
+const SPECIAL_USE_TO_PATH: Record<string, string> = {
+  '\\Inbox': 'INBOX',
+  '\\Sent': '[Gmail]/Sent Mail',
+  '\\Draft': '[Gmail]/Drafts',
+  '\\Drafts': '[Gmail]/Drafts',
+  '\\Junk': '[Gmail]/Spam',
+  '\\Starred': '[Gmail]/Starred',
+  '\\Important': '[Gmail]/Important',
+};
+
 /** Parsed attachment metadata from simpleParser (non-inline attachments). */
 export interface ParsedAttachmentMeta {
   filename: string;
@@ -479,6 +494,20 @@ export class ImapService {
   }
 
   /**
+   * Resolve a folder name to the IMAP path used for SELECT.
+   * If the folder is an RFC 6154 special-use attribute (e.g. \Sent) stored in DB or
+   * returned by LIST, returns the actual mailbox path (e.g. [Gmail]/Sent Mail).
+   * Prevents "BAD Could not parse command" when SELECT is given an attribute instead of a path.
+   */
+  private resolveFolderForSelect(folder: string, accountId: string): string {
+    if (folder === '\\Trash') {
+      return DatabaseService.getInstance().getTrashFolder(Number(accountId));
+    }
+    const resolved = SPECIAL_USE_TO_PATH[folder];
+    return resolved ?? folder;
+  }
+
+  /**
    * Fetch all messages in a Gmail thread.
    * Always searches the thread's known folders first (to pick up drafts and folder-specific UIDs),
    * then searches [Gmail]/All Mail as an authoritative baseline to catch messages that may have
@@ -489,6 +518,11 @@ export class ImapService {
     accountId: string,
     xGmThrid: string
   ): Promise<FetchedEmail[]> {
+    if (!xGmThrid || typeof xGmThrid !== 'string' || xGmThrid.trim() === '') {
+      log.warn('[IMAP] fetchThread: invalid or empty xGmThrid, skipping');
+      return [];
+    }
+
     const db = DatabaseService.getInstance();
     const numAccountId = Number(accountId);
     const ALL_MAIL_PATH = '[Gmail]/All Mail';
@@ -509,7 +543,8 @@ export class ImapService {
     const byMessageId = new Map<string, FetchedEmail>();
 
     for (const folder of folders) {
-      const lock = await client.getMailboxLock(folder);
+      const pathForSelect = this.resolveFolderForSelect(folder, accountId);
+      const lock = await client.getMailboxLock(pathForSelect);
       try {
         const searchResult = await client.search({ threadId: xGmThrid }, { uid: true }) as number[] | false;
         if (!searchResult || searchResult.length === 0) continue;
@@ -530,7 +565,7 @@ export class ImapService {
         } as any, { uid: true })) {
           if (!msg) continue;
           const fetchMsg = msg as FetchMessageObject;
-          const email = this.parseMessage(fetchMsg, folder);
+          const email = this.parseMessage(fetchMsg, pathForSelect);
             if (email) {
               if (fetchMsg.source) {
                 try {
