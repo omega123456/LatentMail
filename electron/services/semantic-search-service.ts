@@ -6,18 +6,15 @@
  * 2. Embed the semantic topic query via OllamaService (single string, fast, runs on main thread)
  * 3. Run cosine similarity search via VectorDbService, filtered by account_id
  * 4. Deduplicate by x_gm_msgid (multiple chunks from the same email → keep highest score)
- * 5. Filter by similarity threshold
- * 6. Filter out emails whose ONLY folder associations are Trash, Spam, or Drafts
+ * 5. Filter by similarity threshold, then sort by similarity descending.
+ * 6. Filter out emails whose ONLY folder associations are Trash, Spam, or Drafts.
  * 7a. If structured filters present: apply via SQL (local DB) + IMAP (missing emails),
  *     then sort by date descending.
- * 7b. If no structured filters: apply MIN_RESULTS_THRESHOLD quality gate, resolve unknown
- *     emails via ImapCrawlService, return similarity-sorted results.
+ * 7b. If no structured filters: resolve unknown emails via ImapCrawlService,
+ *     return similarity-sorted results (no minimum-count gate).
  *
- * Fallback contract:
- * - Returns empty array if VectorDbService is unavailable, no embedding model is configured,
- *   or the similarity search returns fewer than MIN_RESULTS_THRESHOLD results above
- *   SIMILARITY_THRESHOLD (when no structured filters are present). The caller is responsible
- *   for falling through to keyword search.
+ * Returns empty array only when VectorDbService is unavailable, no embedding model is
+ * configured, or the similarity search returns no raw results. No fallback to keyword search.
  */
 
 import { LoggerService } from './logger-service';
@@ -38,17 +35,17 @@ const log = LoggerService.getInstance();
 /** Minimum cosine similarity score for a result to be considered relevant. */
 const SIMILARITY_THRESHOLD = 0.5;
 
-/** Minimum number of results above the threshold before we use semantic results (no-filter path). */
-const MIN_RESULTS_THRESHOLD = 5;
-
 /** Maximum number of results returned after deduplication and filtering. */
-const MAX_RESULTS = 50;
+const MAX_RESULTS = 100;
 
 /** Spam folder path (static, same across Gmail accounts). */
 const SPAM_FOLDER = '[Gmail]/Spam';
 
 /** Drafts folder path (static, same across Gmail accounts). */
 const DRAFTS_FOLDER = '[Gmail]/Drafts';
+
+/** Maximum number of results returned from vector search. */
+const MAX_VECTOR_SEARCH_RESULTS = 450;
 
 export class SemanticSearchService {
   private static instance: SemanticSearchService;
@@ -76,7 +73,7 @@ export class SemanticSearchService {
    * @param todayDate - Today's date as YYYY-MM-DD (for LLM relative-date resolution)
    * @param folders - List of folder names for LLM context
    * @returns Array of x_gm_msgid values sorted by relevance or date,
-   *          or empty array if semantic search is unavailable or returns too few results.
+   *          or empty array only if semantic search is unavailable or returns no raw results.
    */
   async search(
     naturalQuery: string,
@@ -132,10 +129,10 @@ export class SemanticSearchService {
     }
 
     // Step 3: Run similarity search — fetch more candidates than needed to allow for filtering.
-    const rawResults = vectorDb.search(queryEmbedding, accountId, 450);
+    const rawResults = vectorDb.search(queryEmbedding, accountId, MAX_VECTOR_SEARCH_RESULTS);
 
     if (rawResults.length === 0) {
-      log.info('[SemanticSearch] No vector search results — falling back to keywords');
+      log.info('[SemanticSearch] No vector search results');
       return [];
     }
 
@@ -148,8 +145,8 @@ export class SemanticSearchService {
       }
     }
 
-    // Step 5: Filter by similarity threshold, sorted by similarity descending.
-    const aboveThreshold = Array.from(bestScoreByMsgId.entries())
+    // Step 5: Filter by similarity threshold, then sort by similarity descending.
+    const sortedBySimilarity = Array.from(bestScoreByMsgId.entries())
       .filter(([, score]) => score >= SIMILARITY_THRESHOLD)
       .sort((a, b) => b[1] - a[1])
       .map(([xGmMsgId]) => xGmMsgId);
@@ -162,14 +159,14 @@ export class SemanticSearchService {
     const trashFolder = db.getTrashFolder(accountId);
     const excludedFolders = [trashFolder, SPAM_FOLDER, DRAFTS_FOLDER];
 
-    const folderFilteredMsgIds = this.filterExcludedFolders(db, accountId, aboveThreshold, excludedFolders);
+    const folderFilteredMsgIds = this.filterExcludedFolders(db, accountId, sortedBySimilarity, excludedFolders);
 
     // Step 7: Branch on whether the LLM extracted any structured filters.
     if (hasFilters(intent.filters)) {
       // Structured filter path: apply SQL + IMAP filters, sort by date descending.
       log.info(
         `[SemanticSearch] Applying structured filters to ${folderFilteredMsgIds.length} candidates ` +
-        `(${aboveThreshold.length} before folder filter)`
+        `(${sortedBySimilarity.length} before folder filter)`
       );
       const filteredMsgIds = await this.applyStructuredFilters(accountId, folderFilteredMsgIds, intent.filters);
       const sortedMsgIds = this.sortByDate(accountId, filteredMsgIds);
@@ -179,20 +176,12 @@ export class SemanticSearchService {
       return finalResults;
     }
 
-    // No-filter path: apply quality gate and resolve unknown emails.
-    if (aboveThreshold.length < MIN_RESULTS_THRESHOLD) {
-      log.info(
-        `[SemanticSearch] Insufficient results: ${aboveThreshold.length} above threshold ` +
-        `(need ≥${MIN_RESULTS_THRESHOLD}) — falling back to keywords`
-      );
-      return [];
-    }
-
+    // No-filter path: resolve unknown emails and return similarity-sorted results.
     const finalResults = folderFilteredMsgIds.slice(0, MAX_RESULTS);
 
     log.info(
-      `[SemanticSearch] Semantic search: ${finalResults.length} results above threshold ` +
-      `(${aboveThreshold.length} before folder filter)`
+      `[SemanticSearch] Semantic search: ${finalResults.length} results ` +
+      `(${sortedBySimilarity.length} before folder filter)`
     );
 
     // Resolve any results that are missing from the local emails table by fetching
