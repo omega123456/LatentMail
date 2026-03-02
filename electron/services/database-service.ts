@@ -10,6 +10,7 @@ const log = LoggerService.getInstance();
 import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord, AttachmentRecord } from '../database/models';
 import { ALL_MAIL_PATH } from './sync-service';
 import { formatParticipantList } from '../utils/format-participant';
+import type { SemanticSearchFilters } from '../utils/search-filter-translator';
 
 export class DatabaseService {
   private static instance: DatabaseService;
@@ -3456,6 +3457,218 @@ export class DatabaseService {
     );
 
     this.scheduleSave();
+  }
+
+  // ---- Structured filter methods ----
+
+  /**
+   * Given a set of x_gm_msgid values and structured filters, returns the
+   * subset of those message IDs that match all filter conditions in the local
+   * emails table.
+   *
+   * Handles large lists by chunking into batches of 500. The JOIN on
+   * email_folders is added only when the folder filter is present to avoid
+   * unnecessary joins and duplicate rows.
+   *
+   * If no filters are defined (all fields are undefined) the full input set is
+   * returned immediately without hitting the database.
+   *
+   * @param accountId  - Account ID to scope the query
+   * @param xGmMsgIds  - Candidate message IDs to filter
+   * @param filters    - Structured filter constraints to apply
+   * @returns Set of x_gm_msgid values that satisfy all filter conditions
+   */
+  filterEmailsByMsgIds(
+    accountId: number,
+    xGmMsgIds: string[],
+    filters: SemanticSearchFilters
+  ): Set<string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    if (xGmMsgIds.length === 0) {
+      return new Set<string>();
+    }
+
+    const noFiltersApplied =
+      filters.dateFrom === undefined &&
+      filters.dateTo === undefined &&
+      filters.folder === undefined &&
+      filters.sender === undefined &&
+      filters.recipient === undefined &&
+      filters.hasAttachment === undefined &&
+      filters.isRead === undefined &&
+      filters.isStarred === undefined;
+
+    if (noFiltersApplied) {
+      return new Set<string>(xGmMsgIds);
+    }
+
+    const matchingIds = new Set<string>();
+    const CHUNK_SIZE = 500;
+
+    const needsFolderJoin = filters.folder !== undefined;
+
+    const filterClauses: string[] = [];
+    const filterParams: Record<string, string | number> = {};
+
+    if (filters.dateFrom !== undefined) {
+      filterClauses.push('AND e.date >= :dateFrom');
+      filterParams[':dateFrom'] = filters.dateFrom;
+    }
+
+    if (filters.dateTo !== undefined) {
+      filterClauses.push('AND e.date <= :dateTo');
+      filterParams[':dateTo'] = filters.dateTo;
+    }
+
+    if (filters.folder !== undefined) {
+      filterClauses.push('AND ef.folder = :folder');
+      filterParams[':folder'] = filters.folder;
+    }
+
+    if (filters.sender !== undefined) {
+      filterClauses.push(
+        'AND (e.from_address LIKE :senderPattern OR e.from_name LIKE :senderPattern)'
+      );
+      filterParams[':senderPattern'] = `%${filters.sender}%`;
+    }
+
+    if (filters.recipient !== undefined) {
+      filterClauses.push('AND e.to_addresses LIKE :recipientPattern');
+      filterParams[':recipientPattern'] = `%${filters.recipient}%`;
+    }
+
+    if (filters.hasAttachment !== undefined) {
+      filterClauses.push('AND e.has_attachments = :hasAttachment');
+      filterParams[':hasAttachment'] = filters.hasAttachment ? 1 : 0;
+    }
+
+    if (filters.isRead !== undefined) {
+      filterClauses.push('AND e.is_read = :isRead');
+      filterParams[':isRead'] = filters.isRead ? 1 : 0;
+    }
+
+    if (filters.isStarred !== undefined) {
+      filterClauses.push('AND e.is_starred = :isStarred');
+      filterParams[':isStarred'] = filters.isStarred ? 1 : 0;
+    }
+
+    const joinClause = needsFolderJoin
+      ? 'JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid'
+      : '';
+
+    const filterClausesSql = filterClauses.join('\n     ');
+
+    try {
+      for (let offset = 0; offset < xGmMsgIds.length; offset += CHUNK_SIZE) {
+        const chunk = xGmMsgIds.slice(offset, offset + CHUNK_SIZE);
+        const placeholders = chunk
+          .map((_, index) => `:msgId${offset + index}`)
+          .join(', ');
+
+        const params: Record<string, string | number> = {
+          ':accountId': accountId,
+          ...filterParams,
+        };
+
+        for (let index = 0; index < chunk.length; index++) {
+          params[`:msgId${offset + index}`] = chunk[index];
+        }
+
+        const sql = [
+          'SELECT DISTINCT e.x_gm_msgid',
+          'FROM emails e',
+          joinClause,
+          'WHERE e.account_id = :accountId',
+          `  AND e.x_gm_msgid IN (${placeholders})`,
+          filterClausesSql ? `  ${filterClausesSql}` : '',
+        ]
+          .filter((line) => line.trim().length > 0)
+          .join('\n');
+
+        const result = this.db.exec(sql, params);
+
+        if (result.length > 0) {
+          for (const row of result[0].values) {
+            const msgId = row[0];
+            if (typeof msgId === 'string') {
+              matchingIds.add(msgId);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      log.error('filterEmailsByMsgIds: query failed', error);
+      return new Set<string>();
+    }
+
+    return matchingIds;
+  }
+
+  /**
+   * Fetches the `date` column for a set of x_gm_msgid values, returning a Map
+   * from message ID to ISO date string. Used for date-based sorting of search
+   * results after filtering.
+   *
+   * Handles large lists by chunking into batches of 500.
+   *
+   * @param accountId  - Account ID to scope the query
+   * @param xGmMsgIds  - Message IDs whose dates should be fetched
+   * @returns Map of x_gm_msgid → date string
+   */
+  getEmailDatesByMsgIds(
+    accountId: number,
+    xGmMsgIds: string[]
+  ): Map<string, string> {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    if (xGmMsgIds.length === 0) {
+      return new Map<string, string>();
+    }
+
+    const dateMap = new Map<string, string>();
+    const CHUNK_SIZE = 500;
+
+    try {
+      for (let offset = 0; offset < xGmMsgIds.length; offset += CHUNK_SIZE) {
+        const chunk = xGmMsgIds.slice(offset, offset + CHUNK_SIZE);
+        const placeholders = chunk
+          .map((_, index) => `:msgId${offset + index}`)
+          .join(', ');
+
+        const params: Record<string, string | number> = { ':accountId': accountId };
+        for (let index = 0; index < chunk.length; index++) {
+          params[`:msgId${offset + index}`] = chunk[index];
+        }
+
+        const result = this.db.exec(
+          `SELECT e.x_gm_msgid, e.date
+           FROM emails e
+           WHERE e.account_id = :accountId
+             AND e.x_gm_msgid IN (${placeholders})`,
+          params
+        );
+
+        if (result.length > 0) {
+          for (const row of result[0].values) {
+            const msgId = row[0];
+            const date = row[1];
+            if (typeof msgId === 'string' && typeof date === 'string') {
+              dateMap.set(msgId, date);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      log.error('getEmailDatesByMsgIds: query failed', error);
+      return new Map<string, string>();
+    }
+
+    return dateMap;
   }
 
   // ---- Close ----

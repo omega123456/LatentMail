@@ -16,7 +16,7 @@ export interface ParsedAttachmentMeta {
   contentId: string | null;
 }
 
-interface FetchedEmail {
+export interface FetchedEmail {
   uid: number;
   /** Gmail X-GM-MSGID (globally unique message identifier, returned as string by ImapFlow) */
   xGmMsgId: string;

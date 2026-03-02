@@ -324,23 +324,32 @@ export function registerAiIpcHandlers(): void {
         hasFolder: !!intent.folder,
       });
 
-      // Attempt semantic search if the vector index is available and an embedding model is configured.
-      // If semantic search returns ≥5 results above the 0.6 similarity threshold, populate
-      // semanticResults. The renderer uses semanticResults when present, otherwise falls through
-      // to keyword search. Keyword intent+queries are ALWAYS generated regardless — they serve
-      // as fallback for the IMAP search phase.
+      // Attempt semantic search if the vector index is available, an embedding model is configured,
+      // the Ollama service is connected, and a main model is selected.
+      // If semantic search returns results, populate semanticResults. The renderer uses
+      // semanticResults when present, otherwise falls through to keyword search.
+      // Keyword intent+queries are ALWAYS generated regardless — they serve as fallback
+      // for the IMAP search phase.
       let semanticResults: string[] = [];
       const vectorDb = VectorDbService.getInstance();
-      const embeddingModel = ollama.getEmbeddingModel();
-      const semanticSearchAvailable =
+      const isSemanticPipelineReady = (
         vectorDb.vectorsAvailable &&
-        !!embeddingModel &&
-        !!vectorDb.getVectorDimension();
+        vectorDb.getVectorDimension() !== null &&
+        ollama.getStatus().connected &&
+        ollama.getModel() !== '' &&
+        ollama.getEmbeddingModel() !== ''
+      );
 
-      if (semanticSearchAvailable) {
+      if (isSemanticPipelineReady) {
         try {
           const semanticService = SemanticSearchService.getInstance();
-          semanticResults = await semanticService.search(naturalQuery, numAccountId);
+          semanticResults = await semanticService.search(
+            naturalQuery,
+            numAccountId,
+            userEmail,
+            todayDate,
+            folderContext
+          );
           if (semanticResults.length > 0) {
             log.info(`[AI] search: semantic search returned ${semanticResults.length} results`);
           } else {

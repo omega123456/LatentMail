@@ -6,6 +6,7 @@ import { DatabaseService } from './database-service';
 import * as crypto from 'crypto';
 import { SearchIntent } from '../utils/search-query-generator';
 import { loadPrompt } from '../utils/prompt-loader';
+import { SemanticSearchIntent, SemanticSearchFilters } from '../utils/search-filter-translator';
 
 export interface OllamaModel {
   name: string;
@@ -988,6 +989,189 @@ export class OllamaService {
       exactPhrases,
       negations,
     };
+  }
+
+  /**
+   * Extract structured semantic intent from natural language using the
+   * extract-semantic-intent prompt. Returns a `SemanticSearchIntent` containing
+   * a topic-only `semanticQuery` string (suitable for embedding search) and a
+   * `filters` object with all structured constraints.
+   */
+  async extractSemanticIntent(
+    query: string,
+    userEmail: string,
+    todayDate: string,
+    folders: string[]
+  ): Promise<SemanticSearchIntent> {
+    const normalizedFolders = Array.from(
+      new Set(
+        folders
+          .map((folder) => folder.trim())
+          .filter((folder) => folder.length > 0)
+      )
+    ).sort((folderA, folderB) => folderA.localeCompare(folderB, undefined, { sensitivity: 'base' }));
+
+    const cacheInput = `${query}|${userEmail}|${todayDate}|${normalizedFolders.join(',')}`;
+    const cacheKey = this.getCacheKey('semantic-intent', cacheInput);
+    const cached = this.getCachedResult('semantic-intent', cacheKey);
+    if (cached) {
+      try {
+        const parsedCached = JSON.parse(cached) as unknown;
+        if (this.isSemanticSearchIntent(parsedCached)) {
+          log.debug('[Ollama] extractSemanticIntent: returning cached result', { query, cacheKey });
+          return parsedCached;
+        }
+        log.warn('[Ollama] extractSemanticIntent: cached value failed validation, regenerating');
+      } catch {
+        log.warn('[Ollama] extractSemanticIntent: failed to parse cached value, regenerating');
+      }
+    }
+
+    const messages: OllamaChatMessage[] = [
+      {
+        role: 'system',
+        content: loadPrompt('extract-semantic-intent', {
+          userEmail: userEmail || '(unknown)',
+          todayDate,
+          folderList: normalizedFolders.length > 0 ? normalizedFolders.join(', ') : '(none provided)',
+        }),
+      },
+      {
+        role: 'user',
+        content: query,
+      },
+    ];
+
+    const raw = await this.chat(messages, { format: 'json', temperature: 0.2 });
+    log.info('[Ollama] extractSemanticIntent: raw response', { query, raw });
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      const objectMatch = raw.match(/\{[\s\S]*\}/);
+      if (!objectMatch) {
+        throw new Error('AI returned non-JSON semantic intent');
+      }
+      parsed = JSON.parse(objectMatch[0]) as unknown;
+    }
+
+    const validated = this.validateSemanticIntentResponse(parsed, query);
+
+    this.setCachedResult('semantic-intent', cacheKey, JSON.stringify(validated));
+    return validated;
+  }
+
+  /**
+   * Validates and backfills a raw parsed JSON value into a well-formed
+   * `SemanticSearchIntent`. Fields with wrong types are removed; date strings
+   * not matching YYYY-MM-DD are removed. If `semanticQuery` is missing or not
+   * a string, falls back to the original `query` parameter.
+   */
+  private validateSemanticIntentResponse(parsed: unknown, originalQuery: string): SemanticSearchIntent {
+    const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+    let semanticQuery: string;
+    let filtersRaw: Record<string, unknown> = {};
+
+    if (parsed !== null && typeof parsed === 'object') {
+      const parsedRecord = parsed as Record<string, unknown>;
+
+      if (typeof parsedRecord['semanticQuery'] === 'string') {
+        semanticQuery = parsedRecord['semanticQuery'];
+      } else {
+        log.debug('[Ollama] validateSemanticIntentResponse: semanticQuery missing or wrong type, falling back to original query');
+        semanticQuery = originalQuery;
+      }
+
+      if (parsedRecord['filters'] !== null && typeof parsedRecord['filters'] === 'object' && !Array.isArray(parsedRecord['filters'])) {
+        filtersRaw = parsedRecord['filters'] as Record<string, unknown>;
+      } else {
+        log.debug('[Ollama] validateSemanticIntentResponse: filters missing or wrong type, using {}');
+      }
+    } else {
+      log.debug('[Ollama] validateSemanticIntentResponse: parsed value is not an object, falling back to original query');
+      semanticQuery = originalQuery;
+    }
+
+    const filters: SemanticSearchFilters = {};
+
+    if (typeof filtersRaw['dateFrom'] === 'string') {
+      if (ISO_DATE_PATTERN.test(filtersRaw['dateFrom'])) {
+        filters.dateFrom = filtersRaw['dateFrom'];
+      } else {
+        log.debug('[Ollama] validateSemanticIntentResponse: dateFrom failed format check, dropping', { value: filtersRaw['dateFrom'] });
+      }
+    } else if (filtersRaw['dateFrom'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: dateFrom has wrong type, dropping', { type: typeof filtersRaw['dateFrom'] });
+    }
+
+    if (typeof filtersRaw['dateTo'] === 'string') {
+      if (ISO_DATE_PATTERN.test(filtersRaw['dateTo'])) {
+        filters.dateTo = filtersRaw['dateTo'];
+      } else {
+        log.debug('[Ollama] validateSemanticIntentResponse: dateTo failed format check, dropping', { value: filtersRaw['dateTo'] });
+      }
+    } else if (filtersRaw['dateTo'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: dateTo has wrong type, dropping', { type: typeof filtersRaw['dateTo'] });
+    }
+
+    if (typeof filtersRaw['folder'] === 'string') {
+      filters.folder = filtersRaw['folder'];
+    } else if (filtersRaw['folder'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: folder has wrong type, dropping', { type: typeof filtersRaw['folder'] });
+    }
+
+    if (typeof filtersRaw['sender'] === 'string') {
+      filters.sender = filtersRaw['sender'];
+    } else if (filtersRaw['sender'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: sender has wrong type, dropping', { type: typeof filtersRaw['sender'] });
+    }
+
+    if (typeof filtersRaw['recipient'] === 'string') {
+      filters.recipient = filtersRaw['recipient'];
+    } else if (filtersRaw['recipient'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: recipient has wrong type, dropping', { type: typeof filtersRaw['recipient'] });
+    }
+
+    if (typeof filtersRaw['hasAttachment'] === 'boolean') {
+      filters.hasAttachment = filtersRaw['hasAttachment'];
+    } else if (filtersRaw['hasAttachment'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: hasAttachment has wrong type, dropping', { type: typeof filtersRaw['hasAttachment'] });
+    }
+
+    if (typeof filtersRaw['isRead'] === 'boolean') {
+      filters.isRead = filtersRaw['isRead'];
+    } else if (filtersRaw['isRead'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: isRead has wrong type, dropping', { type: typeof filtersRaw['isRead'] });
+    }
+
+    if (typeof filtersRaw['isStarred'] === 'boolean') {
+      filters.isStarred = filtersRaw['isStarred'];
+    } else if (filtersRaw['isStarred'] !== undefined) {
+      log.debug('[Ollama] validateSemanticIntentResponse: isStarred has wrong type, dropping', { type: typeof filtersRaw['isStarred'] });
+    }
+
+    return { semanticQuery, filters };
+  }
+
+  /**
+   * Type guard for `SemanticSearchIntent`. Checks that the value has the
+   * required shape: an object with a string `semanticQuery` and an object
+   * `filters`. Does not deeply validate filter field types.
+   */
+  private isSemanticSearchIntent(value: unknown): value is SemanticSearchIntent {
+    if (value === null || typeof value !== 'object') {
+      return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    if (typeof candidate['semanticQuery'] !== 'string') {
+      return false;
+    }
+    if (candidate['filters'] === null || typeof candidate['filters'] !== 'object' || Array.isArray(candidate['filters'])) {
+      return false;
+    }
+    return true;
   }
 
   /** AI-assisted filter creation: generate filter rules from natural language description */
