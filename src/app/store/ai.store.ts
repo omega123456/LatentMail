@@ -455,25 +455,6 @@ export const AiStore = signalStore(
       },
 
       /** AI search: convert natural language into structured intent + query variants */
-      async aiSearch(accountId: string, query: string, folders?: string[]): Promise<{ intent: SearchIntent | null; queries: string[]; semanticResults?: string[] } | null> {
-        patchState(store, { searchLoading: true, searchResult: null, error: null });
-        const response = await electronService.aiSearch(accountId, query, folders);
-        if (response.success && response.data) {
-          const data = response.data as { intent: SearchIntent | null; queries: string[]; semanticResults?: string[] };
-          patchState(store, {
-            searchLoading: false,
-            searchResult: { intent: data.intent, queries: data.queries },
-          });
-          return data;
-        } else {
-          patchState(store, {
-            searchLoading: false,
-            error: response.error?.message || 'AI search failed',
-          });
-          return null;
-        }
-      },
-
       /** Generate a filter from natural language */
       async generateFilter(description: string, accountId: number): Promise<AiFilterSuggestion | null> {
         patchState(store, { filterLoading: true, filterSuggestion: null, error: null });
@@ -550,6 +531,7 @@ export const AiStore = signalStore(
         accountId: string,
         query: string,
         folders?: string[],
+        mode?: 'keyword' | 'semantic',
       ): Promise<{ searchToken: string; query: string } | null> {
         // Search lock — prevent concurrent searches
         if (store.searchStreamStatus() === 'searching') {
@@ -566,18 +548,9 @@ export const AiStore = signalStore(
         });
 
         try {
-          const response = await electronService.aiSearch(accountId, query, folders);
+          const response = await electronService.aiSearch(accountId, query, folders, mode);
           if (response.success && response.data) {
-            const data = response.data as { searchToken?: string };
-            if (!data.searchToken) {
-              // The IPC handler returned a keyword fallback response (no searchToken).
-              // This search is not streaming — reset to idle and let the caller fall back.
-              patchState(store, {
-                searchStreamStatus: 'idle',
-                searchAccountId: null,
-              });
-              return null;
-            }
+            const data = response.data as { searchToken: string };
             patchState(store, { searchToken: data.searchToken });
             return { searchToken: data.searchToken, query };
           } else {

@@ -127,8 +127,6 @@ interface ElectronAPI {
     move: (accountId: string, messageIds: string[], targetFolder: string, sourceFolder?: string) => Promise<IpcResponse>;
     flag: (accountId: string, messageIds: string[], flag: string, value: boolean) => Promise<IpcResponse>;
     delete: (accountId: string, messageIds: string[], folder: string) => Promise<IpcResponse>;
-    search: (accountId: string, query: string | string[]) => Promise<IpcResponse>;
-    searchImap: (accountId: string, query: string | string[]) => Promise<IpcResponse>;
     searchByMsgIds: (accountId: string, xGmMsgIds: string[]) => Promise<IpcResponse>;
     syncAccount: (accountId: string) => Promise<IpcResponse>;
     getFolders: (accountId: string) => Promise<IpcResponse>;
@@ -144,7 +142,7 @@ interface ElectronAPI {
     summarize: (threadContent: string, requestId?: string) => Promise<IpcResponse>;
     compose: (prompt: string, context?: string, requestId?: string) => Promise<IpcResponse>;
     categorize: (emailContent: string) => Promise<IpcResponse>;
-    search: (accountId: string, naturalQuery: string, folders?: string[]) => Promise<IpcResponse>;
+    search: (accountId: string, naturalQuery: string, folders?: string[], mode?: string) => Promise<IpcResponse>;
     transform: (text: string, transformation: string, requestId?: string) => Promise<IpcResponse>;
     getModels: () => Promise<IpcResponse>;
     getStatus: () => Promise<IpcResponse>;
@@ -268,16 +266,8 @@ export class ElectronService {
     return this.invoke(() => this.api!.mail.delete(accountId, messageIds, folder));
   }
 
-  async searchEmails(accountId: string, query: string | string[]): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.mail.search(accountId, query));
-  }
-
   async searchEmailsByMsgIds(accountId: string, xGmMsgIds: string[]): Promise<IpcResponse> {
     return this.invoke(() => this.api!.mail.searchByMsgIds(accountId, xGmMsgIds));
-  }
-
-  async searchImapEmails(accountId: string, query: string | string[]): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.mail.searchImap(accountId, query));
   }
 
   async syncAccount(accountId: string): Promise<IpcResponse> {
@@ -324,8 +314,8 @@ export class ElectronService {
     return this.invoke(() => this.api!.ai.categorize(emailContent));
   }
 
-  async aiSearch(accountId: string, naturalQuery: string, folders?: string[]): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.ai.search(accountId, naturalQuery, folders));
+  async aiSearch(accountId: string, naturalQuery: string, folders?: string[], mode?: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.search(accountId, naturalQuery, folders, mode));
   }
 
   async aiTransform(text: string, transformation: string, requestId?: string): Promise<IpcResponse> {

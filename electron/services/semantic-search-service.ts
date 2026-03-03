@@ -30,38 +30,28 @@ import { OllamaService } from './ollama-service';
 import { VectorDbService } from './vector-db-service';
 import { DatabaseService } from './database-service';
 import { ImapCrawlService, CrawlFetchResult } from './imap-crawl-service';
+import { BaseSearchService, SearchBatchCallback } from './base-search-service';
 import {
   SemanticSearchFilters,
   SemanticSearchIntent,
   translateFiltersToGmailQuery,
   hasFilters,
 } from '../utils/search-filter-translator';
-import { parseGmailQuery } from '../utils/gmail-query-parser';
 
 const log = LoggerService.getInstance();
 
 /** Minimum cosine similarity score for a result to be considered relevant. */
 const SIMILARITY_THRESHOLD = 0.5;
 
-/** Maximum number of results returned after deduplication and filtering. */
-const MAX_RESULTS = 50;
-
-/** Spam folder path (static, same across Gmail accounts). */
-const SPAM_FOLDER = '[Gmail]/Spam';
-
-/** Drafts folder path (static, same across Gmail accounts). */
-const DRAFTS_FOLDER = '[Gmail]/Drafts';
-
 /** Maximum number of results returned from vector search. */
 const MAX_VECTOR_SEARCH_RESULTS = 450;
 
-/** Mailbox path used for all IMAP resolution operations. */
-const ALL_MAIL_PATH = '[Gmail]/All Mail';
-
-export class SemanticSearchService {
+export class SemanticSearchService extends BaseSearchService {
   private static instance: SemanticSearchService;
 
-  private constructor() {}
+  protected constructor() {
+    super();
+  }
 
   static getInstance(): SemanticSearchService {
     if (!SemanticSearchService.instance) {
@@ -180,7 +170,7 @@ export class SemanticSearchService {
     // Resolve the trash folder dynamically (supports [Gmail]/Bin and other locales).
     // Per codebase conventions, never hardcode '[Gmail]/Trash'.
     const trashFolder = db.getTrashFolder(accountId);
-    const excludedFolders = [trashFolder, SPAM_FOLDER, DRAFTS_FOLDER];
+    const excludedFolders = [trashFolder, this.SPAM_FOLDER, this.DRAFTS_FOLDER];
 
     const folderFilteredCandidates = this.filterExcludedFolders(db, accountId, sortedBySimilarity, excludedFolders);
 
@@ -327,8 +317,8 @@ export class SemanticSearchService {
 
     try {
       // --- Iterative loop: process missing candidates in deficit-sized rounds ---
-      while (confirmed.size < MAX_RESULTS && missingCursor < missingEligibleCandidates.length) {
-        const deficit = MAX_RESULTS - confirmed.size;
+      while (confirmed.size < this.MAX_RESULTS && missingCursor < missingEligibleCandidates.length) {
+        const deficit = this.MAX_RESULTS - confirmed.size;
         const batch = missingEligibleCandidates.slice(missingCursor, missingCursor + deficit);
         missingCursor += batch.length;
         roundCounter += 1;
@@ -349,7 +339,7 @@ export class SemanticSearchService {
           try {
             await crawlService.withMailboxLock(
               accountIdStr,
-              ALL_MAIL_PATH,
+              this.ALL_MAIL_PATH,
               async (client) => {
                 // Batch SEARCH: OR all candidate emailIds together with the gmRaw filter.
                 // One IMAP command resolves + filters all missing candidates at once.
@@ -463,7 +453,7 @@ export class SemanticSearchService {
       gmailQuery: gmRaw,
     });
 
-    const localMsgIds = this.runLocalSearchByGmailQuery(accountId, gmRaw, MAX_RESULTS);
+    const localMsgIds = this.runLocalSearchByGmailQuery(accountId, gmRaw, this.MAX_RESULTS);
     const sortedLocalMsgIds = this.sortByDate(accountId, localMsgIds);
     onBatch(sortedLocalMsgIds, 'local');
 
@@ -481,7 +471,7 @@ export class SemanticSearchService {
       try {
         await crawlService.withMailboxLock(
           accountIdStr,
-          ALL_MAIL_PATH,
+          this.ALL_MAIL_PATH,
           async (client) => {
             let survivingUids: number[];
             try {
@@ -501,7 +491,7 @@ export class SemanticSearchService {
               return;
             }
 
-            const remaining = MAX_RESULTS - emittedMsgIds.size;
+            const remaining = this.MAX_RESULTS - emittedMsgIds.size;
             if (remaining <= 0) {
               return;
             }
@@ -538,112 +528,6 @@ export class SemanticSearchService {
     }
 
     return hadImapError ? 'partial' : 'complete';
-  }
-
-  /**
-   * Build Gmail raw query string with standard folder exclusions (trash, spam, drafts).
-   */
-  private buildGmRawWithExclusions(filterQuery: string): string {
-    const folderExclusionClause = '-in:trash -in:spam -in:drafts';
-    return [filterQuery, folderExclusionClause]
-      .filter((part) => part.length > 0)
-      .join(' ');
-  }
-
-  /**
-   * Ensure IMAP crawl connection is open for the account. Caller must disconnect in finally if connectionOpened.
-   */
-  private async ensureCrawlConnection(
-    accountIdStr: string,
-    options: { logContext: string }
-  ): Promise<{ imapAvailable: boolean; connectionOpened: boolean }> {
-    const crawlService = ImapCrawlService.getInstance();
-    let connectionOpened = false;
-    try {
-      if (!crawlService.isConnected(accountIdStr)) {
-        await crawlService.connect(accountIdStr);
-        connectionOpened = true;
-      }
-      return { imapAvailable: true, connectionOpened };
-    } catch (connectError) {
-      log.warn(`[SemanticSearch] ${options.logContext}: failed to open IMAP connection:`, connectError);
-      return { imapAvailable: false, connectionOpened: false };
-    }
-  }
-
-  /**
-   * Upsert a single envelope from IMAP crawl into the DB. Logs and swallows errors.
-   */
-  private upsertEnvelopeFromCrawl(
-    accountId: number,
-    envelope: CrawlFetchResult,
-    logContext: string
-  ): void {
-    const db = DatabaseService.getInstance();
-    try {
-      db.upsertEmailFromEnvelope(accountId, {
-        xGmMsgId: envelope.xGmMsgId,
-        xGmThrid: envelope.xGmThrid,
-        messageId: envelope.messageId,
-        subject: envelope.subject,
-        fromAddress: envelope.fromAddress,
-        fromName: envelope.fromName,
-        toAddresses: envelope.toAddresses,
-        date: envelope.date,
-        isRead: envelope.isRead,
-        isStarred: envelope.isStarred,
-        isDraft: envelope.isDraft,
-        size: envelope.size,
-        rawLabels: envelope.rawLabels,
-      });
-    } catch (upsertError) {
-      log.warn(`[SemanticSearch] ${logContext}: failed to upsert envelope:`, upsertError);
-    }
-  }
-
-  /**
-   * Run local DB search by Gmail query string; returns x_gm_msgid list ordered by date DESC.
-   */
-  private runLocalSearchByGmailQuery(
-    accountId: number,
-    gmailQuery: string,
-    limit: number
-  ): string[] {
-    const db = DatabaseService.getInstance();
-    const parsed = parseGmailQuery(gmailQuery, {
-      accountId,
-      paramPrefix: 'fof_',
-      trashFolderResolver: (resolverAccountId?: number) => db.getTrashFolder(resolverAccountId ?? accountId),
-    });
-
-    const localParams = {
-      ':accountId': accountId,
-      ':limit': limit,
-      ...parsed.params,
-    } as Record<string, number | string | null>;
-
-    const rawDb = db.getDatabase();
-    try {
-      const localResult = rawDb.exec(
-        `SELECT DISTINCT e.x_gm_msgid
-         FROM emails e
-         WHERE e.account_id = :accountId
-           AND (${parsed.whereClause})
-         ORDER BY e.date DESC
-         LIMIT :limit`,
-        localParams
-      );
-
-      if (localResult.length === 0) {
-        return [];
-      }
-      return localResult[0].values
-        .map((row) => row[0] as string | null)
-        .filter((msgId): msgId is string => msgId !== null && msgId.length > 0);
-    } catch (localSearchError) {
-      log.warn('[SemanticSearch] Filter-only fallback: local DB search failed:', localSearchError);
-      return [];
-    }
   }
 
   /**
@@ -757,81 +641,23 @@ export class SemanticSearchService {
   }
 
   /**
-   * Sort x_gm_msgid values by their email date, newest first.
-   * Message IDs with no date record in the local DB are placed at the end.
-   *
-   * @param accountId - Account ID to scope the date lookup
-   * @param msgIds - Message IDs to sort
-   * @returns Sorted array (date descending, un-dated entries last)
+   * Ensure IMAP crawl connection is open for the account. Caller must disconnect in finally if connectionOpened.
    */
-  private sortByDate(accountId: number, msgIds: string[]): string[] {
-    if (msgIds.length === 0) {
-      return [];
-    }
-
-    const db = DatabaseService.getInstance();
-    const dateMap = db.getEmailDatesByMsgIds(accountId, msgIds);
-
-    const sorted = [...msgIds].sort((idA, idB) => {
-      const dateA = dateMap.get(idA);
-      const dateB = dateMap.get(idB);
-
-      // Entries without a date record go to the end of the sorted array.
-      if (!dateA && !dateB) {
-        return 0;
-      }
-      if (!dateA) {
-        return 1;
-      }
-      if (!dateB) {
-        return -1;
-      }
-
-      // Sort newest first (descending).
-      return dateB.localeCompare(dateA);
-    });
-
-    return sorted;
-  }
-
-  /**
-   * Filter out x_gm_msgid values that are ONLY in excluded folders (Trash, Spam, Drafts).
-   * An email is included in results if it has at least one folder association that is
-   * NOT in the excluded set.
-   *
-   * Emails with NO folder associations in email_folders (un-synced emails from the
-   * full-mailbox crawl) are always included here — they have no local folder data.
-   * These un-synced emails are subsequently re-checked after fetching from IMAP using
-   * their server-side rawLabels (via the X-GM-RAW filter in filterAndResolve).
-   *
-   * @param db - DatabaseService instance
-   * @param accountId - Account ID
-   * @param xGmMsgIds - Candidate message IDs (sorted by relevance)
-   * @param excludedFolders - Folders to exclude (resolved dynamically for this account)
-   * @returns Filtered list preserving the original ordering
-   */
-  private filterExcludedFolders(
-    db: DatabaseService,
-    accountId: number,
-    xGmMsgIds: string[],
-    excludedFolders: string[]
-  ): string[] {
-    if (xGmMsgIds.length === 0) {
-      return [];
-    }
-
+  private async ensureCrawlConnection(
+    accountIdStr: string,
+    options: { logContext: string }
+  ): Promise<{ imapAvailable: boolean; connectionOpened: boolean }> {
+    const crawlService = ImapCrawlService.getInstance();
+    let connectionOpened = false;
     try {
-      const includedSet = db.getMsgIdsWithNonExcludedFolders(accountId, xGmMsgIds, excludedFolders);
-      // For results with no email_folders entries (un-synced emails from full-mailbox crawl),
-      // getMsgIdsWithNonExcludedFolders will return nothing. We need to identify which msgIds
-      // have NO folder records at all (distinct from having only excluded-folder records) so
-      // they can be passed through. Use a single batched query for this.
-      const hasAnyFolder = db.getMsgIdsWithAnyFolder(accountId, xGmMsgIds);
-      return xGmMsgIds.filter((msgId) => includedSet.has(msgId) || !hasAnyFolder.has(msgId));
-    } catch (filterError) {
-      log.warn('[SemanticSearch] Failed to filter by folder exclusions, returning unfiltered results:', filterError);
-      // Return unfiltered rather than throwing — better to show some results than none
-      return xGmMsgIds;
+      if (!crawlService.isConnected(accountIdStr)) {
+        await crawlService.connect(accountIdStr);
+        connectionOpened = true;
+      }
+      return { imapAvailable: true, connectionOpened };
+    } catch (connectError) {
+      log.warn(`[SemanticSearch] ${options.logContext}: failed to open IMAP connection:`, connectError);
+      return { imapAvailable: false, connectionOpened: false };
     }
   }
 }

@@ -28,10 +28,6 @@ const electronAPI = {
       ipcRenderer.invoke('mail:flag', accountId, messageIds, flag, value) as Promise<IpcResponse>,
     delete: (accountId: string, messageIds: string[], folder: string) =>
       ipcRenderer.invoke('mail:delete', accountId, messageIds, folder) as Promise<IpcResponse>,
-    search: (accountId: string, query: string | string[]) =>
-      ipcRenderer.invoke('mail:search', accountId, query) as Promise<IpcResponse>,
-    searchImap: (accountId: string, query: string | string[]) =>
-      ipcRenderer.invoke('mail:search-imap', accountId, query) as Promise<IpcResponse>,
     searchByMsgIds: (accountId: string, xGmMsgIds: string[]) =>
       ipcRenderer.invoke('mail:search-by-msgids', accountId, xGmMsgIds) as Promise<IpcResponse>,
     syncAccount: (accountId: string) =>
@@ -62,8 +58,8 @@ const electronAPI = {
       ipcRenderer.invoke('ai:compose', prompt, context, requestId) as Promise<IpcResponse>,
     categorize: (emailContent: string) =>
       ipcRenderer.invoke('ai:categorize', emailContent) as Promise<IpcResponse>,
-    search: (accountId: string, naturalQuery: string, folders?: string[]) =>
-      ipcRenderer.invoke('ai:search', accountId, naturalQuery, folders) as Promise<IpcResponse>,
+    search: (accountId: string, naturalQuery: string, folders?: string[], mode?: string) =>
+      ipcRenderer.invoke('ai:search', accountId, naturalQuery, folders, mode) as Promise<IpcResponse>,
     transform: (text: string, transformation: string, requestId?: string) =>
       ipcRenderer.invoke('ai:transform', text, transformation, requestId) as Promise<IpcResponse>,
     getModels: () =>

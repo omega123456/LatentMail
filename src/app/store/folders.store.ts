@@ -240,16 +240,6 @@ export const FoldersStore = signalStore(
         patchState(store, { searchResultCount: count });
       },
 
-      /** Set IMAP search loading state */
-      setSearchingImap(loading: boolean): void {
-        patchState(store, { searchingImap: loading });
-      },
-
-      /** Set IMAP search error */
-      setSearchImapError(error: string | null): void {
-        patchState(store, { searchImapError: error, searchingImap: false });
-      },
-
       /** Create a new user label on IMAP and in the local DB, then reload folders. */
       async createLabel(accountId: number, name: string, color: string | null): Promise<void> {
         const response = await electronService.createLabel(String(accountId), name, color);

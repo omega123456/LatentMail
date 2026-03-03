@@ -5,7 +5,7 @@
   <input
     class="search-bar-input"
     type="text"
-    [placeholder]="aiMode() ? 'Ask AI to find emails...' : 'Search emails...'"
+    [placeholder]="searchMode() === 'semantic' ? 'Ask AI to find emails...' : 'Search emails...'"
     [value]="query()"
     [readonly]="aiStore.searchStreamStatus() === 'searching'"
     (input)="query.set($any($event.target).value)"
@@ -21,13 +21,28 @@
       <span class="material-symbols-outlined">close</span>
     </button>
   }
-  <button
-    class="search-action-btn ai-toggle"
-    [class.active]="aiMode()"
-    [disabled]="!aiStore.isAvailable() || aiStore.searchStreamStatus() === 'searching'"
-    (click)="toggleAiMode()"
-    [title]="aiStore.isAvailable() ? (aiMode() ? 'Switch to direct search' : 'Switch to AI search') : 'Ollama not connected'"
-  >
-    <span class="material-symbols-outlined">auto_awesome</span>
-  </button>
+  @if (aiStore.isAvailable()) {
+    <div class="search-mode-toggle" role="group" aria-label="Search mode">
+      <button
+        class="search-mode-btn"
+        [attr.aria-pressed]="searchMode() === 'keyword'"
+        aria-label="Keyword search"
+        [disabled]="aiStore.searchStreamStatus() === 'searching'"
+        (click)="setSearchMode('keyword')"
+        title="Keyword search"
+      >
+        <span class="material-symbols-outlined">text_fields</span>
+      </button>
+      <button
+        class="search-mode-btn"
+        [attr.aria-pressed]="searchMode() === 'semantic'"
+        aria-label="Semantic search"
+        [disabled]="aiStore.searchStreamStatus() === 'searching'"
+        (click)="setSearchMode('semantic')"
+        title="Semantic AI search"
+      >
+        <span class="material-symbols-outlined">auto_awesome</span>
+      </button>
+    </div>
+  }
 </div>

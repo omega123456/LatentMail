@@ -473,7 +473,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  onSearch(event: { queries: string[]; originalQuery: string; semanticResults?: string[]; streaming?: boolean }): void {
+  onSearch(event: { queries: string[]; originalQuery: string; streaming?: boolean }): void {
     const activeAccount = this.accountsStore.activeAccount();
     if (!activeAccount) {
       return;
@@ -488,15 +488,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       // Do NOT call clearThreadsForStreaming() or clearSelection() — search bar did that before startStreamingSearch
       return;
     }
-
-    const effectiveQuery = event.queries.join(' OR ');
-
-    // Activate search mode in FoldersStore (saves previous folder, shows virtual folder)
-    this.foldersStore.activateSearch(event.originalQuery, effectiveQuery);
-
-    // Clear selection and start two-phase search
-    this.emailsStore.clearSelection();
-    this.emailsStore.searchEmails(activeAccount.id, event.queries, event.semanticResults);
   }
 
   onSearchCleared(): void {

@@ -9,7 +9,8 @@ import { DatabaseService } from '../services/database-service';
 import { VectorDbService } from '../services/vector-db-service';
 import { EmbeddingService } from '../services/embedding-service';
 import { SemanticSearchService } from '../services/semantic-search-service';
-import { SearchIntent, SearchQueryGenerator } from '../utils/search-query-generator';
+import { SearchIntent } from '../utils/search-query-generator';
+import { KeywordSearchService } from '../services/keyword-search-service';
 
 function isAllowedOllamaUrl(rawUrl: string): boolean {
   try {
@@ -272,7 +273,81 @@ export function registerAiIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (event, accountId: string, naturalQuery: string, folders?: unknown) => {
+  /**
+   * Shared helper that fires a streaming search in the background and emits incremental
+   * batch/complete push events to the renderer window.  Defined as a const inside
+   * registerAiIpcHandlers() so that it is available to the AI_SEARCH handler below.
+   */
+  const runStreamingSearch = (
+    service: {
+      search: (
+        query: string,
+        accountId: number,
+        userEmail: string,
+        todayDate: string,
+        folders: string[],
+        onBatch: (msgIds: string[], phase: 'local' | 'imap') => void
+      ) => Promise<'complete' | 'partial' | 'error'>;
+    },
+    serviceLabel: string,
+    searchToken: string,
+    browserWindow: BrowserWindow | null,
+    query: string,
+    accountId: number,
+    userEmail: string,
+    todayDate: string,
+    folderContext: string[],
+    maxResults: number
+  ): void => {
+    let emittedCount = 0;
+    service.search(
+      query,
+      accountId,
+      userEmail,
+      todayDate,
+      folderContext,
+      (msgIds: string[], phase: 'local' | 'imap') => {
+        if (!browserWindow || browserWindow.isDestroyed()) {
+          return;
+        }
+        if (emittedCount >= maxResults) {
+          return;
+        }
+        const remaining = maxResults - emittedCount;
+        const cappedMsgIds = msgIds.slice(0, remaining);
+        emittedCount += cappedMsgIds.length;
+        browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_BATCH, {
+          searchToken,
+          msgIds: cappedMsgIds,
+          phase,
+        });
+      }
+    )
+      .then((status) => {
+        if (!browserWindow || browserWindow.isDestroyed()) {
+          return;
+        }
+        log.info(`[AI] search: ${serviceLabel} search finished with status=${status}, totalResults=${emittedCount}`);
+        browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
+          searchToken,
+          status,
+          totalResults: emittedCount,
+        });
+      })
+      .catch((searchErr) => {
+        log.warn(`[AI] search: ${serviceLabel} search threw unexpectedly:`, searchErr);
+        if (!browserWindow || browserWindow.isDestroyed()) {
+          return;
+        }
+        browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
+          searchToken,
+          status: 'error',
+          totalResults: emittedCount,
+        });
+      });
+  };
+
+  ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (event, accountId: string, naturalQuery: string, folders?: unknown, mode?: unknown) => {
     try {
       if (!accountId || isNaN(Number(accountId))) {
         return ipcError('AI_INVALID_INPUT', 'Valid account ID is required');
@@ -295,9 +370,12 @@ export function registerAiIpcHandlers(): void {
       log.info('[AI] search request', {
         accountId,
         queryLen: naturalQuery.length,
+        mode: mode ?? 'undefined',
         userEmail: userEmail ? '(set)' : '(empty)',
         folderCount: folderContext.length,
       });
+
+      const useMode: 'keyword' | 'semantic' = (mode === 'keyword' || mode === 'semantic') ? mode : 'semantic';
 
       const vectorDb = VectorDbService.getInstance();
       const isSemanticPipelineReady = (
@@ -308,114 +386,22 @@ export function registerAiIpcHandlers(): void {
         ollama.getEmbeddingModel() !== ''
       );
 
-      /** Maximum number of msgIds to emit across all batches for a single search. */
       const MAX_RESULTS = 50;
+      const searchToken = randomUUID();
+      const browserWindow = BrowserWindow.fromWebContents(event.sender);
 
-      // Semantic-first: when the semantic pipeline is ready, always use it and never fall through.
-      // The contract: if isSemanticPipelineReady, this block always returns — success or error.
-      // Results are delivered incrementally via push events (ai:search:batch / ai:search:complete).
-      // The invoke returns { searchToken } immediately so the renderer can correlate push events.
-      if (isSemanticPipelineReady) {
-        const searchToken = randomUUID();
-        const browserWindow = BrowserWindow.fromWebContents(event.sender);
-
-        // Return the search token immediately — the renderer uses this to correlate push events.
-        const immediateResponse = ipcSuccess({ searchToken });
-
-        // Fire-and-forget: run the search in the background and push incremental results.
-        // Wrapped in .catch() to prevent unhandled promise rejections.
-        const semanticService = SemanticSearchService.getInstance();
-
-        let emittedCount = 0;
-
-        semanticService.search(
-          naturalQuery,
-          numAccountId,
-          userEmail,
-          todayDate,
-          folderContext,
-          (msgIds: string[], phase: 'local' | 'imap') => {
-            // Guard: window may have been closed before results arrive.
-            if (!browserWindow || browserWindow.isDestroyed()) {
-              return;
-            }
-
-            // Enforce MAX_RESULTS cap — stop emitting once the total is reached.
-            // Still call onBatch (no-op here) but send nothing to the renderer.
-            if (emittedCount >= MAX_RESULTS) {
-              return;
-            }
-
-            // Trim the batch if it would push us over the cap.
-            const remaining = MAX_RESULTS - emittedCount;
-            const cappedMsgIds = msgIds.slice(0, remaining);
-            emittedCount += cappedMsgIds.length;
-
-            browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_BATCH, {
-              searchToken,
-              msgIds: cappedMsgIds,
-              phase,
-            });
-          }
-        )
-          .then((status) => {
-            if (!browserWindow || browserWindow.isDestroyed()) {
-              return;
-            }
-            log.info(`[AI] search: semantic search finished with status=${status}, totalResults=${emittedCount}`);
-            browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
-              searchToken,
-              status,
-              totalResults: emittedCount,
-            });
-          })
-          .catch((semanticErr) => {
-            log.warn('[AI] search: semantic search threw unexpectedly:', semanticErr);
-            if (!browserWindow || browserWindow.isDestroyed()) {
-              return;
-            }
-            browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
-              searchToken,
-              status: 'error',
-              totalResults: emittedCount,
-            });
-          });
-
-        return immediateResponse;
+      if (useMode === 'keyword' || !isSemanticPipelineReady) {
+        if (useMode === 'semantic' && !isSemanticPipelineReady) {
+          log.debug('[AI] search: semantic pipeline not ready, falling back to keyword');
+        }
+        const keywordService = KeywordSearchService.getInstance();
+        runStreamingSearch(keywordService, 'keyword', searchToken, browserWindow, naturalQuery, numAccountId, userEmail, todayDate, folderContext, MAX_RESULTS);
       } else {
-        log.debug('[AI] search: semantic pipeline not ready, using keyword search');
+        const semanticService = SemanticSearchService.getInstance();
+        runStreamingSearch(semanticService, 'semantic', searchToken, browserWindow, naturalQuery, numAccountId, userEmail, todayDate, folderContext, MAX_RESULTS);
       }
 
-      // Keyword path: only reached when semantic pipeline is not ready.
-      // Responses on this path do NOT include the `semanticResults` field — its absence signals
-      // to the renderer that the keyword pipeline was used (not semantic).
-      let intent: SearchIntent;
-      try {
-        intent = await ollama.extractSearchIntent(naturalQuery, userEmail, todayDate, folderContext);
-      } catch (intentError) {
-        log.warn('[AI] search intent extraction failed, falling back to raw query', intentError);
-        return ipcSuccess({ intent: null, queries: [naturalQuery] });
-      }
-
-      if (!isSearchIntent(intent)) {
-        log.warn('[AI] search intent validation failed, falling back to raw query');
-        return ipcSuccess({ intent: null, queries: [naturalQuery] });
-      }
-
-      const queries = SearchQueryGenerator.generate(intent);
-      if (!Array.isArray(queries) || queries.length === 0) {
-        log.warn('[AI] search query generation returned no queries, falling back to raw query');
-        return ipcSuccess({ intent: null, queries: [naturalQuery] });
-      }
-
-      log.info('[AI] search success (keyword path)', {
-        accountId,
-        queryCount: queries.length,
-        direction: intent.direction,
-        hasFolder: !!intent.folder,
-      });
-
-      return ipcSuccess({ intent, queries });
+      return ipcSuccess({ searchToken });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process natural language search';
       log.error('[AI] search failed:', err);

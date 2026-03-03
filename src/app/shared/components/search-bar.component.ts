@@ -19,20 +19,20 @@ export class SearchBarComponent implements OnInit, OnDestroy {
   readonly accountsStore = inject(AccountsStore);
   readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
-  readonly searchExecuted = output<{ queries: string[]; originalQuery: string; semanticResults?: string[]; streaming?: boolean }>();
+  readonly searchExecuted = output<{ queries: string[]; originalQuery: string; streaming?: boolean }>();
   readonly searchCleared = output<void>();
 
   readonly query = signal('');
-  readonly aiMode = signal(false);
+  readonly searchMode = signal<'keyword' | 'semantic'>('keyword');
   readonly focused = signal(false);
 
   private keydownHandler?: (e: KeyboardEvent) => void;
 
   constructor() {
-    // Default to AI search when Ollama is available; turn off when connection is down
+    // Auto-switch to semantic when Ollama connects; back to keyword when it disconnects
     effect(() => {
       const available = this.aiStore.isAvailable();
-      this.aiMode.set(available);
+      this.searchMode.set(available ? 'semantic' : 'keyword');
     });
   }
 
@@ -57,8 +57,8 @@ export class SearchBarComponent implements OnInit, OnDestroy {
     }
   }
 
-  toggleAiMode(): void {
-    this.aiMode.update(v => !v);
+  setSearchMode(mode: 'keyword' | 'semantic'): void {
+    this.searchMode.set(mode);
   }
 
   async onSearch(): Promise<void> {
@@ -73,49 +73,31 @@ export class SearchBarComponent implements OnInit, OnDestroy {
     }
 
     const originalQuery = q;
+    const accountId = this.accountsStore.activeAccountId();
+    if (!accountId) {
+      return;
+    }
 
-    if (this.aiMode() && this.aiStore.isAvailable()) {
-      // Use AI streaming semantic search
-      const accountId = this.accountsStore.activeAccountId();
-      if (!accountId) {
-        // Fallback: use original query if no active account
-        this.searchExecuted.emit({ queries: [q], originalQuery });
-        return;
-      }
+    const folderNames = Array.from(
+      new Set(
+        this.foldersStore
+          .folders()
+          .flatMap((folder) => [folder.gmailLabelId, folder.name])
+          .map((folderName) => folderName.trim())
+          .filter((folderName) => folderName.length > 0)
+      )
+    );
 
-      const folderNames = Array.from(
-        new Set(
-          this.foldersStore
-            .folders()
-            .flatMap((folder) => [folder.gmailLabelId, folder.name])
-            .map((folderName) => folderName.trim())
-            .filter((folderName) => folderName.length > 0)
-        )
-      );
+    // Activate search mode and clear thread list before starting the backend search.
+    // This ensures the first batch (e.g. local-only results) is never applied before the
+    // clear, which would then be wiped when onSearch runs after the IPC returns.
+    this.foldersStore.activateSearch(originalQuery, originalQuery);
+    this.emailsStore.clearThreadsForStreaming();
+    this.emailsStore.clearSelection();
 
-      // Activate search mode and clear thread list before starting the backend search.
-      // This ensures the first batch (e.g. local-only results) is never applied before the
-      // clear, which would then be wiped when onSearch runs after the IPC returns.
-      this.foldersStore.activateSearch(originalQuery, originalQuery);
-      this.emailsStore.clearThreadsForStreaming();
-      this.emailsStore.clearSelection();
-
-      const result = await this.aiStore.startStreamingSearch(String(accountId), q, folderNames);
-      if (result) {
-        // Streaming search started — emit event with streaming flag so mail-shell
-        // activates search mode immediately without waiting for results
-        this.searchExecuted.emit({
-          queries: [q],
-          originalQuery,
-          streaming: true,
-        });
-      } else {
-        // startStreamingSearch returned null (locked or IPC failed) — fallback to keyword search
-        this.searchExecuted.emit({ queries: [q], originalQuery });
-      }
-    } else {
-      // Direct keyword search — query and originalQuery are the same
-      this.searchExecuted.emit({ queries: [q], originalQuery });
+    const result = await this.aiStore.startStreamingSearch(String(accountId), q, folderNames, this.searchMode());
+    if (result) {
+      this.searchExecuted.emit({ queries: [q], originalQuery, streaming: true });
     }
   }
 
