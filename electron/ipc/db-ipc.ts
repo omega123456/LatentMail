@@ -3,6 +3,7 @@ import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import type { LogLevel } from '../services/logger-service';
+import { setLaunchAtLogin } from '../utils/launch-at-login';
 
 const log = LoggerService.getInstance();
 
@@ -31,6 +32,13 @@ export function registerDbIpcHandlers(): void {
       const db = DatabaseService.getInstance();
       for (const [key, value] of Object.entries(settings)) {
         db.setSetting(key, value);
+      }
+      if (settings['openAtLogin'] !== undefined) {
+        try {
+          setLaunchAtLogin(settings['openAtLogin'] === 'true');
+        } catch (launchErr) {
+          log.warn('Failed to apply openAtLogin to OS:', launchErr);
+        }
       }
       return ipcSuccess(null);
     } catch (err) {

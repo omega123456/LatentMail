@@ -22,6 +22,8 @@ export interface SettingsState {
   closeToTray: boolean;
   /** When true on Windows, the app starts minimized. */
   startMinimized: boolean;
+  /** When true, the app launches at OS login (macOS/Windows/Linux). */
+  openAtLogin: boolean;
   logLevel: LogLevel;
   /** Custom keybinding overrides: command ID → normalized key combo string. */
   customKeyBindings: Record<string, string>;
@@ -48,6 +50,7 @@ const initialState: SettingsState = {
   showAvatars: true,
   closeToTray: true,
   startMinimized: true,
+  openAtLogin: false,
   logLevel: 'error',
   zoomLevel: 100,
   customKeyBindings: {},
@@ -115,6 +118,7 @@ export const SettingsStore = signalStore(
             showAvatars: data['showAvatars'] !== undefined ? data['showAvatars'] === 'true' : store.showAvatars(),
             closeToTray: data['closeToTray'] !== undefined ? data['closeToTray'] === 'true' : store.closeToTray(),
             startMinimized: data['startMinimized'] !== undefined ? data['startMinimized'] === 'true' : store.startMinimized(),
+            openAtLogin: data['openAtLogin'] !== undefined ? data['openAtLogin'] === 'true' : store.openAtLogin(),
             logLevel,
             customKeyBindings,
             allowedImageSenders,

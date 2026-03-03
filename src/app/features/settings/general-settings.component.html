@@ -84,9 +84,16 @@
   </div>
 </section>
 
-@if (isWindows()) {
-  <section class="settings-section">
-    <h3>System</h3>
+<section class="settings-section">
+  <h3>System</h3>
+  <div class="toggle-row">
+    <mat-slide-toggle
+      [checked]="settingsStore.openAtLogin()"
+      (change)="settingsStore.toggleSetting('openAtLogin')"
+    >Start at login</mat-slide-toggle>
+  </div>
+  <p class="close-to-tray-hint close-to-tray-hint--spaced">When enabled, LatentMail starts automatically when you log in to your computer.</p>
+  @if (isWindows()) {
     <div class="toggle-row">
       <mat-slide-toggle
         [checked]="settingsStore.closeToTray()"
@@ -101,8 +108,8 @@
       >Start minimized</mat-slide-toggle>
     </div>
     <p class="close-to-tray-hint">When enabled, LatentMail starts hidden in the system tray (no window opens).</p>
-  </section>
-}
+  }
+</section>
 
 <section class="settings-section">
   <h3>Privacy</h3>

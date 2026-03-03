@@ -17,6 +17,7 @@ import { EmbeddingService } from './services/embedding-service';
 import { patchIpcMainForActivityTracking } from './ipc/ipc-activity-tracker';
 import { getAvatarCacheDir } from './services/avatar-cache-service';
 import { isMacOS, isWindows } from './utils/platform';
+import { setLaunchAtLogin } from './utils/launch-at-login';
 
 // Suppress unused import warning — Notification is used by SyncService via Electron global
 void Notification;
@@ -99,6 +100,15 @@ if (runApp) {
 
     // Register IPC handlers
     registerAllIpcHandlers();
+
+    // Apply openAtLogin from DB so the app starts at login when the user previously enabled it
+    try {
+      const dbService = DatabaseService.getInstance();
+      const openAtLogin = dbService.getSetting('openAtLogin') === 'true';
+      setLaunchAtLogin(openAtLogin);
+    } catch (err) {
+      logger.warn('Failed to apply openAtLogin from settings:', err);
+    }
 
     // Serve cached BIMI logos from disk (bimi-logo://hash.ext)
     protocol.handle('bimi-logo', (request) => {
