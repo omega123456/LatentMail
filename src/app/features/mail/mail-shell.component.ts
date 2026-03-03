@@ -122,6 +122,9 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         this.foldersStore.deactivateSearch();
         this.emailsStore.clearSearch();
       }
+      // Always clear streaming search state when loading a folder so "X results" header is hidden
+      // (covers both folder-list and label-manager paths; label-manager may have already deactivated search)
+      this.aiStore.clearStreamingSearch();
 
       this.emailsStore.clearSelection();
       this.foldersStore.setActiveFolder(normalizedFolderId);
@@ -453,6 +456,11 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     await this.foldersStore.loadFolders(accountId);
     this.foldersStore.setActiveFolder('INBOX');
     this.emailsStore.clearSelection();
+    if (this.foldersStore.searchActive()) {
+      this.foldersStore.deactivateSearch();
+      this.emailsStore.clearSearch();
+    }
+    this.aiStore.clearStreamingSearch();
     await this.emailsStore.loadThreads(accountId, 'INBOX');
     this.lastLoadedAccountId = accountId;
     this.lastLoadedFolderId = 'INBOX';
