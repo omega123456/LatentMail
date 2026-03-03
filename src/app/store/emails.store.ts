@@ -199,7 +199,7 @@ export const EmailsStore = signalStore(
     return {
       /** Load threads for a folder */
       async loadThreads(accountId: number, folderId: string): Promise<void> {
-        patchState(store, { loading: true, loadingPage: false, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false, multiSelectedThreadIds: [] });
+        patchState(store, { loading: true, loadingPage: false, fetchingMore: false, error: null, currentPage: 0, hasMore: true, dbExhausted: false, fetchError: null, serverCursorDate: null, hasLoadedMore: false, preserveListPosition: false, multiSelectedThreadIds: [] });
         try {
           const response = await electronService.fetchEmails(
             String(accountId),
@@ -1125,6 +1125,8 @@ export const EmailsStore = signalStore(
         const activeAccountId = accountsStore.activeAccountId();
         const activeFolderId = foldersStore.activeFolderId();
         if (activeAccountId == null || payload.accountId !== activeAccountId || activeFolderId !== payload.folderId) {
+          // Event was for a different account/folder (e.g. user switched before it arrived). Clear loading state so the banner does not stay stuck.
+          patchState(store, { fetchingMore: false, fetchError: null });
           return;
         }
         if (payload.error) {
