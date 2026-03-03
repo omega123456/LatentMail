@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, dialog, Notification, protocol } from 'electron';
+import { app, BrowserWindow, shell, dialog, Notification, protocol, powerMonitor } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { LoggerService } from './services/logger-service';
@@ -166,6 +166,15 @@ if (runApp) {
     } catch (err) {
       logger.warn('Failed to initialize OAuth refresh timers:', err);
     }
+
+    // Re-schedule refresh timers when system resumes from sleep (timers may have fired in a burst or not at all).
+    powerMonitor.on('resume', () => {
+      try {
+        OAuthService.getInstance().initializeRefreshTimers();
+      } catch (err) {
+        logger.warn('Failed to re-initialize OAuth refresh timers on resume:', err);
+      }
+    });
 
     // Start background sync via SyncQueueBridge.
     // This enqueues per-folder sync items into MailQueueService (concurrency-1 per account),

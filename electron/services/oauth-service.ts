@@ -16,6 +16,9 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo';
 const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 
+/** Max retries for invalid_grant before marking account as needing re-auth (transient after sleep). */
+const INVALID_GRANT_MAX_RETRIES = 2;
+
 // Required scopes for Gmail access + user profile
 const SCOPES = [
   'https://mail.google.com/',
@@ -319,8 +322,16 @@ export class OAuthService {
 
       return newTokens.accessToken;
     } catch (err: any) {
-      // If the refresh token is revoked, mark account as needing re-auth
+      // invalid_grant can be transient after sleep (clock skew, keychain). Retry before marking re-auth.
       if (err.message?.includes('invalid_grant')) {
+        if (retryCount < INVALID_GRANT_MAX_RETRIES) {
+          const delayMs = retryCount === 0 ? 15_000 : 30_000;
+          log.warn(
+            `Token refresh returned invalid_grant for account ${accountId}, retrying in ${delayMs / 1000}s (attempt ${retryCount + 1}/${INVALID_GRANT_MAX_RETRIES + 1})`
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return this.refreshAccessToken(accountId, retryCount + 1);
+        }
         log.error(`Refresh token revoked for account ${accountId} — needs re-authentication`);
         const db = DatabaseService.getInstance();
         db.setAccountNeedsReauth(Number(accountId));
