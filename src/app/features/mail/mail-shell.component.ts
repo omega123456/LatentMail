@@ -481,13 +481,11 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     if (event.streaming === true) {
       // Streaming semantic search path — results arrive via push events (ai:search:batch / ai:search:complete)
-      // Activate search mode immediately so the virtual search folder appears
+      // Search bar already activated search and cleared the thread list before invoking the backend,
+      // so the first batch (e.g. local-only) is never wiped. Do NOT clear here or we would race
+      // with onSearchBatch and wipe results that just arrived.
       this.foldersStore.activateSearch(event.originalQuery, event.originalQuery);
-
-      // Clear the thread list and reset search metadata so we start fresh for streaming results
-      this.emailsStore.clearThreadsForStreaming();
-      this.emailsStore.clearSelection();
-      // Do NOT call emailsStore.searchEmails() — results arrive via AiStore.onSearchBatch()
+      // Do NOT call clearThreadsForStreaming() or clearSelection() — search bar did that before startStreamingSearch
       return;
     }
 

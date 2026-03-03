@@ -290,7 +290,7 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
           const folderParam = nextParam();
           params[folderParam] = mappedFolder.toLowerCase();
           conditions.push(
-            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.email_id = e.id AND LOWER(ef_in.folder) = ${folderParam})`
+            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid AND LOWER(ef_in.folder) = ${folderParam})`
           );
           break;
         }
@@ -300,7 +300,7 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
 
         if (typeof accountId !== 'number' || !Number.isFinite(accountId)) {
           conditions.push(
-            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.email_id = e.id AND LOWER(ef_in.folder) = ${folderParam})`
+            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid AND LOWER(ef_in.folder) = ${folderParam})`
           );
           break;
         }
@@ -311,7 +311,7 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
           `${not}EXISTS (
             SELECT 1
             FROM email_folders ef_in
-            WHERE ef_in.email_id = e.id
+            WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid
               AND (
                 LOWER(ef_in.folder) = ${folderParam}
                 OR LOWER(ef_in.folder) IN (
@@ -346,7 +346,7 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
           `${not}EXISTS (
             SELECT 1
             FROM email_folders ef_label
-            WHERE ef_label.email_id = e.id
+            WHERE ef_label.account_id = e.account_id AND ef_label.x_gm_msgid = e.x_gm_msgid
               AND LOWER(ef_label.folder) IN (
                 SELECT LOWER(l.gmail_label_id)
                 FROM labels l

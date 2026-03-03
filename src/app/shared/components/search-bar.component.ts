@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AiStore } from '../../store/ai.store';
 import { AccountsStore } from '../../store/accounts.store';
+import { EmailsStore } from '../../store/emails.store';
 import { FoldersStore } from '../../store/folders.store';
 
 @Component({
@@ -16,6 +17,7 @@ import { FoldersStore } from '../../store/folders.store';
 export class SearchBarComponent implements OnInit, OnDestroy {
   readonly aiStore = inject(AiStore);
   readonly accountsStore = inject(AccountsStore);
+  readonly emailsStore = inject(EmailsStore);
   readonly foldersStore = inject(FoldersStore);
   readonly searchExecuted = output<{ queries: string[]; originalQuery: string; semanticResults?: string[]; streaming?: boolean }>();
   readonly searchCleared = output<void>();
@@ -90,6 +92,13 @@ export class SearchBarComponent implements OnInit, OnDestroy {
             .filter((folderName) => folderName.length > 0)
         )
       );
+
+      // Activate search mode and clear thread list before starting the backend search.
+      // This ensures the first batch (e.g. local-only results) is never applied before the
+      // clear, which would then be wiped when onSearch runs after the IPC returns.
+      this.foldersStore.activateSearch(originalQuery, originalQuery);
+      this.emailsStore.clearThreadsForStreaming();
+      this.emailsStore.clearSelection();
 
       const result = await this.aiStore.startStreamingSearch(String(accountId), q, folderNames);
       if (result) {

@@ -36,6 +36,7 @@ import {
   translateFiltersToGmailQuery,
   hasFilters,
 } from '../utils/search-filter-translator';
+import { parseGmailQuery } from '../utils/gmail-query-parser';
 
 const log = LoggerService.getInstance();
 
@@ -133,166 +134,7 @@ export class SemanticSearchService {
     log.info('[SemanticSearch] Extracted intent:', JSON.stringify(intent));
 
     if (intent.semanticQuery.trim() === '' && hasFilters(intent.filters)) {
-      const db = DatabaseService.getInstance();
-      const filterGmailQuery = translateFiltersToGmailQuery(intent.filters).trim();
-      const filterQueryWithExclusions = [filterGmailQuery, '-in:trash -in:spam -in:drafts']
-        .filter((part) => part.length > 0)
-        .join(' ');
-
-      log.info('[SemanticSearch] Empty semantic query with active filters — falling back to keyword search', {
-        gmailQuery: filterQueryWithExclusions,
-      });
-
-      const { parseGmailQuery } = require('../utils/gmail-query-parser') as {
-        parseGmailQuery: (
-          query: string,
-          options?: {
-            accountId?: number;
-            paramPrefix?: string;
-            trashFolderResolver?: (accountId?: number) => string;
-          }
-        ) => { whereClause: string; params: Record<string, unknown> };
-      };
-
-      const parsed = parseGmailQuery(filterQueryWithExclusions, {
-        accountId,
-        paramPrefix: 'fof_',
-        trashFolderResolver: (resolverAccountId?: number) => db.getTrashFolder(resolverAccountId ?? accountId),
-      });
-
-      const localParams = {
-        ':accountId': accountId,
-        ':limit': MAX_RESULTS,
-        ...parsed.params,
-      } as Record<string, number | string | null>;
-
-      const rawDb = db.getDatabase();
-      let localMsgIds: string[] = [];
-
-      try {
-        const localResult = rawDb.exec(
-          `SELECT DISTINCT e.x_gm_msgid
-           FROM emails e
-           WHERE e.account_id = :accountId
-             AND (${parsed.whereClause})
-           ORDER BY e.date DESC
-           LIMIT :limit`,
-          localParams
-        );
-
-        if (localResult.length > 0) {
-          localMsgIds = localResult[0].values
-            .map((row) => row[0] as string | null)
-            .filter((msgId): msgId is string => msgId !== null && msgId.length > 0);
-        }
-      } catch (localSearchError) {
-        log.warn('[SemanticSearch] Filter-only fallback: local DB search failed:', localSearchError);
-      }
-
-      const sortedLocalMsgIds = this.sortByDate(accountId, localMsgIds);
-      onBatch(sortedLocalMsgIds, 'local');
-
-      const crawlService = ImapCrawlService.getInstance();
-      const accountIdStr = String(accountId);
-      let connectionOpened = false;
-      let imapAvailable = false;
-
-      try {
-        if (!crawlService.isConnected(accountIdStr)) {
-          await crawlService.connect(accountIdStr);
-          connectionOpened = true;
-        }
-        imapAvailable = true;
-      } catch (connectError) {
-        log.warn('[SemanticSearch] Filter-only fallback: failed to open IMAP connection:', connectError);
-      }
-
-      const emittedMsgIds = new Set<string>(sortedLocalMsgIds);
-      let hadImapError = false;
-      let imapBatchMsgIds: string[] = [];
-
-      if (imapAvailable) {
-        try {
-          await crawlService.withMailboxLock(
-            accountIdStr,
-            ALL_MAIL_PATH,
-            async (client) => {
-              let survivingUids: number[];
-              try {
-                const searchResult = await client.search(
-                  { gmraw: filterQueryWithExclusions } as Record<string, unknown>,
-                  { uid: true }
-                ) as number[] | false;
-                survivingUids = searchResult ? Array.from(searchResult) : [];
-              } catch (searchError) {
-                log.warn('[SemanticSearch] Filter-only fallback: IMAP SEARCH failed:', searchError);
-                return;
-              }
-
-              log.info(`[SemanticSearch] Filter-only fallback: ${survivingUids.length} UIDs from IMAP SEARCH`);
-
-              if (survivingUids.length === 0) {
-                return;
-              }
-
-              const remaining = MAX_RESULTS - emittedMsgIds.size;
-              if (remaining <= 0) {
-                return;
-              }
-              const cappedUids = survivingUids.slice(0, remaining);
-
-              const fetchedEnvelopes = await this.fetchEnvelopesForUids(client, cappedUids);
-              const newImapMsgIds: string[] = [];
-
-              for (const envelope of fetchedEnvelopes) {
-                if (envelope.xGmMsgId && !emittedMsgIds.has(envelope.xGmMsgId)) {
-                  emittedMsgIds.add(envelope.xGmMsgId);
-                  newImapMsgIds.push(envelope.xGmMsgId);
-                  try {
-                    db.upsertEmailFromEnvelope(accountId, {
-                      xGmMsgId: envelope.xGmMsgId,
-                      xGmThrid: envelope.xGmThrid,
-                      messageId: envelope.messageId,
-                      subject: envelope.subject,
-                      fromAddress: envelope.fromAddress,
-                      fromName: envelope.fromName,
-                      toAddresses: envelope.toAddresses,
-                      date: envelope.date,
-                      isRead: envelope.isRead,
-                      isStarred: envelope.isStarred,
-                      isDraft: envelope.isDraft,
-                      size: envelope.size,
-                      rawLabels: envelope.rawLabels,
-                    });
-                  } catch (upsertError) {
-                    log.warn('[SemanticSearch] Filter-only fallback: failed to upsert envelope:', upsertError);
-                  }
-                }
-              }
-
-              imapBatchMsgIds = this.sortByDate(accountId, newImapMsgIds);
-            }
-          );
-        } catch (imapError) {
-          hadImapError = true;
-          log.warn('[SemanticSearch] Filter-only fallback: IMAP round failed:', imapError);
-        }
-      }
-
-      onBatch(imapBatchMsgIds, 'imap');
-
-      try {
-        if (connectionOpened) {
-          await crawlService.disconnect(accountIdStr);
-        }
-      } catch (disconnectError) {
-        log.warn('[SemanticSearch] Filter-only fallback: failed to disconnect:', disconnectError);
-      }
-
-      if (hadImapError) {
-        return 'partial';
-      }
-      return 'complete';
+      return this.runFilterOnlyFallback(accountId, intent.filters, onBatch);
     }
 
     // Step 2: Embed the semantic topic query (strip filter qualifiers, embed topic only).
@@ -445,10 +287,7 @@ export class SemanticSearchService {
 
     // --- Upfront Step 4: Build X-GM-RAW query string once ---
     const filterQuery = filters !== undefined ? translateFiltersToGmailQuery(filters).trim() : '';
-    const folderExclusionClause = '-in:trash -in:spam -in:drafts';
-    const gmRaw = [filterQuery, folderExclusionClause]
-      .filter((part) => part.length > 0)
-      .join(' ');
+    const gmRaw = this.buildGmRawWithExclusions(filterQuery);
 
     // --- Upfront Step 5: Open IMAP connection (only if missing candidates exist) ---
     const crawlService = ImapCrawlService.getInstance();
@@ -457,15 +296,11 @@ export class SemanticSearchService {
     let imapAvailable = false;
 
     if (missingCount > 0) {
-      try {
-        if (!crawlService.isConnected(accountIdStr)) {
-          await crawlService.connect(accountIdStr);
-          connectionOpened = true;
-        }
-        imapAvailable = true;
-      } catch (connectError) {
-        log.warn('[SemanticSearch] Failed to open crawl connection for IMAP resolution:', connectError);
-      }
+      const connection = await this.ensureCrawlConnection(accountIdStr, {
+        logContext: 'IMAP resolution',
+      });
+      imapAvailable = connection.imapAvailable;
+      connectionOpened = connection.connectionOpened;
     }
 
     // --- Emit local phase batch ---
@@ -558,30 +393,7 @@ export class SemanticSearchService {
                   if (envelope.xGmMsgId) {
                     confirmed.add(envelope.xGmMsgId);
                     imapConfirmedCount += 1;
-
-                    try {
-                      db.upsertEmailFromEnvelope(accountId, {
-                        xGmMsgId: envelope.xGmMsgId,
-                        xGmThrid: envelope.xGmThrid,
-                        messageId: envelope.messageId,
-                        subject: envelope.subject,
-                        fromAddress: envelope.fromAddress,
-                        fromName: envelope.fromName,
-                        toAddresses: envelope.toAddresses,
-                        date: envelope.date,
-                        isRead: envelope.isRead,
-                        isStarred: envelope.isStarred,
-                        isDraft: envelope.isDraft,
-                        size: envelope.size,
-                        rawLabels: envelope.rawLabels,
-                      });
-                    } catch (upsertError) {
-                      log.warn(
-                        `[SemanticSearch] Round ${roundCounter}: failed to upsert envelope ` +
-                        `for ${envelope.xGmMsgId}:`,
-                        upsertError
-                      );
-                    }
+                    this.upsertEnvelopeFromCrawl(accountId, envelope, `Round ${roundCounter}`);
                   }
                 }
               }
@@ -627,6 +439,210 @@ export class SemanticSearchService {
           log.warn('[SemanticSearch] filterAndResolve: failed to disconnect crawl connection:', disconnectError);
         }
       }
+    }
+  }
+
+  /**
+   * Run filter-only search when semantic query is empty but filters are present.
+   * Uses local DB + IMAP SEARCH with Gmail raw query, then emits batches via onBatch.
+   *
+   * @param accountId - Account to search
+   * @param filters - Structured filters from intent extraction
+   * @param onBatch - Callback for each batch (local then imap)
+   * @returns 'complete' if all phases succeeded, 'partial' if IMAP had errors
+   */
+  private async runFilterOnlyFallback(
+    accountId: number,
+    filters: SemanticSearchFilters,
+    onBatch: (msgIds: string[], phase: 'local' | 'imap') => void
+  ): Promise<'complete' | 'partial'> {
+    const filterGmailQuery = translateFiltersToGmailQuery(filters).trim();
+    const gmRaw = this.buildGmRawWithExclusions(filterGmailQuery);
+
+    log.info('[SemanticSearch] Empty semantic query with active filters — falling back to keyword search', {
+      gmailQuery: gmRaw,
+    });
+
+    const localMsgIds = this.runLocalSearchByGmailQuery(accountId, gmRaw, MAX_RESULTS);
+    const sortedLocalMsgIds = this.sortByDate(accountId, localMsgIds);
+    onBatch(sortedLocalMsgIds, 'local');
+
+    const crawlService = ImapCrawlService.getInstance();
+    const accountIdStr = String(accountId);
+    const { imapAvailable, connectionOpened } = await this.ensureCrawlConnection(accountIdStr, {
+      logContext: 'Filter-only fallback',
+    });
+
+    const emittedMsgIds = new Set<string>(sortedLocalMsgIds);
+    let hadImapError = false;
+    let imapBatchMsgIds: string[] = [];
+
+    if (imapAvailable) {
+      try {
+        await crawlService.withMailboxLock(
+          accountIdStr,
+          ALL_MAIL_PATH,
+          async (client) => {
+            let survivingUids: number[];
+            try {
+              const searchResult = await client.search(
+                { gmraw: gmRaw } as Record<string, unknown>,
+                { uid: true }
+              ) as number[] | false;
+              survivingUids = searchResult ? Array.from(searchResult) : [];
+            } catch (searchError) {
+              log.warn('[SemanticSearch] Filter-only fallback: IMAP SEARCH failed:', searchError);
+              return;
+            }
+
+            log.info(`[SemanticSearch] Filter-only fallback: ${survivingUids.length} UIDs from IMAP SEARCH`);
+
+            if (survivingUids.length === 0) {
+              return;
+            }
+
+            const remaining = MAX_RESULTS - emittedMsgIds.size;
+            if (remaining <= 0) {
+              return;
+            }
+            const cappedUids = survivingUids.slice(0, remaining);
+
+            const fetchedEnvelopes = await this.fetchEnvelopesForUids(client, cappedUids);
+            const newImapMsgIds: string[] = [];
+
+            for (const envelope of fetchedEnvelopes) {
+              if (envelope.xGmMsgId && !emittedMsgIds.has(envelope.xGmMsgId)) {
+                emittedMsgIds.add(envelope.xGmMsgId);
+                newImapMsgIds.push(envelope.xGmMsgId);
+                this.upsertEnvelopeFromCrawl(accountId, envelope, 'Filter-only fallback');
+              }
+            }
+
+            imapBatchMsgIds = this.sortByDate(accountId, newImapMsgIds);
+          }
+        );
+      } catch (imapError) {
+        hadImapError = true;
+        log.warn('[SemanticSearch] Filter-only fallback: IMAP round failed:', imapError);
+      }
+    }
+
+    onBatch(imapBatchMsgIds, 'imap');
+
+    try {
+      if (connectionOpened) {
+        await crawlService.disconnect(accountIdStr);
+      }
+    } catch (disconnectError) {
+      log.warn('[SemanticSearch] Filter-only fallback: failed to disconnect:', disconnectError);
+    }
+
+    return hadImapError ? 'partial' : 'complete';
+  }
+
+  /**
+   * Build Gmail raw query string with standard folder exclusions (trash, spam, drafts).
+   */
+  private buildGmRawWithExclusions(filterQuery: string): string {
+    const folderExclusionClause = '-in:trash -in:spam -in:drafts';
+    return [filterQuery, folderExclusionClause]
+      .filter((part) => part.length > 0)
+      .join(' ');
+  }
+
+  /**
+   * Ensure IMAP crawl connection is open for the account. Caller must disconnect in finally if connectionOpened.
+   */
+  private async ensureCrawlConnection(
+    accountIdStr: string,
+    options: { logContext: string }
+  ): Promise<{ imapAvailable: boolean; connectionOpened: boolean }> {
+    const crawlService = ImapCrawlService.getInstance();
+    let connectionOpened = false;
+    try {
+      if (!crawlService.isConnected(accountIdStr)) {
+        await crawlService.connect(accountIdStr);
+        connectionOpened = true;
+      }
+      return { imapAvailable: true, connectionOpened };
+    } catch (connectError) {
+      log.warn(`[SemanticSearch] ${options.logContext}: failed to open IMAP connection:`, connectError);
+      return { imapAvailable: false, connectionOpened: false };
+    }
+  }
+
+  /**
+   * Upsert a single envelope from IMAP crawl into the DB. Logs and swallows errors.
+   */
+  private upsertEnvelopeFromCrawl(
+    accountId: number,
+    envelope: CrawlFetchResult,
+    logContext: string
+  ): void {
+    const db = DatabaseService.getInstance();
+    try {
+      db.upsertEmailFromEnvelope(accountId, {
+        xGmMsgId: envelope.xGmMsgId,
+        xGmThrid: envelope.xGmThrid,
+        messageId: envelope.messageId,
+        subject: envelope.subject,
+        fromAddress: envelope.fromAddress,
+        fromName: envelope.fromName,
+        toAddresses: envelope.toAddresses,
+        date: envelope.date,
+        isRead: envelope.isRead,
+        isStarred: envelope.isStarred,
+        isDraft: envelope.isDraft,
+        size: envelope.size,
+        rawLabels: envelope.rawLabels,
+      });
+    } catch (upsertError) {
+      log.warn(`[SemanticSearch] ${logContext}: failed to upsert envelope:`, upsertError);
+    }
+  }
+
+  /**
+   * Run local DB search by Gmail query string; returns x_gm_msgid list ordered by date DESC.
+   */
+  private runLocalSearchByGmailQuery(
+    accountId: number,
+    gmailQuery: string,
+    limit: number
+  ): string[] {
+    const db = DatabaseService.getInstance();
+    const parsed = parseGmailQuery(gmailQuery, {
+      accountId,
+      paramPrefix: 'fof_',
+      trashFolderResolver: (resolverAccountId?: number) => db.getTrashFolder(resolverAccountId ?? accountId),
+    });
+
+    const localParams = {
+      ':accountId': accountId,
+      ':limit': limit,
+      ...parsed.params,
+    } as Record<string, number | string | null>;
+
+    const rawDb = db.getDatabase();
+    try {
+      const localResult = rawDb.exec(
+        `SELECT DISTINCT e.x_gm_msgid
+         FROM emails e
+         WHERE e.account_id = :accountId
+           AND (${parsed.whereClause})
+         ORDER BY e.date DESC
+         LIMIT :limit`,
+        localParams
+      );
+
+      if (localResult.length === 0) {
+        return [];
+      }
+      return localResult[0].values
+        .map((row) => row[0] as string | null)
+        .filter((msgId): msgId is string => msgId !== null && msgId.length > 0);
+    } catch (localSearchError) {
+      log.warn('[SemanticSearch] Filter-only fallback: local DB search failed:', localSearchError);
+      return [];
     }
   }
 

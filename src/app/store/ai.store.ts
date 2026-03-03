@@ -594,11 +594,19 @@ export const AiStore = signalStore(
        * Handle an incoming ai:search:batch push event.
        * Resolves the batch of msgIds to Thread objects and merges them into the
        * emails store. Silently ignores events for stale search tokens.
+       *
+       * If the batch arrives before the IPC response (token not set yet), we adopt
+       * the batch's token so we don't drop results due to IPC ordering.
        */
       async onSearchBatch(payload: SearchBatchPayload): Promise<void> {
-        // Ignore stale events from previous searches
-        if (payload.searchToken !== store.searchToken()) {
+        // Ignore only when we already have a different token (stale from a previous search)
+        const currentToken = store.searchToken();
+        if (currentToken != null && payload.searchToken !== currentToken) {
           return;
+        }
+        // Batch arrived before IPC response: adopt token so this and future batches match
+        if (currentToken == null && payload.searchToken) {
+          patchState(store, { searchToken: payload.searchToken });
         }
 
         // Empty batch (e.g. empty local phase) — nothing to merge
@@ -632,11 +640,16 @@ export const AiStore = signalStore(
        * Handle an incoming ai:search:complete push event.
        * Transitions searchStreamStatus to the final status reported by the backend.
        * Silently ignores events for stale search tokens.
+       *
+       * If complete arrives before we had a token (batch arrived after complete), adopt token.
        */
       onSearchComplete(payload: SearchCompletePayload): void {
-        // Ignore stale events from previous searches
-        if (payload.searchToken !== store.searchToken()) {
+        const currentToken = store.searchToken();
+        if (currentToken != null && payload.searchToken !== currentToken) {
           return;
+        }
+        if (currentToken == null && payload.searchToken) {
+          patchState(store, { searchToken: payload.searchToken });
         }
 
         patchState(store, { searchStreamStatus: payload.status });

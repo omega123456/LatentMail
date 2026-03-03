@@ -27,6 +27,7 @@ dist-electron
 config.json
 out
 .cursor
+.sisyphus
 
 # Visual Studio Code
 .vscode/*
