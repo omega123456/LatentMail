@@ -53,8 +53,8 @@
         @if (thread().messageCount > 1) {
           <span
             class="message-count"
-            [title]="thread().messageCount + ' messages in thread'"
-          >{{ thread().messageCount }}</span>
+            [title]="(thread().folder === 'search' ? 'At least ' + thread().messageCount + ' messages in thread' : thread().messageCount + ' messages in thread')"
+          >{{ thread().folder === 'search' ? thread().messageCount + '+' : thread().messageCount }}</span>
         }
       </div>
       <div class="email-top-right">
