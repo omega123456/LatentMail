@@ -1205,11 +1205,10 @@ export class DatabaseService {
 
   /**
    * Recomputes the stored thread metadata (message_count, subject, snippet, etc.).
-   * Note: threads.message_count stores the visible (non-trashed) email count.
-   * It is read by getThreadById and surfaced to the renderer in some paths;
-   * keeping it consistent with the list-view display count avoids stale data.
-   * The Trash folder list view always uses a live subquery that includes all emails,
-   * so it is unaffected by this stored value.
+   * threads.message_count stores the total email count (including trashed emails).
+   * List-view queries (getThreadsByFolder, etc.) override this with a live
+   * subquery that conditionally excludes trash depending on the viewed folder,
+   * so the stored value is only a fallback (e.g. getThreadById in queue ops).
    */
   recomputeThreadMetadata(accountId: number, xGmThrid: string): void {
     if (!this.db) throw new Error('Database not initialized');
@@ -1243,20 +1242,15 @@ export class DatabaseService {
         return;
       }
 
-      const trashFolder = this.getTrashFolder(accountId);
       const aggResult = this.db.exec(
         `SELECT
            COUNT(DISTINCT e.id) AS message_count,
-           MAX(date) AS last_message_date,
+           COALESCE(MAX(date), datetime('now')) AS last_message_date,
            MIN(CASE WHEN is_read = 0 THEN 0 ELSE 1 END) AS all_read,
            MAX(is_starred) AS any_starred
          FROM emails e
-         LEFT JOIN email_folders ef_trash ON ef_trash.account_id = e.account_id
-           AND ef_trash.x_gm_msgid = e.x_gm_msgid
-           AND ef_trash.folder = :trashFolder
-         WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid
-           AND ef_trash.x_gm_msgid IS NULL`,
-        { ':accountId': accountId, ':xGmThrid': xGmThrid, ':trashFolder': trashFolder }
+         WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid`,
+        { ':accountId': accountId, ':xGmThrid': xGmThrid }
       );
 
       if (aggResult.length === 0 || aggResult[0].values.length === 0) {
