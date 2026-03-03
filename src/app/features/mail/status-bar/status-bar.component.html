@@ -1,16 +1,32 @@
-<div class="status-bar">
+<div class="status-bar" [class.sync-paused]="syncPaused()">
   <div class="status-left">
+    @if (syncPaused()) {
+      <span
+        class="status-item sync-paused-badge"
+        title="Background sync is paused. Run 'latentmail-cli resume-sync' to resume."
+        aria-label="Sync paused — background sync and new mail notifications are disabled"
+        role="status"
+        aria-live="polite">
+        <span class="material-symbols-outlined">pause_circle</span>
+        Sync paused
+      </span>
+      <span class="status-separator">|</span>
+    }
     <button
       class="status-item sync-status"
       [class.syncing]="emailsStore.syncing()"
-      [disabled]="emailsStore.syncing()"
-      [title]="emailsStore.syncing() ? 'Syncing...' : fullTimestamp() + ' — click to refresh'"
-      [attr.aria-label]="emailsStore.syncing() ? 'Syncing' : 'Refresh — last synced ' + relativeTime()"
+      [class.paused]="syncPaused()"
+      [disabled]="emailsStore.syncing() || syncPaused()"
+      [title]="syncPaused() ? 'Sync is paused — run latentmail-cli resume-sync to re-enable' : (emailsStore.syncing() ? 'Syncing...' : fullTimestamp() + ' — click to refresh')"
+      [attr.aria-label]="syncPaused() ? 'Sync paused' : (emailsStore.syncing() ? 'Syncing' : 'Refresh — last synced ' + relativeTime())"
       [attr.aria-busy]="emailsStore.syncing()"
       (click)="triggerManualSync()">
       @if (emailsStore.syncing()) {
         <span class="material-symbols-outlined spinning">sync</span>
         Syncing{{ emailsStore.syncProgress() > 0 ? ' ' + emailsStore.syncProgress() + '%' : '...' }}
+      } @else if (syncPaused()) {
+        <span class="material-symbols-outlined">schedule</span>
+        Last synced: {{ relativeTime() }}
       } @else {
         <span class="material-symbols-outlined">schedule</span>
         Last synced: {{ relativeTime() }}

@@ -1,0 +1,5 @@
+#!/bin/sh
+# LatentMail CLI wrapper — macOS/Linux production
+# Placed alongside the LatentMail binary in the app bundle (Contents/MacOS/).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ELECTRON_RUN_AS_NODE=1 exec "${SCRIPT_DIR}/LatentMail" "${SCRIPT_DIR}/../Resources/app.asar/dist-electron/cli/cli-client.js" "$@"

@@ -31,6 +31,9 @@ export class SyncQueueBridge {
   /** Background sync timer handle. */
   private syncInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Whether background sync is paused via CLI command. */
+  private paused = false;
+
   private constructor() {}
 
   static getInstance(): SyncQueueBridge {
@@ -90,6 +93,54 @@ export class SyncQueueBridge {
       this.syncInterval = null;
       log.info('[SyncQueueBridge] Background sync stopped');
     }
+  }
+
+  /**
+   * Pause background sync and all IMAP IDLE connections.
+   * Sets global reconnect suppression FIRST to prevent reconnects during async teardown.
+   * Idempotent: calling when already paused is a no-op.
+   */
+  pause(): void {
+    if (this.paused) {
+      log.info('[SyncQueueBridge] pause() called but already paused — no-op');
+      return;
+    }
+    this.paused = true;
+    this.emitPausedStateChanged(true);
+    // Set global IDLE reconnect suppression BEFORE teardown to prevent reconnect
+    // timers that fire during async stopAllIdle() from scheduling new connections.
+    SyncService.getInstance().setGlobalIdleSuppression(true);
+    // Stop the background timer
+    this.stop();
+    // Tear down all IDLE connections (async — in-flight reconnects are suppressed above)
+    SyncService.getInstance().stopAllIdle().catch((err) => {
+      log.warn('[SyncQueueBridge] pause(): stopAllIdle failed:', err);
+    });
+    log.info('[SyncQueueBridge] Background sync paused');
+  }
+
+  /**
+   * Resume background sync and restart IMAP IDLE connections.
+   * Idempotent: calling when not paused is a no-op.
+   */
+  resume(): void {
+    if (!this.paused) {
+      log.info('[SyncQueueBridge] resume() called but not paused — no-op');
+      return;
+    }
+    this.paused = false;
+    this.emitPausedStateChanged(false);
+    SyncService.getInstance().setGlobalIdleSuppression(false);
+    // start() triggers an immediate sync tick and restarts IDLE for all accounts.
+    this.start();
+    log.info('[SyncQueueBridge] Background sync resumed');
+  }
+
+  /**
+   * Returns whether background sync is currently paused.
+   */
+  isPaused(): boolean {
+    return this.paused;
   }
 
   // -----------------------------------------------------------------------
@@ -171,6 +222,10 @@ export class SyncQueueBridge {
    * @param accountId  Account ID as string (matching the IDLE connection's accountId format).
    */
   enqueueInboxSync(accountId: string): void {
+    if (this.paused) {
+      log.debug('[SyncQueueBridge] enqueueInboxSync: skipped — sync is paused');
+      return;
+    }
     const numAccountId = Number(accountId);
     const queue = MailQueueService.getInstance();
     const db = DatabaseService.getInstance();
@@ -290,6 +345,23 @@ export class SyncQueueBridge {
       return Math.max(60_000, parsed * 60_000);
     }
     return Math.max(60_000, parsed);
+  }
+
+  /**
+   * Emit SYNC_PAUSED_STATE_CHANGED event to all renderer windows.
+   * Called immediately after the paused flag changes so the UI indicator updates instantly.
+   */
+  private emitPausedStateChanged(paused: boolean): void {
+    try {
+      const windows = BrowserWindow.getAllWindows();
+      for (const win of windows) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC_EVENTS.SYNC_PAUSED_STATE_CHANGED, { paused });
+        }
+      }
+    } catch {
+      // Window may not exist yet during startup
+    }
   }
 
   /**

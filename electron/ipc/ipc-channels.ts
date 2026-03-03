@@ -89,6 +89,9 @@ export const IPC_CHANNELS = {
   // BIMI sender avatar (logo from domain BIMI DNS record)
   BIMI_GET_LOGO: 'bimi:get-logo',
 
+  // Sync pause/resume state
+  SYNC_GET_PAUSED: 'sync:get-paused',
+
   // Embedding / semantic search operations
   AI_SET_EMBEDDING_MODEL: 'ai:set-embedding-model',
   AI_GET_EMBEDDING_STATUS: 'ai:get-embedding-status',
@@ -125,6 +128,9 @@ export const IPC_EVENTS = {
   // AI semantic search streaming events (main → renderer)
   AI_SEARCH_BATCH: 'ai:search:batch',
   AI_SEARCH_COMPLETE: 'ai:search:complete',
+
+  // Sync pause state change (fired when pause-sync / resume-sync CLI command runs)
+  SYNC_PAUSED_STATE_CHANGED: 'sync:paused-state-changed',
 } as const;
 
 // IPC response envelope

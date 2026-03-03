@@ -12,6 +12,7 @@ import { ImapService } from './services/imap-service';
 import { MailQueueService } from './services/mail-queue-service';
 import { NativeDropService } from './services/native-drop-service';
 import { TrayService } from './services/tray-service';
+import { CliServer } from './cli/cli-server';
 import { VectorDbService } from './services/vector-db-service';
 import { EmbeddingService } from './services/embedding-service';
 import { patchIpcMainForActivityTracking } from './ipc/ipc-activity-tracker';
@@ -41,6 +42,7 @@ if (isDev) {
 const logger = LoggerService.getInstance();
 
 let mainWindow: BrowserWindow | null = null;
+let cliServer: CliServer | null = null;
 
 // Single instance lock (production only; in dev allow running alongside packaged app)
 let runApp = true;
@@ -175,6 +177,14 @@ if (runApp) {
         logger.warn('Failed to re-initialize OAuth refresh timers on resume:', err);
       }
     });
+
+    // Start CLI pipe server so users can control sync from the terminal.
+    try {
+      cliServer = new CliServer(isDev);
+      await cliServer.start();
+    } catch (err) {
+      logger.warn('Failed to start CliServer:', err);
+    }
 
     // Start background sync via SyncQueueBridge.
     // This enqueues per-folder sync items into MailQueueService (concurrency-1 per account),
@@ -409,6 +419,7 @@ app.on('before-quit', async (event) => {
 
   // Stop background sync, IDLE, and disconnect IMAP
   try {
+    cliServer?.stop();
     SyncQueueBridge.getInstance().stop();
     SyncService.getInstance().stopAllIdle().catch(() => {});
     MailQueueService.getInstance().cancelAllRetries();

@@ -153,6 +153,13 @@ export class SyncService {
    */
   private idleNewMailCallbacks: Map<string, () => void> = new Map();
 
+  /**
+   * Global flag that suppresses ALL IDLE reconnect scheduling regardless of per-account state.
+   * Set by SyncQueueBridge.pause() / resume() via setGlobalIdleSuppression().
+   * Independent of the per-account idleSuppressReconnect Set.
+   */
+  private globalIdleSuppression = false;
+
   private constructor() {}
 
   static getInstance(): SyncService {
@@ -160,6 +167,17 @@ export class SyncService {
       SyncService.instance = new SyncService();
     }
     return SyncService.instance;
+  }
+
+  /**
+   * Set or clear the global IDLE reconnect suppression flag.
+   * When set to true, scheduleIdleReconnect() will skip scheduling new timers.
+   * Called by SyncQueueBridge.pause() and SyncQueueBridge.resume().
+   * Does NOT interact with the per-account idleSuppressReconnect Set.
+   */
+  setGlobalIdleSuppression(suppress: boolean): void {
+    this.globalIdleSuppression = suppress;
+    log.info(`[SyncService] Global IDLE reconnect suppression: ${suppress}`);
   }
 
   // -----------------------------------------------------------------------
@@ -967,6 +985,12 @@ export class SyncService {
    * Schedule an IDLE reconnection with exponential backoff.
    */
   private scheduleIdleReconnect(accountId: string): void {
+    // If global pause is active, do not schedule any reconnect timers.
+    if (this.globalIdleSuppression) {
+      log.info(`[IDLE] scheduleIdleReconnect: skipped for account ${accountId} — global reconnect suppression is active`);
+      return;
+    }
+
     // Clear any existing reconnect timer
     const existingTimer = this.idleReconnectTimers.get(accountId);
     if (existingTimer) {

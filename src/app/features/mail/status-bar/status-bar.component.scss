@@ -11,6 +11,15 @@
   user-select: none;
   flex-shrink: 0;
   width: 100%;
+  transition: background-color 0.2s ease;
+
+  // When sync is paused, tint the entire status bar amber so the state is unmissable.
+  // Fallback for environments where color-mix() is unavailable (Electron < 111).
+  &.sync-paused {
+    background-color: rgba(245, 158, 11, 0.18); // fallback: plain amber tint
+    background-color: color-mix(in srgb, var(--color-surface-variant) 70%, #F59E0B 30%);
+    border-top-color: #D97706;
+  }
 }
 
 .status-left, .status-right {
@@ -147,4 +156,25 @@
     flex-shrink: 0;
     margin-left: 1px;
   }
+}
+
+// Sync paused badge — prominent amber pill shown when CLI pause-sync is active
+.sync-paused-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #92400E;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+
+  .material-symbols-outlined {
+    font-size: 14px;
+    color: #D97706;
+  }
+}
+
+// Sync button dimmed appearance when paused
+.sync-status.paused {
+  opacity: 0.55;
+  cursor: default;
 }

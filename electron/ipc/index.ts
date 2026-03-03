@@ -12,6 +12,7 @@ import { registerFilterIpcHandlers } from './filter-ipc';
 import { registerLoggerIpcHandlers } from './logger-ipc';
 import { registerAttachmentIpcHandlers } from './attachment-ipc';
 import { registerBimiIpcHandlers } from './bimi-ipc';
+import { registerSyncIpcHandlers } from './sync-ipc';
 
 export function registerAllIpcHandlers(): void {
   log.info('Registering IPC handlers...');
@@ -27,6 +28,7 @@ export function registerAllIpcHandlers(): void {
   registerLoggerIpcHandlers();
   registerAttachmentIpcHandlers();
   registerBimiIpcHandlers();
+  registerSyncIpcHandlers();
 
   log.info('All IPC handlers registered');
 }

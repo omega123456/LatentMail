@@ -187,6 +187,11 @@ const electronAPI = {
     getLogo: (email: string) => ipcRenderer.invoke('bimi:get-logo', email) as Promise<IpcResponse>,
   },
 
+  // Sync pause state (query current state on load; push events arrive via on('sync:paused-state-changed'))
+  sync: {
+    getPaused: () => ipcRenderer.invoke('sync:get-paused') as Promise<IpcResponse>,
+  },
+
   // Event listeners (for push events from main process)
   on: (channel: string, callback: IpcCallback) => {
     const validChannels = [
@@ -214,6 +219,8 @@ const electronAPI = {
       // AI semantic search streaming events
       'ai:search:batch',
       'ai:search:complete',
+      // Sync pause state changes (CLI pause-sync / resume-sync)
+      'sync:paused-state-changed',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, callback);

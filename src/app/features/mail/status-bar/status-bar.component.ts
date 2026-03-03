@@ -27,8 +27,11 @@ export class StatusBarComponent implements OnInit, OnDestroy {
 
   /** Counter that increments every 30s to trigger relative time recalculation */
   readonly tick = signal(0);
+  /** True when background sync is paused via CLI command. */
+  readonly syncPaused = signal(false);
   private tickInterval?: ReturnType<typeof setInterval>;
   private aiStatusSub?: Subscription;
+  private syncPausedSub?: Subscription;
 
   /** Computed so the value is stable during change detection and only updates when deps change. */
   readonly relativeTime = computed(() => {
@@ -70,6 +73,22 @@ export class StatusBarComponent implements OnInit, OnDestroy {
       .onEvent<{ connected: boolean; url: string; currentModel: string }>('ai:status')
       .subscribe(status => {
         this.aiStore.updateStatus(status);
+      });
+
+    // Hydrate initial sync-paused state from main process
+    this.electronService.getSyncPaused().then(response => {
+      if (response.success && response.data) {
+        this.syncPaused.set(response.data.paused);
+      }
+    }).catch(() => {
+      // Not critical — indicator defaults to unpaused
+    });
+
+    // Subscribe to push events when pause state changes (via CLI pause-sync / resume-sync)
+    this.syncPausedSub = this.electronService
+      .onEvent<{ paused: boolean }>('sync:paused-state-changed')
+      .subscribe(payload => {
+        this.syncPaused.set(payload.paused);
       });
   }
 
@@ -144,6 +163,7 @@ export class StatusBarComponent implements OnInit, OnDestroy {
       clearInterval(this.tickInterval);
     }
     this.aiStatusSub?.unsubscribe();
+    this.syncPausedSub?.unsubscribe();
   }
 
   fullTimestamp(): string {

@@ -63,7 +63,10 @@
       "target": [
         "nsis"
       ],
-      "executableName": "LatentMail"
+      "executableName": "LatentMail",
+      "extraFiles": [
+        { "from": "latentmail-cli.cmd", "to": "latentmail-cli.cmd" }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -73,7 +76,10 @@
       "target": [
         "dmg"
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extraFiles": [
+        { "from": "latentmail-cli", "to": "MacOS/latentmail-cli" }
+      ]
     },
     "dmg": {}
   },

@@ -198,6 +198,9 @@ interface ElectronAPI {
   bimi: {
     getLogo: (email: string) => Promise<IpcResponse<{ logoUrl: string | null }>>;
   };
+  sync: {
+    getPaused: () => Promise<IpcResponse<{ paused: boolean }>>;
+  };
   logger: {
     getRecentEntries: () => Promise<IpcResponse>;
   };
@@ -501,6 +504,13 @@ export class ElectronService {
     return this.invoke(() => this.api!.bimi.getLogo(email)) as Promise<
       IpcResponse<{ logoUrl: string | null }>
     >;
+  }
+
+  // ---- Sync state operations ----
+
+  /** Query whether background sync is currently paused (used for initial UI hydration). */
+  async getSyncPaused(): Promise<IpcResponse<{ paused: boolean }>> {
+    return this.invoke(() => this.api!.sync.getPaused()) as Promise<IpcResponse<{ paused: boolean }>>;
   }
 
   // ---- Logger operations ----
