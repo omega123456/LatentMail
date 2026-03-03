@@ -656,7 +656,7 @@ export function registerAiIpcHandlers(): void {
           // Outside a build: use the vector_indexed_emails table for the indexed count.
           // No total is available without an IMAP SEARCH ALL — report 0 to signal "unknown".
           // Only load accounts in the non-building path to avoid unnecessary DB reads during builds.
-          const accounts = db.getAccounts().filter((account) => account.is_active);
+          const accounts = db.getAccounts().filter((account) => account.isActive);
           for (const account of accounts) {
             indexed += db.countVectorIndexedEmails(account.id);
           }

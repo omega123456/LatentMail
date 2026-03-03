@@ -124,7 +124,7 @@ All main-renderer communication flows through the IPC bridge defined in `electro
 - `bimi-ipc.ts` - BIMI sender logo (domain DNS)
 - `system-ipc.ts` - Window controls (minimize, maximize, close), platform, zoom
 
-### Database Schema (SQLite via sql.js)
+### Database Schema (SQLite via better-sqlite3)
 
 **Migrations**: Schema is managed by **Umzug** (file-based migrations). Migrations live in `electron/database/migrations/` (e.g. `001_initial_schema.ts`, `002_remove_gmail_parent_label.ts`); executed migrations are recorded in the `schema_migrations` table. On app start, `DatabaseService.initialize()` runs `umzug.up()`. To add schema changes: add a new migration file with `up` (and optionally `down`) receiving `{ context }: { context: MigrationContext }` — the `MigrationContext` type is exported from `001_initial_schema.ts` and has `db` and `databaseService`.
 
@@ -232,7 +232,7 @@ The app uses a **persistent, resumable queue** for all mail operations (`MailQue
 ### Database Schema Migrations (Umzug)
 
 1. Add a new file under `electron/database/migrations/` (e.g. `008_add_foo.ts`) with named exports `up` and optionally `down`.
-2. Migration functions receive `{ context }: { context: MigrationContext }` (import `MigrationContext` from `./001_initial_schema`). Use `context.db.run()` or `context.db.exec()` for SQL; use **named placeholders** (`:name`) and objects for parameters.
+2. Migration functions receive `{ context }: { context: MigrationContext }` (import `MigrationContext` from `./001_initial_schema`). Use `context.db.exec()` for DDL (no parameters); use `context.db.prepare(sql).run(params)` or `.all(params)` for parameterized queries.
 3. Run `yarn build:electron` so the new migration is compiled to `dist-electron/database/migrations/*.js`. Migrations run automatically on app start via `umzug.up()` in `DatabaseService.initialize()`.
 4. The `schema_migrations` table records executed migration names; no manual version bump needed.
 
@@ -297,8 +297,8 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 ### Database
 
-- Use parameterized queries for all user input (`db.run()` / `db.exec()` with params)
-- **Use named placeholders only** — never positional `?`. Use `:name` in SQL and pass an object: `{ ':accountId': id, ':folder': folder }`. Keys must include the colon (per sql.js). This keeps queries readable and avoids parameter-order bugs.
+- Use parameterized queries for all user input (`db.prepare(sql).run(params)` / `db.prepare(sql).all(params)`)
+- **Use named placeholders only** — never positional `?`. Use `:name` in SQL and pass an object: `{ accountId: id, folder: folder }`. Keys must NOT include the colon (per better-sqlite3). This keeps queries readable and avoids parameter-order bugs.
 - **Trash folder**: Never hardcode `'[Gmail]/Trash'` or any trash path in SQL or application code. Always resolve the trash folder via `DatabaseService.getTrashFolder(accountId)` and pass it as a bound parameter (e.g. `:trashFolder`). This supports accounts that use `[Gmail]/Bin` or other locale- or provider-specific trash folders; inline `labels` joins for `special_use = '\Trash'` can fail and fall back incorrectly.
 - Wrap multi-statement transactions in `db.transaction(() => { ... })` (or `BEGIN`/`COMMIT`/`ROLLBACK` where used)
 - Always handle foreign key constraints (CASCADE deletes)

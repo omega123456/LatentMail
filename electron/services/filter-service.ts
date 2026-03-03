@@ -461,10 +461,9 @@ export class FilterService {
     const internalId = db.getThreadInternalId(accountId, xGmThrid);
     if (internalId != null) {
       const rawDb = db.getDatabase();
-      rawDb.run(
-        'UPDATE threads SET is_read = :isRead, updated_at = datetime(\'now\') WHERE id = :id',
-        { ':isRead': allRead ? 1 : 0, ':id': internalId }
-      );
+      rawDb.prepare(
+        'UPDATE threads SET is_read = :isRead, updated_at = datetime(\'now\') WHERE id = :id'
+      ).run({ isRead: allRead ? 1 : 0, id: internalId });
     }
   }
 

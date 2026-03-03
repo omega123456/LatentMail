@@ -1,14 +1,14 @@
-import type { Database } from 'sql.js';
+import type BetterSqlite3 from 'better-sqlite3';
 import { getInitialSchemaForMigrations } from '../schema';
 
 export interface MigrationContext {
-  db: Database;
+  db: BetterSqlite3.Database;
   databaseService: unknown;
 }
 
 export async function up({ context }: { context: MigrationContext }): Promise<void> {
-  const sql = getInitialSchemaForMigrations();
-  context.db.exec(sql);
+  const schema = getInitialSchemaForMigrations();
+  context.db.exec(schema);
 }
 
 export async function down(): Promise<void> {

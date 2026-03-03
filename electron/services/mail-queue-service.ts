@@ -786,7 +786,7 @@ export class MailQueueService {
 
     // Build MIME
     const mimeBuffer = await buildDraftMime({
-      from: `${account.display_name} <${account.email}>`,
+      from: `${account.displayName} <${account.email}>`,
       to: payload.to,
       cc: payload.cc || undefined,
       bcc: payload.bcc || undefined,
@@ -842,7 +842,7 @@ export class MailQueueService {
         folder: GMAIL_DRAFTS_FOLDER,
         folderUid: imapUid,
         fromAddress: account.email,
-        fromName: account.display_name,
+        fromName: account.displayName,
         toAddresses: payload.to || '',
         ccAddresses: payload.cc || '',
         bccAddresses: payload.bcc || '',
@@ -976,7 +976,7 @@ export class MailQueueService {
 
     // Build MIME
     const mimeBuffer = await buildDraftMime({
-      from: `${account.display_name} <${account.email}>`,
+      from: `${account.displayName} <${account.email}>`,
       to: payload.to,
       cc: payload.cc || undefined,
       bcc: payload.bcc || undefined,
@@ -1038,7 +1038,7 @@ export class MailQueueService {
         folder: GMAIL_DRAFTS_FOLDER,
         folderUid: newUid,
         fromAddress: account.email,
-        fromName: account.display_name,
+        fromName: account.displayName,
         toAddresses: payload.to || '',
         ccAddresses: payload.cc || '',
         bccAddresses: payload.bcc || '',

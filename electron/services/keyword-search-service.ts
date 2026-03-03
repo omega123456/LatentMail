@@ -155,8 +155,7 @@ export class KeywordSearchService extends BaseSearchService {
 
         // Upsert all fetched emails and threads in a single transaction.
         const rawDb = db.getDatabase();
-        rawDb.run('BEGIN');
-        try {
+        rawDb.transaction(() => {
           for (const email of emails) {
             db.upsertEmail({
               accountId: numAccountId,
@@ -219,12 +218,7 @@ export class KeywordSearchService extends BaseSearchService {
               });
             }
           }
-
-          rawDb.run('COMMIT');
-        } catch (upsertError) {
-          rawDb.run('ROLLBACK');
-          throw upsertError;
-        }
+        })();
 
         // Collect only the net-new message IDs (not already emitted in the local phase).
         const localMsgIdSet = new Set(localMsgIds);

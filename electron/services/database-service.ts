@@ -1,10 +1,10 @@
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+import type BetterSqlite3 from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import { Umzug } from 'umzug';
 import { LoggerService } from './logger-service';
-import { createSqlJsStorage } from '../database/umzug-storage';
+import { createBetterSqlite3Storage } from '../database/umzug-storage';
 
 const log = LoggerService.getInstance();
 import type { UpsertEmailInput, UpsertThreadInput, UpsertFolderStateInput, FolderStateRecord, AttachmentRecord } from '../database/models';
@@ -14,9 +14,8 @@ import type { SemanticSearchFilters } from '../utils/search-filter-translator';
 
 export class DatabaseService {
   private static instance: DatabaseService;
-  private db: SqlJsDatabase | null = null;
+  private db: BetterSqlite3.Database | null = null;
   private dbPath: string = '';
-  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {}
 
@@ -40,52 +39,16 @@ export class DatabaseService {
     log.info(`Initializing database at: ${this.dbPath}`);
 
     const dir = path.dirname(this.dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    fs.mkdirSync(dir, { recursive: true });
 
-    const wasmPath = path.join(
-      app.getAppPath(),
-      'node_modules',
-      'sql.js',
-      'dist',
-      'sql-wasm.wasm'
-    );
-    const SQL = await initSqlJs({ locateFile: () => wasmPath });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3');
 
-    if (fs.existsSync(this.dbPath)) {
-      const fileBuffer = fs.readFileSync(this.dbPath);
-      this.db = new SQL.Database(fileBuffer);
-      log.info('Loaded existing database');
+    this.db = new BetterSqlite3(this.dbPath);
 
-      let hasSchemaMigrations = false;
-      let hasSchemaVersion = false;
-      try {
-        this.db.exec('SELECT name FROM schema_migrations LIMIT 1');
-        hasSchemaMigrations = true;
-      } catch {
-        // schema_migrations table does not exist
-      }
-      try {
-        this.db.exec('SELECT version FROM schema_version LIMIT 1');
-        hasSchemaVersion = true;
-      } catch {
-        // schema_version table does not exist
-      }
-      if (hasSchemaVersion && !hasSchemaMigrations) {
-        log.info('Database reset: old schema_version-based DB detected; removing and starting fresh with Umzug migrations');
-        this.db.close();
-        this.db = null;
-        fs.unlinkSync(this.dbPath);
-        this.db = new SQL.Database();
-        log.info('Created fresh database');
-      }
-    } else {
-      this.db = new SQL.Database();
-      log.info('Created new database');
-    }
-
-    this.db.run('PRAGMA foreign_keys = ON');
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('foreign_keys = ON');
 
     const migrationsDir = path.join(__dirname, '..', 'database', 'migrations');
     const umzug = new Umzug({
@@ -93,7 +56,7 @@ export class DatabaseService {
         glob: ['*.js', { cwd: migrationsDir }],
       },
       context: { db: this.db, databaseService: this },
-      storage: createSqlJsStorage(this.db),
+      storage: createBetterSqlite3Storage(this.db),
       logger: log,
     });
 
@@ -103,29 +66,10 @@ export class DatabaseService {
     } else {
       log.info('[MIGRATIONS] No pending migrations');
     }
-    this.saveToDisk();
     log.info('Database schema initialized (Umzug)');
   }
 
-  /** Persist the in-memory database to disk */
-  saveToDisk(): void {
-    if (!this.db) return;
-    try {
-      const data = this.db.export();
-      const buffer = Buffer.from(data);
-      fs.writeFileSync(this.dbPath, buffer);
-    } catch (err) {
-      log.error('Failed to save database to disk:', err);
-    }
-  }
-
-  /** Schedule a debounced save (avoids writing on every single mutation) */
-  private scheduleSave(): void {
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.saveToDisk(), 1000);
-  }
-
-  getDatabase(): SqlJsDatabase {
+  getDatabase(): BetterSqlite3.Database {
     if (!this.db) throw new Error('Database not initialized');
     return this.db;
   }
@@ -134,134 +78,104 @@ export class DatabaseService {
 
   getSetting(key: string): string | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec('SELECT value FROM settings WHERE key = :key', { ':key': key });
-    if (result.length > 0 && result[0].values.length > 0) {
-      return result[0].values[0][0] as string;
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = :key').get({ key }) as { value: string } | undefined;
+    if (row === undefined) {
+      return null;
     }
-    return null;
+    return row.value;
   }
 
   setSetting(key: string, value: string, scope: string = 'global'): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'INSERT INTO settings (key, value, scope) VALUES (:key, :value, :scope) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      { ':key': key, ':value': value, ':scope': scope }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'INSERT INTO settings (key, value, scope) VALUES (:key, :value, :scope) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    ).run({ key, value, scope });
   }
 
   getAllSettings(): Record<string, string> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec('SELECT key, value FROM settings');
+    const rows = this.db.prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
     const settings: Record<string, string> = {};
-    if (result.length > 0) {
-      for (const row of result[0].values) {
-        settings[row[0] as string] = row[1] as string;
-      }
+    for (const row of rows) {
+      settings[row.key] = row.value;
     }
     return settings;
   }
 
   // ---- Account operations ----
 
-  getAccounts(): Array<{ id: number; email: string; display_name: string; avatar_url: string | null; is_active: number; needs_reauth: number }> {
+  getAccounts(): Array<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean }> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE is_active = 1');
-    if (result.length === 0) return [];
-    return result[0].values.map((row: (string | number | Uint8Array | null)[]) => ({
-      id: row[0] as number,
-      email: row[1] as string,
-      display_name: row[2] as string,
-      avatar_url: row[3] as string | null,
-      is_active: row[4] as number,
-      needs_reauth: (row[5] as number) || 0,
-    }));
+    const rows = this.db.prepare('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE is_active = 1').all();
+    return rows.map((row) => this.mapRow<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean }>(row as Record<string, unknown>));
   }
 
-  getAccountById(id: number): { id: number; email: string; display_name: string; avatar_url: string | null; is_active: number; needs_reauth: number } | null {
+  getAccountById(id: number): { id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean } | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE id = :id', { ':id': id });
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    const row = result[0].values[0];
-    return {
-      id: row[0] as number,
-      email: row[1] as string,
-      display_name: row[2] as string,
-      avatar_url: row[3] as string | null,
-      is_active: row[4] as number,
-      needs_reauth: (row[5] as number) || 0,
-    };
+    const row = this.db.prepare('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE id = :id').get({ id });
+    if (row === undefined) {
+      return null;
+    }
+    return this.mapRow<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean }>(row as Record<string, unknown>);
   }
 
   createAccount(email: string, displayName: string, avatarUrl: string | null): number {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'INSERT INTO accounts (email, display_name, avatar_url, is_active) VALUES (:email, :displayName, :avatarUrl, 1)',
-      { ':email': email, ':displayName': displayName, ':avatarUrl': avatarUrl }
-    );
-    const result = this.db.exec('SELECT last_insert_rowid()');
-    const id = result[0].values[0][0] as number;
-    this.scheduleSave();
-    return id;
+    const result = this.db.prepare(
+      'INSERT INTO accounts (email, display_name, avatar_url, is_active) VALUES (:email, :displayName, :avatarUrl, 1)'
+    ).run({ email, displayName, avatarUrl });
+    return Number(result.lastInsertRowid);
   }
 
   updateAccount(id: number, displayName: string, avatarUrl: string | null): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'UPDATE accounts SET display_name = :displayName, avatar_url = :avatarUrl, needs_reauth = 0, updated_at = datetime(\'now\') WHERE id = :id',
-      { ':displayName': displayName, ':avatarUrl': avatarUrl, ':id': id }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      "UPDATE accounts SET display_name = :displayName, avatar_url = :avatarUrl, needs_reauth = 0, updated_at = datetime('now') WHERE id = :id"
+    ).run({ displayName, avatarUrl, id });
   }
 
   deleteAccount(id: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
+    const deleteAllAccountData = this.db.transaction(() => {
       // Delete all account data explicitly — do not rely on FK ON DELETE CASCADE
-      // since foreign_keys enforcement can be unreliable in sql.js across sessions.
+      // since junction tables (email_folders, thread_folders) have no FK to accounts.
 
       // attachments and search_index reference emails(id) with no account_id column;
       // delete them via subquery before the emails rows are removed.
-      this.db.run(
-        'DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)',
-        { ':accountId': id }
-      );
-      this.db.run(
-        'DELETE FROM search_index WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)',
-        { ':accountId': id }
-      );
+      this.db!.prepare(
+        'DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)'
+      ).run({ accountId: id });
+      this.db!.prepare(
+        'DELETE FROM search_index WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)'
+      ).run({ accountId: id });
       // Junction tables have no FK constraint to accounts — must be deleted explicitly.
-      this.db.run('DELETE FROM email_folders WHERE account_id = :accountId', { ':accountId': id });
-      this.db.run('DELETE FROM thread_folders WHERE account_id = :accountId', { ':accountId': id });
+      this.db!.prepare('DELETE FROM email_folders WHERE account_id = :accountId').run({ accountId: id });
+      this.db!.prepare('DELETE FROM thread_folders WHERE account_id = :accountId').run({ accountId: id });
       // Direct account-owned tables.
-      this.db.run('DELETE FROM emails WHERE account_id = :accountId', { ':accountId': id });
-      this.db.run('DELETE FROM threads WHERE account_id = :accountId', { ':accountId': id });
-      this.db.run('DELETE FROM folder_state WHERE account_id = :accountId', { ':accountId': id });
-      this.db.run('DELETE FROM labels WHERE account_id = :accountId', { ':accountId': id });
-      this.db.run('DELETE FROM filters WHERE account_id = :accountId', { ':accountId': id });
+      this.db!.prepare('DELETE FROM emails WHERE account_id = :accountId').run({ accountId: id });
+      this.db!.prepare('DELETE FROM threads WHERE account_id = :accountId').run({ accountId: id });
+      this.db!.prepare('DELETE FROM folder_state WHERE account_id = :accountId').run({ accountId: id });
+      this.db!.prepare('DELETE FROM labels WHERE account_id = :accountId').run({ accountId: id });
+      this.db!.prepare('DELETE FROM filters WHERE account_id = :accountId').run({ accountId: id });
       // Finally remove the accounts row itself.
-      this.db.run('DELETE FROM accounts WHERE id = :id', { ':id': id });
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+      this.db!.prepare('DELETE FROM accounts WHERE id = :id').run({ id });
+    });
+    deleteAllAccountData();
     log.info(`Deleted account ${id} and all related data`);
   }
 
   setAccountNeedsReauth(id: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('UPDATE accounts SET needs_reauth = 1, updated_at = datetime(\'now\') WHERE id = :id', { ':id': id });
-    this.scheduleSave();
+    this.db.prepare("UPDATE accounts SET needs_reauth = 1, updated_at = datetime('now') WHERE id = :id").run({ id });
   }
 
   getAccountCount(): number {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec('SELECT COUNT(*) FROM accounts WHERE is_active = 1');
-    if (result.length === 0) return 0;
-    return result[0].values[0][0] as number;
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM accounts WHERE is_active = 1').get() as { count: number } | undefined;
+    if (row === undefined) {
+      return 0;
+    }
+    return row.count;
   }
 
   // ---- Email operations (keyed by X-GM-MSGID) ----
@@ -270,7 +184,7 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     // Upsert the single email row.
     // Pass NULL (not '') for empty bodies so COALESCE preserves existing body on update.
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO emails (account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
         is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels, updated_at)
@@ -290,110 +204,99 @@ export class DatabaseService {
         is_draft = MAX(is_draft, excluded.is_draft),
         snippet = excluded.snippet, size = excluded.size, has_attachments = excluded.has_attachments,
         labels = excluded.labels,
-        updated_at = datetime('now')`,
-      {
-        ':accountId': email.accountId,
-        ':xGmMsgId': email.xGmMsgId,
-        ':xGmThrid': email.xGmThrid,
-        ':messageId': email.messageId || null,
-        ':fromAddress': email.fromAddress,
-        ':fromName': email.fromName || '',
-        ':toAddresses': email.toAddresses,
-        ':ccAddresses': email.ccAddresses || '',
-        ':bccAddresses': email.bccAddresses || '',
-        ':subject': email.subject || '',
-        ':textBody': email.textBody || null,
-        ':htmlBody': email.htmlBody || null,
-        ':date': email.date,
-        ':isRead': email.isRead ? 1 : 0,
-        ':isStarred': email.isStarred ? 1 : 0,
-        ':isImportant': email.isImportant ? 1 : 0,
-        ':isDraft': email.isDraft ? 1 : 0,
-        ':snippet': email.snippet || '',
-        ':size': email.size || 0,
-        ':hasAttachments': email.hasAttachments ? 1 : 0,
-        ':labels': email.labels || '',
-      }
-    );
+        updated_at = datetime('now')`
+    ).run({
+      accountId: email.accountId,
+      xGmMsgId: email.xGmMsgId,
+      xGmThrid: email.xGmThrid,
+      messageId: email.messageId || null,
+      fromAddress: email.fromAddress,
+      fromName: email.fromName || '',
+      toAddresses: email.toAddresses,
+      ccAddresses: email.ccAddresses || '',
+      bccAddresses: email.bccAddresses || '',
+      subject: email.subject || '',
+      textBody: email.textBody || null,
+      htmlBody: email.htmlBody || null,
+      date: email.date,
+      isRead: email.isRead ? 1 : 0,
+      isStarred: email.isStarred ? 1 : 0,
+      isImportant: email.isImportant ? 1 : 0,
+      isDraft: email.isDraft ? 1 : 0,
+      snippet: email.snippet || '',
+      size: email.size || 0,
+      hasAttachments: email.hasAttachments ? 1 : 0,
+      labels: email.labels || '',
+    });
 
     // Retrieve the actual id (last_insert_rowid is unreliable after ON CONFLICT)
-    const result = this.db.exec(
-      'SELECT id FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
-      { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId }
-    );
-    const id = result[0].values[0][0] as number;
+    const idRow = this.db.prepare(
+      'SELECT id FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId'
+    ).get({ accountId: email.accountId, xGmMsgId: email.xGmMsgId }) as { id: number } | undefined;
+    const id = idRow!.id;
 
     // Record folder association in the link table (keyed by x_gm_msgid, not email_id).
     // [Gmail]/All Mail is a discovery scope, not a persisted folder association here.
     if (email.folder !== ALL_MAIL_PATH) {
       if (email.folderUid != null) {
-        this.db.run(
+        this.db.prepare(
           `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :folderUid)
-           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`,
-          { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder, ':folderUid': email.folderUid }
-        );
+           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`
+        ).run({ accountId: email.accountId, xGmMsgId: email.xGmMsgId, folder: email.folder, folderUid: email.folderUid });
       } else {
-        this.db.run(
-          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
-          { ':accountId': email.accountId, ':xGmMsgId': email.xGmMsgId, ':folder': email.folder }
-        );
+        this.db.prepare(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
+        ).run({ accountId: email.accountId, xGmMsgId: email.xGmMsgId, folder: email.folder });
       }
     }
 
-    this.scheduleSave();
     return id;
   }
 
   getEmailsByThreadId(accountId: number, xGmThrid: string): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT id, account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, is_draft, size, has_attachments, labels
        FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
-       ORDER BY date ASC`,
-      { ':accountId': accountId, ':xGmThrid': xGmThrid }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapEmailRow(row, result[0].columns));
+       ORDER BY date ASC`
+    ).all({ accountId, xGmThrid });
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   getEmailById(id: number): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT id, account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, is_draft, size, has_attachments, labels
-       FROM emails WHERE id = :id`,
-      { ':id': id }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return this.mapEmailRow(result[0].values[0], result[0].columns);
+       FROM emails WHERE id = :id`
+    ).get({ id });
+    if (row === undefined) return null;
+    return this.mapRow<Record<string, unknown>>(row as Record<string, unknown>);
   }
 
   getEmailByXGmMsgId(accountId: number, xGmMsgId: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT id, account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
         to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, snippet, date,
         is_read, is_starred, is_important, is_draft, size, has_attachments, labels
-       FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId LIMIT 1`,
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return this.mapEmailRow(result[0].values[0], result[0].columns);
+       FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId LIMIT 1`
+    ).get({ accountId, xGmMsgId });
+    if (row === undefined) return null;
+    return this.mapRow<Record<string, unknown>>(row as Record<string, unknown>);
   }
 
   /** Get all folders an email appears in (via the email_folders link table). */
   getFoldersForEmail(accountId: number, xGmMsgId: string): string[] {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT folder FROM email_folders
-       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
+       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`
+    ).all({ accountId, xGmMsgId }) as Array<{ folder: string }>;
+    return rows.map((row) => row.folder);
   }
 
   /**
@@ -402,16 +305,11 @@ export class DatabaseService {
    */
   getFolderUidsForEmail(accountId: number, xGmMsgId: string): Array<{ folder: string; uid: number }> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT folder, uid FROM email_folders
-       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND uid IS NOT NULL`,
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => ({
-      folder: row[0] as string,
-      uid: row[1] as number,
-    }));
+       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND uid IS NOT NULL`
+    ).all({ accountId, xGmMsgId }) as Array<{ folder: string; uid: number }>;
+    return rows.map((row) => ({ folder: row.folder, uid: row.uid }));
   }
 
   updateEmailFlags(
@@ -422,83 +320,71 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const updates: string[] = [];
     const params: Record<string, string | number> = {
-      ':accountId': accountId,
-      ':xGmMsgId': xGmMsgId,
+      accountId,
+      xGmMsgId,
     };
 
     if (flags.isRead !== undefined) {
       updates.push('is_read = :isRead');
-      params[':isRead'] = flags.isRead ? 1 : 0;
+      params['isRead'] = flags.isRead ? 1 : 0;
     }
     if (flags.isStarred !== undefined) {
       updates.push('is_starred = :isStarred');
-      params[':isStarred'] = flags.isStarred ? 1 : 0;
+      params['isStarred'] = flags.isStarred ? 1 : 0;
     }
     if (flags.isImportant !== undefined) {
       updates.push('is_important = :isImportant');
-      params[':isImportant'] = flags.isImportant ? 1 : 0;
+      params['isImportant'] = flags.isImportant ? 1 : 0;
     }
 
     if (updates.length === 0) return;
 
     updates.push("updated_at = datetime('now')");
 
-    this.db.run(
-      `UPDATE emails SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
-      params
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      `UPDATE emails SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`
+    ).run(params);
   }
 
   deleteEmailsByAccount(accountId: number): void {
     if (!this.db) throw new Error('Database not initialized');
     // Clean up junction tables first (no FK cascade from emails to email_folders in new schema)
-    this.db.run('DELETE FROM email_folders WHERE account_id = :accountId', { ':accountId': accountId });
-    this.db.run('DELETE FROM thread_folders WHERE account_id = :accountId', { ':accountId': accountId });
-    this.db.run('DELETE FROM emails WHERE account_id = :accountId', { ':accountId': accountId });
-    this.db.run('DELETE FROM threads WHERE account_id = :accountId', { ':accountId': accountId });
-    this.scheduleSave();
+    this.db.prepare('DELETE FROM email_folders WHERE account_id = :accountId').run({ accountId });
+    this.db.prepare('DELETE FROM thread_folders WHERE account_id = :accountId').run({ accountId });
+    this.db.prepare('DELETE FROM emails WHERE account_id = :accountId').run({ accountId });
+    this.db.prepare('DELETE FROM threads WHERE account_id = :accountId').run({ accountId });
   }
 
   deleteEmailsByThreadId(accountId: number, xGmThrid: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
+    const doDelete = this.db.transaction(() => {
       // Remove email_folders associations for all emails in this thread before deleting the emails
-      this.db.run(
+      this.db!.prepare(
         `DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid IN (
            SELECT x_gm_msgid FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
-         )`,
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
+         )`
+      ).run({ accountId, xGmThrid });
       // Remove thread_folders associations
-      this.db.run(
-        'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
+      this.db!.prepare(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+      ).run({ accountId, xGmThrid });
       // Delete the email rows (CASCADE handles attachments, search_index)
-      this.db.run(
-        'DELETE FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
+      this.db!.prepare(
+        'DELETE FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+      ).run({ accountId, xGmThrid });
       // Delete the thread row itself
-      this.db.run(
-        'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+      this.db!.prepare(
+        'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+      ).run({ accountId, xGmThrid });
+    });
+    doDelete();
   }
 
   // ---- Thread operations (keyed by X-GM-THRID) ----
 
   upsertThread(thread: UpsertThreadInput): number {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO threads (account_id, x_gm_thrid, subject, last_message_date, participants,
         message_count, snippet, is_read, is_starred, updated_at)
        VALUES (:accountId, :xGmThrid, :subject, :lastMessageDate, :participants,
@@ -508,25 +394,23 @@ export class DatabaseService {
         participants = excluded.participants, message_count = excluded.message_count,
         snippet = excluded.snippet,
         is_read = excluded.is_read, is_starred = excluded.is_starred,
-        updated_at = datetime('now')`,
-      {
-        ':accountId': thread.accountId,
-        ':xGmThrid': thread.xGmThrid,
-        ':subject': thread.subject || '',
-        ':lastMessageDate': thread.lastMessageDate,
-        ':participants': thread.participants || '',
-        ':messageCount': thread.messageCount,
-        ':snippet': thread.snippet || '',
-        ':isRead': thread.isRead ? 1 : 0,
-        ':isStarred': thread.isStarred ? 1 : 0,
-      }
-    );
-    const result = this.db.exec(
-      'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-      { ':accountId': thread.accountId, ':xGmThrid': thread.xGmThrid }
-    );
-    const id = result[0].values[0][0] as number;
-    this.scheduleSave();
+        updated_at = datetime('now')`
+    ).run({
+      accountId: thread.accountId,
+      xGmThrid: thread.xGmThrid,
+      subject: thread.subject || '',
+      lastMessageDate: thread.lastMessageDate,
+      participants: thread.participants || '',
+      messageCount: thread.messageCount,
+      snippet: thread.snippet || '',
+      isRead: thread.isRead ? 1 : 0,
+      isStarred: thread.isStarred ? 1 : 0,
+    });
+    const idRow = this.db.prepare(
+      'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+    ).get({ accountId: thread.accountId, xGmThrid: thread.xGmThrid }) as { id: number } | undefined;
+    const id = idRow!.id;
+
     return id;
   }
 
@@ -539,20 +423,20 @@ export class DatabaseService {
   ): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const params: Record<string, string | number> = {
-      ':accountId': accountId,
-      ':folder': folder,
-      ':limit': limit,
-      ':offset': offset,
+      accountId,
+      folder,
+      limit,
+      offset,
     };
     if (threadId != null && threadId !== '') {
-      params[':threadId'] = threadId;
+      params['threadId'] = threadId;
     }
-    params[':trashFolder'] = this.getTrashFolder(accountId);
+    params['trashFolder'] = this.getTrashFolder(accountId);
     const whereClause =
       threadId != null && threadId !== ''
         ? 'WHERE t.account_id = :accountId AND t.x_gm_thrid = :threadId'
         : 'WHERE t.account_id = :accountId';
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, MAX(e.date) AS last_message_date, t.participants,
         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
          FROM emails e2
@@ -578,11 +462,9 @@ export class DatabaseService {
        INNER JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid AND e.x_gm_thrid = t.x_gm_thrid
        ${whereClause}
        GROUP BY t.id
-       ORDER BY MAX(e.date) DESC LIMIT :limit OFFSET :offset`,
-      params
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+       ORDER BY MAX(e.date) DESC LIMIT :limit OFFSET :offset`
+    ).all(params);
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   getThreadsByFolderBeforeDate(
@@ -593,7 +475,7 @@ export class DatabaseService {
   ): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const trashFolder = this.getTrashFolder(accountId);
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT t.id, t.account_id, t.x_gm_thrid, t.subject, MAX(e.date) AS last_message_date, t.participants,
         (SELECT COUNT(DISTINCT e2.x_gm_msgid)
          FROM emails e2
@@ -620,23 +502,20 @@ export class DatabaseService {
        WHERE t.account_id = :accountId
        GROUP BY t.id
        HAVING MAX(e.date) < :beforeDate
-       ORDER BY MAX(e.date) DESC LIMIT :limit`,
-      { ':accountId': accountId, ':folder': folder, ':beforeDate': beforeDate, ':limit': limit, ':trashFolder': trashFolder }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+       ORDER BY MAX(e.date) DESC LIMIT :limit`
+    ).all({ accountId, folder, beforeDate, limit, trashFolder });
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   getThreadById(accountId: number, xGmThrid: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT id, account_id, x_gm_thrid, subject, last_message_date, participants,
         message_count, snippet, is_read, is_starred
-       FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
-      { ':accountId': accountId, ':xGmThrid': xGmThrid }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return this.mapThreadRow(result[0].values[0], result[0].columns);
+       FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`
+    ).get({ accountId, xGmThrid });
+    if (row === undefined) return null;
+    return this.mapRow<Record<string, unknown>>(row as Record<string, unknown>);
   }
 
   updateThreadFlags(
@@ -647,69 +526,60 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const updates: string[] = [];
     const params: Record<string, string | number> = {
-      ':accountId': accountId,
-      ':xGmThrid': xGmThrid,
+      accountId,
+      xGmThrid,
     };
 
     if (flags.isRead !== undefined) {
       updates.push('is_read = :isRead');
-      params[':isRead'] = flags.isRead ? 1 : 0;
+      params['isRead'] = flags.isRead ? 1 : 0;
     }
     if (flags.isStarred !== undefined) {
       updates.push('is_starred = :isStarred');
-      params[':isStarred'] = flags.isStarred ? 1 : 0;
+      params['isStarred'] = flags.isStarred ? 1 : 0;
     }
 
     if (updates.length === 0) return;
 
     updates.push("updated_at = datetime('now')");
 
-    this.db.run(
-      `UPDATE threads SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
-      params
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      `UPDATE threads SET ${updates.join(', ')} WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`
+    ).run(params);
   }
 
   // ---- Thread-Folder operations (keyed by X-GM-THRID) ----
 
   upsertThreadFolder(accountId: number, xGmThrid: string, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder)
-       VALUES (:accountId, :xGmThrid, :folder)`,
-      { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-    );
-    this.scheduleSave();
+       VALUES (:accountId, :xGmThrid, :folder)`
+    ).run({ accountId, xGmThrid, folder });
   }
 
   removeThreadFolderAssociation(accountId: number, xGmThrid: string, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
-      { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder'
+    ).run({ accountId, xGmThrid, folder });
   }
 
   getFoldersForThread(accountId: number, xGmThrid: string): string[] {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      'SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-      { ':accountId': accountId, ':xGmThrid': xGmThrid }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
+    const rows = this.db.prepare(
+      'SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+    ).all({ accountId, xGmThrid }) as Array<{ folder: string }>;
+    return rows.map((row) => row.folder);
   }
 
   getThreadInternalId(accountId: number, xGmThrid: string): number | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-      { ':accountId': accountId, ':xGmThrid': xGmThrid }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    return result[0].values[0][0] as number;
+    const row = this.db.prepare(
+      'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+    ).get({ accountId, xGmThrid }) as { id: number } | undefined;
+    if (row === undefined) return null;
+    return row.id;
   }
 
   // ---- Label-based email-folder reconciliation (All Mail sync) ----
@@ -743,64 +613,52 @@ export class DatabaseService {
     const currentSet = new Set(currentFolderPaths);
 
     // Determine adds and removes
-    const toAdd = currentFolderPaths.filter((f) => !existingSet.has(f));
-    const toRemove = existingFolders.filter((f) => !currentSet.has(f));
+    const toAdd = currentFolderPaths.filter((folder) => !existingSet.has(folder));
+    const toRemove = existingFolders.filter((folder) => !currentSet.has(folder));
 
     if (toAdd.length === 0 && toRemove.length === 0) {
       return affectedFolders;
     }
 
-    // Use SAVEPOINT (not BEGIN) so this can be safely nested inside an outer transaction.
-    const savepointName = `reconcile_${xGmMsgId.replace(/[^a-zA-Z0-9]/g, '_')}`;
-    this.db.run(`SAVEPOINT ${savepointName}`);
-    try {
+    // Use db.transaction() for atomicity — handles nesting via SAVEPOINTs automatically.
+    const doReconcile = this.db.transaction(() => {
       // Add missing folder associations
       for (const folder of toAdd) {
-        this.db.run(
-          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
-          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
-        );
+        this.db!.prepare(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
+        ).run({ accountId, xGmMsgId, folder });
         // Upsert thread_folders
-        this.db.run(
-          'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)',
-          { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-        );
+        this.db!.prepare(
+          'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)'
+        ).run({ accountId, xGmThrid, folder });
         affectedFolders.add(folder);
       }
 
       // Remove stale folder associations
       for (const folder of toRemove) {
-        this.db.run(
-          'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
-          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
-        );
+        this.db!.prepare(
+          'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder'
+        ).run({ accountId, xGmMsgId, folder });
         // Check if thread still has other emails in this folder
-        const countResult = this.db.exec(
-          `SELECT COUNT(*) FROM email_folders ef
+        const countRow = this.db!.prepare(
+          `SELECT COUNT(*) AS cnt FROM email_folders ef
            JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
-           WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
-          { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-        );
-        const remaining = (countResult.length > 0 && countResult[0].values.length > 0)
-          ? countResult[0].values[0][0] as number : 0;
+           WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`
+        ).get({ accountId, xGmThrid, folder }) as { cnt: number } | undefined;
+        const remaining = countRow?.cnt ?? 0;
         if (remaining === 0) {
-          this.db.run(
-            'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
-            { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-          );
+          this.db!.prepare(
+            'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder'
+          ).run({ accountId, xGmThrid, folder });
         }
         affectedFolders.add(folder);
       }
-
-      this.db.run(`RELEASE ${savepointName}`);
-    } catch (err) {
-      this.db.run(`ROLLBACK TO ${savepointName}`);
-      this.db.run(`RELEASE ${savepointName}`);
-      throw err;
-    }
+    });
+    doReconcile();
 
     if (affectedFolders.size > 0) {
-      this.scheduleSave();
+  
+
     }
     return affectedFolders;
   }
@@ -817,26 +675,22 @@ export class DatabaseService {
       return 0;
     }
 
-    const placeholders = keepFolders.map((_, i) => `:keep${i}`).join(', ');
-    const params: Record<string, string | number> = { ':accountId': accountId };
-    for (let i = 0; i < keepFolders.length; i++) {
-      params[`:keep${i}`] = keepFolders[i];
+    const placeholders = keepFolders.map((_, index) => `:keep${index}`).join(', ');
+    const params: Record<string, string | number> = { accountId };
+    for (let index = 0; index < keepFolders.length; index++) {
+      params[`keep${index}`] = keepFolders[index];
     }
 
     // Count before delete
-    const countResult = this.db.exec(
-      `SELECT COUNT(*) FROM folder_state WHERE account_id = :accountId AND folder NOT IN (${placeholders})`,
-      params
-    );
-    const count = (countResult.length > 0 && countResult[0].values.length > 0)
-      ? countResult[0].values[0][0] as number : 0;
+    const countRow = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM folder_state WHERE account_id = :accountId AND folder NOT IN (${placeholders})`
+    ).get(params) as { cnt: number } | undefined;
+    const count = countRow?.cnt ?? 0;
 
     if (count > 0) {
-      this.db.run(
-        `DELETE FROM folder_state WHERE account_id = :accountId AND folder NOT IN (${placeholders})`,
-        params
-      );
-      this.scheduleSave();
+      this.db.prepare(
+        `DELETE FROM folder_state WHERE account_id = :accountId AND folder NOT IN (${placeholders})`
+      ).run(params);
     }
     return count;
   }
@@ -849,27 +703,22 @@ export class DatabaseService {
    */
   addEmailFolderAssociation(accountId: number, xGmMsgId: string, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
+    ).run({ accountId, xGmMsgId, folder });
   }
 
   removeEmailFolderAssociation(accountId: number, xGmMsgId: string, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder'
+    ).run({ accountId, xGmMsgId, folder });
   }
 
   /**
    * Atomically remove email-folder (and thread-folder) associations for a set of stale
-   * x_gm_msgid values from a given folder.  All raw SQL runs inside a single BEGIN/COMMIT
-   * block owned entirely by this method, so no scheduleSave() side effects leak out of the
-   * transaction boundary.  scheduleSave() is called once after a successful commit.
+   * x_gm_msgid values from a given folder.  All raw SQL runs inside a single transaction
+   * owned entirely by this method.
    */
   removeStaleEmailFolderAssociations(accountId: number, folder: string, xGmMsgIds: string[]): void {
     if (!this.db) throw new Error('Database not initialized');
@@ -878,219 +727,165 @@ export class DatabaseService {
     // Collect thread IDs before mutating (needed for thread-folder cleanup check).
     const affectedThreadIds = new Map<string, string>(); // xGmMsgId → xGmThrid
     for (const xGmMsgId of xGmMsgIds) {
-      const emailResult = this.db.exec(
-        'SELECT x_gm_thrid FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
-        { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-      );
-      if (emailResult.length > 0 && emailResult[0].values.length > 0) {
-        const xGmThrid = emailResult[0].values[0][0] as string;
-        if (xGmThrid) {
-          affectedThreadIds.set(xGmMsgId, xGmThrid);
-        }
+      const emailRow = this.db.prepare(
+        'SELECT x_gm_thrid FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId'
+      ).get({ accountId, xGmMsgId }) as { x_gm_thrid: string } | undefined;
+      if (emailRow?.x_gm_thrid) {
+        affectedThreadIds.set(xGmMsgId, emailRow.x_gm_thrid);
       }
     }
 
-    this.db.run('BEGIN');
-    try {
+    const doRemove = this.db.transaction(() => {
       for (const xGmMsgId of xGmMsgIds) {
-        // Remove email-folder association (raw SQL — no scheduleSave inside transaction)
-        this.db.run(
-          'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
-          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': folder }
-        );
+        // Remove email-folder association
+        this.db!.prepare(
+          'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder'
+        ).run({ accountId, xGmMsgId, folder });
 
         // Remove thread-folder if no remaining emails for this thread exist in the folder
         const xGmThrid = affectedThreadIds.get(xGmMsgId);
         if (xGmThrid) {
-          const countResult = this.db.exec(
-            `SELECT COUNT(*) FROM email_folders ef
+          const countRow = this.db!.prepare(
+            `SELECT COUNT(*) AS cnt FROM email_folders ef
              JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
-             WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
-            { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-          );
-          const remaining = (countResult.length > 0 && countResult[0].values.length > 0)
-            ? countResult[0].values[0][0] as number : 0;
+             WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`
+          ).get({ accountId, xGmThrid, folder }) as { cnt: number } | undefined;
+          const remaining = countRow?.cnt ?? 0;
           if (remaining === 0) {
-            this.db.run(
-              'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
-              { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-            );
+            this.db!.prepare(
+              'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder'
+            ).run({ accountId, xGmThrid, folder });
           }
         }
       }
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+    });
+    doRemove();
   }
 
   moveEmailFolder(accountId: number, xGmMsgId: string, sourceFolder: string, targetFolder: string, targetUid?: number | null): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
+    const doMove = this.db.transaction(() => {
       // Remove source folder association
-      this.db.run(
-        'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder',
-        { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': sourceFolder }
-      );
+      this.db!.prepare(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId AND folder = :folder'
+      ).run({ accountId, xGmMsgId, folder: sourceFolder });
       // Add target folder association (with uid if available)
       if (targetUid != null) {
-        this.db.run(
+        this.db!.prepare(
           `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :uid)
-           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`,
-          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': targetFolder, ':uid': targetUid }
-        );
+           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`
+        ).run({ accountId, xGmMsgId, folder: targetFolder, uid: targetUid });
       } else {
-        this.db.run(
-          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
-          { ':accountId': accountId, ':xGmMsgId': xGmMsgId, ':folder': targetFolder }
-        );
+        this.db!.prepare(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
+        ).run({ accountId, xGmMsgId, folder: targetFolder });
       }
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+    });
+    doMove();
   }
 
   moveThreadFolder(accountId: number, xGmThrid: string, sourceFolder: string, targetFolder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
-      this.db.run(
-        'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
-        { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': sourceFolder }
-      );
-      this.db.run(
-        'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)',
-        { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': targetFolder }
-      );
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+    const doMove = this.db.transaction(() => {
+      this.db!.prepare(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder'
+      ).run({ accountId, xGmThrid, folder: sourceFolder });
+      this.db!.prepare(
+        'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)'
+      ).run({ accountId, xGmThrid, folder: targetFolder });
+    });
+    doMove();
   }
 
   threadHasEmailsInFolder(accountId: number, xGmThrid: string, folder: string): boolean {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      `SELECT COUNT(*) FROM email_folders ef
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM email_folders ef
        JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
-       WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
-      { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return false;
-    return (result[0].values[0][0] as number) > 0;
+       WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`
+    ).get({ accountId, xGmThrid, folder }) as { cnt: number } | undefined;
+    return (row?.cnt ?? 0) > 0;
   }
 
   /** Get all x_gm_msgid values that have a folder association for a given account + folder. */
   getEmailXGmMsgIdsByFolder(accountId: number, folder: string): string[] {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT x_gm_msgid FROM email_folders
-       WHERE account_id = :accountId AND folder = :folder`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
+       WHERE account_id = :accountId AND folder = :folder`
+    ).all({ accountId, folder }) as Array<{ x_gm_msgid: string }>;
+    return rows.map((row) => row.x_gm_msgid);
   }
 
   /** Get all (x_gm_msgid, uid) pairs from email_folders for a given account + folder. */
   getEmailFolderUids(accountId: number, folder: string): Array<{ xGmMsgId: string; uid: number }> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT x_gm_msgid, uid FROM email_folders
-       WHERE account_id = :accountId AND folder = :folder AND uid IS NOT NULL`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => ({
-      xGmMsgId: row[0] as string,
-      uid: row[1] as number,
-    }));
+       WHERE account_id = :accountId AND folder = :folder AND uid IS NOT NULL`
+    ).all({ accountId, folder }) as Array<{ x_gm_msgid: string; uid: number }>;
+    return rows.map((row) => ({ xGmMsgId: row.x_gm_msgid, uid: row.uid }));
   }
 
   // ---- Email removal and orphan cleanup ----
 
   removeEmailAndAssociations(accountId: number, xGmMsgId: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
-      const emailResult = this.db.exec(
-        'SELECT id, x_gm_thrid FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
-        { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-      );
-      if (emailResult.length === 0 || emailResult[0].values.length === 0) {
-        this.db.run('COMMIT');
+    const doRemove = this.db.transaction(() => {
+      const emailRow = this.db!.prepare(
+        'SELECT id, x_gm_thrid FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId'
+      ).get({ accountId, xGmMsgId }) as { id: number; x_gm_thrid: string } | undefined;
+      if (emailRow === undefined) {
         return;
       }
-      const emailId = emailResult[0].values[0][0] as number;
-      const xGmThrid = emailResult[0].values[0][1] as string;
+      const emailId = emailRow.id;
+      const xGmThrid = emailRow.x_gm_thrid;
 
       // Remove all folder associations for this email
-      this.db.run('DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
-        { ':accountId': accountId, ':xGmMsgId': xGmMsgId });
+      this.db!.prepare(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId'
+      ).run({ accountId, xGmMsgId });
 
       // Remove the email row itself (CASCADE handles attachments, search_index)
-      this.db.run('DELETE FROM emails WHERE id = :emailId', { ':emailId': emailId });
+      this.db!.prepare('DELETE FROM emails WHERE id = :emailId').run({ emailId });
 
       // Clean up orphaned thread
       if (xGmThrid) {
-        const remainingResult = this.db.exec(
-          'SELECT COUNT(*) FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-          { ':accountId': accountId, ':xGmThrid': xGmThrid }
-        );
-        const remaining = (remainingResult.length > 0 && remainingResult[0].values.length > 0)
-          ? remainingResult[0].values[0][0] as number : 0;
+        const remainingRow = this.db!.prepare(
+          'SELECT COUNT(*) AS cnt FROM emails WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+        ).get({ accountId, xGmThrid }) as { cnt: number } | undefined;
+        const remaining = remainingRow?.cnt ?? 0;
 
         if (remaining === 0) {
-          this.db.run(
-            'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-            { ':accountId': accountId, ':xGmThrid': xGmThrid }
-          );
-          this.db.run(
-            'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-            { ':accountId': accountId, ':xGmThrid': xGmThrid }
-          );
+          this.db!.prepare(
+            'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+          ).run({ accountId, xGmThrid });
+          this.db!.prepare(
+            'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+          ).run({ accountId, xGmThrid });
         } else {
           // Thread still has emails — remove thread_folders for folders with no remaining emails
-          const tfResult = this.db.exec(
-            'SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-            { ':accountId': accountId, ':xGmThrid': xGmThrid }
-          );
-          if (tfResult.length > 0) {
-            for (const row of tfResult[0].values) {
-              const folder = row[0] as string;
-              const countResult = this.db.exec(
-                `SELECT COUNT(*) FROM email_folders ef
-                 JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
-                 WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`,
-                { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-              );
-              const count = (countResult.length > 0 && countResult[0].values.length > 0)
-                ? countResult[0].values[0][0] as number : 0;
-              if (count === 0) {
-                this.db.run(
-                  'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder',
-                  { ':accountId': accountId, ':xGmThrid': xGmThrid, ':folder': folder }
-                );
-              }
+          const folderRows = this.db!.prepare(
+            'SELECT DISTINCT folder FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+          ).all({ accountId, xGmThrid }) as Array<{ folder: string }>;
+          for (const folderRow of folderRows) {
+            const folder = folderRow.folder;
+            const countRow = this.db!.prepare(
+              `SELECT COUNT(*) AS cnt FROM email_folders ef
+               JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+               WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid AND ef.folder = :folder`
+            ).get({ accountId, xGmThrid, folder }) as { cnt: number } | undefined;
+            const count = countRow?.cnt ?? 0;
+            if (count === 0) {
+              this.db!.prepare(
+                'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder'
+              ).run({ accountId, xGmThrid, folder });
             }
           }
         }
       }
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+    });
+    doRemove();
   }
 
   removeOrphanedEmails(accountId: number, bypassGracePeriod: boolean = false): Array<{ xGmMsgId: string; xGmThrid: string }> {
@@ -1106,43 +901,36 @@ export class DatabaseService {
       ? ''
       : "AND (updated_at IS NULL OR updated_at < datetime('now', '-1 hour'))";
 
-    this.db.run('BEGIN');
-    try {
-      const selectResult = this.db.exec(
+    // db.prepare() must be called inside the method since the SQL is dynamic (grace period clause).
+    const doRemove = this.db.transaction(() => {
+      const selectRows = this.db!.prepare(
         `SELECT x_gm_msgid, x_gm_thrid FROM emails
          WHERE account_id = :accountId
            AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)
-           ${gracePeriodClause}`,
-        { ':accountId': accountId }
-      );
+           ${gracePeriodClause}`
+      ).all({ accountId }) as Array<{ x_gm_msgid: string; x_gm_thrid: string }>;
 
-      if (selectResult.length > 0) {
-        for (const row of selectResult[0].values) {
-          removed.push({
-            xGmMsgId: row[0] as string,
-            xGmThrid: row[1] as string,
-          });
-        }
+      for (const row of selectRows) {
+        removed.push({
+          xGmMsgId: row.x_gm_msgid,
+          xGmThrid: row.x_gm_thrid,
+        });
       }
 
       if (removed.length > 0) {
-        this.db.run(
+        this.db!.prepare(
           `DELETE FROM emails
            WHERE account_id = :accountId
              AND x_gm_msgid NOT IN (SELECT x_gm_msgid FROM email_folders WHERE account_id = :accountId)
-             ${gracePeriodClause}`,
-          { ':accountId': accountId }
-        );
+             ${gracePeriodClause}`
+        ).run({ accountId });
       }
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
+    });
+    doRemove();
 
     if (removed.length > 0) {
-      this.scheduleSave();
+  
+
     }
     return removed;
   }
@@ -1162,23 +950,19 @@ export class DatabaseService {
       ? ''
       : "AND (threads.updated_at IS NULL OR threads.updated_at < datetime('now', '-1 hour'))";
 
-    const countResult = this.db.exec(
-      `SELECT COUNT(*) FROM threads t WHERE t.account_id = :accountId
+    const countRow = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM threads t WHERE t.account_id = :accountId
        AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = t.account_id AND tf.x_gm_thrid = t.x_gm_thrid)
-       ${countGracePeriodClause}`,
-      { ':accountId': accountId }
-    );
-    const count = (countResult.length > 0 && countResult[0].values.length > 0)
-      ? countResult[0].values[0][0] as number : 0;
+       ${countGracePeriodClause}`
+    ).get({ accountId }) as { cnt: number } | undefined;
+    const count = countRow?.cnt ?? 0;
 
     if (count > 0) {
-      this.db.run(
+      this.db.prepare(
         `DELETE FROM threads WHERE account_id = :accountId
          AND NOT EXISTS (SELECT 1 FROM thread_folders tf WHERE tf.account_id = threads.account_id AND tf.x_gm_thrid = threads.x_gm_thrid)
-         ${deleteGracePeriodClause}`,
-        { ':accountId': accountId }
-      );
-      this.scheduleSave();
+         ${deleteGracePeriodClause}`
+      ).run({ accountId });
     }
     return count;
   }
@@ -1187,20 +971,18 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     if (xGmMsgIds.length === 0) return [];
 
-    const placeholders = xGmMsgIds.map((_, i) => `:id${i}`).join(', ');
-    const params: Record<string, string | number> = { ':accountId': accountId };
-    for (let i = 0; i < xGmMsgIds.length; i++) {
-      params[`:id${i}`] = xGmMsgIds[i];
+    const placeholders = xGmMsgIds.map((_, index) => `:id${index}`).join(', ');
+    const params: Record<string, string | number> = { accountId };
+    for (let index = 0; index < xGmMsgIds.length; index++) {
+      params[`id${index}`] = xGmMsgIds[index];
     }
 
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT DISTINCT x_gm_thrid FROM emails
-       WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
-      params
-    );
+       WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`
+    ).all(params) as Array<{ x_gm_thrid: string }>;
 
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => row[0] as string);
+    return rows.map((row) => row.x_gm_thrid);
   }
 
   /**
@@ -1213,81 +995,72 @@ export class DatabaseService {
   recomputeThreadMetadata(accountId: number, xGmThrid: string): void {
     if (!this.db) throw new Error('Database not initialized');
 
-    this.db.run('BEGIN');
-    try {
-      const countResult = this.db.exec(
-        `SELECT COUNT(*) FROM emails
-         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`,
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
-      const emailCount = (countResult.length > 0 && countResult[0].values.length > 0)
-        ? countResult[0].values[0][0] as number : 0;
+    const doRecompute = this.db.transaction(() => {
+      const countRow = this.db!.prepare(
+        `SELECT COUNT(*) AS cnt FROM emails
+         WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid`
+      ).get({ accountId, xGmThrid }) as { cnt: number } | undefined;
+      const emailCount = countRow?.cnt ?? 0;
 
-      const threadResult = this.db.exec(
-        'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
-      if (threadResult.length === 0 || threadResult[0].values.length === 0) {
-        this.db.run('COMMIT');
+      const threadRow = this.db!.prepare(
+        'SELECT id FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+      ).get({ accountId, xGmThrid }) as { id: number } | undefined;
+      if (threadRow === undefined) {
         return;
       }
-      const threadId = threadResult[0].values[0][0] as number;
+      const threadId = threadRow.id;
 
       if (emailCount === 0) {
-        this.db.run('DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
-          { ':accountId': accountId, ':xGmThrid': xGmThrid });
-        this.db.run('DELETE FROM threads WHERE id = :threadId', { ':threadId': threadId });
-        this.db.run('COMMIT');
-        this.scheduleSave();
+        this.db!.prepare(
+          'DELETE FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid'
+        ).run({ accountId, xGmThrid });
+        this.db!.prepare('DELETE FROM threads WHERE id = :threadId').run({ threadId });
         return;
       }
 
-      const aggResult = this.db.exec(
+      const aggRow = this.db!.prepare(
         `SELECT
            COUNT(DISTINCT e.id) AS message_count,
            COALESCE(MAX(date), datetime('now')) AS last_message_date,
            MIN(CASE WHEN is_read = 0 THEN 0 ELSE 1 END) AS all_read,
            MAX(is_starred) AS any_starred
          FROM emails e
-         WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid`,
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
+         WHERE e.account_id = :accountId AND e.x_gm_thrid = :xGmThrid`
+      ).get({ accountId, xGmThrid }) as {
+        message_count: number;
+        last_message_date: string;
+        all_read: number;
+        any_starred: number;
+      } | undefined;
 
-      if (aggResult.length === 0 || aggResult[0].values.length === 0) {
-        this.db.run('COMMIT');
+      if (aggRow === undefined) {
         return;
       }
 
-      const agg = aggResult[0].values[0];
-      const messageCount = agg[0] as number;
-      const lastMessageDate = agg[1] as string;
-      const isRead = (agg[2] as number) === 1;
-      const isStarred = (agg[3] as number) === 1;
+      const messageCount = aggRow.message_count;
+      const lastMessageDate = aggRow.last_message_date;
+      const isRead = aggRow.all_read === 1;
+      const isStarred = aggRow.any_starred === 1;
 
-      const snippetResult = this.db.exec(
+      const snippetRow = this.db!.prepare(
         `SELECT snippet FROM emails
          WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
-         ORDER BY date DESC LIMIT 1`,
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
-      const snippet = (snippetResult.length > 0 && snippetResult[0].values.length > 0)
-        ? snippetResult[0].values[0][0] as string : '';
+         ORDER BY date DESC LIMIT 1`
+      ).get({ accountId, xGmThrid }) as { snippet: string } | undefined;
+      const snippet = snippetRow?.snippet ?? '';
 
-      const participantsResult = this.db.exec(
+      const participantRows = this.db!.prepare(
         `SELECT from_address, from_name FROM emails
          WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid
-         ORDER BY date DESC`,
-        { ':accountId': accountId, ':xGmThrid': xGmThrid }
-      );
-      const participantRows = participantsResult.length > 0 && participantsResult[0].values.length > 0
-        ? participantsResult[0].values.map((row) => ({
-            fromAddress: row[0] as string,
-            fromName: row[1] as string | null,
-          }))
-        : [];
-      const participants = formatParticipantList(participantRows);
+         ORDER BY date DESC`
+      ).all({ accountId, xGmThrid }) as Array<{ from_address: string; from_name: string | null }>;
+      const mappedParticipants = participantRows.map((row) => ({
+        fromAddress: row.from_address,
+        fromName: row.from_name,
+      }));
+      const participants = formatParticipantList(mappedParticipants);
 
-      this.db.run(
+      this.db!.prepare(
         `UPDATE threads SET
            message_count = :messageCount,
            last_message_date = :lastMessageDate,
@@ -1296,31 +1069,25 @@ export class DatabaseService {
            is_read = :isRead,
            is_starred = :isStarred,
            updated_at = datetime('now')
-         WHERE id = :threadId`,
-        {
-          ':messageCount': messageCount,
-          ':lastMessageDate': lastMessageDate,
-          ':snippet': snippet || '',
-          ':participants': participants,
-          ':isRead': isRead ? 1 : 0,
-          ':isStarred': isStarred ? 1 : 0,
-          ':threadId': threadId,
-        }
-      );
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+         WHERE id = :threadId`
+      ).run({
+        messageCount,
+        lastMessageDate,
+        snippet: snippet || '',
+        participants,
+        isRead: isRead ? 1 : 0,
+        isStarred: isStarred ? 1 : 0,
+        threadId,
+      });
+    });
+    doRecompute();
   }
 
   // ---- Folder State operations (CONDSTORE) ----
 
   upsertFolderState(input: UpsertFolderStateInput): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO folder_state (account_id, folder, uid_validity, highest_modseq, condstore_supported, last_reconciled_at, updated_at)
        VALUES (:accountId, :folder, :uidValidity, :highestModseq, :condstoreSupported, :lastReconciledAt, datetime('now'))
        ON CONFLICT(account_id, folder) DO UPDATE SET
@@ -1328,17 +1095,15 @@ export class DatabaseService {
         highest_modseq = excluded.highest_modseq,
         condstore_supported = excluded.condstore_supported,
         last_reconciled_at = COALESCE(excluded.last_reconciled_at, folder_state.last_reconciled_at),
-        updated_at = datetime('now')`,
-      {
-        ':accountId': input.accountId,
-        ':folder': input.folder,
-        ':uidValidity': input.uidValidity,
-        ':highestModseq': input.highestModseq ?? null,
-        ':condstoreSupported': (input.condstoreSupported ?? true) ? 1 : 0,
-        ':lastReconciledAt': input.lastReconciledAt ?? null,
-      }
-    );
-    this.scheduleSave();
+        updated_at = datetime('now')`
+    ).run({
+      accountId: input.accountId,
+      folder: input.folder,
+      uidValidity: input.uidValidity,
+      highestModseq: input.highestModseq ?? null,
+      condstoreSupported: (input.condstoreSupported ?? true) ? 1 : 0,
+      lastReconciledAt: input.lastReconciledAt ?? null,
+    });
   }
 
   /**
@@ -1354,81 +1119,79 @@ export class DatabaseService {
     condstoreSupported: boolean,
   ): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO folder_state (account_id, folder, uid_validity, highest_modseq, condstore_supported, updated_at)
        VALUES (:accountId, :folder, :uidValidity, NULL, :condstoreSupported, datetime('now'))
        ON CONFLICT(account_id, folder) DO UPDATE SET
         uid_validity        = excluded.uid_validity,
         condstore_supported = excluded.condstore_supported,
-        updated_at          = datetime('now')`,
-      {
-        ':accountId': accountId,
-        ':folder': folder,
-        ':uidValidity': uidValidity,
-        ':condstoreSupported': condstoreSupported ? 1 : 0,
-      }
-    );
-    this.scheduleSave();
+        updated_at          = datetime('now')`
+    ).run({
+      accountId,
+      folder,
+      uidValidity,
+      condstoreSupported: condstoreSupported ? 1 : 0,
+    });
   }
 
   getFolderState(accountId: number, folder: string): FolderStateRecord | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT id, account_id, folder, uid_validity, highest_modseq, condstore_supported, last_reconciled_at, updated_at
-       FROM folder_state WHERE account_id = :accountId AND folder = :folder`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (result.length === 0 || result[0].values.length === 0) return null;
-    const row = result[0].values[0];
+       FROM folder_state WHERE account_id = :accountId AND folder = :folder`
+    ).get({ accountId, folder }) as {
+      id: number; account_id: number; folder: string; uid_validity: string;
+      highest_modseq: string | null; condstore_supported: number;
+      last_reconciled_at: string | null; updated_at: string;
+    } | undefined;
+    if (row === undefined) return null;
     return {
-      id: row[0] as number,
-      accountId: row[1] as number,
-      folder: row[2] as string,
-      uidValidity: row[3] as string,
-      highestModseq: row[4] as string | null,
-      condstoreSupported: (row[5] as number) === 1,
-      lastReconciledAt: row[6] as string | null,
-      updatedAt: row[7] as string,
+      id: row.id,
+      accountId: row.account_id,
+      folder: row.folder,
+      uidValidity: row.uid_validity,
+      highestModseq: row.highest_modseq,
+      condstoreSupported: row.condstore_supported === 1,
+      lastReconciledAt: row.last_reconciled_at,
+      updatedAt: row.updated_at,
     };
   }
 
   getAllFolderStates(accountId: number): FolderStateRecord[] {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT id, account_id, folder, uid_validity, highest_modseq, condstore_supported, last_reconciled_at, updated_at
-       FROM folder_state WHERE account_id = :accountId`,
-      { ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => ({
-      id: row[0] as number,
-      accountId: row[1] as number,
-      folder: row[2] as string,
-      uidValidity: row[3] as string,
-      highestModseq: row[4] as string | null,
-      condstoreSupported: (row[5] as number) === 1,
-      lastReconciledAt: row[6] as string | null,
-      updatedAt: row[7] as string,
+       FROM folder_state WHERE account_id = :accountId`
+    ).all({ accountId }) as Array<{
+      id: number; account_id: number; folder: string; uid_validity: string;
+      highest_modseq: string | null; condstore_supported: number;
+      last_reconciled_at: string | null; updated_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      accountId: row.account_id,
+      folder: row.folder,
+      uidValidity: row.uid_validity,
+      highestModseq: row.highest_modseq,
+      condstoreSupported: row.condstore_supported === 1,
+      lastReconciledAt: row.last_reconciled_at,
+      updatedAt: row.updated_at,
     }));
   }
 
   deleteFolderState(accountId: number, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'DELETE FROM folder_state WHERE account_id = :accountId AND folder = :folder',
-      { ':accountId': accountId, ':folder': folder }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'DELETE FROM folder_state WHERE account_id = :accountId AND folder = :folder'
+    ).run({ accountId, folder });
   }
 
   updateFolderStateReconciliation(accountId: number, folder: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `UPDATE folder_state SET last_reconciled_at = datetime('now'), updated_at = datetime('now')
-       WHERE account_id = :accountId AND folder = :folder`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    this.scheduleSave();
+       WHERE account_id = :accountId AND folder = :folder`
+    ).run({ accountId, folder });
   }
 
   /**
@@ -1439,48 +1202,39 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
 
     const affectedThreadIds = new Set<string>();
-    const affectedResult = this.db.exec(
+    const affectedRows = this.db.prepare(
       `SELECT DISTINCT e.x_gm_thrid
        FROM emails e
        INNER JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
-       WHERE ef.account_id = :accountId AND ef.folder = :folder`,
-      { ':accountId': accountId, ':folder': folder }
-    );
-    if (affectedResult.length > 0) {
-      for (const row of affectedResult[0].values) {
-        const xGmThrid = row[0] as string;
-        if (xGmThrid) {
-          affectedThreadIds.add(xGmThrid);
-        }
+       WHERE ef.account_id = :accountId AND ef.folder = :folder`
+    ).all({ accountId, folder }) as Array<{ x_gm_thrid: string }>;
+    for (const row of affectedRows) {
+      if (row.x_gm_thrid) {
+        affectedThreadIds.add(row.x_gm_thrid);
       }
     }
 
-    this.db.run('BEGIN');
-    try {
+    const doWipe = this.db.transaction(() => {
       // Remove all email_folders for this folder
-      this.db.run(
-        'DELETE FROM email_folders WHERE account_id = :accountId AND folder = :folder',
-        { ':accountId': accountId, ':folder': folder }
-      );
+      this.db!.prepare(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND folder = :folder'
+      ).run({ accountId, folder });
       // Remove all thread_folders for this folder
-      this.db.run(
-        'DELETE FROM thread_folders WHERE account_id = :accountId AND folder = :folder',
-        { ':accountId': accountId, ':folder': folder }
-      );
+      this.db!.prepare(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND folder = :folder'
+      ).run({ accountId, folder });
       // Remove folder state
-      this.db.run(
-        'DELETE FROM folder_state WHERE account_id = :accountId AND folder = :folder',
-        { ':accountId': accountId, ':folder': folder }
-      );
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
+      this.db!.prepare(
+        'DELETE FROM folder_state WHERE account_id = :accountId AND folder = :folder'
+      ).run({ accountId, folder });
+    });
+    doWipe();
 
     // Remove newly orphaned emails and track their affected threads.
     // Pass bypassGracePeriod=true: this is an intentional wipe (UIDVALIDITY reset),
     // so immediate cleanup is correct — no grace period needed.
+    // Note: removeOrphanedEmails and removeOrphanedThreads are also wrapped in
+    // db.transaction() internally — better-sqlite3 handles nested transactions via savepoints.
     const orphanedEmails = this.removeOrphanedEmails(accountId, true);
     for (const orphan of orphanedEmails) {
       if (orphan.xGmThrid) {
@@ -1500,8 +1254,6 @@ export class DatabaseService {
     // Remove threads that no longer belong to any folder.
     // Pass bypassGracePeriod=true for the same reason as removeOrphanedEmails above.
     this.removeOrphanedThreads(accountId, true);
-
-    this.scheduleSave();
   }
 
   // ---- Label/Folder operations ----
@@ -1517,25 +1269,23 @@ export class DatabaseService {
     specialUse?: string;
   }): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO labels (account_id, gmail_label_id, name, type, color, unread_count, total_count, special_use)
        VALUES (:accountId, :gmailLabelId, :name, :type, :color, :unreadCount, :totalCount, :specialUse)
        ON CONFLICT(account_id, gmail_label_id) DO UPDATE SET
         name = excluded.name, type = excluded.type, color = COALESCE(excluded.color, labels.color),
         unread_count = excluded.unread_count, total_count = excluded.total_count,
-        special_use = COALESCE(excluded.special_use, labels.special_use)`,
-      {
-        ':accountId': label.accountId,
-        ':gmailLabelId': label.gmailLabelId,
-        ':name': label.name,
-        ':type': label.type,
-        ':color': label.color || null,
-        ':unreadCount': label.unreadCount,
-        ':totalCount': label.totalCount,
-        ':specialUse': label.specialUse || null,
-      }
-    );
-    this.scheduleSave();
+        special_use = COALESCE(excluded.special_use, labels.special_use)`
+    ).run({
+      accountId: label.accountId,
+      gmailLabelId: label.gmailLabelId,
+      name: label.name,
+      type: label.type,
+      color: label.color || null,
+      unreadCount: label.unreadCount,
+      totalCount: label.totalCount,
+      specialUse: label.specialUse || null,
+    });
   }
 
   /**
@@ -1549,27 +1299,19 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
 
     // Primary: resolve by special_use attribute (populated after first sync post-migration)
-    const bySpecialUse = this.db.exec(
-      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND special_use = '\Trash' LIMIT 1`,
-      { ':accountId': accountId }
-    );
-    if (bySpecialUse.length > 0 && bySpecialUse[0].values.length > 0) {
-      const value = bySpecialUse[0].values[0][0];
-      if (typeof value === 'string' && value.length > 0) {
-        return value;
-      }
+    const bySpecialUse = this.db.prepare(
+      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND special_use = '\Trash' LIMIT 1`
+    ).get({ accountId }) as { gmail_label_id: string } | undefined;
+    if (bySpecialUse !== undefined && bySpecialUse.gmail_label_id.length > 0) {
+      return bySpecialUse.gmail_label_id;
     }
 
     // Legacy fallback: check for '[Gmail]/Bin' by label ID (UK locale, before special_use is populated)
-    const byBin = this.db.exec(
-      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND gmail_label_id = '[Gmail]/Bin' LIMIT 1`,
-      { ':accountId': accountId }
-    );
-    if (byBin.length > 0 && byBin[0].values.length > 0) {
-      const value = byBin[0].values[0][0];
-      if (typeof value === 'string' && value.length > 0) {
-        return value;
-      }
+    const byBin = this.db.prepare(
+      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND gmail_label_id = '[Gmail]/Bin' LIMIT 1`
+    ).get({ accountId }) as { gmail_label_id: string } | undefined;
+    if (byBin !== undefined && byBin.gmail_label_id.length > 0) {
+      return byBin.gmail_label_id;
     }
 
     return '[Gmail]/Trash';
@@ -1577,42 +1319,27 @@ export class DatabaseService {
 
   getUnreadThreadCountsByFolder(accountId: number): Record<string, number> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT tf.folder, COUNT(DISTINCT t.id) AS cnt
        FROM thread_folders tf
        INNER JOIN threads t ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid
        WHERE tf.account_id = :accountId AND t.is_read = 0
-       GROUP BY tf.folder`,
-      { ':accountId': accountId }
-    );
+       GROUP BY tf.folder`
+    ).all({ accountId }) as Array<{ folder: string; cnt: number }>;
     const out: Record<string, number> = {};
-    if (result.length > 0 && result[0].values.length > 0) {
-      for (const row of result[0].values) {
-        out[row[0] as string] = (row[1] as number) || 0;
-      }
+    for (const row of rows) {
+      out[row.folder] = row.cnt || 0;
     }
     return out;
   }
 
   getLabelsByAccount(accountId: number): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT id, account_id, gmail_label_id, name, type, color, unread_count, total_count, special_use
-       FROM labels WHERE account_id = :accountId ORDER BY type ASC, name ASC`,
-      { ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => ({
-      id: row[0] as number,
-      accountId: row[1] as number,
-      gmailLabelId: row[2] as string,
-      name: row[3] as string,
-      type: row[4] as string,
-      color: row[5] as string | null,
-      unreadCount: row[6] as number,
-      totalCount: row[7] as number,
-      specialUse: row[8] as string | null,
-    }));
+       FROM labels WHERE account_id = :accountId ORDER BY type ASC, name ASC`
+    ).all({ accountId });
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   /**
@@ -1621,18 +1348,11 @@ export class DatabaseService {
    */
   createLabel(accountId: number, gmailLabelId: string, name: string, color: string | null): number {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    const result = this.db.prepare(
       `INSERT INTO labels (account_id, gmail_label_id, name, type, color, unread_count, total_count)
-       VALUES (:accountId, :gmailLabelId, :name, 'user', :color, 0, 0)`,
-      { ':accountId': accountId, ':gmailLabelId': gmailLabelId, ':name': name, ':color': color }
-    );
-    const result = this.db.exec(
-      'SELECT id FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
-      { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
-    );
-    const newId = result[0]?.values[0]?.[0] as number;
-    this.scheduleSave();
-    return newId;
+       VALUES (:accountId, :gmailLabelId, :name, 'user', :color, 0, 0)`
+    ).run({ accountId, gmailLabelId, name, color });
+    return Number(result.lastInsertRowid);
   }
 
   /**
@@ -1641,26 +1361,18 @@ export class DatabaseService {
    */
   deleteLabel(accountId: number, gmailLabelId: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('BEGIN');
-    try {
-      this.db.run(
-        'DELETE FROM email_folders WHERE account_id = :accountId AND folder = :gmailLabelId',
-        { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
-      );
-      this.db.run(
-        'DELETE FROM thread_folders WHERE account_id = :accountId AND folder = :gmailLabelId',
-        { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
-      );
-      this.db.run(
-        'DELETE FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
-        { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
-      );
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+    const doDelete = this.db.transaction(() => {
+      this.db!.prepare(
+        'DELETE FROM email_folders WHERE account_id = :accountId AND folder = :gmailLabelId'
+      ).run({ accountId, gmailLabelId });
+      this.db!.prepare(
+        'DELETE FROM thread_folders WHERE account_id = :accountId AND folder = :gmailLabelId'
+      ).run({ accountId, gmailLabelId });
+      this.db!.prepare(
+        'DELETE FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId'
+      ).run({ accountId, gmailLabelId });
+    });
+    doDelete();
   }
 
   /**
@@ -1668,11 +1380,9 @@ export class DatabaseService {
    */
   updateLabelColor(accountId: number, gmailLabelId: string, color: string | null): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'UPDATE labels SET color = :color WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
-      { ':accountId': accountId, ':gmailLabelId': gmailLabelId, ':color': color }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'UPDATE labels SET color = :color WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId'
+    ).run({ color, accountId, gmailLabelId });
   }
 
   /**
@@ -1680,23 +1390,14 @@ export class DatabaseService {
    */
   getLabelByGmailId(accountId: number, gmailLabelId: string): Record<string, unknown> | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT id, account_id, gmail_label_id, name, type, color
-       FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId`,
-      { ':accountId': accountId, ':gmailLabelId': gmailLabelId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) {
+       FROM labels WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId`
+    ).get({ accountId, gmailLabelId });
+    if (row === undefined) {
       return null;
     }
-    const row = result[0].values[0];
-    return {
-      id: row[0] as number,
-      accountId: row[1] as number,
-      gmailLabelId: row[2] as string,
-      name: row[3] as string,
-      type: row[4] as string,
-      color: row[5] as string | null,
-    };
+    return this.mapRow<Record<string, unknown>>(row as Record<string, unknown>);
   }
 
   /**
@@ -1712,36 +1413,32 @@ export class DatabaseService {
       return new Map();
     }
 
-    // Build a quoted, comma-separated list for the IN clause (no parameterised arrays in sql.js)
-    const sanitized = xGmThrids
-      .map((identifier) => identifier.replace(/'/g, "''"))
-      .map((identifier) => `'${identifier}'`)
-      .join(', ');
-
-    const sql = `
-      SELECT DISTINCT e.x_gm_thrid, l.id, l.name, l.color, l.gmail_label_id
-      FROM emails e
-      JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
-      JOIN labels l ON l.account_id = e.account_id AND l.gmail_label_id = ef.folder
-      WHERE e.account_id = :accountId
-        AND l.type = 'user'
-        AND e.x_gm_thrid IN (${sanitized})
-    `;
-
-    const result = this.db.exec(sql, { ':accountId': accountId });
-    const map = new Map<string, Array<{ id: number; name: string; color: string | null; gmailLabelId: string }>>();
-
-    if (result.length === 0) {
-      return map;
+    // Build parameterized placeholders for the IN clause — avoids string injection risks.
+    const thridPlaceholders = xGmThrids.map((_, index) => `:thrid${index}`).join(', ');
+    const params: Record<string, string | number> = { accountId };
+    for (let index = 0; index < xGmThrids.length; index++) {
+      params[`thrid${index}`] = xGmThrids[index];
     }
 
-    for (const row of result[0].values) {
-      const xGmThrid = row[0] as string;
+    const rows = this.db.prepare(
+      `SELECT DISTINCT e.x_gm_thrid, l.id, l.name, l.color, l.gmail_label_id
+       FROM emails e
+       JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
+       JOIN labels l ON l.account_id = e.account_id AND l.gmail_label_id = ef.folder
+       WHERE e.account_id = :accountId
+         AND l.type = 'user'
+         AND e.x_gm_thrid IN (${thridPlaceholders})`
+    ).all(params) as Array<{ x_gm_thrid: string; id: number; name: string; color: string | null; gmail_label_id: string }>;
+
+    const map = new Map<string, Array<{ id: number; name: string; color: string | null; gmailLabelId: string }>>();
+
+    for (const row of rows) {
+      const xGmThrid = row.x_gm_thrid;
       const labelEntry = {
-        id: row[1] as number,
-        name: row[2] as string,
-        color: row[3] as string | null,
-        gmailLabelId: row[4] as string,
+        id: row.id,
+        name: row.name,
+        color: row.color,
+        gmailLabelId: row.gmail_label_id,
       };
       if (!map.has(xGmThrid)) {
         map.set(xGmThrid, []);
@@ -1754,55 +1451,48 @@ export class DatabaseService {
 
   updateLabelCounts(accountId: number, gmailLabelId: string, unreadCount: number, totalCount: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'UPDATE labels SET unread_count = :unreadCount, total_count = :totalCount WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId',
-      { ':unreadCount': unreadCount, ':totalCount': totalCount, ':accountId': accountId, ':gmailLabelId': gmailLabelId }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'UPDATE labels SET unread_count = :unreadCount, total_count = :totalCount WHERE account_id = :accountId AND gmail_label_id = :gmailLabelId'
+    ).run({ unreadCount, totalCount, accountId, gmailLabelId });
   }
 
   // ---- Contact operations ----
 
   upsertContact(email: string, displayName?: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO contacts (email, display_name, frequency, last_contacted_at, updated_at)
        VALUES (:email, :displayName, 1, datetime('now'), datetime('now'))
        ON CONFLICT(email) DO UPDATE SET
         display_name = COALESCE(excluded.display_name, display_name),
         frequency = frequency + 1,
         last_contacted_at = datetime('now'),
-        updated_at = datetime('now')`,
-      { ':email': email, ':displayName': displayName || null }
-    );
-    this.scheduleSave();
+        updated_at = datetime('now')`
+    ).run({ email, displayName: displayName || null });
   }
 
   searchContacts(query: string, limit: number = 10): Array<Record<string, unknown>> {
     if (!this.db) throw new Error('Database not initialized');
     const likeQuery = `%${query}%`;
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT id, email, display_name, frequency, last_contacted_at
        FROM contacts WHERE email LIKE :likeQuery OR display_name LIKE :likeQuery
-       ORDER BY frequency DESC LIMIT :limit`,
-      { ':likeQuery': likeQuery, ':limit': limit }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapGenericRow(row, result[0].columns));
+       ORDER BY frequency DESC LIMIT :limit`
+    ).all({ likeQuery, limit });
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   // ---- Search operations ----
 
   upsertSearchIndex(emailId: number, subject: string, body: string, fromName: string, fromAddress: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO search_index (email_id, subject, body, from_name, from_address)
        VALUES (:emailId, :subject, :body, :fromName, :fromAddress)
        ON CONFLICT(email_id) DO UPDATE SET
         subject = excluded.subject, body = excluded.body,
-        from_name = excluded.from_name, from_address = excluded.from_address`,
-      { ':emailId': emailId, ':subject': subject, ':body': body, ':fromName': fromName, ':fromAddress': fromAddress }
-    );
+        from_name = excluded.from_name, from_address = excluded.from_address`
+    ).run({ emailId, subject, body, fromName, fromAddress });
   }
 
   searchEmails(accountId: number, query: string, limit: number = 100): Array<Record<string, unknown>> {
@@ -1815,9 +1505,9 @@ export class DatabaseService {
     }) as { whereClause: string; params: Record<string, unknown> };
 
     const params = {
-      ':accountId': accountId,
-      ':limit': limit,
-      ':trashFolder': this.getTrashFolder(accountId),
+      accountId,
+      limit,
+      trashFolder: this.getTrashFolder(accountId),
       ...parsed.params,
     } as Record<string, number | string | null>;
 
@@ -1853,9 +1543,8 @@ export class DatabaseService {
        LIMIT :limit
      `;
 
-    const result = this.db.exec(sql, params);
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+    const rows = this.db.prepare(sql).all(params);
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   searchEmailsMulti(accountId: number, queries: string[], limit: number = 100): Array<Record<string, unknown>> {
@@ -1879,23 +1568,21 @@ export class DatabaseService {
       }) as { whereClause: string; params: Record<string, unknown> };
 
       const params = {
-        ':accountId': accountId,
-        ':limit': limit,
+        accountId,
+        limit,
         ...parsed.params,
       } as Record<string, number | string | null>;
 
-      const result = this.db.exec(
+      const rows = this.db.prepare(
         `SELECT DISTINCT e.x_gm_thrid
          FROM emails e
          WHERE e.account_id = :accountId AND (${parsed.whereClause})
          ORDER BY e.date DESC
-         LIMIT :limit`,
-        params
-      );
+         LIMIT :limit`
+      ).all(params) as Array<{ x_gm_thrid: string | null }>;
 
-      if (result.length === 0) continue;
-      for (const row of result[0].values) {
-        const threadId = row[0] as string | null;
+      for (const row of rows) {
+        const threadId = row.x_gm_thrid;
         if (threadId) {
           threadIdSet.add(threadId);
         }
@@ -1915,15 +1602,15 @@ export class DatabaseService {
 
     const placeholders = uniqueIds.map((_, index) => `:threadId${index}`);
     const params: Record<string, number | string> = {
-      ':accountId': accountId,
-      ':limit': limit,
-      ':trashFolder': this.getTrashFolder(accountId),
+      accountId,
+      limit,
+      trashFolder: this.getTrashFolder(accountId),
     };
     for (let index = 0; index < uniqueIds.length; index++) {
-      params[`:threadId${index}`] = uniqueIds[index];
+      params[`threadId${index}`] = uniqueIds[index];
     }
 
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT
          t.id,
          t.account_id,
@@ -1948,12 +1635,10 @@ export class DatabaseService {
        WHERE t.account_id = :accountId
          AND t.x_gm_thrid IN (${placeholders.join(', ')})
        ORDER BY t.last_message_date DESC
-       LIMIT :limit`,
-      params
-    );
+       LIMIT :limit`
+    ).all(params);
 
-    if (result.length === 0) return [];
-    return result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+    return rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
   }
 
   // ---- Batch operations for thread enrichment ----
@@ -1970,23 +1655,20 @@ export class DatabaseService {
     const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
     const params: Record<string, number> = {};
     for (let index = 0; index < uniqueThreadIds.length; index++) {
-      params[`:threadId${index}`] = uniqueThreadIds[index];
+      params[`threadId${index}`] = uniqueThreadIds[index];
     }
 
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT t.id, tf.folder
        FROM threads t
        INNER JOIN thread_folders tf ON t.account_id = tf.account_id AND t.x_gm_thrid = tf.x_gm_thrid
        WHERE t.id IN (${placeholders.join(', ')})
-       ORDER BY t.id ASC, tf.folder ASC`,
-      params
-    );
+       ORDER BY t.id ASC, tf.folder ASC`
+    ).all(params) as Array<{ id: number; folder: string }>;
 
-    if (result.length === 0) return map;
-
-    for (const row of result[0].values) {
-      const threadId = row[0] as number;
-      const folder = row[1] as string;
+    for (const row of rows) {
+      const threadId = row.id;
+      const folder = row.folder;
       if (!map.has(threadId)) {
         map.set(threadId, []);
       }
@@ -2005,14 +1687,14 @@ export class DatabaseService {
 
     const placeholders = uniqueThreadIds.map((_, index) => `:threadId${index}`);
     const params: Record<string, number | string> = {
-      ':folder': folder,
-      ':trashFolder': this.getTrashFolder(accountId),
+      folder,
+      trashFolder: this.getTrashFolder(accountId),
     };
     for (let index = 0; index < uniqueThreadIds.length; index++) {
-      params[`:threadId${index}`] = uniqueThreadIds[index];
+      params[`threadId${index}`] = uniqueThreadIds[index];
     }
 
-    const queryResult = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT DISTINCT t.id
        FROM threads t
        INNER JOIN emails e ON e.account_id = t.account_id AND e.x_gm_thrid = t.x_gm_thrid
@@ -2023,14 +1705,11 @@ export class DatabaseService {
          AND (
            :folder = :trashFolder
            OR ef_trash.x_gm_msgid IS NULL
-         )`,
-      params
-    );
+         )`
+    ).all(params) as Array<{ id: number }>;
 
-    if (queryResult.length > 0) {
-      for (const row of queryResult[0].values) {
-        result.add(row[0] as number);
-      }
+    for (const row of rows) {
+      result.add(row.id);
     }
 
     return result;
@@ -2040,95 +1719,83 @@ export class DatabaseService {
 
   updateAccountSyncState(accountId: number, lastSyncAt: string, syncCursor?: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      `UPDATE accounts SET last_sync_at = :lastSyncAt, sync_cursor = :syncCursor, updated_at = datetime('now') WHERE id = :accountId`,
-      { ':lastSyncAt': lastSyncAt, ':syncCursor': syncCursor || null, ':accountId': accountId }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      `UPDATE accounts SET last_sync_at = :lastSyncAt, sync_cursor = :syncCursor, updated_at = datetime('now') WHERE id = :accountId`
+    ).run({ lastSyncAt, syncCursor: syncCursor || null, accountId });
   }
 
   getAccountSyncState(accountId: number): { lastSyncAt: string | null; syncCursor: string | null } {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
-      'SELECT last_sync_at, sync_cursor FROM accounts WHERE id = :accountId',
-      { ':accountId': accountId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) {
+    const row = this.db.prepare(
+      'SELECT last_sync_at, sync_cursor FROM accounts WHERE id = :accountId'
+    ).get({ accountId }) as { last_sync_at: string | null; sync_cursor: string | null } | undefined;
+    if (row === undefined) {
       return { lastSyncAt: null, syncCursor: null };
     }
     return {
-      lastSyncAt: result[0].values[0][0] as string | null,
-      syncCursor: result[0].values[0][1] as string | null,
+      lastSyncAt: row.last_sync_at,
+      syncCursor: row.sync_cursor,
     };
   }
 
   // ---- Row mapping helpers ----
 
-  private toCamelKey(column: string): string {
-    if (column === 'x_gm_msgid') {
-      return 'xGmMsgId';
-    }
-    if (column === 'x_gm_thrid') {
-      return 'xGmThrid';
-    }
-    return column.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
-  }
+  /**
+   * Convert a snake_case database row object (from better-sqlite3's .get()/.all())
+   * to a camelCase object, with boolean coercion for known boolean columns.
+   *
+   * Special cases:
+   *   x_gm_msgid → xGmMsgId
+   *   x_gm_thrid → xGmThrid
+   *
+   * Boolean coercion: known boolean columns are converted from 0/1 integers
+   * to false/true.
+   */
+  private mapRow<T extends Record<string, unknown>>(row: Record<string, unknown>): T {
+    const booleanColumns = new Set([
+      'is_read', 'is_starred', 'is_important', 'is_draft', 'is_filtered',
+      'has_attachments', 'is_enabled', 'is_ai_generated', 'is_active',
+      'needs_reauth', 'condstore_supported', 'build_interrupted',
+    ]);
 
-  private mapEmailRow(row: (string | number | Uint8Array | null)[], columns: string[]): Record<string, unknown> {
-    const obj: Record<string, unknown> = {};
-    for (let i = 0; i < columns.length; i++) {
-      const col = columns[i];
-      const val = row[i];
-      const key = this.toCamelKey(col);
-      if (col === 'is_read' || col === 'is_starred' || col === 'is_important' || col === 'is_draft' || col === 'is_filtered' || col === 'has_attachments') {
-        obj[key] = val === 1;
+    const result: Record<string, unknown> = {};
+
+    for (const key of Object.keys(row)) {
+      const value = row[key];
+
+      let camelKey: string;
+      if (key === 'x_gm_msgid') {
+        camelKey = 'xGmMsgId';
+      } else if (key === 'x_gm_thrid') {
+        camelKey = 'xGmThrid';
       } else {
-        obj[key] = val;
+        const parts = key.split('_');
+        camelKey = parts[0] + parts.slice(1).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('');
+      }
+
+      if (booleanColumns.has(key) && (value === 0 || value === 1)) {
+        result[camelKey] = value === 1;
+      } else {
+        result[camelKey] = value;
       }
     }
-    return obj;
-  }
 
-  private mapThreadRow(row: (string | number | Uint8Array | null)[], columns: string[]): Record<string, unknown> {
-    const obj: Record<string, unknown> = {};
-    for (let i = 0; i < columns.length; i++) {
-      const col = columns[i];
-      const val = row[i];
-      const key = this.toCamelKey(col);
-      if (col === 'is_read' || col === 'is_starred' || col === 'has_attachments') {
-        obj[key] = val === 1;
-      } else {
-        obj[key] = val;
-      }
-    }
-    return obj;
-  }
-
-  private mapGenericRow(row: (string | number | Uint8Array | null)[], columns: string[]): Record<string, unknown> {
-    const obj: Record<string, unknown> = {};
-    for (let i = 0; i < columns.length; i++) {
-      const col = columns[i];
-      const val = row[i];
-      const key = this.toCamelKey(col);
-      obj[key] = val;
-    }
-    return obj;
+    return result as T;
   }
 
   // ---- AI Cache operations ----
 
   getAiCacheResult(operation: string, inputHash: string, model: string): string | null {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT result FROM ai_cache
        WHERE operation_type = :operation AND input_hash = :inputHash AND model = :model
-       AND (expires_at IS NULL OR expires_at > datetime('now'))`,
-      { ':operation': operation, ':inputHash': inputHash, ':model': model }
-    );
-    if (result.length > 0 && result[0].values.length > 0) {
-      return result[0].values[0][0] as string;
+       AND (expires_at IS NULL OR expires_at > datetime('now'))`
+    ).get({ operation, inputHash, model }) as { result: string } | undefined;
+    if (row === undefined) {
+      return null;
     }
-    return null;
+    return row.result;
   }
 
   setAiCacheResult(operation: string, inputHash: string, model: string, resultText: string, expiresInDays: number | null): void {
@@ -2137,31 +1804,26 @@ export class DatabaseService {
       ? new Date(Date.now() + (Math.floor(expiresInDays) * 24 * 60 * 60 * 1000)).toISOString()
       : null;
 
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO ai_cache (operation_type, input_hash, model, result, expires_at)
        VALUES (:operation, :inputHash, :model, :result, :expiresAt)
        ON CONFLICT(operation_type, input_hash, model) DO UPDATE SET
-         result = excluded.result, created_at = datetime('now'), expires_at = excluded.expires_at`,
-      { ':operation': operation, ':inputHash': inputHash, ':model': model, ':result': resultText, ':expiresAt': expiresAt }
-    );
-    this.scheduleSave();
+         result = excluded.result, created_at = datetime('now'), expires_at = excluded.expires_at`
+    ).run({ operation, inputHash, model, result: resultText, expiresAt });
   }
 
   clearExpiredAiCache(): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run("DELETE FROM ai_cache WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')");
-    this.scheduleSave();
+    this.db.prepare("DELETE FROM ai_cache WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
   }
 
   invalidateAiCache(operation: string, inputHash?: string): void {
     if (!this.db) throw new Error('Database not initialized');
     if (inputHash) {
-      this.db.run('DELETE FROM ai_cache WHERE operation_type = :operation AND input_hash = :inputHash',
-        { ':operation': operation, ':inputHash': inputHash });
+      this.db.prepare('DELETE FROM ai_cache WHERE operation_type = :operation AND input_hash = :inputHash').run({ operation, inputHash });
     } else {
-      this.db.run('DELETE FROM ai_cache WHERE operation_type = :operation', { ':operation': operation });
+      this.db.prepare('DELETE FROM ai_cache WHERE operation_type = :operation').run({ operation });
     }
-    this.scheduleSave();
   }
 
   // ---- Filter CRUD operations ----
@@ -2171,18 +1833,14 @@ export class DatabaseService {
     isEnabled: boolean; isAiGenerated: boolean; sortOrder: number; createdAt: string; updatedAt: string;
   }> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT id, account_id, name, conditions, actions, is_enabled, is_ai_generated, sort_order, created_at, updated_at
-       FROM filters WHERE account_id = :accountId ORDER BY sort_order ASC, id ASC`,
-      { ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map(row => ({
-      id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
-      conditions: row[3] as string, actions: row[4] as string,
-      isEnabled: !!(row[5] as number), isAiGenerated: !!(row[6] as number),
-      sortOrder: (row[7] as number) || 0, createdAt: row[8] as string, updatedAt: row[9] as string,
-    }));
+       FROM filters WHERE account_id = :accountId ORDER BY sort_order ASC, id ASC`
+    ).all({ accountId });
+    return rows.map((row) => this.mapRow<{
+      id: number; accountId: number; name: string; conditions: string; actions: string;
+      isEnabled: boolean; isAiGenerated: boolean; sortOrder: number; createdAt: string; updatedAt: string;
+    }>(row as Record<string, unknown>));
   }
 
   saveFilter(filter: {
@@ -2192,55 +1850,53 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     let sortOrder = filter.sortOrder;
     if (sortOrder == null) {
-      const maxResult = this.db.exec(
-        'SELECT COALESCE(MAX(sort_order), 0) FROM filters WHERE account_id = :accountId',
-        { ':accountId': filter.accountId }
-      );
-      sortOrder = ((maxResult[0]?.values[0]?.[0] as number) || 0) + 1;
+      const maxRow = this.db.prepare(
+        'SELECT COALESCE(MAX(sort_order), 0) AS maxOrder FROM filters WHERE account_id = :accountId'
+      ).get({ accountId: filter.accountId }) as { maxOrder: number } | undefined;
+      sortOrder = ((maxRow?.maxOrder) || 0) + 1;
     }
-    this.db.run(
+    const result = this.db.prepare(
       `INSERT INTO filters (account_id, name, conditions, actions, is_enabled, is_ai_generated, sort_order)
-       VALUES (:accountId, :name, :conditions, :actions, :isEnabled, :isAiGenerated, :sortOrder)`,
-      {
-        ':accountId': filter.accountId, ':name': filter.name, ':conditions': filter.conditions,
-        ':actions': filter.actions, ':isEnabled': filter.isEnabled ? 1 : 0,
-        ':isAiGenerated': filter.isAiGenerated ? 1 : 0, ':sortOrder': sortOrder,
-      }
-    );
-    const idResult = this.db.exec('SELECT last_insert_rowid()');
-    const id = idResult.length > 0 ? (idResult[0].values[0][0] as number) : 0;
-    this.scheduleSave();
-    return id;
+       VALUES (:accountId, :name, :conditions, :actions, :isEnabled, :isAiGenerated, :sortOrder)`
+    ).run({
+      accountId: filter.accountId,
+      name: filter.name,
+      conditions: filter.conditions,
+      actions: filter.actions,
+      isEnabled: filter.isEnabled ? 1 : 0,
+      isAiGenerated: filter.isAiGenerated ? 1 : 0,
+      sortOrder,
+    });
+    return Number(result.lastInsertRowid);
   }
 
   updateFilter(filter: { id: number; name: string; conditions: string; actions: string; isEnabled: boolean; sortOrder?: number }): void {
     if (!this.db) throw new Error('Database not initialized');
     const updates = ['name = :name', 'conditions = :conditions', 'actions = :actions', 'is_enabled = :isEnabled', "updated_at = datetime('now')"];
     const params: Record<string, string | number> = {
-      ':id': filter.id, ':name': filter.name, ':conditions': filter.conditions,
-      ':actions': filter.actions, ':isEnabled': filter.isEnabled ? 1 : 0,
+      id: filter.id,
+      name: filter.name,
+      conditions: filter.conditions,
+      actions: filter.actions,
+      isEnabled: filter.isEnabled ? 1 : 0,
     };
     if (filter.sortOrder != null) {
       updates.push('sort_order = :sortOrder');
-      params[':sortOrder'] = filter.sortOrder;
+      params['sortOrder'] = filter.sortOrder;
     }
-    this.db.run(`UPDATE filters SET ${updates.join(', ')} WHERE id = :id`, params);
-    this.scheduleSave();
+    this.db.prepare(`UPDATE filters SET ${updates.join(', ')} WHERE id = :id`).run(params);
   }
 
   deleteFilter(id: number): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run('DELETE FROM filters WHERE id = :id', { ':id': id });
-    this.scheduleSave();
+    this.db.prepare('DELETE FROM filters WHERE id = :id').run({ id });
   }
 
   toggleFilter(id: number, isEnabled: boolean): void {
     if (!this.db) throw new Error('Database not initialized');
-    this.db.run(
-      'UPDATE filters SET is_enabled = :isEnabled, updated_at = datetime(\'now\') WHERE id = :id',
-      { ':id': id, ':isEnabled': isEnabled ? 1 : 0 }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      "UPDATE filters SET is_enabled = :isEnabled, updated_at = datetime('now') WHERE id = :id"
+    ).run({ id, isEnabled: isEnabled ? 1 : 0 });
   }
 
   // ---- Filter execution support ----
@@ -2250,21 +1906,27 @@ export class DatabaseService {
     toAddresses: string; subject: string; textBody: string | null; htmlBody: string | null; hasAttachments: boolean;
   }> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT e.id, e.x_gm_msgid, e.x_gm_thrid, e.from_address, e.from_name,
         e.to_addresses, e.subject, e.text_body, e.html_body, e.has_attachments
        FROM emails e
        JOIN email_folders ef ON ef.account_id = e.account_id AND ef.x_gm_msgid = e.x_gm_msgid
-       WHERE e.account_id = :accountId AND ef.folder = 'INBOX' AND e.is_filtered = 0`,
-      { ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map(row => ({
-      id: row[0] as number, xGmMsgId: row[1] as string, xGmThrid: row[2] as string,
-      fromAddress: row[3] as string, fromName: (row[4] as string) || '',
-      toAddresses: (row[5] as string) || '', subject: (row[6] as string) || '',
-      textBody: row[7] as string | null, htmlBody: row[8] as string | null,
-      hasAttachments: !!(row[9] as number),
+       WHERE e.account_id = :accountId AND ef.folder = 'INBOX' AND e.is_filtered = 0`
+    ).all({ accountId }) as Array<{
+      id: number; x_gm_msgid: string; x_gm_thrid: string; from_address: string; from_name: string;
+      to_addresses: string; subject: string; text_body: string | null; html_body: string | null; has_attachments: number;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      xGmMsgId: row.x_gm_msgid,
+      xGmThrid: row.x_gm_thrid,
+      fromAddress: row.from_address,
+      fromName: row.from_name || '',
+      toAddresses: row.to_addresses || '',
+      subject: row.subject || '',
+      textBody: row.text_body,
+      htmlBody: row.html_body,
+      hasAttachments: row.has_attachments === 1,
     }));
   }
 
@@ -2272,44 +1934,35 @@ export class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     if (emailIds.length === 0) return;
 
-    this.db.run('BEGIN');
-    try {
+    const doMark = this.db.transaction(() => {
       const batchSize = 500;
-      for (let i = 0; i < emailIds.length; i += batchSize) {
-        const batch = emailIds.slice(i, i + batchSize);
-        const placeholders = batch.map((_, idx) => `:eid${idx}`);
+      for (let offset = 0; offset < emailIds.length; offset += batchSize) {
+        const batch = emailIds.slice(offset, offset + batchSize);
+        const placeholders = batch.map((_, index) => `:eid${index}`).join(', ');
         const params: Record<string, number> = {};
-        for (let j = 0; j < batch.length; j++) {
-          params[`:eid${j}`] = batch[j];
+        for (let index = 0; index < batch.length; index++) {
+          params[`eid${index}`] = batch[index];
         }
-        this.db.run(
-          `UPDATE emails SET is_filtered = 1, updated_at = datetime('now') WHERE id IN (${placeholders.join(', ')})`,
-          params
-        );
+        this.db!.prepare(
+          `UPDATE emails SET is_filtered = 1, updated_at = datetime('now') WHERE id IN (${placeholders})`
+        ).run(params);
       }
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.scheduleSave();
+    });
+    doMark();
   }
 
   getEnabledFiltersOrdered(accountId: number): Array<{
     id: number; accountId: number; name: string; conditions: string; actions: string; sortOrder: number;
   }> {
     if (!this.db) throw new Error('Database not initialized');
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT id, account_id, name, conditions, actions, sort_order
        FROM filters WHERE account_id = :accountId AND is_enabled = 1
-       ORDER BY sort_order ASC, id ASC`,
-      { ':accountId': accountId }
-    );
-    if (result.length === 0) return [];
-    return result[0].values.map(row => ({
-      id: row[0] as number, accountId: row[1] as number, name: row[2] as string,
-      conditions: row[3] as string, actions: row[4] as string, sortOrder: (row[5] as number) || 0,
-    }));
+       ORDER BY sort_order ASC, id ASC`
+    ).all({ accountId });
+    return rows.map((row) => this.mapRow<{
+      id: number; accountId: number; name: string; conditions: string; actions: string; sortOrder: number;
+    }>(row as Record<string, unknown>));
   }
 
   // ---- Body prefetch helpers ----
@@ -2342,6 +1995,7 @@ export class DatabaseService {
     // while JS `toISOString()` produces ISO 8601 (with T and Z). SQLite's lexicographic
     // string comparison would give incorrect results across these two formats.
 
+    // db.prepare() is called inside the method since the SQL is dynamic (sinceMinutes clause).
     if (sinceMinutes !== undefined) {
       sql = `
         SELECT account_id, x_gm_msgid, x_gm_thrid
@@ -2353,7 +2007,7 @@ export class DatabaseService {
         ORDER BY date DESC
         LIMIT :limit
       `;
-      params = { ':accountId': accountId, ':sinceMinutes': sinceMinutes, ':limit': limit };
+      params = { accountId, sinceMinutes, limit };
     } else {
       sql = `
         SELECT account_id, x_gm_msgid, x_gm_thrid
@@ -2365,17 +2019,18 @@ export class DatabaseService {
         ORDER BY date DESC
         LIMIT :limit
       `;
-      params = { ':accountId': accountId, ':limit': limit };
+      params = { accountId, limit };
     }
 
-    const result = this.db.exec(sql, params);
-    if (result.length === 0) {
-      return [];
-    }
-    return result[0].values.map((row) => ({
-      accountId: row[0] as number,
-      xGmMsgId: row[1] as string,
-      xGmThrid: row[2] as string,
+    const rows = this.db.prepare(sql).all(params) as Array<{
+      account_id: number;
+      x_gm_msgid: string;
+      x_gm_thrid: string;
+    }>;
+    return rows.map((row) => ({
+      accountId: row.account_id,
+      xGmMsgId: row.x_gm_msgid,
+      xGmThrid: row.x_gm_thrid,
     }));
   }
 
@@ -2394,7 +2049,7 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    this.db.run(
+    this.db.prepare(
       `UPDATE emails
        SET text_body = :textBody,
            html_body = :htmlBody,
@@ -2402,15 +2057,13 @@ export class DatabaseService {
        WHERE account_id = :accountId
          AND x_gm_msgid = :xGmMsgId
          AND (text_body IS NULL OR text_body = '')
-         AND (html_body IS NULL OR html_body = '')`,
-      {
-        ':textBody': textBody || null,
-        ':htmlBody': htmlBody || null,
-        ':accountId': accountId,
-        ':xGmMsgId': xGmMsgId,
-      },
-    );
-    this.scheduleSave();
+         AND (html_body IS NULL OR html_body = '')`
+    ).run({
+      textBody: textBody || null,
+      htmlBody: htmlBody || null,
+      accountId,
+      xGmMsgId,
+    });
   }
 
   // ---- Attachment CRUD ----
@@ -2438,32 +2091,29 @@ export class DatabaseService {
     }
 
     // Look up the email's internal id
-    const emailResult = this.db.exec(
-      'SELECT id FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-    );
-    if (emailResult.length === 0 || emailResult[0].values.length === 0) {
+    const emailRow = this.db.prepare(
+      'SELECT id FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId'
+    ).get({ accountId, xGmMsgId }) as { id: number } | undefined;
+    if (emailRow === undefined) {
       log.warn(`[DB] upsertAttachmentsForEmail: email not found for account=${accountId} msgid=${xGmMsgId}`);
       return;
     }
-    const emailId = emailResult[0].values[0][0] as number;
+    const emailId = emailRow.id;
 
     for (const att of attachments) {
       // Use INSERT OR IGNORE so that re-syncing a message doesn't duplicate attachment rows.
       // Attachment identity is determined by (email_id, filename, content_id).
-      this.db.run(
+      this.db.prepare(
         `INSERT OR IGNORE INTO attachments (email_id, filename, mime_type, size, content_id)
-         VALUES (:emailId, :filename, :mimeType, :size, :contentId)`,
-        {
-          ':emailId': emailId,
-          ':filename': att.filename,
-          ':mimeType': att.mimeType ?? null,
-          ':size': att.size ?? null,
-          ':contentId': att.contentId ?? null,
-        }
-      );
+         VALUES (:emailId, :filename, :mimeType, :size, :contentId)`
+      ).run({
+        emailId,
+        filename: att.filename,
+        mimeType: att.mimeType ?? null,
+        size: att.size ?? null,
+        contentId: att.contentId ?? null,
+      });
     }
-    this.scheduleSave();
   }
 
   /**
@@ -2473,26 +2123,25 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT a.id, a.email_id, a.filename, a.mime_type, a.size, a.content_id, a.local_path, a.created_at
        FROM attachments a
        JOIN emails e ON e.id = a.email_id
        WHERE e.account_id = :accountId AND e.x_gm_msgid = :xGmMsgId
-       ORDER BY a.id ASC`,
-      { ':accountId': accountId, ':xGmMsgId': xGmMsgId }
-    );
-    if (result.length === 0) {
-      return [];
-    }
-    return result[0].values.map((row) => ({
-      id: row[0] as number,
-      emailId: row[1] as number,
-      filename: row[2] as string,
-      mimeType: row[3] as string | null,
-      size: row[4] as number | null,
-      contentId: row[5] as string | null,
-      localPath: row[6] as string | null,
-      createdAt: row[7] as string,
+       ORDER BY a.id ASC`
+    ).all({ accountId, xGmMsgId }) as Array<{
+      id: number; email_id: number; filename: string; mime_type: string | null;
+      size: number | null; content_id: string | null; local_path: string | null; created_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      emailId: row.email_id,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      size: row.size,
+      contentId: row.content_id,
+      localPath: row.local_path,
+      createdAt: row.created_at,
     }));
   }
 
@@ -2505,49 +2154,48 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    const result = new Map<string, AttachmentRecord[]>();
+    const resultMap = new Map<string, AttachmentRecord[]>();
     if (xGmMsgIds.length === 0) {
-      return result;
+      return resultMap;
     }
 
-    const placeholders = xGmMsgIds.map((_, i) => `:msgid${i}`).join(', ');
-    const params: Record<string, string | number> = { ':accountId': accountId };
-    for (let i = 0; i < xGmMsgIds.length; i++) {
-      params[`:msgid${i}`] = xGmMsgIds[i];
+    const placeholders = xGmMsgIds.map((_, index) => `:msgid${index}`).join(', ');
+    const params: Record<string, string | number> = { accountId };
+    for (let index = 0; index < xGmMsgIds.length; index++) {
+      params[`msgid${index}`] = xGmMsgIds[index];
     }
 
-    const queryResult = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT a.id, a.email_id, a.filename, a.mime_type, a.size, a.content_id, a.local_path, a.created_at,
               e.x_gm_msgid
        FROM attachments a
        JOIN emails e ON e.id = a.email_id
        WHERE e.account_id = :accountId AND e.x_gm_msgid IN (${placeholders})
-       ORDER BY e.x_gm_msgid, a.id ASC`,
-      params
-    );
+       ORDER BY e.x_gm_msgid, a.id ASC`
+    ).all(params) as Array<{
+      id: number; email_id: number; filename: string; mime_type: string | null;
+      size: number | null; content_id: string | null; local_path: string | null;
+      created_at: string; x_gm_msgid: string;
+    }>;
 
-    if (queryResult.length === 0) {
-      return result;
-    }
-
-    for (const row of queryResult[0].values) {
-      const xGmMsgId = row[8] as string;
-      if (!result.has(xGmMsgId)) {
-        result.set(xGmMsgId, []);
+    for (const row of rows) {
+      const xGmMsgId = row.x_gm_msgid;
+      if (!resultMap.has(xGmMsgId)) {
+        resultMap.set(xGmMsgId, []);
       }
-      result.get(xGmMsgId)!.push({
-        id: row[0] as number,
-        emailId: row[1] as number,
-        filename: row[2] as string,
-        mimeType: row[3] as string | null,
-        size: row[4] as number | null,
-        contentId: row[5] as string | null,
-        localPath: row[6] as string | null,
-        createdAt: row[7] as string,
+      resultMap.get(xGmMsgId)!.push({
+        id: row.id,
+        emailId: row.email_id,
+        filename: row.filename,
+        mimeType: row.mime_type,
+        size: row.size,
+        contentId: row.content_id,
+        localPath: row.local_path,
+        createdAt: row.created_at,
       });
     }
 
-    return result;
+    return resultMap;
   }
 
   /**
@@ -2557,11 +2205,9 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    this.db.run(
-      'UPDATE attachments SET local_path = :localPath WHERE id = :id',
-      { ':localPath': localPath, ':id': attachmentId }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'UPDATE attachments SET local_path = :localPath WHERE id = :id'
+    ).run({ localPath, id: attachmentId });
   }
 
   /**
@@ -2572,12 +2218,10 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    this.db.run(
+    this.db.prepare(
       `UPDATE attachments SET local_path = NULL
-       WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)`,
-      { ':accountId': accountId }
-    );
-    this.scheduleSave();
+       WHERE email_id IN (SELECT id FROM emails WHERE account_id = :accountId)`
+    ).run({ accountId });
   }
 
   /**
@@ -2587,24 +2231,25 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT id, email_id, filename, mime_type, size, content_id, local_path, created_at
-       FROM attachments WHERE id = :id`,
-      { ':id': attachmentId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) {
+       FROM attachments WHERE id = :id`
+    ).get({ id: attachmentId }) as {
+      id: number; email_id: number; filename: string; mime_type: string | null;
+      size: number | null; content_id: string | null; local_path: string | null; created_at: string;
+    } | undefined;
+    if (row === undefined) {
       return null;
     }
-    const row = result[0].values[0];
     return {
-      id: row[0] as number,
-      emailId: row[1] as number,
-      filename: row[2] as string,
-      mimeType: row[3] as string | null,
-      size: row[4] as number | null,
-      contentId: row[5] as string | null,
-      localPath: row[6] as string | null,
-      createdAt: row[7] as string,
+      id: row.id,
+      emailId: row.email_id,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      size: row.size,
+      contentId: row.content_id,
+      localPath: row.local_path,
+      createdAt: row.created_at,
     };
   }
 
@@ -2616,20 +2261,18 @@ export class DatabaseService {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
-    const result = this.db.exec(
+    const row = this.db.prepare(
       `SELECT e.x_gm_msgid, e.account_id
        FROM attachments a
        JOIN emails e ON e.id = a.email_id
-       WHERE a.id = :attachmentId`,
-      { ':attachmentId': attachmentId }
-    );
-    if (result.length === 0 || result[0].values.length === 0) {
+       WHERE a.id = :attachmentId`
+    ).get({ attachmentId }) as { x_gm_msgid: string; account_id: number } | undefined;
+    if (row === undefined) {
       return null;
     }
-    const row = result[0].values[0];
     return {
-      xGmMsgId: row[0] as string,
-      accountId: row[1] as number,
+      xGmMsgId: row.x_gm_msgid,
+      accountId: row.account_id,
     };
   }
 
@@ -2648,18 +2291,14 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    const result = this.db.exec(
-      'SELECT x_gm_msgid FROM vector_indexed_emails WHERE account_id = :accountId',
-      { ':accountId': accountId }
-    );
+    const rows = this.db.prepare(
+      'SELECT x_gm_msgid FROM vector_indexed_emails WHERE account_id = :accountId'
+    ).all({ accountId }) as Array<{ x_gm_msgid: string }>;
 
     const indexed = new Set<string>();
-    if (result.length > 0) {
-      for (const row of result[0].values) {
-        const msgId = row[0];
-        if (typeof msgId === 'string') {
-          indexed.add(msgId);
-        }
+    for (const row of rows) {
+      if (typeof row.x_gm_msgid === 'string') {
+        indexed.add(row.x_gm_msgid);
       }
     }
     return indexed;
@@ -2690,23 +2329,19 @@ export class DatabaseService {
     for (let start = 0; start < uniqueIds.length; start += chunkSize) {
       const chunk = uniqueIds.slice(start, start + chunkSize);
       const placeholders = chunk.map((_, index) => `:msgId${index}`).join(', ');
-      const params: Record<string, number | string> = { ':accountId': accountId };
+      const params: Record<string, number | string> = { accountId };
       for (let index = 0; index < chunk.length; index++) {
-        params[`:msgId${index}`] = chunk[index];
+        params[`msgId${index}`] = chunk[index];
       }
 
-      const result = this.db.exec(
+      const rows = this.db.prepare(
         `SELECT x_gm_msgid FROM vector_indexed_emails
-         WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
-        params
-      );
+         WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`
+      ).all(params) as Array<{ x_gm_msgid: string }>;
 
-      if (result.length > 0) {
-        for (const row of result[0].values) {
-          const msgId = row[0];
-          if (typeof msgId === 'string') {
-            indexed.add(msgId);
-          }
+      for (const row of rows) {
+        if (typeof row.x_gm_msgid === 'string') {
+          indexed.add(row.x_gm_msgid);
         }
       }
     }
@@ -2741,39 +2376,30 @@ export class DatabaseService {
       return;
     }
 
-    this.db.run('BEGIN');
-    try {
+    const doBatchInsert = this.db.transaction(() => {
       for (const record of records) {
-        this.db.run(
+        this.db!.prepare(
           `INSERT OR REPLACE INTO vector_indexed_emails (x_gm_msgid, account_id, embedding_hash)
-           VALUES (:xGmMsgId, :accountId, :embeddingHash)`,
-          {
-            ':xGmMsgId': record.xGmMsgId,
-            ':accountId': accountId,
-            ':embeddingHash': record.embeddingHash,
-          }
-        );
+           VALUES (:xGmMsgId, :accountId, :embeddingHash)`
+        ).run({
+          xGmMsgId: record.xGmMsgId,
+          accountId,
+          embeddingHash: record.embeddingHash,
+        });
       }
 
       // Atomically update the resume cursor if provided
       if (cursorUid !== undefined) {
-        this.db.run(
+        this.db!.prepare(
           `INSERT INTO embedding_crawl_progress (account_id, last_uid, build_interrupted, updated_at)
            VALUES (:accountId, :lastUid, 0, datetime('now'))
            ON CONFLICT(account_id) DO UPDATE SET
              last_uid   = excluded.last_uid,
-             updated_at = excluded.updated_at`,
-          { ':accountId': accountId, ':lastUid': cursorUid }
-        );
+             updated_at = excluded.updated_at`
+        ).run({ accountId, lastUid: cursorUid });
       }
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-
-    this.scheduleSave();
+    });
+    doBatchInsert();
   }
 
   /**
@@ -2788,15 +2414,11 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    const result = this.db.exec(
-      'SELECT COUNT(*) FROM vector_indexed_emails WHERE account_id = :accountId',
-      { ':accountId': accountId }
-    );
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS cnt FROM vector_indexed_emails WHERE account_id = :accountId'
+    ).get({ accountId }) as { cnt: number } | undefined;
 
-    if (result.length > 0 && result[0].values.length > 0) {
-      return result[0].values[0][0] as number;
-    }
-    return 0;
+    return row?.cnt ?? 0;
   }
 
   /**
@@ -2810,11 +2432,10 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    this.db.run(
-      'DELETE FROM vector_indexed_emails WHERE account_id = :accountId',
-      { ':accountId': accountId }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'DELETE FROM vector_indexed_emails WHERE account_id = :accountId'
+    ).run({ accountId });
+
     log.info(`[DatabaseService] Cleared vector index tracking for account ${accountId}`);
   }
 
@@ -2828,8 +2449,8 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    this.db.run('DELETE FROM vector_indexed_emails');
-    this.scheduleSave();
+    this.db.prepare('DELETE FROM vector_indexed_emails').run();
+
     log.info('[DatabaseService] Cleared all vector index tracking globally');
   }
 
@@ -2847,15 +2468,14 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    const result = this.db.exec(
-      'SELECT last_uid FROM embedding_crawl_progress WHERE account_id = :accountId',
-      { ':accountId': accountId }
-    );
+    const row = this.db.prepare(
+      'SELECT last_uid FROM embedding_crawl_progress WHERE account_id = :accountId'
+    ).get({ accountId }) as { last_uid: number } | undefined;
 
-    if (result.length === 0 || result[0].values.length === 0) {
+    if (row === undefined) {
       return 0;
     }
-    return result[0].values[0][0] as number;
+    return row.last_uid;
   }
 
   /**
@@ -2871,15 +2491,13 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO embedding_crawl_progress (account_id, last_uid, build_interrupted, updated_at)
        VALUES (:accountId, :lastUid, 0, datetime('now'))
        ON CONFLICT(account_id) DO UPDATE SET
          last_uid   = excluded.last_uid,
-         updated_at = excluded.updated_at`,
-      { ':accountId': accountId, ':lastUid': lastUid }
-    );
-    this.scheduleSave();
+         updated_at = excluded.updated_at`
+    ).run({ accountId, lastUid });
   }
 
   /**
@@ -2896,15 +2514,13 @@ export class DatabaseService {
     }
 
     const interruptedValue = interrupted ? 1 : 0;
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO embedding_crawl_progress (account_id, last_uid, build_interrupted, updated_at)
        VALUES (:accountId, 0, :interrupted, datetime('now'))
        ON CONFLICT(account_id) DO UPDATE SET
          build_interrupted = excluded.build_interrupted,
-         updated_at        = excluded.updated_at`,
-      { ':accountId': accountId, ':interrupted': interruptedValue }
-    );
-    this.scheduleSave();
+         updated_at        = excluded.updated_at`
+    ).run({ accountId, interrupted: interruptedValue });
   }
 
   /**
@@ -2918,14 +2534,11 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       'SELECT account_id FROM embedding_crawl_progress WHERE build_interrupted = 1'
-    );
+    ).all() as Array<{ account_id: number }>;
 
-    if (result.length === 0 || result[0].values.length === 0) {
-      return [];
-    }
-    return result[0].values.map((row) => row[0] as number);
+    return rows.map((row) => row.account_id);
   }
 
   /**
@@ -2939,11 +2552,9 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    this.db.run(
-      'DELETE FROM embedding_crawl_progress WHERE account_id = :accountId',
-      { ':accountId': accountId }
-    );
-    this.scheduleSave();
+    this.db.prepare(
+      'DELETE FROM embedding_crawl_progress WHERE account_id = :accountId'
+    ).run({ accountId });
   }
 
   /**
@@ -2956,8 +2567,8 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    this.db.run('DELETE FROM embedding_crawl_progress');
-    this.scheduleSave();
+    this.db.prepare('DELETE FROM embedding_crawl_progress').run();
+
     log.info('[DatabaseService] Cleared all embedding crawl progress globally');
   }
 
@@ -2995,7 +2606,7 @@ export class DatabaseService {
     }
 
     const trashFolder = this.getTrashFolder(accountId);
-    const result = this.db.exec(
+    const rows = this.db.prepare(
       `SELECT e.x_gm_msgid, e.account_id, e.subject, e.text_body, e.html_body
        FROM emails e
        WHERE e.account_id = :accountId
@@ -3016,26 +2627,27 @@ export class DatabaseService {
              AND ef.folder NOT IN (:trashFolder, :spamFolder, :draftsFolder)
          )
        ORDER BY e.date DESC
-       LIMIT :batchSize`,
-      {
-        ':accountId': accountId,
-        ':batchSize': batchSize,
-        ':trashFolder': trashFolder,
-        ':spamFolder': '[Gmail]/Spam',
-        ':draftsFolder': '[Gmail]/Drafts',
-      }
-    );
+       LIMIT :batchSize`
+    ).all({
+      accountId,
+      batchSize,
+      trashFolder,
+      spamFolder: '[Gmail]/Spam',
+      draftsFolder: '[Gmail]/Drafts',
+    }) as Array<{
+      x_gm_msgid: string;
+      account_id: number;
+      subject: string;
+      text_body: string | null;
+      html_body: string | null;
+    }>;
 
-    if (result.length === 0) {
-      return [];
-    }
-
-    return result[0].values.map((row) => ({
-      xGmMsgId: row[0] as string,
-      accountId: row[1] as number,
-      subject: (row[2] as string) || '',
-      textBody: row[3] as string | null,
-      htmlBody: row[4] as string | null,
+    return rows.map((row) => ({
+      xGmMsgId: row.x_gm_msgid,
+      accountId: row.account_id,
+      subject: row.subject || '',
+      textBody: row.text_body,
+      htmlBody: row.html_body,
     }));
   }
 
@@ -3076,12 +2688,12 @@ export class DatabaseService {
     // Build dynamic placeholders for excluded folders list
     const folderPlaceholders = excludedFolders.map((_, index) => `:excludedFolder${index}`).join(', ');
 
-    const params: Record<string, number | string> = { ':accountId': accountId };
+    const params: Record<string, number | string> = { accountId };
     for (let index = 0; index < uniqueIds.length; index++) {
-      params[`:msgId${index}`] = uniqueIds[index];
+      params[`msgId${index}`] = uniqueIds[index];
     }
     for (let index = 0; index < excludedFolders.length; index++) {
-      params[`:excludedFolder${index}`] = excludedFolders[index];
+      params[`excludedFolder${index}`] = excludedFolders[index];
     }
 
     // Select x_gm_msgid values that have at least one folder NOT in the excluded list
@@ -3093,34 +2705,16 @@ export class DatabaseService {
         AND ef.folder NOT IN (${folderPlaceholders})
     `;
 
-    const result = this.db.exec(sql, params);
-    if (result.length === 0) {
-      return new Set();
-    }
-
+    const rows = this.db.prepare(sql).all(params) as Array<{ x_gm_msgid: string }>;
     const included = new Set<string>();
-    for (const row of result[0].values) {
-      const msgId = row[0];
-      if (typeof msgId === 'string') {
-        included.add(msgId);
+    for (const row of rows) {
+      if (typeof row.x_gm_msgid === 'string') {
+        included.add(row.x_gm_msgid);
       }
     }
     return included;
   }
 
-  /**
-   * Given a list of x_gm_msgid values, return the subset that have AT LEAST ONE
-   * folder association in email_folders for this account (regardless of which folder).
-   *
-   * Used by SemanticSearchService to distinguish "only in excluded folders" from
-   * "never locally synced (no email_folders rows at all)". Un-synced emails from the
-   * full-mailbox crawl have no rows in email_folders and should pass through the
-   * folder exclusion filter.
-   *
-   * @param accountId - Account ID to scope the query
-   * @param xGmMsgIds - Candidate message IDs to check
-   * @returns Set of x_gm_msgid values that have at least one email_folders entry
-   */
   getMsgIdsWithAnyFolder(accountId: number, xGmMsgIds: string[]): Set<string> {
     if (!this.db) {
       throw new Error('Database not initialized');
@@ -3137,22 +2731,18 @@ export class DatabaseService {
     for (let offset = 0; offset < uniqueIds.length; offset += CHUNK_SIZE) {
       const chunk = uniqueIds.slice(offset, offset + CHUNK_SIZE);
       const placeholders = chunk.map((_, index) => `:msgId${offset + index}`).join(', ');
-      const params: Record<string, number | string> = { ':accountId': accountId };
+      const params: Record<string, number | string> = { accountId };
       for (let index = 0; index < chunk.length; index++) {
-        params[`:msgId${offset + index}`] = chunk[index];
+        params[`msgId${offset + index}`] = chunk[index];
       }
 
-      const result = this.db.exec(
-        `SELECT DISTINCT x_gm_msgid FROM email_folders WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
-        params
-      );
+      const rows = this.db.prepare(
+        `SELECT DISTINCT x_gm_msgid FROM email_folders WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`
+      ).all(params) as Array<{ x_gm_msgid: string }>;
 
-      if (result.length > 0) {
-        for (const row of result[0].values) {
-          const msgId = row[0];
-          if (typeof msgId === 'string') {
-            hasFolder.add(msgId);
-          }
+      for (const row of rows) {
+        if (typeof row.x_gm_msgid === 'string') {
+          hasFolder.add(row.x_gm_msgid);
         }
       }
     }
@@ -3185,12 +2775,12 @@ export class DatabaseService {
 
     const placeholders = uniqueIds.map((_, index) => `:msgId${index}`).join(', ');
     const params: Record<string, number | string | null> = {
-      ':accountId': accountId,
-      ':limit': uniqueIds.length,
-      ':trashFolder': this.getTrashFolder(accountId),
+      accountId,
+      limit: uniqueIds.length,
+      trashFolder: this.getTrashFolder(accountId),
     };
     for (let index = 0; index < uniqueIds.length; index++) {
-      params[`:msgId${index}`] = uniqueIds[index];
+      params[`msgId${index}`] = uniqueIds[index];
     }
 
     // Join emails → threads via x_gm_msgid to resolve threads for the given message IDs
@@ -3222,12 +2812,8 @@ export class DatabaseService {
       LIMIT :limit
     `;
 
-    const result = this.db.exec(sql, params);
-    if (result.length === 0) {
-      return [];
-    }
-
-    const rows = result[0].values.map((row) => this.mapThreadRow(row, result[0].columns));
+    const rows = this.db.prepare(sql).all(params);
+    const mappedRows = rows.map((row) => this.mapRow<Record<string, unknown>>(row as Record<string, unknown>));
 
     // Re-sort to preserve the relevance ordering of the input xGmMsgIds.
     // Build a map from x_gm_thrid → rank (using the first matching msgId's position).
@@ -3241,10 +2827,10 @@ export class DatabaseService {
     // The query joined emails to threads; we need to look up the emailMsgIds for each thread.
     // Simpler approach: for each result thread, compute its rank by querying back.
     // Even simpler: re-query the emails table for xGmThrid → msgId mapping for these threads.
-    const threadIds = rows.map((row) => row['xGmThrid'] as string);
+    const threadIds = mappedRows.map((row) => row['xGmThrid'] as string);
     const threadMsgIdMap = this.getFirstMatchingMsgIdForThreads(accountId, threadIds, uniqueIds);
 
-    const rankedRows = rows.map((row) => {
+    const rankedRows = mappedRows.map((row) => {
       const xGmThrid = row['xGmThrid'] as string;
       const firstMatchingMsgId = threadMsgIdMap.get(xGmThrid);
       const rank = firstMatchingMsgId !== undefined ? (msgIdToRank.get(firstMatchingMsgId) ?? Infinity) : Infinity;
@@ -3272,12 +2858,12 @@ export class DatabaseService {
     const thridPlaceholders = xGmThrids.map((_, index) => `:thrid${index}`).join(', ');
     const msgIdPlaceholders = candidateMsgIds.map((_, index) => `:cand${index}`).join(', ');
 
-    const params: Record<string, number | string> = { ':accountId': accountId };
+    const params: Record<string, number | string> = { accountId };
     for (let index = 0; index < xGmThrids.length; index++) {
-      params[`:thrid${index}`] = xGmThrids[index];
+      params[`thrid${index}`] = xGmThrids[index];
     }
     for (let index = 0; index < candidateMsgIds.length; index++) {
-      params[`:cand${index}`] = candidateMsgIds[index];
+      params[`cand${index}`] = candidateMsgIds[index];
     }
 
     const sql = `
@@ -3288,10 +2874,7 @@ export class DatabaseService {
         AND x_gm_msgid IN (${msgIdPlaceholders})
     `;
 
-    const result = this.db.exec(sql, params);
-    if (result.length === 0) {
-      return new Map();
-    }
+    const rows = this.db.prepare(sql).all(params) as Array<{ x_gm_thrid: string; x_gm_msgid: string }>;
 
     // For each thread, keep track of the best-ranked (lowest index) matching msgId
     const msgIdToRank = new Map<string, number>();
@@ -3300,9 +2883,9 @@ export class DatabaseService {
     }
 
     const threadBestMap = new Map<string, { msgId: string; rank: number }>();
-    for (const row of result[0].values) {
-      const thrid = row[0] as string;
-      const msgId = row[1] as string;
+    for (const row of rows) {
+      const thrid = row.x_gm_thrid;
+      const msgId = row.x_gm_msgid;
       const rank = msgIdToRank.get(msgId) ?? Infinity;
       const existing = threadBestMap.get(thrid);
       if (existing === undefined || rank < existing.rank) {
@@ -3343,22 +2926,18 @@ export class DatabaseService {
     for (let offset = 0; offset < uniqueIds.length; offset += CHUNK_SIZE) {
       const chunk = uniqueIds.slice(offset, offset + CHUNK_SIZE);
       const placeholders = chunk.map((_, index) => `:msgId${offset + index}`).join(', ');
-      const params: Record<string, number | string> = { ':accountId': accountId };
+      const params: Record<string, number | string> = { accountId };
       for (let index = 0; index < chunk.length; index++) {
-        params[`:msgId${offset + index}`] = chunk[index];
+        params[`msgId${offset + index}`] = chunk[index];
       }
 
-      const result = this.db.exec(
-        `SELECT x_gm_msgid FROM emails WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`,
-        params
-      );
+      const rows = this.db.prepare(
+        `SELECT x_gm_msgid FROM emails WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`
+      ).all(params) as Array<{ x_gm_msgid: string }>;
 
-      if (result.length > 0) {
-        for (const row of result[0].values) {
-          const msgId = row[0];
-          if (typeof msgId === 'string') {
-            existing.add(msgId);
-          }
+      for (const row of rows) {
+        if (typeof row.x_gm_msgid === 'string') {
+          existing.add(row.x_gm_msgid);
         }
       }
     }
@@ -3401,7 +2980,7 @@ export class DatabaseService {
     // Upsert the email row (no body fields — NULL body fields are preserved on conflict
     // via COALESCE(NULLIF(excluded.text_body, ''), text_body) logic in upsertEmail).
     // We use a direct INSERT OR IGNORE here to avoid overwriting an existing full body.
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO emails (account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
          to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
          is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels, updated_at)
@@ -3420,39 +2999,37 @@ export class DatabaseService {
          is_starred = excluded.is_starred,
          is_draft = MAX(is_draft, excluded.is_draft),
          size = excluded.size,
-         updated_at = datetime('now')`,
-      {
-        ':accountId': accountId,
-        ':xGmMsgId': envelope.xGmMsgId,
-        ':xGmThrid': envelope.xGmThrid,
-        ':messageId': envelope.messageId || null,
-        ':fromAddress': envelope.fromAddress,
-        ':fromName': envelope.fromName || '',
-        ':toAddresses': envelope.toAddresses,
-        ':subject': envelope.subject || '',
-        ':date': envelope.date,
-        ':isRead': envelope.isRead ? 1 : 0,
-        ':isStarred': envelope.isStarred ? 1 : 0,
-        ':isDraft': envelope.isDraft ? 1 : 0,
-        ':size': envelope.size || 0,
-      }
-    );
+         updated_at = datetime('now')`
+    ).run({
+      accountId,
+      xGmMsgId: envelope.xGmMsgId,
+      xGmThrid: envelope.xGmThrid,
+      messageId: envelope.messageId || null,
+      fromAddress: envelope.fromAddress,
+      fromName: envelope.fromName || '',
+      toAddresses: envelope.toAddresses,
+      subject: envelope.subject || '',
+      date: envelope.date,
+      isRead: envelope.isRead ? 1 : 0,
+      isStarred: envelope.isStarred ? 1 : 0,
+      isDraft: envelope.isDraft ? 1 : 0,
+      size: envelope.size || 0,
+    });
 
     // Upsert a thread row if it doesn't already exist.
-    this.db.run(
+    this.db.prepare(
       `INSERT INTO threads (account_id, x_gm_thrid, subject, last_message_date, participants, message_count, snippet, is_read, is_starred)
        VALUES (:accountId, :xGmThrid, :subject, :lastMessageDate, :participants, 1, '', :isRead, :isStarred)
-       ON CONFLICT(account_id, x_gm_thrid) DO NOTHING`,
-      {
-        ':accountId': accountId,
-        ':xGmThrid': envelope.xGmThrid,
-        ':subject': envelope.subject || '',
-        ':lastMessageDate': envelope.date,
-        ':participants': envelope.fromAddress,
-        ':isRead': envelope.isRead ? 1 : 0,
-        ':isStarred': envelope.isStarred ? 1 : 0,
-      }
-    );
+       ON CONFLICT(account_id, x_gm_thrid) DO NOTHING`
+    ).run({
+      accountId,
+      xGmThrid: envelope.xGmThrid,
+      subject: envelope.subject || '',
+      lastMessageDate: envelope.date,
+      participants: envelope.fromAddress,
+      isRead: envelope.isRead ? 1 : 0,
+      isStarred: envelope.isStarred ? 1 : 0,
+    });
 
     // Insert folder links when rawLabels are provided (envelope-only fetch has no UIDs).
     // [Gmail]/All Mail is a discovery scope, not a persisted folder association — skip it like elsewhere.
@@ -3461,18 +3038,14 @@ export class DatabaseService {
         if (folder === ALL_MAIL_PATH) {
           continue;
         }
-        this.db.run(
-          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)',
-          { ':accountId': accountId, ':xGmMsgId': envelope.xGmMsgId, ':folder': folder }
-        );
-        this.db.run(
-          'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)',
-          { ':accountId': accountId, ':xGmThrid': envelope.xGmThrid, ':folder': folder }
-        );
+        this.db.prepare(
+          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
+        ).run({ accountId, xGmMsgId: envelope.xGmMsgId, folder });
+        this.db.prepare(
+          'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)'
+        ).run({ accountId, xGmThrid: envelope.xGmThrid, folder });
       }
     }
-
-    this.scheduleSave();
   }
 
   // ---- Structured filter methods ----
@@ -3531,44 +3104,44 @@ export class DatabaseService {
 
     if (filters.dateFrom !== undefined) {
       filterClauses.push('AND e.date >= :dateFrom');
-      filterParams[':dateFrom'] = filters.dateFrom;
+      filterParams['dateFrom'] = filters.dateFrom;
     }
 
     if (filters.dateTo !== undefined) {
       filterClauses.push('AND e.date <= :dateTo');
-      filterParams[':dateTo'] = filters.dateTo;
+      filterParams['dateTo'] = filters.dateTo;
     }
 
     if (filters.folder !== undefined) {
       filterClauses.push('AND ef.folder = :folder');
-      filterParams[':folder'] = filters.folder;
+      filterParams['folder'] = filters.folder;
     }
 
     if (filters.sender !== undefined) {
       filterClauses.push(
         'AND (e.from_address LIKE :senderPattern OR e.from_name LIKE :senderPattern)'
       );
-      filterParams[':senderPattern'] = `%${filters.sender}%`;
+      filterParams['senderPattern'] = `%${filters.sender}%`;
     }
 
     if (filters.recipient !== undefined) {
       filterClauses.push('AND e.to_addresses LIKE :recipientPattern');
-      filterParams[':recipientPattern'] = `%${filters.recipient}%`;
+      filterParams['recipientPattern'] = `%${filters.recipient}%`;
     }
 
     if (filters.hasAttachment !== undefined) {
       filterClauses.push('AND e.has_attachments = :hasAttachment');
-      filterParams[':hasAttachment'] = filters.hasAttachment ? 1 : 0;
+      filterParams['hasAttachment'] = filters.hasAttachment ? 1 : 0;
     }
 
     if (filters.isRead !== undefined) {
       filterClauses.push('AND e.is_read = :isRead');
-      filterParams[':isRead'] = filters.isRead ? 1 : 0;
+      filterParams['isRead'] = filters.isRead ? 1 : 0;
     }
 
     if (filters.isStarred !== undefined) {
       filterClauses.push('AND e.is_starred = :isStarred');
-      filterParams[':isStarred'] = filters.isStarred ? 1 : 0;
+      filterParams['isStarred'] = filters.isStarred ? 1 : 0;
     }
 
     const joinClause = needsFolderJoin
@@ -3585,12 +3158,12 @@ export class DatabaseService {
           .join(', ');
 
         const params: Record<string, string | number> = {
-          ':accountId': accountId,
+          accountId,
           ...filterParams,
         };
 
         for (let index = 0; index < chunk.length; index++) {
-          params[`:msgId${offset + index}`] = chunk[index];
+          params[`msgId${offset + index}`] = chunk[index];
         }
 
         const sql = [
@@ -3604,14 +3177,11 @@ export class DatabaseService {
           .filter((line) => line.trim().length > 0)
           .join('\n');
 
-        const result = this.db.exec(sql, params);
+        const rows = this.db.prepare(sql).all(params) as Array<{ x_gm_msgid: string }>;
 
-        if (result.length > 0) {
-          for (const row of result[0].values) {
-            const msgId = row[0];
-            if (typeof msgId === 'string') {
-              matchingIds.add(msgId);
-            }
+        for (const row of rows) {
+          if (typeof row.x_gm_msgid === 'string') {
+            matchingIds.add(row.x_gm_msgid);
           }
         }
       }
@@ -3656,26 +3226,21 @@ export class DatabaseService {
           .map((_, index) => `:msgId${offset + index}`)
           .join(', ');
 
-        const params: Record<string, string | number> = { ':accountId': accountId };
+        const params: Record<string, string | number> = { accountId };
         for (let index = 0; index < chunk.length; index++) {
-          params[`:msgId${offset + index}`] = chunk[index];
+          params[`msgId${offset + index}`] = chunk[index];
         }
 
-        const result = this.db.exec(
+        const rows = this.db.prepare(
           `SELECT e.x_gm_msgid, e.date
            FROM emails e
            WHERE e.account_id = :accountId
-             AND e.x_gm_msgid IN (${placeholders})`,
-          params
-        );
+             AND e.x_gm_msgid IN (${placeholders})`
+        ).all(params) as Array<{ x_gm_msgid: string; date: string }>;
 
-        if (result.length > 0) {
-          for (const row of result[0].values) {
-            const msgId = row[0];
-            const date = row[1];
-            if (typeof msgId === 'string' && typeof date === 'string') {
-              dateMap.set(msgId, date);
-            }
+        for (const row of rows) {
+          if (typeof row.x_gm_msgid === 'string' && typeof row.date === 'string') {
+            dateMap.set(row.x_gm_msgid, row.date);
           }
         }
       }
@@ -3691,11 +3256,6 @@ export class DatabaseService {
 
   close(): void {
     if (this.db) {
-      if (this.saveTimer) {
-        clearTimeout(this.saveTimer);
-        this.saveTimer = null;
-      }
-      this.saveToDisk();
       this.db.close();
       this.db = null;
       log.info('Database closed');

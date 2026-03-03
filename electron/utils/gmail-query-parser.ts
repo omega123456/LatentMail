@@ -215,12 +215,16 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
   const accountId = options?.accountId;
 
   if (typeof accountId === 'number' && Number.isFinite(accountId)) {
-    params[':accountId'] = accountId;
+    params['accountId'] = accountId;
   }
 
+  /**
+   * Returns the next unique parameter NAME (without colon prefix) for use as the JS
+   * object key.  The SQL string must embed the placeholder as `:${name}`.
+   */
   function nextParam(): string {
     paramCounter++;
-    return `:${paramPrefix}${paramCounter}`;
+    return `${paramPrefix}${paramCounter}`;
   }
 
   for (const token of tokens) {
@@ -228,47 +232,47 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
     const not = negated ? 'NOT ' : '';
 
     if (operator === null) {
-      const param = nextParam();
+      const paramName = nextParam();
       const escaped = escapeLike(value);
-      params[param] = `%${escaped}%`;
+      params[paramName] = `%${escaped}%`;
       conditions.push(
-        `${not}(e.subject LIKE ${param} ESCAPE '\\' OR e.from_address LIKE ${param} ESCAPE '\\' OR e.from_name LIKE ${param} ESCAPE '\\' OR e.to_addresses LIKE ${param} ESCAPE '\\' OR e.text_body LIKE ${param} ESCAPE '\\')`
+        `${not}(e.subject LIKE :${paramName} ESCAPE '\\' OR e.from_address LIKE :${paramName} ESCAPE '\\' OR e.from_name LIKE :${paramName} ESCAPE '\\' OR e.to_addresses LIKE :${paramName} ESCAPE '\\' OR e.text_body LIKE :${paramName} ESCAPE '\\')`
       );
       continue;
     }
 
     switch (operator) {
       case 'from': {
-        const param = nextParam();
+        const paramName = nextParam();
         const escaped = escapeLike(value);
-        params[param] = `%${escaped}%`;
+        params[paramName] = `%${escaped}%`;
         conditions.push(
-          `${not}(e.from_address LIKE ${param} ESCAPE '\\' OR e.from_name LIKE ${param} ESCAPE '\\')`
+          `${not}(e.from_address LIKE :${paramName} ESCAPE '\\' OR e.from_name LIKE :${paramName} ESCAPE '\\')`
         );
         break;
       }
 
       case 'to': {
-        const param = nextParam();
+        const paramName = nextParam();
         const escaped = escapeLike(value);
-        params[param] = `%${escaped}%`;
-        conditions.push(`${not}(e.to_addresses LIKE ${param} ESCAPE '\\')`);
+        params[paramName] = `%${escaped}%`;
+        conditions.push(`${not}(e.to_addresses LIKE :${paramName} ESCAPE '\\')`);
         break;
       }
 
       case 'subject': {
-        const param = nextParam();
+        const paramName = nextParam();
         const escaped = escapeLike(value);
-        params[param] = `%${escaped}%`;
-        conditions.push(`${not}(e.subject LIKE ${param} ESCAPE '\\')`);
+        params[paramName] = `%${escaped}%`;
+        conditions.push(`${not}(e.subject LIKE :${paramName} ESCAPE '\\')`);
         break;
       }
 
       case 'body': {
-        const param = nextParam();
+        const paramName = nextParam();
         const escaped = escapeLike(value);
-        params[param] = `%${escaped}%`;
-        conditions.push(`${not}(e.text_body LIKE ${param} ESCAPE '\\' OR e.html_body LIKE ${param} ESCAPE '\\')`);
+        params[paramName] = `%${escaped}%`;
+        conditions.push(`${not}(e.text_body LIKE :${paramName} ESCAPE '\\' OR e.html_body LIKE :${paramName} ESCAPE '\\')`);
         break;
       }
 
@@ -287,38 +291,38 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
         }
 
         if (typeof mappedFolder === 'string') {
-          const folderParam = nextParam();
-          params[folderParam] = mappedFolder.toLowerCase();
+          const folderParamName = nextParam();
+          params[folderParamName] = mappedFolder.toLowerCase();
           conditions.push(
-            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid AND LOWER(ef_in.folder) = ${folderParam})`
+            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid AND LOWER(ef_in.folder) = :${folderParamName})`
           );
           break;
         }
 
-        const folderParam = nextParam();
-        params[folderParam] = rawFolder.toLowerCase();
+        const folderParamName = nextParam();
+        params[folderParamName] = rawFolder.toLowerCase();
 
         if (typeof accountId !== 'number' || !Number.isFinite(accountId)) {
           conditions.push(
-            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid AND LOWER(ef_in.folder) = ${folderParam})`
+            `${not}EXISTS (SELECT 1 FROM email_folders ef_in WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid AND LOWER(ef_in.folder) = :${folderParamName})`
           );
           break;
         }
 
-        const labelNameParam = nextParam();
-        params[labelNameParam] = rawFolder.toLowerCase();
+        const labelNameParamName = nextParam();
+        params[labelNameParamName] = rawFolder.toLowerCase();
         conditions.push(
           `${not}EXISTS (
             SELECT 1
             FROM email_folders ef_in
             WHERE ef_in.account_id = e.account_id AND ef_in.x_gm_msgid = e.x_gm_msgid
               AND (
-                LOWER(ef_in.folder) = ${folderParam}
+                LOWER(ef_in.folder) = :${folderParamName}
                 OR LOWER(ef_in.folder) IN (
                   SELECT LOWER(l.gmail_label_id)
                   FROM labels l
                   WHERE l.account_id = :accountId
-                    AND LOWER(l.name) = ${labelNameParam}
+                    AND LOWER(l.name) = :${labelNameParamName}
                 )
               )
           )`
@@ -340,8 +344,8 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
           break;
         }
 
-        const labelParam = nextParam();
-        params[labelParam] = labelName.toLowerCase();
+        const labelParamName = nextParam();
+        params[labelParamName] = labelName.toLowerCase();
         conditions.push(
           `${not}EXISTS (
             SELECT 1
@@ -351,7 +355,7 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
                 SELECT LOWER(l.gmail_label_id)
                 FROM labels l
                 WHERE l.account_id = :accountId
-                  AND LOWER(l.name) = ${labelParam}
+                  AND LOWER(l.name) = :${labelParamName}
               )
           )`
         );
@@ -369,11 +373,11 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
         } else if (lowerVal === 'important') {
           conditions.push(negated ? 'e.is_important = 0' : 'e.is_important = 1');
         } else {
-          const param = nextParam();
+          const paramName = nextParam();
           const escaped = escapeLike(`is:${value}`);
-          params[param] = `%${escaped}%`;
+          params[paramName] = `%${escaped}%`;
           conditions.push(
-            `${not}(e.subject LIKE ${param} ESCAPE '\\' OR e.from_address LIKE ${param} ESCAPE '\\' OR e.from_name LIKE ${param} ESCAPE '\\' OR e.to_addresses LIKE ${param} ESCAPE '\\' OR e.text_body LIKE ${param} ESCAPE '\\')`
+            `${not}(e.subject LIKE :${paramName} ESCAPE '\\' OR e.from_address LIKE :${paramName} ESCAPE '\\' OR e.from_name LIKE :${paramName} ESCAPE '\\' OR e.to_addresses LIKE :${paramName} ESCAPE '\\' OR e.text_body LIKE :${paramName} ESCAPE '\\')`
           );
         }
         break;
@@ -384,11 +388,11 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
         if (lowerVal === 'attachment') {
           conditions.push(negated ? 'e.has_attachments = 0' : 'e.has_attachments = 1');
         } else {
-          const param = nextParam();
+          const paramName = nextParam();
           const escaped = escapeLike(`has:${value}`);
-          params[param] = `%${escaped}%`;
+          params[paramName] = `%${escaped}%`;
           conditions.push(
-            `${not}(e.subject LIKE ${param} ESCAPE '\\' OR e.text_body LIKE ${param} ESCAPE '\\')`
+            `${not}(e.subject LIKE :${paramName} ESCAPE '\\' OR e.text_body LIKE :${paramName} ESCAPE '\\')`
           );
         }
         break;
@@ -397,12 +401,12 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
       case 'after': {
         const isoDate = gmailDateToIso(value);
         if (isoDate) {
-          const param = nextParam();
-          params[param] = `${isoDate}T00:00:00.000Z`;
+          const paramName = nextParam();
+          params[paramName] = `${isoDate}T00:00:00.000Z`;
           if (negated) {
-            conditions.push(`e.date < ${param}`);
+            conditions.push(`e.date < :${paramName}`);
           } else {
-            conditions.push(`e.date >= ${param}`);
+            conditions.push(`e.date >= :${paramName}`);
           }
         }
         break;
@@ -411,12 +415,12 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
       case 'before': {
         const isoDate = gmailDateToIso(value);
         if (isoDate) {
-          const param = nextParam();
-          params[param] = `${isoDate}T00:00:00.000Z`;
+          const paramName = nextParam();
+          params[paramName] = `${isoDate}T00:00:00.000Z`;
           if (negated) {
-            conditions.push(`e.date >= ${param}`);
+            conditions.push(`e.date >= :${paramName}`);
           } else {
-            conditions.push(`e.date < ${param}`);
+            conditions.push(`e.date < :${paramName}`);
           }
         }
         break;
@@ -425,12 +429,12 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
       case 'newer_than': {
         const date = parseRelativeTime(value);
         if (date) {
-          const param = nextParam();
-          params[param] = date;
+          const paramName = nextParam();
+          params[paramName] = date;
           if (negated) {
-            conditions.push(`e.date < ${param}`);
+            conditions.push(`e.date < :${paramName}`);
           } else {
-            conditions.push(`e.date >= ${param}`);
+            conditions.push(`e.date >= :${paramName}`);
           }
         }
         break;
@@ -439,23 +443,23 @@ export function parseGmailQuery(query: string, options?: ParseGmailQueryOptions)
       case 'older_than': {
         const date = parseRelativeTime(value);
         if (date) {
-          const param = nextParam();
-          params[param] = date;
+          const paramName = nextParam();
+          params[paramName] = date;
           if (negated) {
-            conditions.push(`e.date >= ${param}`);
+            conditions.push(`e.date >= :${paramName}`);
           } else {
-            conditions.push(`e.date < ${param}`);
+            conditions.push(`e.date < :${paramName}`);
           }
         }
         break;
       }
 
       default: {
-        const param = nextParam();
+        const paramName = nextParam();
         const escaped = escapeLike(`${operator}:${value}`);
-        params[param] = `%${escaped}%`;
+        params[paramName] = `%${escaped}%`;
         conditions.push(
-          `${not}(e.subject LIKE ${param} ESCAPE '\\' OR e.from_address LIKE ${param} ESCAPE '\\' OR e.from_name LIKE ${param} ESCAPE '\\' OR e.to_addresses LIKE ${param} ESCAPE '\\' OR e.text_body LIKE ${param} ESCAPE '\\')`
+          `${not}(e.subject LIKE :${paramName} ESCAPE '\\' OR e.from_address LIKE :${paramName} ESCAPE '\\' OR e.from_name LIKE :${paramName} ESCAPE '\\' OR e.to_addresses LIKE :${paramName} ESCAPE '\\' OR e.text_body LIKE :${paramName} ESCAPE '\\')`
         );
         break;
       }

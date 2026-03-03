@@ -77,7 +77,7 @@ export function registerAuthIpcHandlers(): void {
       const accounts = db.getAccounts();
       const mapped = await Promise.all(
         accounts.map(async (account) => {
-          let avatarUrl = account.avatar_url;
+          let avatarUrl = account.avatarUrl;
           if (avatarUrl) {
             try {
               avatarUrl = await getCachedAvatarUrl(account.id, avatarUrl);
@@ -89,10 +89,10 @@ export function registerAuthIpcHandlers(): void {
           return {
             id: account.id,
             email: account.email,
-            displayName: account.display_name,
+            displayName: account.displayName,
             avatarUrl: avatarUrl,
-            isActive: account.is_active === 1,
-            needsReauth: account.needs_reauth === 1,
+            isActive: account.isActive,
+            needsReauth: account.needsReauth,
           };
         })
       );

@@ -197,7 +197,7 @@ export class EmbeddingService {
     // so a manual "Build Index" can resume from where it left off.
     const db = DatabaseService.getInstance();
     try {
-      const accounts = db.getAccounts().filter((account) => account.is_active);
+      const accounts = db.getAccounts().filter((account) => account.isActive);
       for (const account of accounts) {
         db.setEmbeddingBuildInterrupted(account.id, false);
       }
@@ -276,7 +276,7 @@ export class EmbeddingService {
 
       // Only consider accounts that are currently active — an interrupted account
       // that was subsequently disabled should not trigger a build on every startup.
-      const activeAccounts = db.getAccounts().filter((account) => account.is_active);
+      const activeAccounts = db.getAccounts().filter((account) => account.isActive);
       const activeInterruptedIds = interruptedAccountIds.filter((interruptedId) =>
         activeAccounts.some((account) => account.id === interruptedId)
       );
@@ -372,7 +372,8 @@ export class EmbeddingService {
   private async runBuildLoop(embeddingModel: string, vectorDimension: number): Promise<void> {
     const db = DatabaseService.getInstance();
     const crawlService = ImapCrawlService.getInstance();
-    const accounts = db.getAccounts().filter((account) => account.is_active);
+    const accounts = db.getAccounts().filter((account) => account.isActive);
+
 
     if (accounts.length === 0) {
       log.info('[EmbeddingService] No active accounts — nothing to index');
@@ -689,7 +690,8 @@ export class EmbeddingService {
    */
   private async runIncrementalLoop(embeddingModel: string, vectorDimension: number): Promise<void> {
     const db = DatabaseService.getInstance();
-    const accounts = db.getAccounts().filter((account) => account.is_active);
+    const accounts = db.getAccounts().filter((account) => account.isActive);
+
 
     if (accounts.length === 0) {
       return;
@@ -977,7 +979,8 @@ export class EmbeddingService {
     }
 
     const db = DatabaseService.getInstance();
-    const accounts = db.getAccounts().filter((account) => account.is_active);
+    const accounts = db.getAccounts().filter((account) => account.isActive);
+
     let hasAnyUnindexed = false;
 
     for (const account of accounts) {

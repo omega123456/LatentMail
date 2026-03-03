@@ -207,28 +207,24 @@ export abstract class BaseSearchService {
     });
 
     const localParams = {
-      ':accountId': accountId,
-      ':limit': limit,
+      accountId,
+      limit,
       ...parsed.params,
     } as Record<string, number | string | null>;
 
     const rawDb = db.getDatabase();
     try {
-      const localResult = rawDb.exec(
+      const rows = rawDb.prepare(
         `SELECT DISTINCT e.x_gm_msgid
          FROM emails e
          WHERE e.account_id = :accountId
            AND (${parsed.whereClause})
          ORDER BY e.date DESC
-         LIMIT :limit`,
-        localParams
-      );
+         LIMIT :limit`
+      ).all(localParams) as Array<Record<string, unknown>>;
 
-      if (localResult.length === 0) {
-        return [];
-      }
-      return localResult[0].values
-        .map((row) => row[0] as string | null)
+      return rows
+        .map((row) => row['x_gm_msgid'] as string | null)
         .filter((msgId): msgId is string => msgId !== null && msgId.length > 0);
     } catch (localSearchError) {
       log.warn('[Search] Local DB search failed:', localSearchError);

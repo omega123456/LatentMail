@@ -62,7 +62,7 @@ export class SmtpService {
 
     try {
       const mailOptions: nodemailer.SendMailOptions = {
-        from: message.from || `${account.display_name} <${account.email}>`,
+        from: message.from || `${account.displayName} <${account.email}>`,
         to: message.to,
         cc: message.cc,
         bcc: message.bcc,

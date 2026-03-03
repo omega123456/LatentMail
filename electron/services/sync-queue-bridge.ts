@@ -241,7 +241,7 @@ export class SyncQueueBridge {
     const accounts = db.getAccounts();
 
     const promises = accounts
-      .filter((a) => !a.needs_reauth)
+      .filter((a) => !a.needsReauth)
       .map((a) =>
         this.enqueueSyncForAccount(a.id, false).catch((err) => {
           log.error(`[SyncQueueBridge] onSyncTick: failed to enqueue sync for account ${a.id}:`, err);
@@ -261,7 +261,7 @@ export class SyncQueueBridge {
     const accounts = db.getAccounts();
 
     for (const account of accounts) {
-      if (!account.needs_reauth) {
+      if (!account.needsReauth) {
         syncService
           .startIdle(String(account.id), () => {
             this.enqueueInboxSync(String(account.id));

@@ -40,6 +40,7 @@ export function getInitialSchemaForMigrations(): string {
     has_attachments INTEGER NOT NULL DEFAULT 0,
     labels TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
     UNIQUE(account_id, x_gm_msgid)
   );
@@ -121,6 +122,11 @@ export function getInitialSchemaForMigrations(): string {
     FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
   );
 
+  -- Unique index for attachments: identity is (email_id, filename, COALESCE(content_id, ''))
+  -- Enables INSERT OR IGNORE to skip duplicates on re-sync.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_email_filename_contentid
+    ON attachments (email_id, filename, COALESCE(content_id, ''));
+
   -- Contacts table
   CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY,
@@ -145,6 +151,7 @@ export function getInitialSchemaForMigrations(): string {
     color TEXT,
     unread_count INTEGER NOT NULL DEFAULT 0,
     total_count INTEGER NOT NULL DEFAULT 0,
+    special_use TEXT,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
     UNIQUE(account_id, gmail_label_id)
   );
@@ -186,7 +193,7 @@ export function getInitialSchemaForMigrations(): string {
   -- Search index table (LIKE-based search)
   CREATE TABLE IF NOT EXISTS search_index (
     id INTEGER PRIMARY KEY,
-    email_id INTEGER NOT NULL,
+    email_id INTEGER NOT NULL UNIQUE,
     subject TEXT,
     body TEXT,
     from_name TEXT,
@@ -196,6 +203,43 @@ export function getInitialSchemaForMigrations(): string {
 
   CREATE INDEX IF NOT EXISTS idx_search_subject ON search_index(subject);
   CREATE INDEX IF NOT EXISTS idx_search_from ON search_index(from_address);
+
+  -- Mail queue table (persistent operation queue for drafts, sends, moves, flags, deletes)
+  CREATE TABLE IF NOT EXISTS mail_queue (
+    id TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    operation TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_mail_queue_account_status ON mail_queue(account_id, status);
+
+  -- Vector indexed emails table (tracks which emails have been embedded in the vector index)
+  CREATE TABLE IF NOT EXISTS vector_indexed_emails (
+    x_gm_msgid TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    embedding_hash TEXT NOT NULL,
+    PRIMARY KEY (x_gm_msgid, account_id),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_vector_indexed_emails_account_id ON vector_indexed_emails (account_id);
+
+  -- Embedding crawl progress table (UID-based resume on interrupt for full-mailbox IMAP crawler)
+  CREATE TABLE IF NOT EXISTS embedding_crawl_progress (
+    account_id        INTEGER NOT NULL,
+    last_uid          INTEGER NOT NULL DEFAULT 0,
+    build_interrupted INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT    NOT NULL,
+    PRIMARY KEY (account_id),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  );
 
   -- Umzug migration tracking
   CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY);

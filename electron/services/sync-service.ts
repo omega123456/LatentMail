@@ -572,9 +572,8 @@ export class SyncService {
       const pendingOpService = PendingOpService.getInstance();
       let newInboxEmails = false;
       const rawDb = db.getDatabase();
-      rawDb.run('BEGIN');
 
-      try {
+      rawDb.transaction(() => {
       for (const email of emails) {
         const threadId = email.xGmThrid || email.xGmMsgId;
 
@@ -657,11 +656,7 @@ export class SyncService {
 
         affectedThreadIds.add(threadId);
       }
-      rawDb.run('COMMIT');
-      } catch (batchErr) {
-        rawDb.run('ROLLBACK');
-        throw batchErr;
-      }
+      })();
 
       // --- Orphan cleanup ---
       // Note: CONDSTORE doesn't report server-side deletions (EXPUNGE). Emails permanently
