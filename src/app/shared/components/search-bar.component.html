@@ -21,7 +21,7 @@
       <span class="material-symbols-outlined">close</span>
     </button>
   }
-  @if (aiStore.isAvailable()) {
+  @if (aiStore.isAvailable() && aiStore.indexStatus() === 'complete') {
     <div class="search-mode-toggle" role="group" aria-label="Search mode">
       <button
         class="search-mode-btn"

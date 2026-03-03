@@ -29,10 +29,11 @@ export class SearchBarComponent implements OnInit, OnDestroy {
   private keydownHandler?: (e: KeyboardEvent) => void;
 
   constructor() {
-    // Auto-switch to semantic when Ollama connects; back to keyword when it disconnects
+    // Show semantic option only when Ollama is available and full search index is built; otherwise force keyword
     effect(() => {
       const available = this.aiStore.isAvailable();
-      this.searchMode.set(available ? 'semantic' : 'keyword');
+      const indexReady = this.aiStore.indexStatus() === 'complete';
+      this.searchMode.set(available && indexReady ? 'semantic' : 'keyword');
     });
   }
 
