@@ -169,6 +169,9 @@ if (runApp) {
       logger.warn('Failed to initialize OAuth refresh timers:', err);
     }
 
+    // Timer for delayed sync resume after wake (5s delay to avoid Power Nap brief wakes).
+    let resumeSyncTimeout: ReturnType<typeof setTimeout> | null = null;
+
     // Re-schedule refresh timers when system resumes from sleep (timers may have fired in a burst or not at all).
     powerMonitor.on('resume', () => {
       try {
@@ -176,35 +179,32 @@ if (runApp) {
       } catch (err) {
         logger.warn('Failed to re-initialize OAuth refresh timers on resume:', err);
       }
-      // On Windows (and Linux), resume sync after wake; on macOS we use user-did-become-active instead to avoid Power Nap.
-      if (!isMacOS()) {
+      // Resume sync after 5s delay on all platforms (avoids starting during Power Nap on macOS).
+      if (resumeSyncTimeout) {
+        clearTimeout(resumeSyncTimeout);
+      }
+      resumeSyncTimeout = setTimeout(() => {
+        resumeSyncTimeout = null;
         try {
           SyncQueueBridge.getInstance().startAfterWake();
         } catch (err) {
           logger.warn('Failed to start sync after wake:', err);
         }
-      }
+      }, 5_000);
     });
 
-    // Pause sync when system sleeps (all platforms).
+    // Pause sync when system sleeps (all platforms). Cancel any pending delayed resume.
     powerMonitor.on('suspend', () => {
+      if (resumeSyncTimeout) {
+        clearTimeout(resumeSyncTimeout);
+        resumeSyncTimeout = null;
+      }
       try {
         SyncQueueBridge.getInstance().stopForSleep();
       } catch (err) {
         logger.warn('Failed to stop sync for sleep:', err);
       }
     });
-
-    // On macOS, resume sync only when user session is active (avoids Power Nap brief wakes).
-    if (isMacOS()) {
-      powerMonitor.on('user-did-become-active', () => {
-        try {
-          SyncQueueBridge.getInstance().startAfterWake();
-        } catch (err) {
-          logger.warn('Failed to start sync after wake (user-did-become-active):', err);
-        }
-      });
-    }
 
     // Start CLI pipe server so users can control sync from the terminal.
     try {

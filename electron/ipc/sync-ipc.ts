@@ -9,7 +9,7 @@ import { SyncQueueBridge } from '../services/sync-queue-bridge';
  */
 export function registerSyncIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SYNC_GET_PAUSED, () => {
-    const isPaused = SyncQueueBridge.getInstance().isPaused();
-    return ipcSuccess({ paused: isPaused });
+    const paused = SyncQueueBridge.getInstance().getPausedForUi();
+    return ipcSuccess({ paused });
   });
 }

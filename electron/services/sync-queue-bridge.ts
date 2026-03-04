@@ -141,10 +141,17 @@ export class SyncQueueBridge {
   }
 
   /**
-   * Returns whether background sync is currently paused.
+   * Returns whether background sync is currently paused (user CLI only).
    */
   isPaused(): boolean {
     return this.paused;
+  }
+
+  /**
+   * Returns whether the UI should show the paused indicator (user pause or sleep stopped).
+   */
+  getPausedForUi(): boolean {
+    return this.paused || this.sleepStopped;
   }
 
   /**
@@ -164,6 +171,7 @@ export class SyncQueueBridge {
       log.warn('[SyncQueueBridge] stopForSleep(): stopAllIdle failed:', err);
     });
     this.sleepStopped = true;
+    this.emitPausedStateChanged(this.getPausedForUi());
     log.info('[SyncQueueBridge] Sync stopped for system sleep');
   }
 
@@ -175,6 +183,7 @@ export class SyncQueueBridge {
       return;
     }
     this.sleepStopped = false;
+    this.emitPausedStateChanged(this.getPausedForUi());
     if (this.paused) {
       return;
     }
