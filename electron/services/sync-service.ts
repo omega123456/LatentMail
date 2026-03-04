@@ -692,7 +692,7 @@ export class SyncService {
           continue;
         }
 
-        // Upsert the email row (folder=ALL_MAIL_PATH → skips email_folders insertion)
+        // Upsert the email row (folder=ALL_MAIL_PATH → writes email_folders row with UID)
         db.upsertEmail({
           accountId: numAccountId,
           xGmMsgId: email.xGmMsgId,
@@ -923,6 +923,21 @@ export class SyncService {
           }
         }
       }
+    }
+
+    // Resolve All Mail UIDs for all fetched messages (messages fetched from a non-All Mail
+    // folder will not have an All Mail email_folders row yet).
+    try {
+      const xGmMsgIdsToResolve = fetchedMessages
+        .filter((message) => message.folder !== ALL_MAIL_PATH)
+        .map((message) => message.xGmMsgId)
+        .filter(Boolean);
+      if (xGmMsgIdsToResolve.length > 0) {
+        const uidMap = await imapService.resolveUidsByXGmMsgIdBatch(accountId, ALL_MAIL_PATH, xGmMsgIdsToResolve);
+        db.writeAllMailFolderUids(numAccountId, uidMap);
+      }
+    } catch (allMailUidErr) {
+      log.warn(`[SyncService] syncThread: failed to resolve All Mail UIDs for thread ${xGmThrid} (continuing):`, allMailUidErr);
     }
 
     // Reconcile stale messages (local-only messages no longer on server).

@@ -236,18 +236,16 @@ export class DatabaseService {
     const id = idRow!.id;
 
     // Record folder association in the link table (keyed by x_gm_msgid, not email_id).
-    // [Gmail]/All Mail is a discovery scope, not a persisted folder association here.
-    if (email.folder !== ALL_MAIL_PATH) {
-      if (email.folderUid != null) {
-        this.db.prepare(
-          `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :folderUid)
-           ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`
-        ).run({ accountId: email.accountId, xGmMsgId: email.xGmMsgId, folder: email.folder, folderUid: email.folderUid });
-      } else {
-        this.db.prepare(
-          'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
-        ).run({ accountId: email.accountId, xGmMsgId: email.xGmMsgId, folder: email.folder });
-      }
+    // All Mail rows are now persisted with UIDs so stale-removal can operate on them.
+    if (email.folderUid != null) {
+      this.db.prepare(
+        `INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid) VALUES (:accountId, :xGmMsgId, :folder, :folderUid)
+         ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid`
+      ).run({ accountId: email.accountId, xGmMsgId: email.xGmMsgId, folder: email.folder, folderUid: email.folderUid });
+    } else {
+      this.db.prepare(
+        'INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder) VALUES (:accountId, :xGmMsgId, :folder)'
+      ).run({ accountId: email.accountId, xGmMsgId: email.xGmMsgId, folder: email.folder });
     }
 
     return id;
@@ -614,7 +612,7 @@ export class DatabaseService {
 
     // Determine adds and removes
     const toAdd = currentFolderPaths.filter((folder) => !existingSet.has(folder));
-    const toRemove = existingFolders.filter((folder) => !currentSet.has(folder));
+    const toRemove = existingFolders.filter((folder) => folder !== ALL_MAIL_PATH && !currentSet.has(folder));
 
     if (toAdd.length === 0 && toRemove.length === 0) {
       return affectedFolders;
@@ -661,6 +659,43 @@ export class DatabaseService {
 
     }
     return affectedFolders;
+  }
+
+  /**
+   * Batch-insert or update All Mail email_folders rows with their UIDs for a given account.
+   *
+   * Called after a full All Mail UID fetch to stamp every known message with its
+   * All Mail UID, enabling stale-mail removal based on UID range comparisons.
+   *
+   * Uses ON CONFLICT DO UPDATE to overwrite any previously stored UID (safe after
+   * UIDVALIDITY changes).
+   *
+   * @param accountId - Account ID
+   * @param uidMap    - Map from x_gm_msgid to All Mail UID
+   */
+  writeAllMailFolderUids(accountId: number, uidMap: Map<string, number>): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+    if (uidMap.size === 0) {
+      return;
+    }
+    const insertStmt = this.db.prepare(`
+      INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid)
+      VALUES (:accountId, :xGmMsgId, :folder, :uid)
+      ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid
+    `);
+    const insertAll = this.db.transaction((entries: Array<{ xGmMsgId: string; uid: number }>) => {
+      for (const entry of entries) {
+        insertStmt.run({
+          accountId,
+          xGmMsgId: entry.xGmMsgId,
+          folder: ALL_MAIL_PATH,
+          uid: entry.uid
+        });
+      }
+    });
+    insertAll(Array.from(uidMap.entries()).map(([xGmMsgId, uid]) => ({ xGmMsgId, uid })));
   }
 
   /**
@@ -2972,6 +3007,8 @@ export class DatabaseService {
     size: number;
     /** Optional Gmail label paths (e.g. '[Gmail]/Inbox') — when set, email_folders and thread_folders are populated. */
     rawLabels?: string[];
+    /** Optional All Mail UID — when set, an email_folders row is written for All Mail with this UID. */
+    uid?: number;
   }): void {
     if (!this.db) {
       throw new Error('Database not initialized');
@@ -3032,7 +3069,7 @@ export class DatabaseService {
     });
 
     // Insert folder links when rawLabels are provided (envelope-only fetch has no UIDs).
-    // [Gmail]/All Mail is a discovery scope, not a persisted folder association — skip it like elsewhere.
+    // [Gmail]/All Mail is skipped in the loop below — All Mail is handled separately via the uid field.
     if (envelope.rawLabels && envelope.rawLabels.length > 0) {
       for (const folder of envelope.rawLabels) {
         if (folder === ALL_MAIL_PATH) {
@@ -3045,6 +3082,21 @@ export class DatabaseService {
           'INSERT OR IGNORE INTO thread_folders (account_id, x_gm_thrid, folder) VALUES (:accountId, :xGmThrid, :folder)'
         ).run({ accountId, xGmThrid: envelope.xGmThrid, folder });
       }
+    }
+
+    // Write All Mail email_folders row with UID when provided.
+    // Uses ON CONFLICT DO UPDATE so the UID is always stamped (not silently skipped).
+    if (envelope.uid !== undefined && envelope.uid !== null) {
+      this.db.prepare(`
+        INSERT INTO email_folders (account_id, x_gm_msgid, folder, uid)
+        VALUES (:accountId, :xGmMsgId, :folder, :uid)
+        ON CONFLICT(account_id, x_gm_msgid, folder) DO UPDATE SET uid = excluded.uid
+      `).run({
+        accountId,
+        xGmMsgId: envelope.xGmMsgId,
+        folder: ALL_MAIL_PATH,
+        uid: envelope.uid
+      });
     }
   }
 

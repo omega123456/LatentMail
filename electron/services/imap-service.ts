@@ -1115,6 +1115,62 @@ export class ImapService {
     return result;
   }
 
+  /**
+   * Resolve UIDs for a large batch of X-GM-MSGID values in a specific folder.
+   * Chunks the input into groups of 50 and issues one OR SEARCH per chunk to
+   * avoid hitting IMAP server limits. Returns only entries where a UID was found.
+   * Per-chunk failures are logged as warnings and skipped (best-effort).
+   *
+   * @param accountId - Account string ID
+   * @param folder - Mailbox path to search within (e.g. '[Gmail]/All Mail')
+   * @param xGmMsgIds - List of Gmail message IDs (X-GM-MSGID, string form)
+   * @returns Map of X-GM-MSGID → UID (only entries where UID was resolved)
+   */
+  async resolveUidsByXGmMsgIdBatch(
+    accountId: string,
+    folder: string,
+    xGmMsgIds: string[]
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (xGmMsgIds.length === 0) {
+      return result;
+    }
+
+    const CHUNK_SIZE = 50;
+    for (let offset = 0; offset < xGmMsgIds.length; offset += CHUNK_SIZE) {
+      const chunk = xGmMsgIds.slice(offset, offset + CHUNK_SIZE);
+      try {
+        const client = await this.connect(accountId);
+        const lock = await client.getMailboxLock(folder);
+        try {
+          let searchCriteria: Record<string, unknown>;
+          if (chunk.length === 1) {
+            searchCriteria = { emailId: chunk[0] };
+          } else {
+            searchCriteria = { or: chunk.map((msgId) => ({ emailId: msgId })) };
+          }
+          const uids = await client.search(searchCriteria as any, { uid: true }) as number[] | false;
+          if (!uids || uids.length === 0) {
+            continue;
+          }
+          const uidRange = uids.join(',');
+          for await (const msg of client.fetch(uidRange, { emailId: true, uid: true } as any, { uid: true })) {
+            const msgEmailId = (msg as unknown as { emailId?: string }).emailId;
+            if (msg.uid && msgEmailId) {
+              result.set(String(msgEmailId), msg.uid);
+            }
+          }
+        } finally {
+          lock.release();
+        }
+      } catch (error) {
+        log.warn(`[ImapService] resolveUidsByXGmMsgIdBatch: chunk failed (offset=${offset})`, error);
+      }
+    }
+
+    return result;
+  }
+
   // ---- CONDSTORE ----
 
   /**

@@ -9,7 +9,7 @@ import { SmtpService } from './smtp-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { PendingOpService } from './pending-op-service';
-import { SyncService } from './sync-service';
+import { SyncService, ALL_MAIL_PATH } from './sync-service';
 import { TrayService } from './tray-service';
 import { buildDraftMime } from './draft-mime';
 import { executeFetchOlder } from './fetch-older-handler';
@@ -803,10 +803,15 @@ export class MailQueueService {
     // Lock ordering: FolderLockManager (app-level) → ImapFlow mailbox lock (protocol-level).
     // Both queue workers and SyncService follow this same order — no inversion deadlock risk.
     const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER, item.accountId);
+
+    // Hoisted out of the try block so they are accessible after release() for All Mail UID resolution.
+    let imapUid: number | null | undefined;
+    let fetched: Awaited<ReturnType<typeof imapService.fetchMessageByUid>> | undefined;
+
     try {
       // APPEND to Gmail Drafts
       const appendResult = await imapService.appendDraft(String(item.accountId), mimeBuffer);
-      const imapUid = appendResult.uid;
+      imapUid = appendResult.uid;
       const imapUidValidity = appendResult.uidValidity;
 
       if (imapUid == null) {
@@ -817,7 +822,7 @@ export class MailQueueService {
       }
 
       // Fetch the newly appended message back from the server to get server-confirmed data
-      const fetched = await imapService.fetchMessageByUid(String(item.accountId), GMAIL_DRAFTS_FOLDER, imapUid);
+      fetched = await imapService.fetchMessageByUid(String(item.accountId), GMAIL_DRAFTS_FOLDER, imapUid);
 
       // Determine server IDs
       const xGmMsgId = fetched?.xGmMsgId || draftMessageId;
@@ -895,6 +900,18 @@ export class MailQueueService {
       log.info(`[MailQueue] draft-create (${item.queueId}): uid=${imapUid}, msgId=${xGmMsgId}`);
     } finally {
       release();
+    }
+
+    // Resolve All Mail UID for the new draft after releasing the lock.
+    // Skip if imapUid was null (early return path) or fetched returned no real xGmMsgId
+    // (local draft-id fallback is not a real X-GM-MSGID that Gmail can look up in All Mail).
+    if (imapUid != null && fetched?.xGmMsgId) {
+      try {
+        const uidMap = await imapService.resolveUidsByXGmMsgIdBatch(String(item.accountId), ALL_MAIL_PATH, [fetched.xGmMsgId]);
+        db.writeAllMailFolderUids(item.accountId, uidMap);
+      } catch (allMailUidErr) {
+        log.warn(`[MailQueue] draft-create (${item.queueId}): failed to resolve All Mail UID (continuing):`, allMailUidErr);
+      }
     }
   }
 
@@ -990,10 +1007,15 @@ export class MailQueueService {
     });
 
     const release = await lockManager.acquire(GMAIL_DRAFTS_FOLDER, item.accountId);
+
+    // Hoisted out of the try block so they are accessible after release() for All Mail UID resolution.
+    let newUid: number | null | undefined;
+    let fetched: Awaited<ReturnType<typeof imapService.fetchMessageByUid>> | undefined;
+
     try {
       // APPEND new version first (safe — no data loss if this fails)
       const appendResult = await imapService.appendDraft(String(item.accountId), mimeBuffer);
-      const newUid = appendResult.uid;
+      newUid = appendResult.uid;
       const newUidValidity = appendResult.uidValidity;
 
       // Delete old draft from server (best-effort after successful append)
@@ -1025,7 +1047,7 @@ export class MailQueueService {
       }
 
       // Fetch the new message from server
-      const fetched = await imapService.fetchMessageByUid(String(item.accountId), GMAIL_DRAFTS_FOLDER, newUid);
+      fetched = await imapService.fetchMessageByUid(String(item.accountId), GMAIL_DRAFTS_FOLDER, newUid);
       const xGmMsgId = fetched?.xGmMsgId || newMessageId;
       // Preserve the original thread ID to avoid creating a new thread (dedupe)
       const xGmThrid = fetched?.xGmThrid || oldServerIds.xGmThrid;
@@ -1088,6 +1110,19 @@ export class MailQueueService {
       log.info(`[MailQueue] draft-update (${item.queueId}): new uid=${newUid}, old uid=${oldServerIds.imapUid} deleted`);
     } finally {
       release();
+    }
+
+    // Resolve All Mail UID for the updated draft after releasing the lock.
+    // Skip if newUid was null (early return path) or fetched returned no real xGmMsgId
+    // (local draft-id fallback is not a real X-GM-MSGID that Gmail can look up in All Mail).
+    // Note: when this method falls back to processDraftCreate(), the create path handles resolution.
+    if (newUid != null && fetched?.xGmMsgId) {
+      try {
+        const uidMap = await imapService.resolveUidsByXGmMsgIdBatch(String(item.accountId), ALL_MAIL_PATH, [fetched.xGmMsgId]);
+        db.writeAllMailFolderUids(item.accountId, uidMap);
+      } catch (allMailUidErr) {
+        log.warn(`[MailQueue] draft-update (${item.queueId}): failed to resolve All Mail UID (continuing):`, allMailUidErr);
+      }
     }
   }
 
@@ -1963,7 +1998,7 @@ export class MailQueueService {
       release();
     }
 
-    this.upsertFetchedEmails(accountId, folder, emails);
+    await this.upsertFetchedEmails(accountId, folder, emails);
   }
 
   /**
@@ -2006,7 +2041,7 @@ export class MailQueueService {
       // Upsert fetched emails outside the lock
       const validEmails = fetchedEmails.filter((e): e is NonNullable<typeof e> => e != null);
       if (validEmails.length > 0) {
-        this.upsertFetchedEmails(accountId, folder, validEmails);
+        await this.upsertFetchedEmails(accountId, folder, validEmails);
       }
     }
   }
@@ -2042,7 +2077,7 @@ export class MailQueueService {
    * Upsert an array of fetched emails into the local DB, including thread associations.
    * Replicates the upsert pattern from SyncService.syncAccount().
    */
-  private upsertFetchedEmails(
+  private async upsertFetchedEmails(
     accountId: number,
     folder: string,
     emails: Array<{
@@ -2068,8 +2103,9 @@ export class MailQueueService {
       labels: string;
       messageId?: string;
     }>,
-  ): void {
+  ): Promise<void> {
     const db = DatabaseService.getInstance();
+    const imapService = ImapService.getInstance();
 
     // Group emails by thread
     const threadMap = new Map<string, typeof emails>();
@@ -2134,6 +2170,20 @@ export class MailQueueService {
       });
 
       db.upsertThreadFolder(accountId, threadId, folder);
+    }
+
+    // Resolve All Mail UIDs for the upserted emails (skip if fetched from All Mail itself,
+    // as those already have UIDs from the upsert above).
+    if (folder !== ALL_MAIL_PATH) {
+      try {
+        const xGmMsgIds = emails.map((email) => email.xGmMsgId).filter(Boolean);
+        if (xGmMsgIds.length > 0) {
+          const uidMap = await imapService.resolveUidsByXGmMsgIdBatch(String(accountId), ALL_MAIL_PATH, xGmMsgIds);
+          db.writeAllMailFolderUids(accountId, uidMap);
+        }
+      } catch (allMailUidErr) {
+        log.warn(`[MailQueue] upsertFetchedEmails: failed to resolve All Mail UIDs for ${folder} (account ${accountId}) (continuing):`, allMailUidErr);
+      }
     }
   }
 

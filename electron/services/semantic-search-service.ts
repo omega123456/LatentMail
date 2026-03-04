@@ -637,6 +637,7 @@ export class SemanticSearchService extends BaseSearchService {
       isStarred: flags.includes('\\Flagged'),
       isDraft: flags.includes('\\Draft'),
       size: msg.size || 0,
+      uid: msg.uid,
     };
   }
 

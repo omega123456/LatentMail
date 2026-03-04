@@ -47,6 +47,8 @@ export interface CrawlFetchResult {
   isStarred: boolean;
   isDraft: boolean;
   size: number;
+  /** IMAP UID in [Gmail]/All Mail (populated when fetched from All Mail). */
+  uid?: number;
 }
 
 // ---- Service ----
@@ -428,6 +430,7 @@ export class ImapCrawlService {
       isStarred: flags.includes('\\Flagged'),
       isDraft: flags.includes('\\Draft'),
       size: msg.size || 0,
+      uid: msg.uid,
     };
   }
 
@@ -482,6 +485,7 @@ export class ImapCrawlService {
       isStarred: flags.includes('\\Flagged'),
       isDraft: flags.includes('\\Draft'),
       size: msg.size || 0,
+      uid: msg.uid,
     };
   }
 }

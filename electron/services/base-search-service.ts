@@ -167,6 +167,7 @@ export abstract class BaseSearchService {
         isDraft: envelope.isDraft,
         size: envelope.size,
         rawLabels: envelope.rawLabels,
+        uid: envelope.uid,
       });
     } catch (upsertError) {
       log.warn(`[Search] ${logContext}: failed to upsert envelope:`, upsertError);

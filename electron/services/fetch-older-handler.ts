@@ -1,6 +1,7 @@
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { ImapService } from './imap-service';
+import { ALL_MAIL_PATH } from './sync-service';
 import { formatParticipantList } from '../utils/format-participant';
 
 const log = LoggerService.getInstance();
@@ -108,6 +109,20 @@ export async function executeFetchOlder(
     });
 
     db.upsertThreadFolder(accountId, threadId, folderId);
+  }
+
+  // Resolve All Mail UIDs for the upserted emails (skip if fetched from All Mail itself,
+  // as those already have UIDs from the upsert above).
+  if (folderId !== ALL_MAIL_PATH) {
+    try {
+      const xGmMsgIds = emails.map((email) => email.xGmMsgId).filter(Boolean);
+      if (xGmMsgIds.length > 0) {
+        const uidMap = await imapService.resolveUidsByXGmMsgIdBatch(String(accountId), ALL_MAIL_PATH, xGmMsgIds);
+        db.writeAllMailFolderUids(accountId, uidMap);
+      }
+    } catch (allMailUidErr) {
+      log.warn(`executeFetchOlder: failed to resolve All Mail UIDs for ${folderId} (continuing):`, allMailUidErr);
+    }
   }
 
   let threads = db.getThreadsByFolderBeforeDate(
