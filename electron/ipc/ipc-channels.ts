@@ -11,6 +11,7 @@ export const IPC_CHANNELS = {
   MAIL_DELETE: 'mail:delete',
   MAIL_SEARCH_BY_MSGIDS: 'mail:search-by-msgids',
   MAIL_SYNC_ACCOUNT: 'mail:sync-account',
+  MAIL_SYNC_FOLDER: 'mail:sync-folder',
   MAIL_GET_FOLDERS: 'mail:get-folders',
   MAIL_FETCH_OLDER: 'mail:fetch-older',
 

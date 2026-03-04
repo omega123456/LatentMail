@@ -132,6 +132,19 @@ export const FoldersStore = signalStore(
       }
       return '[Gmail]/Trash';
     }),
+    /**
+     * The gmailLabelId of the account's spam/junk folder (locale-aware).
+     * Primary: finds a folder with specialUse === '\\Junk'.
+     * Final fallback: '[Gmail]/Spam'.
+     */
+    spamFolderId: computed(() => {
+      const folders = store.folders();
+      const bySpecialUse = folders.find(f => f.specialUse === '\\Junk');
+      if (bySpecialUse) {
+        return bySpecialUse.gmailLabelId;
+      }
+      return '[Gmail]/Spam';
+    }),
   })),
 
   withMethods((store) => {

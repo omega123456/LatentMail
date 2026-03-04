@@ -153,6 +153,19 @@ export class SyncService {
    */
   private idleNewMailCallbacks: Map<string, () => void> = new Map();
 
+  // ---- All Mail IDLE tracking state (fully independent from INBOX IDLE) ----
+
+  /** Accounts that have an active All Mail IDLE connection. */
+  private idleAllMailAccounts = new Set<string>();
+  /** Per-account expunge callbacks for All Mail IDLE. Stored for reconnect reuse. */
+  private idleAllMailCallbacks = new Map<string, (accountId: string) => void>();
+  /** Current reconnection backoff delay per account (ms) for All Mail IDLE. */
+  private idleAllMailReconnectDelay = new Map<string, number>();
+  /** Reconnection backoff timers per account for All Mail IDLE. */
+  private idleAllMailReconnectTimers = new Map<string, NodeJS.Timeout>();
+  /** Accounts where All Mail IDLE stop was intentional — suppress auto-reconnect. */
+  private idleAllMailSuppressReconnect = new Set<string>();
+
   /**
    * Global flag that suppresses ALL IDLE reconnect scheduling regardless of per-account state.
    * Set by SyncQueueBridge.pause() / resume() via setGlobalIdleSuppression().
@@ -235,6 +248,8 @@ export class SyncService {
    * @param isInitial        True for the first-ever sync (affects fetch limit).
    * @param sinceDate        For incremental fetches, only emails since this date.
    * @param showNotifications True when triggered by IDLE (shows desktop notification).
+   * @param limit            Optional fetch limit override. Pass `null` to fetch all messages (no limit).
+   *                         Defaults to current behavior (100 for initial, 200 for incremental).
    * @returns SyncFolderResult for the queue worker to act on.
    */
   async syncFolder(
@@ -243,10 +258,81 @@ export class SyncService {
     isInitial: boolean,
     sinceDate: Date,
     showNotifications: boolean,
+    limit?: number | null,
+  ): Promise<SyncFolderResult> {
+    const lockManager = FolderLockManager.getInstance();
+
+    // Acquire folder lock — held through reconciliation (Pattern A).
+    const release = await lockManager.acquire(folder, accountId);
+    try {
+      return await this.syncFolderInner(accountId, folder, isInitial, sinceDate, showNotifications, limit);
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Sync a folder and then perform UID reconciliation against the server, holding the
+   * FolderLockManager lock across the entire sequence to prevent race conditions.
+   *
+   * Intended for on-demand Trash/Spam syncs triggered when the user selects those folders.
+   * Emits MAIL_FOLDER_UPDATED when complete so the renderer reloads the thread list.
+   *
+   * @param accountId Account ID as string.
+   * @param folder    Folder path to sync (e.g. '[Gmail]/Trash').
+   */
+  async syncFolderWithReconciliation(accountId: string, folder: string): Promise<void> {
+    const lockManager = FolderLockManager.getInstance();
+    const imapService = ImapService.getInstance();
+    const numAccountId = Number(accountId);
+    const sinceDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    log.info(`[SyncService] syncFolderWithReconciliation: starting for folder ${folder} account ${accountId}`);
+
+    // Acquire the folder lock and hold it across the full sync + reconciliation sequence.
+    // syncFolderInner() is called directly (no lock) to avoid double-locking.
+    const release = await lockManager.acquire(folder, accountId);
+    try {
+      // Full folder sync (no message limit — fetch everything for Trash/Spam browsing)
+      await this.syncFolderInner(accountId, folder, false, sinceDate, false, null);
+
+      // UID diff: detect messages removed from the folder since last sync
+      const serverUids = await imapService.fetchFolderUids(accountId, folder);
+      const staleCount = await this.reconcileFolderWithServerUids(accountId, folder, serverUids);
+      log.info(`[SyncService] syncFolderWithReconciliation: UID diff — ${staleCount} stale entr${staleCount === 1 ? 'y' : 'ies'} removed from ${folder} (account ${accountId})`);
+    } finally {
+      release();
+    }
+
+    // Notify renderer that the folder has been updated (outside the lock is fine — DB work is done)
+    this.emitFolderUpdated(numAccountId, [folder], 'sync', 'mixed');
+    log.info(`[SyncService] syncFolderWithReconciliation: complete for folder ${folder} account ${accountId}`);
+  }
+
+  /**
+   * Lock-free inner implementation of folder sync. Performs mailbox status check,
+   * email fetch, upsert, thread update, filter evaluation, and folder state persistence.
+   * Does NOT acquire the FolderLockManager lock — callers are responsible for locking.
+   *
+   * @param accountId         Account ID as string.
+   * @param folder            Folder path (e.g. 'INBOX').
+   * @param isInitial         True for the first-ever sync (affects default fetch limit).
+   * @param sinceDate         For incremental fetches, only emails since this date.
+   * @param showNotifications True when triggered by IDLE (shows desktop notification).
+   * @param limit             Optional fetch limit override. Pass `null` to fetch all messages.
+   *                          When `undefined`, defaults to 100 (initial) or 200 (incremental).
+   * @returns SyncFolderResult for the queue worker to act on.
+   */
+  private async syncFolderInner(
+    accountId: string,
+    folder: string,
+    isInitial: boolean,
+    sinceDate: Date,
+    showNotifications: boolean,
+    limit?: number | null,
   ): Promise<SyncFolderResult> {
     const db = DatabaseService.getInstance();
     const imapService = ImapService.getInstance();
-    const lockManager = FolderLockManager.getInstance();
     const numAccountId = Number(accountId);
 
     let uidValidityChanged = false;
@@ -256,65 +342,71 @@ export class SyncService {
 
     const existingFolderState = db.getFolderState(numAccountId, folder);
 
-    // Acquire folder lock — held through reconciliation (Pattern A).
-    const release = await lockManager.acquire(folder, accountId);
-    try {
-      // --- Mailbox status ---
-      const mailboxStatus = await imapService.getMailboxStatus(accountId, folder);
-      const folderUidValidity = mailboxStatus.uidValidity;
-      const folderCondstoreSupported = mailboxStatus.condstoreSupported;
-      let folderHighestModseq: string | null = folderCondstoreSupported ? mailboxStatus.highestModseq : null;
+    // --- Mailbox status ---
+    const mailboxStatus = await imapService.getMailboxStatus(accountId, folder);
+    const folderUidValidity = mailboxStatus.uidValidity;
+    const folderCondstoreSupported = mailboxStatus.condstoreSupported;
+    let folderHighestModseq: string | null = folderCondstoreSupported ? mailboxStatus.highestModseq : null;
 
-      // UIDVALIDITY reset: wipe cached folder data.
-      // The queue worker will call failOperationsForFolder() based on the returned flag.
-      if (existingFolderState && existingFolderState.uidValidity !== mailboxStatus.uidValidity) {
-        log.warn(`[SyncService] UIDVALIDITY changed for ${folder} (account ${accountId}): ${existingFolderState.uidValidity} -> ${mailboxStatus.uidValidity}. Resetting folder cache.`);
-        db.wipeFolderData(numAccountId, folder);
-        uidValidityChanged = true;
-      }
+    // UIDVALIDITY reset: wipe cached folder data.
+    // The queue worker will call failOperationsForFolder() based on the returned flag.
+    if (existingFolderState && existingFolderState.uidValidity !== mailboxStatus.uidValidity) {
+      log.warn(`[SyncService] UIDVALIDITY changed for ${folder} (account ${accountId}): ${existingFolderState.uidValidity} -> ${mailboxStatus.uidValidity}. Resetting folder cache.`);
+      db.wipeFolderData(numAccountId, folder);
+      uidValidityChanged = true;
+    }
 
-      // --- Fetch emails ---
-      const fetchLimit = isInitial ? 100 : 200;
-      let emails: Awaited<ReturnType<typeof imapService.fetchEmails>> = [];
+    // --- Fetch emails ---
+    // When limit is explicitly null, fetch all (no cap). When undefined, use default limits.
+    const defaultFetchLimit = isInitial ? 100 : 200;
+    const fetchLimit = limit === null ? undefined : (limit !== undefined ? limit : defaultFetchLimit);
+    let emails: Awaited<ReturnType<typeof imapService.fetchEmails>> = [];
 
-      const canUseCondstore =
-        !uidValidityChanged &&
-        folderCondstoreSupported &&
-        !!existingFolderState &&
-        existingFolderState.uidValidity === mailboxStatus.uidValidity &&
-        existingFolderState.condstoreSupported;
+    const canUseCondstore =
+      !uidValidityChanged &&
+      folderCondstoreSupported &&
+      !!existingFolderState &&
+      existingFolderState.uidValidity === mailboxStatus.uidValidity &&
+      existingFolderState.condstoreSupported;
 
-      if (canUseCondstore) {
-        const changedSince = existingFolderState!.highestModseq ?? '0';
-        const changed = await imapService.fetchChangedSince(accountId, folder, changedSince);
+    if (canUseCondstore) {
+      const changedSince = existingFolderState!.highestModseq ?? '0';
+      const changed = await imapService.fetchChangedSince(accountId, folder, changedSince);
 
-        const sorted = [...changed.emails].sort((a, b) => {
-          const ma = BigInt(a.modseq ?? '0');
-          const mb = BigInt(b.modseq ?? '0');
-          if (ma < mb) {
-            return -1;
-          }
-          if (ma > mb) {
-            return 1;
-          }
-          return a.uid - b.uid;
-        });
-        emails = sorted.slice(0, fetchLimit);
-
-        if (emails.length > 0) {
-          let maxProcessed = BigInt(changedSince || '0');
-          for (const email of emails) {
-            const modseq = BigInt(email.modseq ?? '0');
-            if (modseq > maxProcessed) {
-              maxProcessed = modseq;
-            }
-          }
-          folderHighestModseq = String(maxProcessed);
-        } else {
-          folderHighestModseq = changed.highestModseq;
+      const sorted = [...changed.emails].sort((a, b) => {
+        const ma = BigInt(a.modseq ?? '0');
+        const mb = BigInt(b.modseq ?? '0');
+        if (ma < mb) {
+          return -1;
         }
+        if (ma > mb) {
+          return 1;
+        }
+        return a.uid - b.uid;
+      });
+      emails = fetchLimit !== undefined ? sorted.slice(0, fetchLimit) : sorted;
+
+      if (emails.length > 0) {
+        let maxProcessed = BigInt(changedSince || '0');
+        for (const email of emails) {
+          const modseq = BigInt(email.modseq ?? '0');
+          if (modseq > maxProcessed) {
+            maxProcessed = modseq;
+          }
+        }
+        folderHighestModseq = String(maxProcessed);
       } else {
-        // Non-condstore path: date-based fetch.
+        folderHighestModseq = changed.highestModseq;
+      }
+    } else {
+      // Non-condstore path: date-based fetch.
+      // When limit is null (full fetch), skip the date window and count cap entirely.
+      // When limit is undefined (default), apply sinceDate and the default fetch limit.
+      if (limit === null) {
+        // Full fetch: no date restriction, no count cap — fetch every message in the folder.
+        // Pass limit: undefined explicitly so fetchEmails treats it as "no cap" (not the default 50).
+        emails = await imapService.fetchEmails(accountId, folder, { limit: undefined });
+      } else {
         // If we had a usable folder state but condstore isn't supported, use sinceDate.
         // After a UIDVALIDITY reset, fall back to 30 days to get a reasonable initial set.
         const hasUsableFolderState =
@@ -326,161 +418,159 @@ export class SyncService {
           : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         emails = await imapService.fetchEmails(accountId, folder, { limit: fetchLimit, since: folderSinceDate });
       }
+    }
 
-      // --- Group emails by thread, skip pending ops ---
-      const pendingOpService = PendingOpService.getInstance();
-      const threadMap = new Map<string, typeof emails>();
-      let newCount = 0;
-      let flagChangeCount = 0;
-      const newEmailsForNotification: NewEmailInfo[] = [];
+    // --- Group emails by thread, skip pending ops ---
+    const pendingOpService = PendingOpService.getInstance();
+    const threadMap = new Map<string, typeof emails>();
+    let newCount = 0;
+    let flagChangeCount = 0;
+    const newEmailsForNotification: NewEmailInfo[] = [];
 
-      for (const email of emails) {
-        const threadId = email.xGmThrid || email.xGmMsgId;
-        const pendingForThread = pendingOpService.getPendingForThread(numAccountId, threadId);
-        if (pendingForThread.has(email.xGmMsgId)) {
-          log.debug(`[SyncService] syncFolder: skipping pending message ${email.xGmMsgId} in ${folder}`);
-          continue;
-        }
+    for (const email of emails) {
+      const threadId = email.xGmThrid || email.xGmMsgId;
+      const pendingForThread = pendingOpService.getPendingForThread(numAccountId, threadId);
+      if (pendingForThread.has(email.xGmMsgId)) {
+        log.debug(`[SyncService] syncFolder: skipping pending message ${email.xGmMsgId} in ${folder}`);
+        continue;
+      }
 
-        const alreadyExists = db.getEmailByXGmMsgId(numAccountId, email.xGmMsgId) != null;
-        if (alreadyExists) {
-          flagChangeCount++;
-        } else {
-          newCount++;
-          if (showNotifications && folder === 'INBOX') {
-            const emailTimestamp = Date.parse(email.date);
-            const now = Date.now();
-            const isRecent = !isNaN(emailTimestamp) && emailTimestamp <= now && (now - emailTimestamp) <= NOTIFICATION_RECENCY_WINDOW_MS;
-            if (isRecent) {
-              newEmailsForNotification.push({
-                xGmMsgId: email.xGmMsgId,
-                xGmThrid: email.xGmThrid,
-                sender: email.fromName || email.fromAddress,
-                subject: email.subject,
-                snippet: email.snippet,
-                date: email.date,
-              });
-            }
+      const alreadyExists = db.getEmailByXGmMsgId(numAccountId, email.xGmMsgId) != null;
+      if (alreadyExists) {
+        flagChangeCount++;
+      } else {
+        newCount++;
+        if (showNotifications && folder === 'INBOX') {
+          const emailTimestamp = Date.parse(email.date);
+          const now = Date.now();
+          const isRecent = !isNaN(emailTimestamp) && emailTimestamp <= now && (now - emailTimestamp) <= NOTIFICATION_RECENCY_WINDOW_MS;
+          if (isRecent) {
+            newEmailsForNotification.push({
+              xGmMsgId: email.xGmMsgId,
+              xGmThrid: email.xGmThrid,
+              sender: email.fromName || email.fromAddress,
+              subject: email.subject,
+              snippet: email.snippet,
+              date: email.date,
+            });
           }
         }
-
-        if (!threadMap.has(threadId)) {
-          threadMap.set(threadId, []);
-        }
-        threadMap.get(threadId)!.push(email);
       }
 
-      // --- Upsert emails ---
-      for (const email of [...threadMap.values()].flat()) {
-        db.upsertEmail({
-          accountId: numAccountId,
-          xGmMsgId: email.xGmMsgId,
-          xGmThrid: email.xGmThrid,
-          folder,
-          folderUid: email.uid,
-          fromAddress: email.fromAddress,
-          fromName: email.fromName,
-          toAddresses: email.toAddresses,
-          ccAddresses: email.ccAddresses,
-          bccAddresses: email.bccAddresses,
-          subject: email.subject,
-          textBody: email.textBody,
-          htmlBody: email.htmlBody,
-          date: email.date,
-          isRead: email.isRead,
-          isStarred: email.isStarred,
-          isImportant: email.isImportant,
-          isDraft: email.isDraft,
-          snippet: email.snippet,
-          size: email.size,
-          hasAttachments: email.hasAttachments,
-          labels: email.labels,
-          messageId: email.messageId,
-        });
-
-        if (email.fromAddress) {
-          db.upsertContact(email.fromAddress, email.fromName);
-        }
+      if (!threadMap.has(threadId)) {
+        threadMap.set(threadId, []);
       }
+      threadMap.get(threadId)!.push(email);
+    }
 
-      // --- Upsert threads ---
-      const affectedThreadIds = new Set<string>();
-      for (const [threadId, threadEmails] of threadMap) {
-        const uniqueEmails = [...new Map(threadEmails.map((e) => [e.xGmMsgId, e])).values()];
-        const latest = uniqueEmails.reduce((a, b) =>
-          new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
-        );
-        const participants = formatParticipantList(uniqueEmails);
-        const allRead = uniqueEmails.every((e) => e.isRead);
-        const anyStarred = uniqueEmails.some((e) => e.isStarred);
-
-        db.upsertThread({
-          accountId: numAccountId,
-          xGmThrid: threadId,
-          subject: latest.subject,
-          lastMessageDate: latest.date,
-          participants,
-          messageCount: uniqueEmails.length,
-          snippet: latest.snippet,
-          isRead: allRead,
-          isStarred: anyStarred,
-        });
-
-        db.upsertThreadFolder(numAccountId, threadId, folder);
-        affectedThreadIds.add(threadId);
-      }
-
-      for (const xGmThrid of affectedThreadIds) {
-        try {
-          db.recomputeThreadMetadata(numAccountId, xGmThrid);
-        } catch (recomputeErr) {
-          log.warn(`[SyncService] syncFolder: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
-        }
-      }
-
-      // --- Filter evaluation for INBOX (within lock, after upserts) ---
-      if (folder === 'INBOX') {
-        try {
-          log.debug(`[SyncService] syncFolder: triggering filter processing for account ${accountId}`);
-          const filterService = FilterService.getInstance();
-          const filterResult = await filterService.processNewEmails(numAccountId);
-          log.debug(`[SyncService] syncFolder: filter done for account ${accountId}: ${filterResult.emailsMatched} matched, ${filterResult.actionsDispatched} dispatched`);
-        } catch (filterErr) {
-          log.warn(`[SyncService] syncFolder: filter processing failed for INBOX account ${accountId} (continuing):`, filterErr);
-        }
-      }
-
-      // Fold email upsert changes into the result
-      folderChangeCount += newCount + flagChangeCount;
-      if (newCount > 0 || flagChangeCount > 0) {
-        folderChanged = true;
-        if (newCount > 0 && flagChangeCount > 0) {
-          folderChangeType = 'mixed';
-        } else if (newCount > 0) {
-          folderChangeType = 'new_messages';
-        } else if (flagChangeCount > 0) {
-          folderChangeType = 'flag_changes';
-        }
-      }
-
-      // --- Persist folder state ---
-      db.upsertFolderState({
+    // --- Upsert emails ---
+    for (const email of [...threadMap.values()].flat()) {
+      db.upsertEmail({
         accountId: numAccountId,
+        xGmMsgId: email.xGmMsgId,
+        xGmThrid: email.xGmThrid,
         folder,
-        uidValidity: folderUidValidity,
-        highestModseq: folderCondstoreSupported ? folderHighestModseq : null,
-        condstoreSupported: folderCondstoreSupported,
+        folderUid: email.uid,
+        fromAddress: email.fromAddress,
+        fromName: email.fromName,
+        toAddresses: email.toAddresses,
+        ccAddresses: email.ccAddresses,
+        bccAddresses: email.bccAddresses,
+        subject: email.subject,
+        textBody: email.textBody,
+        htmlBody: email.htmlBody,
+        date: email.date,
+        isRead: email.isRead,
+        isStarred: email.isStarred,
+        isImportant: email.isImportant,
+        isDraft: email.isDraft,
+        snippet: email.snippet,
+        size: email.size,
+        hasAttachments: email.hasAttachments,
+        labels: email.labels,
+        messageId: email.messageId,
       });
 
-      // --- Desktop notifications for new INBOX emails ---
-      if (newEmailsForNotification.length > 0) {
-        this.accumulateNotification(accountId, folder, newEmailsForNotification);
+      if (email.fromAddress) {
+        db.upsertContact(email.fromAddress, email.fromName);
       }
-
-      log.info(`[SyncService] syncFolder: ${emails.length} fetched / ${newCount} new / ${flagChangeCount} changed from ${folder} for account ${accountId}`);
-    } finally {
-      release();
     }
+
+    // --- Upsert threads ---
+    const affectedThreadIds = new Set<string>();
+    for (const [threadId, threadEmails] of threadMap) {
+      const uniqueEmails = [...new Map(threadEmails.map((e) => [e.xGmMsgId, e])).values()];
+      const latest = uniqueEmails.reduce((a, b) =>
+        new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+      );
+      const participants = formatParticipantList(uniqueEmails);
+      const allRead = uniqueEmails.every((e) => e.isRead);
+      const anyStarred = uniqueEmails.some((e) => e.isStarred);
+
+      db.upsertThread({
+        accountId: numAccountId,
+        xGmThrid: threadId,
+        subject: latest.subject,
+        lastMessageDate: latest.date,
+        participants,
+        messageCount: uniqueEmails.length,
+        snippet: latest.snippet,
+        isRead: allRead,
+        isStarred: anyStarred,
+      });
+
+      db.upsertThreadFolder(numAccountId, threadId, folder);
+      affectedThreadIds.add(threadId);
+    }
+
+    for (const xGmThrid of affectedThreadIds) {
+      try {
+        db.recomputeThreadMetadata(numAccountId, xGmThrid);
+      } catch (recomputeErr) {
+        log.warn(`[SyncService] syncFolder: recomputeThreadMetadata failed for thread ${xGmThrid}:`, recomputeErr);
+      }
+    }
+
+    // --- Filter evaluation for INBOX (within lock, after upserts) ---
+    if (folder === 'INBOX') {
+      try {
+        log.debug(`[SyncService] syncFolder: triggering filter processing for account ${accountId}`);
+        const filterService = FilterService.getInstance();
+        const filterResult = await filterService.processNewEmails(numAccountId);
+        log.debug(`[SyncService] syncFolder: filter done for account ${accountId}: ${filterResult.emailsMatched} matched, ${filterResult.actionsDispatched} dispatched`);
+      } catch (filterErr) {
+        log.warn(`[SyncService] syncFolder: filter processing failed for INBOX account ${accountId} (continuing):`, filterErr);
+      }
+    }
+
+    // Fold email upsert changes into the result
+    folderChangeCount += newCount + flagChangeCount;
+    if (newCount > 0 || flagChangeCount > 0) {
+      folderChanged = true;
+      if (newCount > 0 && flagChangeCount > 0) {
+        folderChangeType = 'mixed';
+      } else if (newCount > 0) {
+        folderChangeType = 'new_messages';
+      } else if (flagChangeCount > 0) {
+        folderChangeType = 'flag_changes';
+      }
+    }
+
+    // --- Persist folder state ---
+    db.upsertFolderState({
+      accountId: numAccountId,
+      folder,
+      uidValidity: folderUidValidity,
+      highestModseq: folderCondstoreSupported ? folderHighestModseq : null,
+      condstoreSupported: folderCondstoreSupported,
+    });
+
+    // --- Desktop notifications for new INBOX emails ---
+    if (newEmailsForNotification.length > 0) {
+      this.accumulateNotification(accountId, folder, newEmailsForNotification);
+    }
+
+    log.info(`[SyncService] syncFolder: ${emails.length} fetched / ${newCount} new / ${flagChangeCount} changed from ${folder} for account ${accountId}`);
 
     return { uidValidityChanged, folderChanged, changeType: folderChangeType, changeCount: folderChangeCount };
   }
@@ -676,10 +766,26 @@ export class SyncService {
       }
       })();
 
-      // --- Orphan cleanup ---
-      // Note: CONDSTORE doesn't report server-side deletions (EXPUNGE). Emails permanently
-      // deleted via another client won't be detected here. A periodic full-UID reconciliation
-      // against All Mail would be needed for that — deferred to a future enhancement.
+      // --- UID diff: detect emails removed from All Mail since last sync ---
+      // CONDSTORE only reports changes to existing messages; it does not surface server-side
+      // deletions (EXPUNGE). Fetching all server UIDs and diffing against the local DB catches
+      // emails that were trashed, spammed, or permanently deleted via another client.
+      try {
+        const uidDiffStart = Date.now();
+        const serverUids = await imapService.fetchFolderUids(accountId, ALL_MAIL_PATH);
+        const staleCount = await this.reconcileFolderWithServerUids(accountId, ALL_MAIL_PATH, serverUids);
+        const uidDiffMs = Date.now() - uidDiffStart;
+        log.info(`[SyncService] syncAllMail: UID diff complete — ${staleCount} stale entr${staleCount === 1 ? 'y' : 'ies'} removed in ${uidDiffMs}ms (account ${accountId})`);
+        if (staleCount > 0) {
+          affectedFolders.add(ALL_MAIL_PATH);
+        }
+      } catch (uidDiffErr) {
+        log.warn(`[SyncService] syncAllMail: UID diff failed (continuing):`, uidDiffErr);
+      }
+
+      // --- Orphan cleanup (safety net) ---
+      // reconcileFolderWithServerUids() above already runs orphan cleanup internally,
+      // so these calls will typically be no-ops. They are retained as a harmless safety net.
       try {
         const orphanEmails = db.removeOrphanedEmails(numAccountId);
         for (const orphan of orphanEmails) {
@@ -952,6 +1058,8 @@ export class SyncService {
         'INBOX',
         // onNewMail callback — enqueues via SyncQueueBridge (passed in by caller)
         onNewMail,
+        // onExpunge callback — not needed for INBOX IDLE (All Mail handles expunge detection)
+        undefined,
         // onClose callback — reconnect with backoff (unless intentionally stopped)
         () => {
           this.idleAccounts.delete(accountId);
@@ -1050,7 +1158,7 @@ export class SyncService {
 
     try {
       const imapService = ImapService.getInstance();
-      await imapService.disconnectIdle(accountId);
+      await imapService.disconnectIdle(accountId, 'INBOX');
       log.info(`[IDLE] Stopped for account ${accountId}`);
     } catch (err) {
       log.warn(`Failed to stop IDLE for account ${accountId}:`, err);
@@ -1070,8 +1178,155 @@ export class SyncService {
       this.idleReconnectTimers.delete(accountId);
     }
 
-    await Promise.allSettled(promises);
+    // Stop All Mail IDLE connections for all accounts that have one
+    const allMailAccountIds = Array.from(this.idleAllMailAccounts);
+    const allMailPromises = allMailAccountIds.map((id) => this.stopIdleAllMail(id));
+
+    await Promise.allSettled([...promises, ...allMailPromises]);
     log.info('[IDLE] All IDLE connections stopped');
+  }
+
+  // -----------------------------------------------------------------------
+  // All Mail IDLE management
+  // -----------------------------------------------------------------------
+
+  /**
+   * Start IDLE on [Gmail]/All Mail for real-time expunge (deletion) detection.
+   * Uses a dedicated IMAP connection independent from the INBOX IDLE connection.
+   * On expunge, calls the provided onExpunge callback (typically SyncQueueBridge.enqueueAllMailSync).
+   * Reconnects with exponential backoff on disconnect.
+   *
+   * @param accountId  Account ID as string.
+   * @param onExpunge  Callback invoked when the server signals a message was expunged.
+   */
+  async startIdleAllMail(accountId: string, onExpunge: (accountId: string) => void): Promise<void> {
+    if (this.idleAllMailAccounts.has(accountId)) {
+      return;
+    }
+
+    // Store callback so scheduleIdleAllMailReconnect() can pass it again on reconnect.
+    this.idleAllMailCallbacks.set(accountId, onExpunge);
+
+    try {
+      const imapService = ImapService.getInstance();
+      this.idleAllMailAccounts.add(accountId);
+      this.idleAllMailReconnectDelay.set(accountId, 2000); // Reset backoff
+
+      // Suppress reconnect during the connection phase (connectIdle tears down
+      // any existing IDLE connection, which fires onClose — we don't want that
+      // to trigger a reconnect).
+      this.idleAllMailSuppressReconnect.add(accountId);
+
+      await imapService.startIdle(
+        accountId,
+        ALL_MAIL_PATH,
+        // onNewMail — no-op; INBOX IDLE handles new mail with lower latency
+        () => {},
+        // onExpunge — the reason this IDLE connection exists
+        () => {
+          log.info(`[IDLE] EXPUNGE detected on All Mail for account ${accountId} — scheduling reconcile sync`);
+          onExpunge(accountId);
+        },
+        // onClose callback — reconnect with backoff (unless intentionally stopped)
+        () => {
+          this.idleAllMailAccounts.delete(accountId);
+          if (!this.idleAllMailSuppressReconnect.has(accountId)) {
+            this.scheduleIdleAllMailReconnect(accountId);
+          }
+        },
+        // onError callback
+        (err: Error) => {
+          log.error(`[IDLE] All Mail connection error for account ${accountId}:`, err);
+          this.idleAllMailAccounts.delete(accountId);
+          if (!this.idleAllMailSuppressReconnect.has(accountId)) {
+            this.scheduleIdleAllMailReconnect(accountId);
+          }
+        },
+      );
+
+      // Connection established — clear suppress flag so future disconnects trigger reconnect
+      this.idleAllMailSuppressReconnect.delete(accountId);
+
+      log.info(`[IDLE] Started on All Mail for account ${accountId}`);
+    } catch (err) {
+      this.idleAllMailSuppressReconnect.delete(accountId);
+      this.idleAllMailAccounts.delete(accountId);
+      log.warn(`Failed to start All Mail IDLE for account ${accountId}:`, err);
+      this.scheduleIdleAllMailReconnect(accountId);
+    }
+  }
+
+  /**
+   * Schedule an All Mail IDLE reconnection with exponential backoff.
+   * Uses the same globalIdleSuppression flag as the INBOX IDLE reconnect scheduler.
+   */
+  private scheduleIdleAllMailReconnect(accountId: string): void {
+    // If global pause is active, do not schedule any reconnect timers.
+    if (this.globalIdleSuppression) {
+      log.info(`[IDLE] scheduleIdleAllMailReconnect: skipped for account ${accountId} — global reconnect suppression is active`);
+      return;
+    }
+
+    // Clear any existing reconnect timer
+    const existingTimer = this.idleAllMailReconnectTimers.get(accountId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const delay = this.idleAllMailReconnectDelay.get(accountId) || 2000;
+    log.info(`[IDLE] Scheduling All Mail reconnect for account ${accountId} in ${delay}ms`);
+
+    const timer = setTimeout(async () => {
+      this.idleAllMailReconnectTimers.delete(accountId);
+
+      try {
+        // Get a fresh access token (handles refresh automatically)
+        const oauthService = OAuthService.getInstance();
+        await oauthService.getAccessToken(accountId);
+      } catch (err) {
+        log.warn(`[IDLE] Token refresh failed for account ${accountId} (All Mail) — stopping IDLE:`, err);
+        return; // Don't retry — account likely needs reauth
+      }
+
+      // Re-use the stored callback for the new IDLE connection.
+      const storedCallback = this.idleAllMailCallbacks.get(accountId) ?? ((_id: string) => {});
+      await this.startIdleAllMail(accountId, storedCallback);
+    }, delay);
+
+    this.idleAllMailReconnectTimers.set(accountId, timer);
+
+    // Increase backoff: 2s → 4s → 8s → 16s → 32s → 60s cap
+    const nextDelay = Math.min(delay * 2, 60_000);
+    this.idleAllMailReconnectDelay.set(accountId, nextDelay);
+  }
+
+  /**
+   * Stop All Mail IDLE for a specific account.
+   */
+  async stopIdleAllMail(accountId: string): Promise<void> {
+    this.idleAllMailAccounts.delete(accountId);
+    this.idleAllMailCallbacks.delete(accountId);
+
+    // Suppress reconnect — this is an intentional stop
+    this.idleAllMailSuppressReconnect.add(accountId);
+
+    // Clear reconnect timer
+    const timer = this.idleAllMailReconnectTimers.get(accountId);
+    if (timer) {
+      clearTimeout(timer);
+      this.idleAllMailReconnectTimers.delete(accountId);
+    }
+
+    // Clear delay state
+    this.idleAllMailReconnectDelay.delete(accountId);
+
+    try {
+      const imapService = ImapService.getInstance();
+      await imapService.disconnectIdle(accountId, ALL_MAIL_PATH);
+      log.info(`[IDLE] All Mail stopped for account ${accountId}`);
+    } catch (err) {
+      log.warn(`Failed to stop All Mail IDLE for account ${accountId}:`, err);
+    }
   }
 
   // -----------------------------------------------------------------------

@@ -5,7 +5,7 @@ import { IPC_CHANNELS, ipcSuccess, ipcError, IpcResponse } from './ipc-channels'
 const log = LoggerService.getInstance();
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { ALL_MAIL_PATH, EXCLUDED_FOLDER_PATHS } from '../services/sync-service';
+import { ALL_MAIL_PATH, EXCLUDED_FOLDER_PATHS, SyncService } from '../services/sync-service';
 import { MailQueueService } from '../services/mail-queue-service';
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
 import { FolderLockManager } from '../services/folder-lock-manager';
@@ -758,6 +758,56 @@ export function registerMailIpcHandlers(): void {
       const errorMessage = err instanceof Error ? err.message : 'Sync failed';
       log.error('Manual sync failed:', err);
       return ipcError('MAIL_SYNC_FAILED', errorMessage);
+    }
+  });
+
+  // Trigger an on-demand sync for a specific folder (Trash/Spam lazy sync).
+  // Validates accountId and folder, then calls syncFolderWithReconciliation() which holds
+  // the folder lock across the full sync + UID diff sequence.
+  // Returns immediately after launching the background sync (fire-and-forget from the renderer's perspective).
+  ipcMain.handle(IPC_CHANNELS.MAIL_SYNC_FOLDER, async (_event, payload: unknown): Promise<IpcResponse<void>> => {
+    try {
+      if (typeof payload !== 'object' || payload === null) {
+        return ipcError('MAIL_SYNC_FOLDER_INVALID_INPUT', 'Payload must be an object');
+      }
+
+      const { accountId, folder } = payload as Record<string, unknown>;
+
+      if (typeof accountId !== 'string' || accountId.trim().length === 0) {
+        return ipcError('MAIL_SYNC_FOLDER_INVALID_INPUT', 'accountId must be a non-empty string');
+      }
+      const trimmedAccountId = accountId.trim();
+
+      const numAccountId = Number(trimmedAccountId);
+      if (!Number.isFinite(numAccountId) || numAccountId <= 0) {
+        return ipcError('MAIL_SYNC_FOLDER_INVALID_INPUT', `Invalid accountId: ${trimmedAccountId}`);
+      }
+
+      if (typeof folder !== 'string' || folder.trim().length === 0) {
+        return ipcError('MAIL_SYNC_FOLDER_INVALID_INPUT', 'folder must be a non-empty string');
+      }
+
+      // Verify the account exists in the database (treat renderer input as untrusted)
+      const account = db.getAccountById(numAccountId);
+      if (!account) {
+        return ipcError('MAIL_SYNC_FOLDER_ACCOUNT_NOT_FOUND', `Account ${trimmedAccountId} not found`);
+      }
+
+      const trimmedFolder = folder.trim();
+      log.info(`[MAIL_SYNC_FOLDER] On-demand sync triggered for folder "${trimmedFolder}" (account ${trimmedAccountId})`);
+
+      // Launch the sync asynchronously — do not await so the renderer gets an immediate response.
+      // The renderer will receive a MAIL_FOLDER_UPDATED push event when sync completes.
+      const syncService = SyncService.getInstance();
+      syncService.syncFolderWithReconciliation(trimmedAccountId, trimmedFolder).catch((err: unknown) => {
+        log.error(`[MAIL_SYNC_FOLDER] syncFolderWithReconciliation failed for folder "${trimmedFolder}" (account ${trimmedAccountId}):`, err);
+      });
+
+      return ipcSuccess(undefined);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to trigger folder sync';
+      log.error('[MAIL_SYNC_FOLDER] Failed:', err);
+      return ipcError('MAIL_SYNC_FOLDER_FAILED', errorMessage);
     }
   });
 

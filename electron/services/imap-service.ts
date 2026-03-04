@@ -79,9 +79,15 @@ export class ImapService {
   private static instance: ImapService;
   private connections: Map<string, ImapFlow> = new Map();
   private connecting: Map<string, Promise<ImapFlow>> = new Map();
-  /** Dedicated IDLE connections — separate from the shared pool */
+  /**
+   * Dedicated IDLE connections — separate from the shared pool.
+   * Keyed by composite string "accountId:folder" (e.g. "1:INBOX", "1:[Gmail]/All Mail").
+   */
   private idleConnections: Map<string, ImapFlow> = new Map();
-  /** Held mailbox locks for dedicated IDLE connections. */
+  /**
+   * Held mailbox locks for dedicated IDLE connections.
+   * Keyed by composite string "accountId:folder".
+   */
   private idleMailboxLocks: Map<string, { release: () => void }> = new Map();
 
   private constructor() {}
@@ -186,8 +192,15 @@ export class ImapService {
    */
   async disconnectAll(): Promise<void> {
     const promises = [
-      ...Array.from(this.connections.keys()).map(id => this.disconnect(id)),
-      ...Array.from(this.idleConnections.keys()).map(id => this.disconnectIdle(id)),
+      ...Array.from(this.connections.keys()).map(accountId => this.disconnect(accountId)),
+      ...Array.from(this.idleConnections.keys()).map(compositeKey => {
+        // Composite key format: "accountId:folder" — split on FIRST ':' only,
+        // because folder paths like "[Gmail]/All Mail" do not contain ':'.
+        const separatorIndex = compositeKey.indexOf(':');
+        const accountId = compositeKey.slice(0, separatorIndex);
+        const folder = compositeKey.slice(separatorIndex + 1);
+        return this.disconnectIdle(accountId, folder);
+      }),
     ];
     await Promise.allSettled(promises);
   }
@@ -267,7 +280,11 @@ export class ImapService {
     options: { limit?: number; since?: Date } = {}
   ): Promise<FetchedEmail[]> {
     const client = await this.connect(accountId);
-    const { limit = 50, since } = options;
+    // When limit is omitted from options, default to 50 for backwards-compatible callers.
+    // Pass limit: undefined explicitly to opt into "no cap" (fetch all matching UIDs).
+    const hasExplicitLimit = Object.prototype.hasOwnProperty.call(options, 'limit');
+    const limit = hasExplicitLimit ? options.limit : 50;
+    const { since } = options;
 
     const lock = await client.getMailboxLock(folder);
     try {
@@ -290,9 +307,9 @@ export class ImapService {
       if (!searchResult || searchResult.length === 0) return [];
 
       const uids = Array.from(searchResult);
-      // Sort descending and limit
+      // Sort descending; apply limit only when one is specified (undefined = no cap).
       uids.sort((a, b) => b - a);
-      const fetchUids = uids.slice(0, limit);
+      const fetchUids = limit !== undefined ? uids.slice(0, limit) : uids;
 
       if (fetchUids.length === 0) return [];
 
@@ -887,10 +904,14 @@ export class ImapService {
 
   /**
    * Create a dedicated IMAP connection for IDLE (separate from shared pool).
+   * @param accountId  Account ID as string.
+   * @param folder     Mailbox folder path to IDLE on (e.g. 'INBOX', '[Gmail]/All Mail').
    */
-  async connectIdle(accountId: string): Promise<ImapFlow> {
-    // Tear down existing IDLE connection if any
-    await this.disconnectIdle(accountId);
+  async connectIdle(accountId: string, folder: string): Promise<ImapFlow> {
+    // Tear down any existing IDLE connection for this account+folder
+    await this.disconnectIdle(accountId, folder);
+
+    const compositeKey = `${accountId}:${folder}`;
 
     const oauthService = OAuthService.getInstance();
     const db = DatabaseService.getInstance();
@@ -919,48 +940,52 @@ export class ImapService {
       emitLogs: false,
     });
 
-    // Handle close/error — clean up from idleConnections map
+    // Handle close/error — clean up from idleConnections map using composite key
     client.on('close', () => {
-      log.info(`IDLE connection closed for account ${accountId}`);
-      this.idleConnections.delete(accountId);
-      this.idleMailboxLocks.delete(accountId);
+      log.info(`IDLE connection closed for account ${accountId} folder ${folder}`);
+      this.idleConnections.delete(compositeKey);
+      this.idleMailboxLocks.delete(compositeKey);
     });
 
     client.on('error', (err: Error) => {
-      log.error(`IDLE connection error for account ${accountId}:`, err);
-      this.idleConnections.delete(accountId);
-      this.idleMailboxLocks.delete(accountId);
+      log.error(`IDLE connection error for account ${accountId} folder ${folder}:`, err);
+      this.idleConnections.delete(compositeKey);
+      this.idleMailboxLocks.delete(compositeKey);
     });
 
     await client.connect();
-    this.idleConnections.set(accountId, client);
-    log.info(`IDLE connection established for account ${accountId} (${account.email})`);
+    this.idleConnections.set(compositeKey, client);
+    log.info(`IDLE connection established for account ${accountId} folder ${folder} (${account.email})`);
 
     return client;
   }
 
   /**
-   * Disconnect the IDLE connection for an account.
+   * Disconnect the IDLE connection for an account+folder pair.
+   * @param accountId  Account ID as string.
+   * @param folder     Mailbox folder path (e.g. 'INBOX', '[Gmail]/All Mail').
    */
-  async disconnectIdle(accountId: string): Promise<void> {
-    const lock = this.idleMailboxLocks.get(accountId);
+  async disconnectIdle(accountId: string, folder: string): Promise<void> {
+    const compositeKey = `${accountId}:${folder}`;
+
+    const lock = this.idleMailboxLocks.get(compositeKey);
     if (lock) {
       try {
         lock.release();
       } catch {
         // Ignore release errors
       }
-      this.idleMailboxLocks.delete(accountId);
+      this.idleMailboxLocks.delete(compositeKey);
     }
 
-    const client = this.idleConnections.get(accountId);
+    const client = this.idleConnections.get(compositeKey);
     if (client) {
       try {
         await client.logout();
       } catch {
         // Ignore logout errors
       }
-      this.idleConnections.delete(accountId);
+      this.idleConnections.delete(compositeKey);
     }
   }
 
@@ -968,17 +993,26 @@ export class ImapService {
    * Start IDLE on a folder using a dedicated connection.
    * The mailbox lock is intentionally held (keeps mailbox selected for IDLE).
    * Returns callbacks for connection lifecycle events.
+   *
+   * @param accountId   Account ID as string.
+   * @param folder      Mailbox folder path to IDLE on (e.g. 'INBOX', '[Gmail]/All Mail').
+   * @param onNewMail   Called when the EXISTS count grows (new messages arrived).
+   * @param onExpunge   Optional. Called when the server sends an EXPUNGE (message removed).
+   * @param onClose     Optional. Called when the IDLE connection closes.
+   * @param onError     Optional. Called when the IDLE connection encounters an error.
    */
   async startIdle(
     accountId: string,
     folder: string,
     onNewMail: () => void,
+    onExpunge?: () => void,
     onClose?: () => void,
     onError?: (err: Error) => void,
   ): Promise<void> {
-    const client = await this.connectIdle(accountId);
+    const compositeKey = `${accountId}:${folder}`;
+    const client = await this.connectIdle(accountId, folder);
     const lock = await client.getMailboxLock(folder);
-    this.idleMailboxLocks.set(accountId, lock as { release: () => void });
+    this.idleMailboxLocks.set(compositeKey, lock as { release: () => void });
 
     client.on('exists', (event: { path?: string; count?: number; prevCount?: number }) => {
       const path = event.path ?? folder;
@@ -997,6 +1031,14 @@ export class ImapService {
       log.info(`[IDLE] New message detected in ${folder} for account ${accountId} (exists ${prevCount} -> ${count})`);
       onNewMail();
     });
+
+    // Register expunge handler if provided
+    if (onExpunge) {
+      client.on('expunge', (event: unknown) => {
+        log.info(`[IDLE] EXPUNGE event on ${folder} for account ${accountId}:`, event);
+        onExpunge();
+      });
+    }
 
     // Re-wire close/error to also call the provided callbacks
     if (onClose) {

@@ -254,6 +254,45 @@ export class SyncQueueBridge {
     log.debug(`[SyncQueueBridge] enqueueInboxSync: enqueued sync-folder for INBOX (account ${accountId})`);
   }
 
+  /**
+   * Enqueue a sync-allmail item triggered by an All Mail IDLE expunge event.
+   * Uses the same dedup key as the periodic timer sync (`sync-allmail:${accountId}`)
+   * to prevent redundant concurrent syncs from both the timer and IDLE events.
+   *
+   * @param accountId  Account ID as string.
+   */
+  enqueueAllMailSync(accountId: string): void {
+    if (this.paused) {
+      log.debug('[SyncQueueBridge] enqueueAllMailSync: skipped — sync is paused');
+      return;
+    }
+    const numAccountId = Number(accountId);
+    const queue = MailQueueService.getInstance();
+    const db = DatabaseService.getInstance();
+
+    const syncState = db.getAccountSyncState(numAccountId);
+    const isInitial = !syncState.lastSyncAt;
+    const sinceDate = isInitial
+      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+      : new Date(syncState.lastSyncAt!);
+
+    // Use the same dedup key as the periodic timer sync to prevent pile-up
+    const dedupKey = `sync-allmail:${numAccountId}`;
+    queue.enqueue(
+      numAccountId,
+      'sync-allmail',
+      {
+        isInitial,
+        sinceDate: sinceDate.toISOString(),
+      },
+      'Sync All Mail',
+      undefined,
+      dedupKey,
+    );
+
+    log.debug(`[SyncQueueBridge] enqueueAllMailSync: enqueued sync-allmail for account ${accountId} (IDLE expunge-triggered)`);
+  }
+
   // -----------------------------------------------------------------------
   // Thread sync
   // -----------------------------------------------------------------------
@@ -309,6 +348,7 @@ export class SyncQueueBridge {
   /**
    * Start IDLE connections for all active accounts.
    * Called after the initial sync tick so IDLE connections benefit from the initial sync state.
+   * Starts both INBOX IDLE (for new mail detection) and All Mail IDLE (for expunge detection).
    */
   private startIdleForAllAccounts(): void {
     const db = DatabaseService.getInstance();
@@ -317,12 +357,24 @@ export class SyncQueueBridge {
 
     for (const account of accounts) {
       if (!account.needsReauth) {
+        const accountId = String(account.id);
+
+        // Start INBOX IDLE — handles new mail with low latency
         syncService
-          .startIdle(String(account.id), () => {
-            this.enqueueInboxSync(String(account.id));
+          .startIdle(accountId, () => {
+            this.enqueueInboxSync(accountId);
           })
           .catch((err) => {
-            log.warn(`[SyncQueueBridge] Failed to start IDLE for account ${account.id}:`, err);
+            log.warn(`[SyncQueueBridge] Failed to start INBOX IDLE for account ${account.id}:`, err);
+          });
+
+        // Start All Mail IDLE — handles server-side deletion detection via expunge events
+        syncService
+          .startIdleAllMail(accountId, (id) => {
+            this.enqueueAllMailSync(id);
+          })
+          .catch((err) => {
+            log.warn(`[SyncQueueBridge] Failed to start All Mail IDLE for account ${account.id}:`, err);
           });
       }
     }

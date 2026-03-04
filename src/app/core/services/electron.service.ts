@@ -129,6 +129,7 @@ interface ElectronAPI {
     delete: (accountId: string, messageIds: string[], folder: string) => Promise<IpcResponse>;
     searchByMsgIds: (accountId: string, xGmMsgIds: string[]) => Promise<IpcResponse>;
     syncAccount: (accountId: string) => Promise<IpcResponse>;
+    syncFolder: (accountId: string, folder: string) => Promise<IpcResponse<void>>;
     getFolders: (accountId: string) => Promise<IpcResponse>;
     fetchOlderEmails: (accountId: string, folderId: string, beforeDate: string, limit: number) => Promise<IpcResponse>;
   };
@@ -275,6 +276,10 @@ export class ElectronService {
 
   async syncAccount(accountId: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.mail.syncAccount(accountId));
+  }
+
+  async syncFolder(accountId: string, folder: string): Promise<IpcResponse<void>> {
+    return this.invoke(() => this.api!.mail.syncFolder(accountId, folder)) as Promise<IpcResponse<void>>;
   }
 
   async getFolders(accountId: string): Promise<IpcResponse> {

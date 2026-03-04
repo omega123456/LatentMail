@@ -135,6 +135,18 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       this.activeCategoryFilter.set(null);
       this.aiStore.clearCategoryCache();
       this.emailLists?.forEach(list => list.setCategoryFilter(null));
+
+      // Fire-and-forget on-demand sync for Trash and Spam folders.
+      // The thread list loads immediately from local DB; the renderer refreshes
+      // automatically when the background sync emits MAIL_FOLDER_UPDATED.
+      const isTrashOrSpam =
+        normalizedFolderId === this.foldersStore.trashFolderId() ||
+        normalizedFolderId === this.foldersStore.spamFolderId();
+      if (isTrashOrSpam) {
+        this.electronService.syncFolder(String(activeAccount.id), normalizedFolderId).catch(() => {
+          // Fire-and-forget: errors are logged server-side; UI degrades gracefully
+        });
+      }
     }
   }
 
