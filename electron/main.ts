@@ -176,7 +176,35 @@ if (runApp) {
       } catch (err) {
         logger.warn('Failed to re-initialize OAuth refresh timers on resume:', err);
       }
+      // On Windows (and Linux), resume sync after wake; on macOS we use user-did-become-active instead to avoid Power Nap.
+      if (!isMacOS()) {
+        try {
+          SyncQueueBridge.getInstance().startAfterWake();
+        } catch (err) {
+          logger.warn('Failed to start sync after wake:', err);
+        }
+      }
     });
+
+    // Pause sync when system sleeps (all platforms).
+    powerMonitor.on('suspend', () => {
+      try {
+        SyncQueueBridge.getInstance().stopForSleep();
+      } catch (err) {
+        logger.warn('Failed to stop sync for sleep:', err);
+      }
+    });
+
+    // On macOS, resume sync only when user session is active (avoids Power Nap brief wakes).
+    if (isMacOS()) {
+      powerMonitor.on('user-did-become-active', () => {
+        try {
+          SyncQueueBridge.getInstance().startAfterWake();
+        } catch (err) {
+          logger.warn('Failed to start sync after wake (user-did-become-active):', err);
+        }
+      });
+    }
 
     // Start CLI pipe server so users can control sync from the terminal.
     try {

@@ -34,6 +34,9 @@ export class SyncQueueBridge {
   /** Whether background sync is paused via CLI command. */
   private paused = false;
 
+  /** Whether sync was stopped due to system sleep (cleared on wake; independent of paused). */
+  private sleepStopped = false;
+
   private constructor() {}
 
   static getInstance(): SyncQueueBridge {
@@ -129,6 +132,7 @@ export class SyncQueueBridge {
       return;
     }
     this.paused = false;
+    this.sleepStopped = false; // User resumed; we are no longer in sleep-stopped state
     this.emitPausedStateChanged(false);
     SyncService.getInstance().setGlobalIdleSuppression(false);
     // start() triggers an immediate sync tick and restarts IDLE for all accounts.
@@ -141,6 +145,42 @@ export class SyncQueueBridge {
    */
   isPaused(): boolean {
     return this.paused;
+  }
+
+  /**
+   * Stop sync and IDLE for system sleep. No-op if already user-paused or already sleep-stopped.
+   * Does not set paused or emit paused state to renderer.
+   */
+  stopForSleep(): void {
+    if (this.paused) {
+      return;
+    }
+    if (this.sleepStopped) {
+      return;
+    }
+    SyncService.getInstance().setGlobalIdleSuppression(true);
+    this.stop();
+    SyncService.getInstance().stopAllIdle().catch((err) => {
+      log.warn('[SyncQueueBridge] stopForSleep(): stopAllIdle failed:', err);
+    });
+    this.sleepStopped = true;
+    log.info('[SyncQueueBridge] Sync stopped for system sleep');
+  }
+
+  /**
+   * Resume sync after wake. No-op if not sleep-stopped or if user is still paused.
+   */
+  startAfterWake(): void {
+    if (!this.sleepStopped) {
+      return;
+    }
+    this.sleepStopped = false;
+    if (this.paused) {
+      return;
+    }
+    SyncService.getInstance().setGlobalIdleSuppression(false);
+    this.start();
+    log.info('[SyncQueueBridge] Sync started after wake');
   }
 
   // -----------------------------------------------------------------------
