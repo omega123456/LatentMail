@@ -48,7 +48,7 @@ function isValidLevel(value: unknown): value is LogLevel {
  */
 export class LoggerService {
   private static instance: LoggerService;
-  private currentLevel: LogLevel;
+  private currentLevel: LogLevel = 'info';
 
   private constructor() {
     // ── Phase 1: early bootstrap ───────────────────────────────────────────
@@ -63,8 +63,6 @@ export class LoggerService {
 
     this.cleanupOldLogs();
 
-    const envLevel = process.env['LOG_LEVEL'];
-    this.currentLevel = isValidLevel(envLevel) ? envLevel : 'error';
     log.transports.file.level = this.currentLevel;
     // Console transport is deliberately left at its electron-log default.
   }
