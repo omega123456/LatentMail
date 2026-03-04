@@ -42,8 +42,9 @@ export const SYSTEM_FOLDER_KEYS = new Set(Object.keys(FOLDER_BADGE_META));
  * These folders may still exist in email_folders rows (reflecting server state)
  * but must never be shown as visible badges in the email list or reading pane.
  * [Gmail]/Important is a Gmail system attribute, not a real user-visible label.
+ * [Gmail]/All Mail is hidden so it does not clutter the reading pane (every message is in All Mail).
  */
-export const HIDDEN_FOLDER_IDS = new Set<string>(['[gmail]/important']);
+export const HIDDEN_FOLDER_IDS = new Set<string>(['[gmail]/important', '[gmail]/all mail']);
 
 export interface FolderForLookup {
   gmailLabelId: string;
