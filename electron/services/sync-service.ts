@@ -298,7 +298,7 @@ export class SyncService {
 
       // UID diff: detect messages removed from the folder since last sync
       const serverUids = await imapService.fetchFolderUids(accountId, folder);
-      const staleCount = await this.reconcileFolderWithServerUids(accountId, folder, serverUids);
+      const { staleCount } = await this.reconcileFolderWithServerUids(accountId, folder, serverUids);
       log.info(`[SyncService] syncFolderWithReconciliation: UID diff — ${staleCount} stale entr${staleCount === 1 ? 'y' : 'ies'} removed from ${folder} (account ${accountId})`);
     } finally {
       release();
@@ -493,6 +493,26 @@ export class SyncService {
 
       if (email.fromAddress) {
         db.upsertContact(email.fromAddress, email.fromName);
+      }
+    }
+
+    // --- Resolve All Mail UIDs for newly synced emails ---
+    // Best-effort: emails synced from a non-All Mail folder won't have an email_folders row
+    // for [Gmail]/All Mail yet. Resolve and write those UIDs now so that All Mail
+    // UID-diff reconciliation can track them correctly. Skip when syncing All Mail
+    // itself (it already writes its own UIDs natively).
+    if (folder !== ALL_MAIL_PATH && threadMap.size > 0) {
+      try {
+        const xGmMsgIds = [...threadMap.values()]
+          .flat()
+          .map((email) => email.xGmMsgId)
+          .filter((id): id is string => id != null);
+        if (xGmMsgIds.length > 0) {
+          const uidMap = await imapService.resolveUidsByXGmMsgIdBatch(accountId, ALL_MAIL_PATH, xGmMsgIds);
+          db.writeAllMailFolderUids(numAccountId, uidMap);
+        }
+      } catch (error) {
+        log.warn(`[syncFolderInner] Failed to resolve All Mail UIDs for folder ${folder}:`, error);
       }
     }
 
@@ -773,11 +793,11 @@ export class SyncService {
       try {
         const uidDiffStart = Date.now();
         const serverUids = await imapService.fetchFolderUids(accountId, ALL_MAIL_PATH);
-        const staleCount = await this.reconcileFolderWithServerUids(accountId, ALL_MAIL_PATH, serverUids);
+        const { staleCount, affectedFolders: reconcileAffected } = await this.reconcileFolderWithServerUids(accountId, ALL_MAIL_PATH, serverUids);
         const uidDiffMs = Date.now() - uidDiffStart;
         log.info(`[SyncService] syncAllMail: UID diff complete — ${staleCount} stale entr${staleCount === 1 ? 'y' : 'ies'} removed in ${uidDiffMs}ms (account ${accountId})`);
-        if (staleCount > 0) {
-          affectedFolders.add(ALL_MAIL_PATH);
+        for (const reconcileFolder of reconcileAffected) {
+          affectedFolders.add(reconcileFolder);
         }
       } catch (uidDiffErr) {
         log.warn(`[SyncService] syncAllMail: UID diff failed (continuing):`, uidDiffErr);
@@ -962,12 +982,19 @@ export class SyncService {
    *
    * Called by syncFolder() after it has already fetched emails and UIDs with the folder lock.
    * Also called by MailQueueService.reconcileFolder() for post-op Starred reconciliation.
+   *
+   * When called for ALL_MAIL_PATH: performs a cascade purge via removeAllEmailFolderAssociations(),
+   * stripping stale emails from every folder except Trash and Spam.
+   * When called for any other folder: removes only the specific folder's stale associations.
+   *
+   * @returns staleCount     - Number of stale All Mail entries detected (same meaning as before).
+   * @returns affectedFolders - Folder paths that had associations removed (for UI refresh).
    */
   async reconcileFolderWithServerUids(
     accountId: string,
     folder: string,
     serverUids: number[],
-  ): Promise<number> {
+  ): Promise<{ staleCount: number; affectedFolders: Set<string> }> {
     const db = DatabaseService.getInstance();
     const numAccountId = Number(accountId);
 
@@ -980,7 +1007,7 @@ export class SyncService {
     const staleEntries = localFolderUids.filter((entry) => !serverUidSet.has(entry.uid));
 
     if (staleEntries.length === 0) {
-      return 0;
+      return { staleCount: 0, affectedFolders: new Set() };
     }
 
     log.info(`[SyncService] reconcileFolder: removing ${staleEntries.length} stale email-folder associations from ${folder} for account ${accountId}`);
@@ -997,13 +1024,33 @@ export class SyncService {
       }
     }
 
-    // Remove stale associations atomically
-    db.removeStaleEmailFolderAssociations(numAccountId, folder, staleEntries.map((e) => e.xGmMsgId));
+    const staleXGmMsgIds = staleEntries.map((entry) => entry.xGmMsgId);
+    let affectedFolders: Set<string>;
+
+    if (folder === ALL_MAIL_PATH) {
+      // Cascade purge: strip stale emails from every folder except Trash and Spam.
+      // This handles the case where an email was permanently deleted from All Mail —
+      // we remove its folder associations everywhere except soft-delete locations.
+      const trashFolder = db.getTrashFolder(numAccountId);
+      const purgeResult = db.removeAllEmailFolderAssociations(numAccountId, staleXGmMsgIds, trashFolder, '[Gmail]/Spam');
+
+      // Merge thread IDs affected by the cascade purge into our set for metadata recompute
+      for (const xGmThrid of purgeResult.affectedThreadIds) {
+        affectedGmailThreadIds.add(xGmThrid);
+      }
+
+      // The affected folders are everything the cascade purge touched, plus All Mail itself
+      affectedFolders = new Set(purgeResult.affectedFolderPaths);
+      affectedFolders.add(ALL_MAIL_PATH);
+    } else {
+      // Non-All Mail: remove only the stale associations for this specific folder
+      db.removeStaleEmailFolderAssociations(numAccountId, folder, staleXGmMsgIds);
+      affectedFolders = new Set([folder]);
+    }
 
     // Remove orphan emails (emails with zero email_folders associations)
-    let orphanEmails: Array<{ xGmMsgId: string; xGmThrid: string }> = [];
     try {
-      orphanEmails = db.removeOrphanedEmails(numAccountId);
+      const orphanEmails = db.removeOrphanedEmails(numAccountId);
       if (orphanEmails.length > 0) {
         log.info(`[SyncService] reconcileFolder: removed ${orphanEmails.length} orphan email(s) for account ${accountId}`);
         for (const orphan of orphanEmails) {
@@ -1035,7 +1082,7 @@ export class SyncService {
       log.warn(`[SyncService] reconcileFolder: removeOrphanedThreads failed (continuing):`, orphanThreadErr);
     }
 
-    return staleEntries.length;
+    return { staleCount: staleEntries.length, affectedFolders };
   }
 
   // -----------------------------------------------------------------------

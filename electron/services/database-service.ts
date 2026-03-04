@@ -797,6 +797,133 @@ export class DatabaseService {
     doRemove();
   }
 
+  /**
+   * Remove all email-folder (and thread-folder) associations for a set of emails across
+   * every folder EXCEPT Trash and Spam.  This is used when a bulk reconcile detects that
+   * messages have been permanently deleted from All Mail: we want to strip them from
+   * every visible folder while leaving any Trash/Spam links intact (so soft-deleted mail
+   * stays in the Trash view until the server eventually expunges it).
+   *
+   * All mutations run inside a single transaction.  Folder paths and thread IDs are
+   * collected BEFORE any deletion so that callers can update the UI accordingly.
+   *
+   * @param accountId   - The account whose emails are being cleaned up.
+   * @param xGmMsgIds   - Stable Gmail message IDs to purge from all non-trash/spam folders.
+   * @param trashFolder - The account-specific trash folder path (excluded from deletion).
+   * @param spamFolder  - The account-specific spam folder path (excluded from deletion).
+   * @returns affectedFolderPaths - Distinct folder paths that had rows removed.
+   * @returns affectedThreadIds   - Distinct x_gm_thrid values whose emails were removed.
+   */
+  removeAllEmailFolderAssociations(
+    accountId: number,
+    xGmMsgIds: string[],
+    trashFolder: string,
+    spamFolder: string,
+  ): { affectedFolderPaths: Set<string>; affectedThreadIds: Set<string> } {
+    if (!this.db) { throw new Error('Database not initialized'); }
+    if (xGmMsgIds.length === 0) {
+      return { affectedFolderPaths: new Set(), affectedThreadIds: new Set() };
+    }
+
+    // --- Pre-deletion SELECT ---
+    // Collect all (folder, x_gm_thrid) pairs that will be affected, so we can:
+    //   1. Return affected folder paths and thread IDs to the caller.
+    //   2. Know which (thread, folder) pairs to check for orphaned thread_folders rows.
+    //
+    // We iterate each xGmMsgId individually (no IN clause) to stay well within SQLite's
+    // bound-parameter limit and to match the established pattern in this file.
+
+    const affectedFolderPaths = new Set<string>();
+    const affectedThreadIds = new Set<string>();
+
+    // folderToThrids: folder → Set<x_gm_thrid> — used for thread_folders cleanup below.
+    const folderToThrids = new Map<string, Set<string>>();
+
+    const selectStmt = this.db.prepare(
+      `SELECT ef.folder, e.x_gm_thrid
+         FROM email_folders ef
+         JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+        WHERE e.account_id = :accountId
+          AND e.x_gm_msgid  = :xGmMsgId
+          AND ef.folder     != :trashFolder
+          AND ef.folder     != :spamFolder`,
+    );
+
+    for (const xGmMsgId of xGmMsgIds) {
+      const rows = selectStmt.all({ accountId, xGmMsgId, trashFolder, spamFolder }) as Array<{
+        folder: string;
+        x_gm_thrid: string;
+      }>;
+
+      for (const row of rows) {
+        affectedFolderPaths.add(row.folder);
+        affectedThreadIds.add(row.x_gm_thrid);
+
+        if (!folderToThrids.has(row.folder)) {
+          folderToThrids.set(row.folder, new Set<string>());
+        }
+        folderToThrids.get(row.folder)!.add(row.x_gm_thrid);
+      }
+    }
+
+    // If nothing was found in non-trash/spam folders, nothing to do.
+    if (affectedFolderPaths.size === 0) {
+      return { affectedFolderPaths, affectedThreadIds };
+    }
+
+    // --- Transactional mutations ---
+    const doRemove = this.db.transaction(() => {
+      // Prepared statements reused across all iterations.
+      const deleteEmailFolderStmt = this.db!.prepare(
+        `DELETE FROM email_folders
+          WHERE account_id = :accountId
+            AND x_gm_msgid = :xGmMsgId
+            AND folder    != :trashFolder
+            AND folder    != :spamFolder`,
+      );
+
+      const countRemainingStmt = this.db!.prepare(
+        `SELECT COUNT(*) AS cnt
+           FROM email_folders ef
+           JOIN emails e ON e.account_id = ef.account_id AND e.x_gm_msgid = ef.x_gm_msgid
+          WHERE e.account_id  = :accountId
+            AND e.x_gm_thrid  = :xGmThrid
+            AND ef.folder     = :folder`,
+      );
+
+      const deleteThreadFolderStmt = this.db!.prepare(
+        `DELETE FROM thread_folders
+          WHERE account_id = :accountId
+            AND x_gm_thrid = :xGmThrid
+            AND folder     = :folder`,
+      );
+
+      // 1. Remove email-folder associations (all non-trash/spam folders) for each message.
+      for (const xGmMsgId of xGmMsgIds) {
+        deleteEmailFolderStmt.run({ accountId, xGmMsgId, trashFolder, spamFolder });
+      }
+
+      // 2. For each (folder, thread) pair that was affected, check whether any emails
+      //    remain in that folder for that thread.  If none remain, remove the thread_folders
+      //    row so the thread no longer appears in that folder's thread list.
+      for (const [folder, thrids] of folderToThrids) {
+        for (const xGmThrid of thrids) {
+          const countRow = countRemainingStmt.get({ accountId, xGmThrid, folder }) as
+            | { cnt: number }
+            | undefined;
+          const remainingCount = countRow?.cnt ?? 0;
+          if (remainingCount === 0) {
+            deleteThreadFolderStmt.run({ accountId, xGmThrid, folder });
+          }
+        }
+      }
+    });
+
+    doRemove();
+
+    return { affectedFolderPaths, affectedThreadIds };
+  }
+
   moveEmailFolder(accountId: number, xGmMsgId: string, sourceFolder: string, targetFolder: string, targetUid?: number | null): void {
     if (!this.db) throw new Error('Database not initialized');
     const doMove = this.db.transaction(() => {

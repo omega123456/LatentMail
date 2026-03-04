@@ -2067,7 +2067,7 @@ export class MailQueueService {
       release();
     }
 
-    const removalCount = await syncService.reconcileFolderWithServerUids(String(accountId), folder, serverUids);
+    const { staleCount: removalCount } = await syncService.reconcileFolderWithServerUids(String(accountId), folder, serverUids);
     if (removalCount > 0) {
       this.emitFolderUpdated(accountId, [folder], 'sync', 'deletions', removalCount);
     }
