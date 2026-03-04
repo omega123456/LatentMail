@@ -1,4 +1,5 @@
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
+import { CLI_COMMANDS_META } from './cli-commands-meta';
 
 /** Result shape returned by every command handler. */
 export interface CommandResult {
@@ -42,7 +43,7 @@ export async function dispatchCommand(command: string): Promise<CommandResult> {
   return handler();
 }
 
-/** Returns the list of registered command names. */
+/** Returns the list of registered command names, derived from the shared metadata. */
 export function getAvailableCommands(): string[] {
-  return Object.keys(registry);
+  return CLI_COMMANDS_META.map((meta) => meta.name);
 }
