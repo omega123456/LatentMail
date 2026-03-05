@@ -201,6 +201,8 @@ interface ElectronAPI {
   };
   sync: {
     getPaused: () => Promise<IpcResponse<{ paused: boolean }>>;
+    pause: () => Promise<IpcResponse<{ paused: boolean }>>;
+    resume: () => Promise<IpcResponse<{ paused: boolean }>>;
   };
   logger: {
     getRecentEntries: () => Promise<IpcResponse>;
@@ -516,6 +518,16 @@ export class ElectronService {
   /** Query whether background sync is currently paused (used for initial UI hydration). */
   async getSyncPaused(): Promise<IpcResponse<{ paused: boolean }>> {
     return this.invoke(() => this.api!.sync.getPaused()) as Promise<IpcResponse<{ paused: boolean }>>;
+  }
+
+  /** Pause background sync (same as CLI pause-sync). */
+  async pauseSync(): Promise<IpcResponse<{ paused: boolean }>> {
+    return this.invoke(() => this.api!.sync.pause()) as Promise<IpcResponse<{ paused: boolean }>>;
+  }
+
+  /** Resume background sync (same as CLI resume-sync; also resumes after sleep). */
+  async resumeSync(): Promise<IpcResponse<{ paused: boolean }>> {
+    return this.invoke(() => this.api!.sync.resume()) as Promise<IpcResponse<{ paused: boolean }>>;
   }
 
   // ---- Logger operations ----

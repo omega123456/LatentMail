@@ -8,6 +8,7 @@ import { AiStore } from '../../../store/ai.store';
 import { UiStore } from '../../../store/ui.store';
 import { QueueStore } from '../../../store/queue.store';
 import { ElectronService } from '../../../core/services/electron.service';
+import { ToastService } from '../../../core/services/toast.service';
 
 @Component({
   selector: 'app-status-bar',
@@ -23,11 +24,12 @@ export class StatusBarComponent implements OnInit, OnDestroy {
   readonly uiStore = inject(UiStore);
   readonly queueStore = inject(QueueStore);
   private readonly electronService = inject(ElectronService);
+  private readonly toastService = inject(ToastService);
   private readonly router = inject(Router);
 
   /** Counter that increments every 30s to trigger relative time recalculation */
   readonly tick = signal(0);
-  /** True when background sync is paused via CLI command. */
+  /** True when background sync is paused (via status bar button or CLI). */
   readonly syncPaused = signal(false);
   private tickInterval?: ReturnType<typeof setInterval>;
   private aiStatusSub?: Subscription;
@@ -156,6 +158,24 @@ export class StatusBarComponent implements OnInit, OnDestroy {
     if (activeAccount && !this.emailsStore.syncing()) {
       this.emailsStore.syncAccount(activeAccount.id);
     }
+  }
+
+  /** Pause background sync (same as CLI pause-sync). */
+  pauseSync(): void {
+    this.electronService.pauseSync().then(response => {
+      if (response.success) {
+        this.toastService.success('Sync paused');
+      }
+    });
+  }
+
+  /** Resume background sync (same as CLI resume-sync; also resumes after sleep). */
+  resumeSync(): void {
+    this.electronService.resumeSync().then(response => {
+      if (response.success) {
+        this.toastService.success('Sync resumed');
+      }
+    });
   }
 
   ngOnDestroy(): void {

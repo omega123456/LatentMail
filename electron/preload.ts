@@ -192,6 +192,8 @@ const electronAPI = {
   // Sync pause state (query current state on load; push events arrive via on('sync:paused-state-changed'))
   sync: {
     getPaused: () => ipcRenderer.invoke('sync:get-paused') as Promise<IpcResponse>,
+    pause: () => ipcRenderer.invoke('sync:pause') as Promise<IpcResponse>,
+    resume: () => ipcRenderer.invoke('sync:resume') as Promise<IpcResponse>,
   },
 
   // Event listeners (for push events from main process)

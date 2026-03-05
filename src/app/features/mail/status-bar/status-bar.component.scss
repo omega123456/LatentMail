@@ -158,7 +158,30 @@
   }
 }
 
-// Sync paused badge — prominent amber pill shown when CLI pause-sync is active
+// Pause button (shown when sync is running) — same minimal style as other status bar buttons
+.sync-pause-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: inherit;
+  line-height: inherit;
+
+  &:hover {
+    color: var(--color-text-secondary);
+  }
+
+  .material-symbols-outlined {
+    font-size: 14px;
+  }
+}
+
+// Sync paused badge — prominent amber pill; when used as Resume button, clickable
 .sync-paused-badge {
   display: flex;
   align-items: center;
@@ -170,6 +193,23 @@
   .material-symbols-outlined {
     font-size: 14px;
     color: #D97706;
+  }
+
+  // Resume button: same button reset as other status bar controls
+  &.sync-resume-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-family: inherit;
+    line-height: inherit;
+
+    &:hover {
+      color: #B45309;
+      .material-symbols-outlined {
+        color: #F59E0B;
+      }
+    }
   }
 }
 

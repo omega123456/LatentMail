@@ -92,6 +92,8 @@ export const IPC_CHANNELS = {
 
   // Sync pause/resume state
   SYNC_GET_PAUSED: 'sync:get-paused',
+  SYNC_PAUSE: 'sync:pause',
+  SYNC_RESUME: 'sync:resume',
 
   // Embedding / semantic search operations
   AI_SET_EMBEDDING_MODEL: 'ai:set-embedding-model',
