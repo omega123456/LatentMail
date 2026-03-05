@@ -188,6 +188,15 @@ export class ImapService {
   }
 
   /**
+   * Disconnect all shared (non-IDLE) IMAP connections.
+   * Used on system wake to force-recycle stale connections before restarting sync.
+   */
+  async disconnectAllShared(): Promise<void> {
+    const promises = Array.from(this.connections.keys()).map(accountId => this.disconnect(accountId));
+    await Promise.allSettled(promises);
+  }
+
+  /**
    * Disconnect all IMAP connections (shared + IDLE).
    */
   async disconnectAll(): Promise<void> {

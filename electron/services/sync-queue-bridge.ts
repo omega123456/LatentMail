@@ -4,6 +4,7 @@ import { DatabaseService } from './database-service';
 
 const log = LoggerService.getInstance();
 import { SyncService } from './sync-service';
+import { ImapService } from './imap-service';
 import { MailQueueService } from './mail-queue-service';
 
 import { IPC_EVENTS } from '../ipc/ipc-channels';
@@ -115,9 +116,12 @@ export class SyncQueueBridge {
     SyncService.getInstance().setGlobalIdleSuppression(true);
     // Stop the background timer
     this.stop();
-    // Tear down all IDLE connections (async — in-flight reconnects are suppressed above)
-    SyncService.getInstance().stopAllIdle().catch((err) => {
-      log.warn('[SyncQueueBridge] pause(): stopAllIdle failed:', err);
+    // Tear down all IDLE and shared IMAP connections so they are recreated fresh on resume.
+    Promise.all([
+      SyncService.getInstance().stopAllIdle(),
+      ImapService.getInstance().disconnectAllShared(),
+    ]).catch((err) => {
+      log.warn('[SyncQueueBridge] pause(): teardown failed:', err);
     });
     log.info('[SyncQueueBridge] Background sync paused');
   }
@@ -167,8 +171,13 @@ export class SyncQueueBridge {
     }
     SyncService.getInstance().setGlobalIdleSuppression(true);
     this.stop();
-    SyncService.getInstance().stopAllIdle().catch((err) => {
-      log.warn('[SyncQueueBridge] stopForSleep(): stopAllIdle failed:', err);
+    // Close shared IMAP connections so they are recreated fresh on wake.
+    // Stale TCP sockets after sleep may report usable=true but hang on any command.
+    Promise.all([
+      SyncService.getInstance().stopAllIdle(),
+      ImapService.getInstance().disconnectAllShared(),
+    ]).catch((err) => {
+      log.warn('[SyncQueueBridge] stopForSleep(): teardown failed:', err);
     });
     this.sleepStopped = true;
     this.emitPausedStateChanged(this.getPausedForUi());

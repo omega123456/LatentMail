@@ -203,7 +203,24 @@ export class SyncService {
    */
   async getMailboxesForSync(accountId: string): Promise<Awaited<ReturnType<typeof ImapService.prototype.getMailboxes>>> {
     const imapService = ImapService.getInstance();
-    const mailboxes = await imapService.getMailboxes(accountId);
+
+    // Race against a 30s timeout so stale post-sleep connections fail fast
+    // instead of hanging the sync indicator indefinitely.
+    const timeoutMs = 30_000;
+    let mailboxes: Awaited<ReturnType<typeof imapService.getMailboxes>>;
+    try {
+      mailboxes = await Promise.race([
+        imapService.getMailboxes(accountId),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error(`getMailboxesForSync timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+        }),
+      ]);
+    } catch (err) {
+      // Force-close the stale connection so the next attempt creates a fresh one.
+      await imapService.disconnect(accountId).catch(() => {});
+      throw err;
+    }
+
     return mailboxes.filter((mb) => !EXCLUDED_FOLDER_PATHS.includes(mb.path));
   }
 
