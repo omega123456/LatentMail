@@ -7,13 +7,17 @@ import {
   AfterViewChecked,
   output,
   HostListener,
+  ChangeDetectorRef,
+  NgZone,
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { FormsModule } from '@angular/forms';
 import { ChatStore } from '../../../store/chat.store';
 import { UiStore } from '../../../store/ui.store';
 import { AccountsStore } from '../../../store/accounts.store';
+import { ElectronService } from '../../../core/services/electron.service';
 import { ChatMessageComponent } from './chat-message.component';
 
 @Component({
@@ -28,6 +32,9 @@ export class AiChatPanelComponent implements AfterViewChecked {
   protected readonly chatStore = inject(ChatStore);
   protected readonly uiStore = inject(UiStore);
   protected readonly accountsStore = inject(AccountsStore);
+  private readonly electronService = inject(ElectronService);
+  private readonly cdr = inject(ChangeDetectorRef);
+  private readonly ngZone = inject(NgZone);
 
   readonly sourceClicked = output<string>();  // emits xGmMsgId for navigation
 
@@ -35,6 +42,28 @@ export class AiChatPanelComponent implements AfterViewChecked {
 
   protected inputText = '';
   private shouldScrollToBottom = false;
+
+  constructor() {
+    // Scroll the message list on every streamed token so the view follows in real time.
+    this.electronService.onAiChatStream$
+      .pipe(takeUntilDestroyed())
+      .subscribe(() => {
+        this.ngZone.run(() => {
+          this.shouldScrollToBottom = true;
+          this.cdr.markForCheck();
+        });
+      });
+
+    // Scroll again after the stream ends and source cards are rendered.
+    this.electronService.onAiChatDone$
+      .pipe(takeUntilDestroyed())
+      .subscribe(() => {
+        this.ngZone.run(() => {
+          this.shouldScrollToBottom = true;
+          this.cdr.markForCheck();
+        });
+      });
+  }
 
   readonly examplePrompts = [
     'Summarize last week\'s important emails',

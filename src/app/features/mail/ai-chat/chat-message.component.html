@@ -11,16 +11,17 @@
       @if (message().error) {
         <div class="error-text">{{ message().error }}</div>
       } @else {
-        <div class="message-content" [class.streaming]="message().streaming" [innerHTML]="formatContent(message().content)" aria-live="off"></div>
+        <div class="message-content" [class.streaming]="message().streaming" [innerHTML]="formatContent(getDisplayContent())" aria-live="off"></div>
       }
 
       @if (message().sources && message().sources.length > 0) {
         <div class="sources-section" aria-label="Source emails">
           <div class="sources-label">SOURCES</div>
           <div class="sources-list">
-            @for (source of message().sources; track source.xGmMsgId) {
+            @for (source of message().sources; track source.xGmMsgId; let idx = $index) {
               <app-source-card
                 [source]="source"
+                [displayIndex]="idx + 1"
                 (sourceClicked)="onSourceClicked($event)"
               />
             }

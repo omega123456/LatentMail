@@ -11,6 +11,8 @@ import { SourceEmail } from '../../../core/models/ai.model';
 })
 export class SourceCardComponent {
   readonly source = input.required<SourceEmail>();
+  /** When set, used for the citation badge instead of source.citationIndex (sequential display). */
+  readonly displayIndex = input<number>();
   readonly sourceClicked = output<string>();  // emits xGmMsgId
 
   onClick(): void {

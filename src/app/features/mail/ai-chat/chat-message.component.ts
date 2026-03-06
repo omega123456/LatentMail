@@ -22,6 +22,27 @@ export class ChatMessageComponent {
   }
 
   /**
+   * Returns message content with citation markers [N] renumbered to sequential
+   * 1, 2, 3, ... so that only cited sources appear as [1], [2], etc.
+   */
+  getDisplayContent(): string {
+    const content = this.message().content;
+    const sources = this.message().sources;
+    if (!sources || sources.length === 0) {
+      return content;
+    }
+    const originalToSequential = new Map<number, number>();
+    sources.forEach((source, index) => {
+      originalToSequential.set(source.citationIndex, index + 1);
+    });
+    return content.replace(/\[(\d+)\]/g, (_match: string, numStr: string) => {
+      const original = parseInt(numStr, 10);
+      const sequential = originalToSequential.get(original);
+      return sequential !== undefined ? `[${sequential}]` : `[${original}]`;
+    });
+  }
+
+  /**
    * Converts the LLM response text (which may contain markdown-like syntax)
    * into safe HTML for rendering via [innerHTML].
    *
