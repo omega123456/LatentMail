@@ -98,7 +98,7 @@
         @if (chatStore.inputDisabled()) {
           <button
             mat-mini-fab
-            class="send-btn stop-btn"
+            class="send-btn"
             (click)="stopStream()"
             aria-label="Stop generating"
             matTooltip="Stop"
@@ -107,7 +107,7 @@
           </button>
         } @else {
           <button
-            mat-mini-fab
+            matMiniFab
             class="send-btn"
             (click)="sendMessage()"
             [disabled]="!inputText.trim() || chatStore.panelStatus() === 'disabled'"

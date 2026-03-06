@@ -85,18 +85,18 @@
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 
 .header-btn {
-  width: 28px;
-  height: 28px;
-  line-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   .material-symbols-outlined {
-    font-size: 18px;
-    width: 18px;
-    height: 18px;
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
   }
 }
 
@@ -209,7 +209,7 @@
   resize: none;
   border: 1px solid var(--color-border);
   border-radius: 6px;
-  padding: 8px 12px;
+  padding: 10px 12px;
   font-size: 13px;
   font-family: inherit;
   line-height: 1.5;
@@ -218,8 +218,8 @@
   outline: none;
   overflow-y: auto;
   // 4 lines max: 4 * line-height * font-size + padding
-  max-height: calc(4 * 1.5 * 13px + 16px);
-  min-height: 36px;
+  max-height: calc(4 * 1.5 * 13px + 20px);
+  min-height: 40px;
   field-sizing: content;
 
   &:focus {
@@ -231,20 +231,4 @@
     opacity: 0.5;
     pointer-events: none;
   }
-}
-
-.send-btn {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-
-  .material-symbols-outlined {
-    font-size: 20px;
-    width: 20px;
-    height: 20px;
-  }
-}
-
-.stop-btn {
-  background: var(--color-error, #d32f2f) !important;
 }
