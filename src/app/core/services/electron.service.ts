@@ -156,6 +156,7 @@ interface ElectronAPI {
     getEmbeddingStatus: () => Promise<IpcResponse>;
     buildIndex: () => Promise<IpcResponse>;
     cancelIndex: () => Promise<IpcResponse>;
+    rebuildIndex: () => Promise<IpcResponse>;
     chat: (question: string, conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>, accountId: number) => Promise<IpcResponse<{ requestId: string }>>;
     chatCancel: (requestId: string) => Promise<IpcResponse<void>>;
     chatNavigate: (accountId: number, xGmMsgId: string) => Promise<IpcResponse<{ searchToken: string }>>;
@@ -373,6 +374,10 @@ export class ElectronService {
 
   async aiCancelIndex(): Promise<IpcResponse> {
     return this.invoke(() => this.api!.ai.cancelIndex());
+  }
+
+  async aiRebuildIndex(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.ai.rebuildIndex());
   }
 
   async aiChat(question: string, conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>, accountId: number): Promise<IpcResponse<{ requestId: string }>> {

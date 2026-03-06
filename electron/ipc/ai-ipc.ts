@@ -638,6 +638,43 @@ export function registerAiIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.AI_REBUILD_INDEX, async () => {
+    log.info('[AI] rebuild-index request');
+    try {
+      const embeddingModel = ollama.getEmbeddingModel();
+      const vectorDb = VectorDbService.getInstance();
+      if (!embeddingModel) {
+        return ipcError('AI_REBUILD_INDEX_FAILED', 'No embedding model selected');
+      }
+      if (!vectorDb.vectorsAvailable) {
+        return ipcError('AI_REBUILD_INDEX_FAILED', 'Vector DB is unavailable');
+      }
+      const vectorDimension = vectorDb.getVectorDimension();
+      if (!vectorDimension) {
+        return ipcError('AI_REBUILD_INDEX_FAILED', 'Vector dimension not configured');
+      }
+
+      const embeddingService = EmbeddingService.getInstance();
+      if (embeddingService.getBuildState() === 'building') {
+        embeddingService.cancelBuild();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+
+      const db = DatabaseService.getInstance();
+      db.clearAllVectorIndexedEmails();
+      db.clearAllEmbeddingCrawlProgress();
+      vectorDb.clearAllAndReconfigure(embeddingModel, vectorDimension);
+
+      embeddingService.startBuild();
+      log.info('[AI] rebuild-index started');
+      return ipcSuccess({ started: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start rebuild';
+      log.warn('[AI] rebuild-index failed to start:', { message });
+      return ipcError('AI_REBUILD_INDEX_FAILED', message);
+    }
+  });
+
   // ---- Inbox Chat (RAG pipeline) handlers ----
 
   const inboxChatService = new InboxChatService(

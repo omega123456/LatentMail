@@ -822,6 +822,19 @@ export const AiStore = signalStore(
         }
       },
 
+      /** Wipe index state and start full reindex (after user confirmation). */
+      async rebuildAllIndex(): Promise<void> {
+        patchState(store, { indexError: null, error: null, indexProgress: null });
+        const response = await electronService.aiRebuildIndex();
+        if (response.success) {
+          patchState(store, { indexStatus: 'building' });
+        } else {
+          patchState(store, {
+            indexError: response.error?.message || 'Failed to start rebuild',
+          });
+        }
+      },
+
       /** Cancel an in-progress index build */
       async cancelIndex(): Promise<void> {
         const response = await electronService.aiCancelIndex();

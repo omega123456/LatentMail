@@ -48,7 +48,7 @@ const VECTOR_CANDIDATE_BUDGET = 200;
  * queries (e.g., "all emails from Alice") can find enough DB-matched candidates
  * even when the semantic query is generic.
  */
-const VECTOR_CANDIDATE_BUDGET_FILTERED = 5000;
+const VECTOR_CANDIDATE_BUDGET_FILTERED = 1360;
 
 /**
  * Minimum cosine similarity score for a chunk to be considered relevant when

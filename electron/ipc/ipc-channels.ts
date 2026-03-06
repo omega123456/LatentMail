@@ -99,6 +99,7 @@ export const IPC_CHANNELS = {
   AI_GET_EMBEDDING_STATUS: 'ai:get-embedding-status',
   AI_BUILD_INDEX: 'ai:build-index',
   AI_CANCEL_INDEX: 'ai:cancel-index',
+  AI_REBUILD_INDEX: 'ai:rebuild-index',
 
   // AI chat operations
   AI_CHAT: 'ai:chat',

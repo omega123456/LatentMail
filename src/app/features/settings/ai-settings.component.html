@@ -222,15 +222,19 @@
         </div>
       }
 
-      <!-- Build index confirmation (same style as embedding model switch warning) -->
-      @if (showBuildIndexConfirmation()) {
+      <!-- Rebuild-all confirmation (same style as embedding model switch warning) -->
+      @if (showRebuildAllConfirmation()) {
         <div class="model-switch-warning">
           <span class="material-symbols-outlined warning-icon">warning</span>
           <div class="warning-content">
-            <p>Building the search index can take hours depending on the size of your mailbox. The app will continue indexing in the background. Continue?</p>
+            <p>
+              This will delete all existing index data (status tracker and vector index), then reindex your entire mailbox from scratch.
+              The process can take a long time depending on mailbox size and will run in the background.
+              Only use this when you need a full refresh (e.g. after fixing data or changing what gets indexed). Continue?
+            </p>
             <div class="warning-actions">
-              <button class="action-btn" (click)="confirmBuildSearchIndex()">Build Index</button>
-              <button class="action-btn secondary" (click)="cancelBuildSearchIndex()">Cancel</button>
+              <button class="action-btn" (click)="confirmRebuildAllIndex()">Rebuild all</button>
+              <button class="action-btn secondary" (click)="cancelRebuildAllIndex()">Cancel</button>
             </div>
           </div>
         </div>
@@ -241,11 +245,19 @@
         <div class="index-actions">
           <button
             class="action-btn"
-            (click)="requestBuildSearchIndex()"
+            (click)="checkForNewEmailsToIndex()"
             [disabled]="!aiStore.embeddingModel() || aiStore.indexStatus() === 'building'"
           >
             <span class="material-symbols-outlined">play_circle</span>
-            {{ aiStore.indexStatus() === 'complete' ? 'Rebuild Index' : 'Build Search Index' }}
+            Check for new emails to index
+          </button>
+          <button
+            class="action-btn"
+            (click)="requestRebuildAllIndex()"
+            [disabled]="!aiStore.embeddingModel() || aiStore.indexStatus() === 'building'"
+          >
+            <span class="material-symbols-outlined">refresh</span>
+            Rebuild all index
           </button>
           @if (aiStore.indexStatus() === 'building') {
             <button class="action-btn secondary" (click)="cancelBuild()">
@@ -253,7 +265,9 @@
             </button>
           }
         </div>
-        <p class="index-hint">Indexes your entire Gmail mailbox for semantic search</p>
+        <p class="index-hint">
+          "Check for new emails to index" only indexes mail not yet in the index. "Rebuild all index" wipes the index and reindexes your entire mailbox from scratch.
+        </p>
       }
     </div>
   </div>

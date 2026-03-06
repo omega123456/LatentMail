@@ -16,8 +16,8 @@ export class AiSettingsComponent implements OnInit {
   readonly testingConnection = signal(false);
   /** Tracks whether the user has confirmed a model switch warning for a pending model */
   readonly pendingEmbeddingModel = signal<string | null>(null);
-  /** True when the build-index confirmation is shown (user clicked Build/Rebuild but not yet confirmed) */
-  readonly showBuildIndexConfirmation = signal(false);
+  /** True when the rebuild-all-index confirmation is shown (user clicked Rebuild all index but not yet confirmed) */
+  readonly showRebuildAllConfirmation = signal(false);
 
   /**
    * True when the progress total is known (during an active build).
@@ -95,20 +95,25 @@ export class AiSettingsComponent implements OnInit {
     this.pendingEmbeddingModel.set(null);
   }
 
-  /** Show confirmation before starting a full index build (can take hours). */
-  requestBuildSearchIndex(): void {
-    this.showBuildIndexConfirmation.set(true);
+  /** Start indexing only emails not yet in the index (no confirmation). */
+  checkForNewEmailsToIndex(): void {
+    this.aiStore.buildIndex();
   }
 
-  /** User confirmed the build — start the index build. */
-  async confirmBuildSearchIndex(): Promise<void> {
-    this.showBuildIndexConfirmation.set(false);
-    await this.aiStore.buildIndex();
+  /** Show inline confirmation for rebuild-all, then wipe index and reindex on confirm. */
+  requestRebuildAllIndex(): void {
+    this.showRebuildAllConfirmation.set(true);
   }
 
-  /** User cancelled the build-index confirmation. */
-  cancelBuildSearchIndex(): void {
-    this.showBuildIndexConfirmation.set(false);
+  /** User confirmed rebuild-all — wipe index and start full reindex. */
+  confirmRebuildAllIndex(): void {
+    this.showRebuildAllConfirmation.set(false);
+    this.aiStore.rebuildAllIndex();
+  }
+
+  /** User cancelled the rebuild-all confirmation. */
+  cancelRebuildAllIndex(): void {
+    this.showRebuildAllConfirmation.set(false);
   }
 
   async cancelBuild(): Promise<void> {

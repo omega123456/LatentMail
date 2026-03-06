@@ -84,6 +84,8 @@ const electronAPI = {
       ipcRenderer.invoke('ai:build-index') as Promise<IpcResponse>,
     cancelIndex: () =>
       ipcRenderer.invoke('ai:cancel-index') as Promise<IpcResponse>,
+    rebuildIndex: () =>
+      ipcRenderer.invoke('ai:rebuild-index') as Promise<IpcResponse>,
     chat: (question: string, conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>, accountId: number) =>
       ipcRenderer.invoke('ai:chat', { question, conversationHistory, accountId }) as Promise<IpcResponse>,
     chatCancel: (requestId: string) =>
