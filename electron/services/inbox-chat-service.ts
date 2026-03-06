@@ -143,9 +143,9 @@ export class InboxChatService {
       const vectorBudget = hasExtractedFilters ? VECTOR_CANDIDATE_BUDGET_FILTERED : VECTOR_CANDIDATE_BUDGET;
       const candidateChunks = this.vectorDbService.search(embedding, accountId, vectorBudget);
 
-      // Step 3a: Apply structured DB filters (date/sender/recipient) if any were extracted.
-      // When filters are present: skip the similarity threshold — DB matches are the primary
-      // relevance signal. When no filters: apply the similarity threshold to discard noise.
+      // Step 3a: Apply structured DB filters (date/sender/recipient) if any were extracted,
+      // then (filtered branch only) apply similarity threshold. When no filters: apply
+      // similarity threshold only.
       let filteredChunks: typeof candidateChunks;
 
       if (hasExtractedFilters) {
@@ -155,18 +155,18 @@ export class InboxChatService {
         // dateTo   → start of the NEXT local calendar day in UTC (exclusive upper bound)
         const normalizedFilters = this.normalizeFilterDates(extractedFilters);
 
-        // Filters-first: pass all candidates through DB filtering, then rank by similarity
+        // Filters-first: pass all candidates through DB filtering, then filter by similarity.
         const uniqueMsgIds = [...new Set(candidateChunks.map(chunk => chunk.xGmMsgId))];
         const matchingMsgIdSet = this.databaseService.filterEmailsByMsgIds(
           accountId,
           uniqueMsgIds,
           normalizedFilters,
         );
-        filteredChunks = candidateChunks.filter(
-          chunk => matchingMsgIdSet.has(chunk.xGmMsgId)
-        );
+        filteredChunks = candidateChunks
+          .filter(chunk => matchingMsgIdSet.has(chunk.xGmMsgId))
+          .filter(chunk => chunk.similarity >= SIMILARITY_THRESHOLD);
 
-        log.info('[InboxChatService] DB filter applied:', {
+        log.info('[InboxChatService] DB filter + similarity applied:', {
           candidateCount: candidateChunks.length,
           afterFilter: filteredChunks.length,
           filters: normalizedFilters,
@@ -189,10 +189,28 @@ export class InboxChatService {
         return;
       }
 
-      // Step 3b: Sort by similarity descending and cap at the final limit.
-      // Sorting preserves the most relevant chunks regardless of which filter
-      // path was taken above.
-      filteredChunks.sort((chunkA, chunkB) => chunkB.similarity - chunkA.similarity);
+      // Step 3b: Sort by date descending (newest first), then by similarity descending.
+      // Chunks without a date go to the end. Same-date chunks are ordered by relevance.
+      const uniqueMsgIdsForSort = [...new Set(filteredChunks.map(chunk => chunk.xGmMsgId))];
+      const dateMap = this.databaseService.getEmailDatesByMsgIds(accountId, uniqueMsgIdsForSort);
+      filteredChunks.sort((chunkA, chunkB) => {
+        const dateA = dateMap.get(chunkA.xGmMsgId);
+        const dateB = dateMap.get(chunkB.xGmMsgId);
+        if (!dateA && !dateB) {
+          return chunkB.similarity - chunkA.similarity;
+        }
+        if (!dateA) {
+          return 1;
+        }
+        if (!dateB) {
+          return -1;
+        }
+        const dateOrder = dateB.localeCompare(dateA);
+        if (dateOrder !== 0) {
+          return dateOrder;
+        }
+        return chunkB.similarity - chunkA.similarity;
+      });
 
       // Step 3c: Cap the final chunk list before passing to the LLM
       const chunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
