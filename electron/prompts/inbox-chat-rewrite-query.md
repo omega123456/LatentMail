@@ -14,7 +14,8 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
   "dateFrom": "YYYY-MM-DD",
   "dateTo": "YYYY-MM-DD",
   "sender": "...",
-  "recipient": "..."
+  "recipient": "...",
+  "dateOrder": "desc"
 }
 ```
 
@@ -23,6 +24,7 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 - `dateTo` (optional): include ONLY when the user explicitly asks about emails up to a specific date. Use inclusive bounds (the exact end date, not adjusted).
 - `sender` (optional): include ONLY when the user explicitly asks about emails from a specific person or address.
 - `recipient` (optional): include ONLY when the user explicitly asks about emails sent to a specific person or address.
+- `dateOrder` (optional): sort direction for results. Use `"asc"` (oldest first) when the user is asking for the first, earliest, or oldest occurrence of something. Use `"desc"` (newest first) in all other cases. Omit when defaulting to `"desc"`.
 
 ## Rules
 
@@ -34,6 +36,7 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 6. "last week" means the 7 calendar days ending yesterday; "last month" means the 30 calendar days ending yesterday
 7. Keep the `query` value concise (under 20 words)
 8. If the question is already a standalone topic query with no filters, output just `{ "query": "..." }`
+9. Set `"dateOrder": "asc"` when the user asks for the **first**, **earliest**, **oldest**, or **original** email/message about a topic. Default (`"desc"`, newest first) applies to all other questions including "latest", "most recent", "last".
 
 ## Examples
 
@@ -64,3 +67,15 @@ Output: {"query": "Alice message", "sender": "Alice", "dateFrom": "2026-01-01", 
 Conversation: (empty)
 New question: Summarize emails about the product launch
 Output: {"query": "product launch summary"}
+
+Conversation: (empty)
+New question: What was the first email I received about the project kickoff?
+Output: {"query": "project kickoff", "dateOrder": "asc"}
+
+Conversation: (empty)
+New question: Show me the oldest invoice email
+Output: {"query": "invoice", "dateOrder": "asc"}
+
+Conversation: (empty)
+New question: What is the latest update on the merger?
+Output: {"query": "merger update"}

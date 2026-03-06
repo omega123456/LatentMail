@@ -65,6 +65,8 @@ const FINAL_CHUNK_LIMIT = 15;
 interface RewriteResult {
   query: string;
   filters: SemanticSearchFilters;
+  /** Sort direction for results. Defaults to 'desc' (newest first). */
+  dateOrder: 'asc' | 'desc';
 }
 
 export class InboxChatService {
@@ -91,14 +93,17 @@ export class InboxChatService {
       // Step 1: Query rewriting (always runs — extracts semantic query + structured filters)
       let embeddingQuery = question;
       let extractedFilters: SemanticSearchFilters = {};
+      let sortDirection: 'asc' | 'desc' = 'desc';
       try {
         const rewriteResult = await this.rewriteQuery(question, conversationHistory);
         embeddingQuery = rewriteResult.query;
         extractedFilters = rewriteResult.filters;
+        sortDirection = rewriteResult.dateOrder;
         log.info('[InboxChatService] Rewrote query:', {
           original: question,
           rewritten: embeddingQuery,
           filters: extractedFilters,
+          dateOrder: sortDirection,
         });
       } catch (rewriteError) {
         log.warn('[InboxChatService] Query rewriting failed, using raw question:', rewriteError);
@@ -189,8 +194,8 @@ export class InboxChatService {
         return;
       }
 
-      // Step 3b: Sort by date descending (newest first), then by similarity descending.
-      // Chunks without a date go to the end. Same-date chunks are ordered by relevance.
+      // Step 3b: Sort by date (direction determined by the query rewrite LLM, default desc),
+      // then by similarity descending within the same date. Chunks without a date go to the end.
       const uniqueMsgIdsForSort = [...new Set(filteredChunks.map(chunk => chunk.xGmMsgId))];
       const dateMap = this.databaseService.getEmailDatesByMsgIds(accountId, uniqueMsgIdsForSort);
       filteredChunks.sort((chunkA, chunkB) => {
@@ -205,9 +210,11 @@ export class InboxChatService {
         if (!dateB) {
           return -1;
         }
-        const dateOrder = dateB.localeCompare(dateA);
-        if (dateOrder !== 0) {
-          return dateOrder;
+        const dateCmp = sortDirection === 'asc'
+          ? dateA.localeCompare(dateB)
+          : dateB.localeCompare(dateA);
+        if (dateCmp !== 0) {
+          return dateCmp;
         }
         return chunkB.similarity - chunkA.similarity;
       });
@@ -353,7 +360,7 @@ export class InboxChatService {
         rawOutput: trimmed,
         parseError,
       });
-      return { query: trimmed || originalQuestion, filters: {} };
+      return { query: trimmed || originalQuestion, filters: {}, dateOrder: 'desc' };
     }
 
     // Type guard: validate the parsed object has the expected shape
@@ -361,7 +368,7 @@ export class InboxChatService {
       log.warn('[InboxChatService] rewriteQuery JSON shape invalid, using original question:', {
         parsed,
       });
-      return { query: originalQuestion, filters: {} };
+      return { query: originalQuestion, filters: {}, dateOrder: 'desc' };
     }
 
     const filters: SemanticSearchFilters = {};
@@ -382,9 +389,12 @@ export class InboxChatService {
       filters.recipient = parsed.recipient;
     }
 
+    const dateOrder: 'asc' | 'desc' = parsed.dateOrder === 'asc' ? 'asc' : 'desc';
+
     return {
       query: parsed.query || originalQuestion,
       filters,
+      dateOrder,
     };
   }
 
@@ -399,6 +409,7 @@ export class InboxChatService {
     dateTo?: string;
     sender?: string;
     recipient?: string;
+    dateOrder?: string;
   } {
     if (typeof value !== 'object' || value === null) {
       return false;
@@ -410,7 +421,7 @@ export class InboxChatService {
       return false;
     }
 
-    const optionalStringFields = ['dateFrom', 'dateTo', 'sender', 'recipient'] as const;
+    const optionalStringFields = ['dateFrom', 'dateTo', 'sender', 'recipient', 'dateOrder'] as const;
     for (const fieldName of optionalStringFields) {
       const fieldValue = candidate[fieldName];
       // Allow null (LLMs commonly emit null for absent optional fields) and undefined.
