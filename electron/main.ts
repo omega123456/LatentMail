@@ -350,7 +350,7 @@ function createMainWindow(): void {
 
   // Load the Angular app (dev: ng serve on 4200; prod: built index)
   if (isDev) {
-    mainWindow.loadURL('http://localhost:4200');
+    mainWindow.loadURL('http://localhost:4201');
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/latentmail-app/browser/index.html'));
   }

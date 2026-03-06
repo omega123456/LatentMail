@@ -11,7 +11,7 @@
     "build:prod": "ng build --configuration=production",
     "build:electron": "tsc -p tsconfig.electron.json && node -e \"require('fs').cpSync('electron/prompts', 'dist-electron/prompts', {recursive: true})\"",
     "build:all": "ng build --configuration=electron && yarn build:electron",
-    "electron:dev": "yarn build:electron && npx concurrently -n ng,electron -c blue,green \"ng serve\" \"npx wait-on http://localhost:4200 && npx cross-env NODE_ENV=development electron .\"",
+    "electron:dev": "yarn build:electron && npx concurrently -n ng,electron -c blue,green \"ng serve --port 4201\" \"npx wait-on http://localhost:4201 && npx cross-env NODE_ENV=development electron .\"",
     "electron:start": "yarn build:all && electron .",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
