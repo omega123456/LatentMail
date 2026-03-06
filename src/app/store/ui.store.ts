@@ -41,8 +41,7 @@ function loadUiState(): Partial<UiState> {
   if (layout) partial.layout = layout;
   const density = localStorage.getItem('density') as DensityMode | null;
   if (density) partial.density = density;
-  const aiChatPanelOpen = localStorage.getItem('ui.aiChatPanelOpen');
-  if (aiChatPanelOpen === 'true') partial.aiChatPanelOpen = true;
+  // aiChatPanelOpen is never restored — always start closed
   return partial;
 }
 
@@ -109,11 +108,10 @@ export const UiStore = signalStore(
       const updated = [commandId, ...filtered].slice(0, 5);
       patchState(store, { recentCommandIds: updated });
     },
-    /** Toggle the AI chat panel open/closed and persist to localStorage. */
+    /** Toggle the AI chat panel open/closed. Always starts closed on app launch. */
     toggleAiChatPanel(): void {
       const open = !store.aiChatPanelOpen();
       patchState(store, { aiChatPanelOpen: open });
-      localStorage.setItem('ui.aiChatPanelOpen', String(open));
     },
   }))
 );
