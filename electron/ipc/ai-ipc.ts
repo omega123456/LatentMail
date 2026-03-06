@@ -12,7 +12,7 @@ import { EmbeddingService } from '../services/embedding-service';
 import { SemanticSearchService } from '../services/semantic-search-service';
 import { SearchIntent } from '../utils/search-query-generator';
 import { KeywordSearchService } from '../services/keyword-search-service';
-import { InboxChatService } from '../services/inbox-chat-service';
+import { InboxChatService, SourceEmail } from '../services/inbox-chat-service';
 import { MessageIdSearchService } from '../services/message-id-search-service';
 import { ImapCrawlService } from '../services/imap-crawl-service';
 
@@ -692,20 +692,25 @@ export function registerAiIpcHandlers(): void {
 
       log.info('[AI] chat request', { requestId, questionLen: question.trim().length, accountId, historyLen: safeHistory.length });
 
+      // Resolve the user's email address for identity injection into the system prompt
+      const db = DatabaseService.getInstance();
+      const account = db.getAccountById(accountId);
+      const accountEmail = account !== null ? account.email : '';
+
       // Start the RAG pipeline asynchronously — return requestId immediately so the
       // renderer can start listening for AI_CHAT_STREAM / AI_CHAT_SOURCES / AI_CHAT_DONE events.
-      inboxChatService.chat(requestId, question.trim(), safeHistory, accountId, {
-        onToken: (token) => {
+      inboxChatService.chat(requestId, question.trim(), safeHistory, accountId, accountEmail, {
+        onToken: (token: string) => {
           if (!browserWindow.isDestroyed()) {
             browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_STREAM, { requestId, token });
           }
         },
-        onSources: (sources) => {
+        onSources: (sources: SourceEmail[]) => {
           if (!browserWindow.isDestroyed()) {
             browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_SOURCES, { requestId, sources });
           }
         },
-        onDone: (cancelled, error) => {
+        onDone: (cancelled: boolean, error?: string) => {
           if (!browserWindow.isDestroyed()) {
             browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_DONE, {
               requestId,

@@ -15,6 +15,16 @@
   }
 }
 
+.citation-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+  margin-top: 3px;
+  min-width: 20px;
+  letter-spacing: 0.01em;
+}
+
 .source-icon {
   font-size: 16px;
   width: 16px;

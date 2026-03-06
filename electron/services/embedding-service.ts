@@ -489,6 +489,27 @@ export class EmbeddingService {
             const deferredSentinelRecords: Array<{ xGmMsgId: string; embeddingHash: string }> = [];
             const batchItems: EmailBatchItem[] = [];
 
+            // Envelope metadata to upsert into the emails table for non-filtered emails.
+            // rawLabels is intentionally omitted — passing labels would create email_folders /
+            // thread_folders rows with NULL UIDs, making incomplete envelope-only emails
+            // visible in the normal mail UI. Only the All Mail UID link is written.
+            const pendingEnvelopes: Array<{
+              accountId: number;
+              xGmMsgId: string;
+              xGmThrid: string;
+              messageId: string;
+              subject: string;
+              fromAddress: string;
+              fromName: string;
+              toAddresses: string;
+              date: string;
+              isRead: boolean;
+              isStarred: boolean;
+              isDraft: boolean;
+              size: number;
+              uid?: number;
+            }> = [];
+
             for (const email of fetchedEmails) {
               // Skip if already indexed (from a previous build or earlier in this run)
               if (indexedSet.has(email.xGmMsgId)) {
@@ -537,11 +558,46 @@ export class EmbeddingService {
                   htmlBody: truncatedHtml || null,
                   hash,
                 });
+
+                // Collect envelope metadata for DB upsert.
+                // rawLabels is deliberately excluded — see pendingEnvelopes declaration above.
+                pendingEnvelopes.push({
+                  accountId: account.id,
+                  xGmMsgId: email.xGmMsgId,
+                  xGmThrid: email.xGmThrid,
+                  messageId: email.messageId,
+                  subject: email.subject,
+                  fromAddress: email.fromAddress,
+                  fromName: email.fromName,
+                  toAddresses: email.toAddresses,
+                  date: email.date,
+                  isRead: email.isRead,
+                  isStarred: email.isStarred,
+                  isDraft: email.isDraft,
+                  size: email.size,
+                  uid: email.uid,
+                });
               }
             }
 
             // Compute the cursor advance for this batch (max UID in the batch)
             const batchCursorUid = Math.max(...batchUids);
+
+            // Upsert envelope metadata for all non-filtered emails before sending to the
+            // worker. This ensures email rows exist in the main DB even if the worker
+            // subsequently fails — rows will be harmlessly re-upserted on resume.
+            // If the upsert itself fails we abort the current account build: indexing
+            // without metadata rows would recreate the "blank source card" problem.
+            if (pendingEnvelopes.length > 0) {
+              try {
+                db.batchUpsertEmailEnvelopes(pendingEnvelopes);
+              } catch (upsertErr) {
+                const upsertErrorMessage = upsertErr instanceof Error ? upsertErr.message : String(upsertErr);
+                log.error('[EmbeddingService] Failed to upsert envelope metadata — aborting build for account:', upsertErrorMessage);
+                accountWorkerError = upsertErrorMessage;
+                break;
+              }
+            }
 
             if (batchItems.length > 0) {
               // Send non-filtered emails to the embedding worker

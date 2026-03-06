@@ -3227,6 +3227,56 @@ export class DatabaseService {
     }
   }
 
+  /**
+   * Batch-upsert email envelope metadata for multiple emails in a single transaction.
+   *
+   * Wraps multiple `upsertEmailFromEnvelope()` calls in one `db.transaction()` block
+   * for atomicity and performance. Used by the embedding build crawl to ensure every
+   * non-filtered crawled email has a row in the `emails` table (avoiding blank AI chat cards).
+   *
+   * Callers MUST NOT pass `rawLabels` — omitting rawLabels prevents email_folders /
+   * thread_folders rows from being created for visible folders with NULL UIDs, which would
+   * make incomplete envelope-only emails appear in the normal mail UI. Pass `uid` only to
+   * create the All Mail email_folders link with the correct UID.
+   *
+   * @param envelopes - Array of envelope objects. Each must include `accountId`.
+   *                    `rawLabels` must not be set (excluded from this type by design).
+   */
+  batchUpsertEmailEnvelopes(
+    envelopes: Array<{
+      accountId: number;
+      xGmMsgId: string;
+      xGmThrid: string;
+      messageId: string;
+      subject: string;
+      fromAddress: string;
+      fromName: string;
+      toAddresses: string;
+      date: string;
+      isRead: boolean;
+      isStarred: boolean;
+      isDraft: boolean;
+      size: number;
+      uid?: number;
+    }>
+  ): void {
+    if (!this.db) {
+      throw new Error('Database not initialized');
+    }
+
+    if (envelopes.length === 0) {
+      return;
+    }
+
+    const doUpsert = this.db.transaction(() => {
+      for (const envelope of envelopes) {
+        const { accountId, ...envelopeFields } = envelope;
+        this.upsertEmailFromEnvelope(accountId, envelopeFields);
+      }
+    });
+    doUpsert();
+  }
+
   // ---- Structured filter methods ----
 
   /**
@@ -3287,7 +3337,9 @@ export class DatabaseService {
     }
 
     if (filters.dateTo !== undefined) {
-      filterClauses.push('AND e.date <= :dateTo');
+      // dateTo is the exclusive upper bound (start of the day after the target date, in UTC).
+      // This is set by the caller when normalizing local calendar dates to UTC timestamps.
+      filterClauses.push('AND e.date < :dateTo');
       filterParams['dateTo'] = filters.dateTo;
     }
 

@@ -88,6 +88,7 @@ export interface SourceEmail {
   fromAddress: string;
   subject: string;
   date: string;  // ISO date string
+  citationIndex: number;  // The [N] number used to cite this email in the response
 }
 
 export interface ChatMessage {
