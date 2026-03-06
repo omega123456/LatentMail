@@ -21,6 +21,7 @@ import { OllamaService } from './ollama-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { SearchIntent, SearchQueryGenerator } from '../utils/search-query-generator';
 import { formatParticipantList } from '../utils/format-participant';
+import { SearchOptions } from './search-options';
 
 const log = LoggerService.getInstance();
 
@@ -45,23 +46,17 @@ export class KeywordSearchService extends BaseSearchService {
    * Emits at least one 'local' batch (possibly empty) before any IMAP work begins,
    * then emits one 'imap' batch with net-new results (or an empty array if IMAP fails).
    *
-   * @param naturalQuery - The user's raw search query
-   * @param accountId - The account to search within
-   * @param userEmail - The account's email address (for Ollama intent context)
-   * @param todayDate - Today's date as YYYY-MM-DD (for Ollama relative-date resolution)
-   * @param folders - List of folder names (for Ollama context)
-   * @param onBatch - Callback invoked with each incremental batch of confirmed message IDs
+   * @param options - Search options including naturalQuery, accountId, userEmail, todayDate,
+   *                  folders, and onBatch callback.
    * @returns 'complete' if all phases succeeded, 'partial' if local results were emitted
    *          but the IMAP phase failed, 'error' if the search failed entirely
    */
-  async search(
-    naturalQuery: string,
-    accountId: number,
-    userEmail: string,
-    todayDate: string,
-    folders: string[],
-    onBatch: SearchBatchCallback
-  ): Promise<'complete' | 'partial' | 'error'> {
+  async search(options: SearchOptions): Promise<'complete' | 'partial' | 'error'> {
+    const { naturalQuery = '', accountId = 0, userEmail = '', todayDate = '', folders = [], onBatch } = options;
+    if (!onBatch) {
+      log.warn('[KeywordSearch] search called without onBatch callback');
+      return 'error';
+    }
     try {
       // ----- Step 1: Build Gmail query string -----
       // Use Ollama to extract structured search intent when available;

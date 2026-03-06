@@ -1,5 +1,6 @@
 import { Injectable, NgZone } from '@angular/core';
 import { Observable, Subject } from 'rxjs';
+import { SourceEmail, ChatStreamPayload, ChatSourcesPayload, ChatDonePayload } from '../models/ai.model';
 
 /** Per-channel shared state so we only add one IPC listener per channel (avoids MaxListenersExceededWarning). */
 interface ChannelState<T> {
@@ -142,7 +143,6 @@ interface ElectronAPI {
   ai: {
     summarize: (threadContent: string, requestId?: string) => Promise<IpcResponse>;
     compose: (prompt: string, context?: string, requestId?: string) => Promise<IpcResponse>;
-    categorize: (emailContent: string) => Promise<IpcResponse>;
     search: (accountId: string, naturalQuery: string, folders?: string[], mode?: string) => Promise<IpcResponse>;
     transform: (text: string, transformation: string, requestId?: string) => Promise<IpcResponse>;
     getModels: () => Promise<IpcResponse>;
@@ -156,6 +156,9 @@ interface ElectronAPI {
     getEmbeddingStatus: () => Promise<IpcResponse>;
     buildIndex: () => Promise<IpcResponse>;
     cancelIndex: () => Promise<IpcResponse>;
+    chat: (question: string, conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>, accountId: number) => Promise<IpcResponse<{ requestId: string }>>;
+    chatCancel: (requestId: string) => Promise<IpcResponse<void>>;
+    chatNavigate: (accountId: number, xGmMsgId: string) => Promise<IpcResponse<{ searchToken: string }>>;
   };
   compose: {
     searchContacts: (query: string) => Promise<IpcResponse>;
@@ -320,10 +323,6 @@ export class ElectronService {
     return this.invoke(() => this.api!.ai.compose(prompt, context, requestId));
   }
 
-  async aiCategorize(emailContent: string): Promise<IpcResponse> {
-    return this.invoke(() => this.api!.ai.categorize(emailContent));
-  }
-
   async aiSearch(accountId: string, naturalQuery: string, folders?: string[], mode?: string): Promise<IpcResponse> {
     return this.invoke(() => this.api!.ai.search(accountId, naturalQuery, folders, mode));
   }
@@ -374,6 +373,35 @@ export class ElectronService {
 
   async aiCancelIndex(): Promise<IpcResponse> {
     return this.invoke(() => this.api!.ai.cancelIndex());
+  }
+
+  async aiChat(question: string, conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>, accountId: number): Promise<IpcResponse<{ requestId: string }>> {
+    return this.invoke(() => this.api!.ai.chat(question, conversationHistory, accountId)) as Promise<IpcResponse<{ requestId: string }>>;
+  }
+
+  async aiChatCancel(requestId: string): Promise<IpcResponse<void>> {
+    return this.invoke(() => this.api!.ai.chatCancel(requestId)) as Promise<IpcResponse<void>>;
+  }
+
+  async aiChatNavigate(accountId: number, xGmMsgId: string): Promise<IpcResponse<{ searchToken: string }>> {
+    return this.invoke(() => this.api!.ai.chatNavigate(accountId, xGmMsgId)) as Promise<IpcResponse<{ searchToken: string }>>;
+  }
+
+  // ---- Chat event streams (main → renderer push events) ----
+
+  /** Fires for each streamed token during an AI chat response. */
+  get onAiChatStream$(): Observable<ChatStreamPayload> {
+    return this.onEvent<ChatStreamPayload>('ai:chat:stream');
+  }
+
+  /** Fires when source emails for an AI chat response are resolved. */
+  get onAiChatSources$(): Observable<{ requestId: string; sources: SourceEmail[] }> {
+    return this.onEvent<{ requestId: string; sources: SourceEmail[] }>('ai:chat:sources');
+  }
+
+  /** Fires when an AI chat generation is complete (success, cancelled, or error). */
+  get onAiChatDone$(): Observable<ChatDonePayload> {
+    return this.onEvent<ChatDonePayload>('ai:chat:done');
   }
 
   // ---- Compose operations (signatures & contacts only) ----

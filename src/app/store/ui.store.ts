@@ -12,6 +12,7 @@ export interface UiState {
   recentCommandIds: string[];
   layout: LayoutMode;
   density: DensityMode;
+  aiChatPanelOpen: boolean;
 }
 
 const initialState: UiState = {
@@ -23,6 +24,7 @@ const initialState: UiState = {
   recentCommandIds: [],
   layout: 'three-column',
   density: 'comfortable',
+  aiChatPanelOpen: false,
 };
 
 function loadUiState(): Partial<UiState> {
@@ -39,6 +41,8 @@ function loadUiState(): Partial<UiState> {
   if (layout) partial.layout = layout;
   const density = localStorage.getItem('density') as DensityMode | null;
   if (density) partial.density = density;
+  const aiChatPanelOpen = localStorage.getItem('ui.aiChatPanelOpen');
+  if (aiChatPanelOpen === 'true') partial.aiChatPanelOpen = true;
   return partial;
 }
 
@@ -104,6 +108,12 @@ export const UiStore = signalStore(
       const filtered = store.recentCommandIds().filter(id => id !== commandId);
       const updated = [commandId, ...filtered].slice(0, 5);
       patchState(store, { recentCommandIds: updated });
+    },
+    /** Toggle the AI chat panel open/closed and persist to localStorage. */
+    toggleAiChatPanel(): void {
+      const open = !store.aiChatPanelOpen();
+      patchState(store, { aiChatPanelOpen: open });
+      localStorage.setItem('ui.aiChatPanelOpen', String(open));
     },
   }))
 );

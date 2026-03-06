@@ -2,7 +2,7 @@ import { computed, inject } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState, withHooks } from '@ngrx/signals';
 import { ElectronService, SearchBatchPayload, SearchCompletePayload } from '../core/services/electron.service';
 import { ToastService } from '../core/services/toast.service';
-import { AiModel, AiStreamEvent, AiCategory, AiFilterSuggestion, AiFollowUpResult, SearchIntent } from '../core/models/ai.model';
+import { AiModel, AiStreamEvent, AiFilterSuggestion, AiFollowUpResult, SearchIntent } from '../core/models/ai.model';
 import { EmbeddingProgressPayload, EmbeddingErrorPayload, EmbeddingStatusData } from '../core/services/electron.service';
 import { Thread } from '../core/models/email.model';
 import { EmailsStore } from './emails.store';
@@ -29,18 +29,46 @@ export interface AiState {
   transformResult: string;
   transformLoading: boolean;
   transformRequestId: string | null;
-  // Categorize
-  categorizeResult: string;
-  categorizeLoading: boolean;
   // Search
   searchLoading: boolean;
   searchResult: { intent: SearchIntent | null; queries: string[] } | null;
   // Streaming search state
   searchToken: string | null;
+  /**
+   * True while a new search has been started but the IPC response (carrying the real
+   * searchToken) has not yet been received. During this window, `onSearchBatch` and
+   * `onSearchComplete` should adopt the first incoming token rather than rejecting it
+   * as "stale", because the real token has not yet been written to the store.
+   */
+  searchTokenPending: boolean;
   searchStreamStatus: 'idle' | 'searching' | 'complete' | 'partial' | 'error';
   searchStreamResultCount: number;
   searchStreamWarningDismissed: boolean;
   searchAccountId: string | null;
+  isNavigationSearch: boolean;
+  /**
+   * Set of search tokens that have been explicitly superseded by a new navigation
+   * search. Events carrying a token in this set are always rejected, even if they
+   * arrive while `searchTokenPending` is true (i.e. before the IPC response for the
+   * new search has been received). This closes the race window left by the guard-token
+   * approach, where new-search events arriving before the IPC response were rejected
+   * because they did not match the guard UUID.
+   *
+   * Tokens are added here at the moment `startNavigationSearch()` resets state.
+   * The set is cleared when the streaming search is fully reset (`clearStreamingSearch`).
+   */
+  rejectedTokens: ReadonlySet<string>;
+  /**
+   * Monotonically increasing counter, incremented on each call to startNavigationSearch().
+   * Captured before the async IPC call; if the counter has changed by the time the IPC
+   * response arrives, a superseding navigation has already started and the response is
+   * discarded. Also guards the token-adoption path in onSearchBatch/onSearchComplete: only
+   * adopt an incoming token if the current generation matches the generation captured at
+   * the moment the pending window opened. This prevents the edge case where two navigation
+   * searches fire before either receives its IPC response — the first response's token
+   * cannot be adopted by the second search's pending window.
+   */
+  navigationGeneration: number;
   // Filter generation
   filterSuggestion: AiFilterSuggestion | null;
   filterLoading: boolean;
@@ -48,8 +76,6 @@ export interface AiState {
   followUpResult: AiFollowUpResult | null;
   followUpLoading: boolean;
   followUpThreadId: string | null;
-  // Category cache (threadId → category)
-  categoryCache: Record<string, AiCategory>;
   // Embedding / Semantic Search
   embeddingModel: string;
   embeddingModels: AiModel[];
@@ -80,22 +106,23 @@ const initialState: AiState = {
   transformResult: '',
   transformLoading: false,
   transformRequestId: null,
-  categorizeResult: '',
-  categorizeLoading: false,
   searchLoading: false,
   searchResult: null,
   // Streaming search state
   searchToken: null,
+  searchTokenPending: false,
   searchStreamStatus: 'idle',
   searchStreamResultCount: 0,
   searchStreamWarningDismissed: false,
   searchAccountId: null,
+  isNavigationSearch: false,
+  rejectedTokens: new Set<string>() as ReadonlySet<string>,
+  navigationGeneration: 0,
   filterSuggestion: null,
   filterLoading: false,
   followUpResult: null,
   followUpLoading: false,
   followUpThreadId: null,
-  categoryCache: {},
   error: null,
   modelsLoading: false,
   // Embedding / Semantic Search
@@ -408,52 +435,6 @@ export const AiStore = signalStore(
         patchState(store, { error: null });
       },
 
-      /** Categorize an email and cache the result by thread ID */
-      async categorize(threadId: string, emailContent: string): Promise<AiCategory | null> {
-        // Check cache first
-        const cached = store.categoryCache()[threadId];
-        if (cached) {
-          return cached;
-        }
-
-        patchState(store, { categorizeLoading: true, error: null });
-        const response = await electronService.aiCategorize(emailContent);
-        if (response.success && response.data) {
-          const data = response.data as { category: string };
-          const category = (data.category || 'Primary') as AiCategory;
-          patchState(store, {
-            categorizeResult: category,
-            categorizeLoading: false,
-            categoryCache: { ...store.categoryCache(), [threadId]: category },
-          });
-          return category;
-        } else {
-          patchState(store, {
-            categorizeLoading: false,
-            error: response.error?.message || 'Failed to categorize',
-          });
-          return null;
-        }
-      },
-
-      /** Batch categorize threads (won't re-categorize cached ones) */
-      async categorizeThreads(threads: Array<{ threadId: string; content: string }>): Promise<void> {
-        const uncached = threads.filter(t => !store.categoryCache()[t.threadId]);
-        for (const thread of uncached) {
-          await this.categorize(thread.threadId, thread.content);
-        }
-      },
-
-      /** Get a category from cache */
-      getCachedCategory(threadId: string): AiCategory | null {
-        return store.categoryCache()[threadId] || null;
-      },
-
-      /** Clear category cache */
-      clearCategoryCache(): void {
-        patchState(store, { categoryCache: {} });
-      },
-
       /** AI search: convert natural language into structured intent + query variants */
       /** Generate a filter from natural language */
       async generateFilter(description: string, accountId: number): Promise<AiFilterSuggestion | null> {
@@ -541,24 +522,26 @@ export const AiStore = signalStore(
         // Reset all prior streaming state before starting
         patchState(store, {
           searchToken: null,
+          searchTokenPending: true,
           searchStreamStatus: 'searching',
           searchStreamResultCount: 0,
           searchStreamWarningDismissed: false,
           searchAccountId: accountId,
+          isNavigationSearch: false,
         });
 
         try {
           const response = await electronService.aiSearch(accountId, query, folders, mode);
           if (response.success && response.data) {
             const data = response.data as { searchToken: string };
-            patchState(store, { searchToken: data.searchToken });
+            patchState(store, { searchToken: data.searchToken, searchTokenPending: false });
             return { searchToken: data.searchToken, query };
           } else {
-            patchState(store, { searchStreamStatus: 'error' });
+            patchState(store, { searchStreamStatus: 'error', searchTokenPending: false });
             return null;
           }
         } catch {
-          patchState(store, { searchStreamStatus: 'error' });
+          patchState(store, { searchStreamStatus: 'error', searchTokenPending: false });
           return null;
         }
       },
@@ -572,14 +555,28 @@ export const AiStore = signalStore(
        * the batch's token so we don't drop results due to IPC ordering.
        */
       async onSearchBatch(payload: SearchBatchPayload): Promise<void> {
-        // Ignore only when we already have a different token (stale from a previous search)
-        const currentToken = store.searchToken();
-        if (currentToken != null && payload.searchToken !== currentToken) {
+        // Always reject tokens that have been explicitly superseded by a new navigation
+        // search, regardless of pending state. This handles the race where stale events
+        // arrive after startNavigationSearch() resets state but before the IPC response.
+        if (store.rejectedTokens().has(payload.searchToken)) {
           return;
         }
-        // Batch arrived before IPC response: adopt token so this and future batches match
-        if (currentToken == null && payload.searchToken) {
-          patchState(store, { searchToken: payload.searchToken });
+
+        // Ignore only when we already have a confirmed token that does not match
+        // (stale event from a previous search).
+        const currentToken = store.searchToken();
+        const isPending = store.searchTokenPending();
+
+        if (currentToken != null && !isPending && payload.searchToken !== currentToken) {
+          return;
+        }
+
+        // If the store is still waiting for the IPC response (searchTokenPending) or
+        // the token has not been set yet, adopt the first incoming batch token.
+        // This prevents the race where the batch push event arrives before the IPC
+        // promise resolves and writes the real token.
+        if (isPending || currentToken == null) {
+          patchState(store, { searchToken: payload.searchToken, searchTokenPending: false });
         }
 
         // Empty batch (e.g. empty local phase) — nothing to merge
@@ -617,12 +614,21 @@ export const AiStore = signalStore(
        * If complete arrives before we had a token (batch arrived after complete), adopt token.
        */
       onSearchComplete(payload: SearchCompletePayload): void {
-        const currentToken = store.searchToken();
-        if (currentToken != null && payload.searchToken !== currentToken) {
+        // Always reject tokens that have been explicitly superseded by a new navigation
+        // search, regardless of pending state (mirrors onSearchBatch rejection logic).
+        if (store.rejectedTokens().has(payload.searchToken)) {
           return;
         }
-        if (currentToken == null && payload.searchToken) {
-          patchState(store, { searchToken: payload.searchToken });
+
+        const currentToken = store.searchToken();
+        const isPending = store.searchTokenPending();
+
+        if (currentToken != null && !isPending && payload.searchToken !== currentToken) {
+          return;
+        }
+        // Adopt token if still pending or not yet set (mirrors onSearchBatch logic).
+        if (isPending || currentToken == null) {
+          patchState(store, { searchToken: payload.searchToken, searchTokenPending: false });
         }
 
         patchState(store, { searchStreamStatus: payload.status });
@@ -632,16 +638,115 @@ export const AiStore = signalStore(
       clearStreamingSearch(): void {
         patchState(store, {
           searchToken: null,
+          searchTokenPending: false,
           searchStreamStatus: 'idle',
           searchStreamResultCount: 0,
           searchStreamWarningDismissed: false,
           searchAccountId: null,
+          isNavigationSearch: false,
+          // Clear rejected tokens so the set does not grow unboundedly across
+          // multiple navigation searches within a single session.
+          rejectedTokens: new Set<string>() as ReadonlySet<string>,
         });
       },
 
       /** Dismiss the partial/error warning banner shown during streaming search. */
       dismissSearchWarning(): void {
         patchState(store, { searchStreamWarningDismissed: true });
+      },
+
+      /**
+       * Reset only the isNavigationSearch flag without touching any other search state.
+       * Called by the auto-select effect in mail-shell after it triggers loadThread(), so
+       * the effect does not fire again on subsequent thread-list updates.
+       */
+      clearNavigationFlag(): void {
+        patchState(store, { isNavigationSearch: false });
+      },
+
+      /**
+       * Start a navigation search for a single email by its x_gm_msgid.
+       * Resets all prior streaming state, calls ai:chat:navigate (which fires the search
+       * in the background and returns a searchToken immediately), and primes the store.
+       * Actual results arrive as push events (ai:search:batch / ai:search:complete).
+        *
+        * Returns the searchToken on success, or null if the IPC call fails.
+        *
+        * Race-condition handling: the old token (if any) is added to `rejectedTokens`
+        * BEFORE state is reset. This means stale push events carrying the old token are
+        * always dropped, even if they arrive during the `searchTokenPending` window
+        * (before the IPC response for the new search has been received). The new search's
+        * events carry an unknown-but-different token and are safely adopted via the
+        * `searchTokenPending: true` path in onSearchBatch / onSearchComplete.
+        *
+        * The edge case of two simultaneous navigations both pending (no token yet for
+        * either) is architecturally impossible: the IPC handler (ai-ipc.ts) generates
+        * the token and returns it synchronously via ipcSuccess BEFORE launching
+        * runStreamingSearch as a fire-and-forget .catch() chain. By the time any
+        * ai:search:batch push event can arrive in the renderer, the IPC response has
+        * already resolved and the real token is set in the store. The navigationGeneration
+        * guard in this function provides an additional layer of safety for this case.
+        */
+      async startNavigationSearch(
+        accountId: number,
+        xGmMsgId: string,
+      ): Promise<string | null> {
+        // Step 1: Snapshot the old token and add it to the rejected set so any
+        // still-in-flight push events from the previous search are always ignored,
+        // even if they arrive while searchTokenPending is true.
+        const oldToken = store.searchToken();
+        const currentRejected = store.rejectedTokens();
+        const nextRejected = new Set<string>(currentRejected) as ReadonlySet<string>;
+        if (oldToken) {
+          (nextRejected as Set<string>).add(oldToken);
+        }
+
+        // Step 2: Increment the navigation generation counter. This handles the
+        // edge case where two navigation searches fire before either receives its
+        // IPC response (searchToken still null). The generation counter ensures
+        // only the latest navigation can adopt an incoming token via the pending path.
+        const thisGeneration = store.navigationGeneration() + 1;
+
+        // Step 3: Reset state. searchToken: null + searchTokenPending: true means
+        // onSearchBatch / onSearchComplete will adopt the first incoming token that
+        // is NOT in rejectedTokens AND matches the current navigationGeneration.
+        patchState(store, {
+          rejectedTokens: nextRejected,
+          navigationGeneration: thisGeneration,
+          searchToken: null,
+          searchTokenPending: true,
+          searchStreamStatus: 'searching',
+          searchStreamResultCount: 0,
+          searchStreamWarningDismissed: false,
+          searchAccountId: String(accountId),
+          isNavigationSearch: true,
+        });
+
+        // Step 4: Start the navigation search via IPC.
+        try {
+          const response = await electronService.aiChatNavigate(accountId, xGmMsgId);
+          if (response.success && response.data) {
+            const data = response.data as { searchToken: string };
+            // Guard: if a superseding navigation started while we were awaiting, discard.
+            if (store.navigationGeneration() !== thisGeneration) {
+              return null;
+            }
+            // Only write the confirmed token if we are still in pending state.
+            // If the token was already adopted from a batch event that arrived before
+            // the IPC response, searchTokenPending will already be false — don't
+            // overwrite the adopted token (it's the same value, but be explicit).
+            if (store.searchTokenPending()) {
+              patchState(store, { searchToken: data.searchToken, searchTokenPending: false });
+            }
+            return data.searchToken;
+          } else {
+            patchState(store, { searchStreamStatus: 'error', searchTokenPending: false, isNavigationSearch: false });
+            return null;
+          }
+        } catch {
+          patchState(store, { searchStreamStatus: 'error', searchTokenPending: false, isNavigationSearch: false });
+          return null;
+        }
       },
 
       // ─── Embedding / Semantic Search ───────────────────────────────

@@ -24,7 +24,6 @@ export const IPC_CHANNELS = {
   // AI operations
   AI_SUMMARIZE: 'ai:summarize',
   AI_COMPOSE: 'ai:compose',
-  AI_CATEGORIZE: 'ai:categorize',
   AI_SEARCH: 'ai:search',
   AI_TRANSFORM: 'ai:transform',
   AI_GET_MODELS: 'ai:get-models',
@@ -100,6 +99,11 @@ export const IPC_CHANNELS = {
   AI_GET_EMBEDDING_STATUS: 'ai:get-embedding-status',
   AI_BUILD_INDEX: 'ai:build-index',
   AI_CANCEL_INDEX: 'ai:cancel-index',
+
+  // AI chat operations
+  AI_CHAT: 'ai:chat',
+  AI_CHAT_CANCEL: 'ai:chat:cancel',
+  AI_CHAT_NAVIGATE: 'ai:chat:navigate',
 } as const;
 
 // Main → Renderer (push events)
@@ -131,6 +135,11 @@ export const IPC_EVENTS = {
   // AI semantic search streaming events (main → renderer)
   AI_SEARCH_BATCH: 'ai:search:batch',
   AI_SEARCH_COMPLETE: 'ai:search:complete',
+
+  // AI chat streaming events (main → renderer)
+  AI_CHAT_STREAM: 'ai:chat:stream',
+  AI_CHAT_SOURCES: 'ai:chat:sources',
+  AI_CHAT_DONE: 'ai:chat:done',
 
   // Sync pause state change (fired when pause-sync / resume-sync CLI command runs)
   SYNC_PAUSED_STATE_CHANGED: 'sync:paused-state-changed',

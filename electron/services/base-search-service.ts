@@ -10,15 +10,15 @@ import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { ImapCrawlService, CrawlFetchResult } from './imap-crawl-service';
 import { parseGmailQuery } from '../utils/gmail-query-parser';
+import { SearchOptions, SearchBatchCallback } from './search-options';
 
 const log = LoggerService.getInstance();
 
 /**
- * Callback type for incremental search result batches.
- * Called at least once with phase 'local' (before any IMAP work begins),
- * then once per IMAP round with phase 'imap'. Batches may be empty.
+ * Re-export SearchBatchCallback from search-options for backward compatibility.
+ * New code should import directly from './search-options'.
  */
-export type SearchBatchCallback = (msgIds: string[], phase: 'local' | 'imap') => void;
+export type { SearchBatchCallback };
 
 export abstract class BaseSearchService {
   /** Maximum number of results returned after deduplication and filtering. */
@@ -36,29 +36,16 @@ export abstract class BaseSearchService {
   protected constructor() {}
 
   /**
-   * Run a search for the given natural language query and deliver results
-   * incrementally via the onBatch callback.
+   * Run a search and deliver results incrementally via the onBatch callback
+   * in the provided SearchOptions.
    *
-   * @param naturalQuery - The user's search query (natural language)
-   * @param accountId - The account to search within
-   * @param userEmail - The account's email address (for LLM context)
-   * @param todayDate - Today's date as YYYY-MM-DD (for LLM relative-date resolution)
-   * @param folders - List of folder names for LLM context
-   * @param onBatch - Callback invoked with each incremental batch of confirmed message IDs.
-   *                  Called at least once with phase 'local' (before IMAP work begins),
-   *                  then once per IMAP round with phase 'imap'. Batches may be empty.
+   * @param options - Search options including query, accountId, userEmail, todayDate,
+   *                  folders, onBatch callback, and optionally xGmMsgId for single-message lookup.
    * @returns 'complete' if all phases succeeded, 'partial' if some IMAP rounds failed
    *          but some results were emitted, 'error' if the search failed entirely before
    *          any results could be produced.
    */
-  abstract search(
-    naturalQuery: string,
-    accountId: number,
-    userEmail: string,
-    todayDate: string,
-    folders: string[],
-    onBatch: SearchBatchCallback
-  ): Promise<'complete' | 'partial' | 'error'>;
+  abstract search(options: SearchOptions): Promise<'complete' | 'partial' | 'error'>;
 
   /**
    * Sort x_gm_msgid values by their email date, newest first.

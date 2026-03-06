@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef, signal, computed, ViewChildren, QueryList, WritableSignal, HostListener } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef, signal, computed, WritableSignal, HostListener, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -21,8 +21,9 @@ import { ElectronService } from '../../core/services/electron.service';
 import { CommandRegistryService } from '../../core/services/command-registry.service';
 import { Thread, ComposeMode, Draft, Email } from '../../core/models/email.model';
 import { AiStore } from '../../store/ai.store';
-import { AiCategory } from '../../core/models/ai.model';
+import { ChatStore } from '../../store/chat.store';
 import { EmailActionEvent } from '../../shared/components/email-actions/email-action.model';
+import { AiChatPanelComponent } from './ai-chat/ai-chat-panel.component';
 
 @Component({
   selector: 'app-mail-shell',
@@ -34,6 +35,7 @@ import { EmailActionEvent } from '../../shared/components/email-actions/email-ac
     ReadingPaneComponent, StatusBarComponent,
     ResizablePanelDirective, ComposeWindowComponent,
     SearchBarComponent, EmailContextMenuComponent,
+    AiChatPanelComponent,
   ],
   templateUrl: './mail-shell.component.html',
   styleUrl: './mail-shell.component.scss',
@@ -47,13 +49,13 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly electronService = inject(ElectronService);
   private readonly commandRegistry = inject(CommandRegistryService);
   private readonly aiStore = inject(AiStore);
+  private readonly chatStore = inject(ChatStore);
   private readonly cdr = inject(ChangeDetectorRef);
   private syncSub?: Subscription;
   private commandSub?: Subscription;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
   // Search active state is now managed by FoldersStore
-  readonly activeCategoryFilter = signal<AiCategory | null>(null);
 
   // Context menu state — store only thread ID so the menu always shows current store state (isStarred/isRead).
   readonly contextMenuThreadId: WritableSignal<string | null> = signal(null);
@@ -67,9 +69,34 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly contextMenuPosition: WritableSignal<{ x: number; y: number } | null> = signal(null);
   readonly contextMenuOpen: WritableSignal<boolean> = signal(false);
 
-  @ViewChildren(EmailListComponent) emailLists!: QueryList<EmailListComponent>;
+  constructor() {
+    /**
+     * Auto-select the first thread when a navigation search (from a chat source card) completes.
+     * Fires whenever searchStreamStatus transitions to 'complete' AND the search was a navigation
+     * search (isNavigationSearch flag), which prevents regular streaming searches from triggering
+     * unwanted auto-selection.
+     *
+     * The flag is cleared BEFORE calling loadThread() so that any subsequent signal change caused
+     * by loadThread() (e.g. threads list updating) does not re-trigger the effect.
+     */
+    effect(() => {
+      const status = this.aiStore.searchStreamStatus();
+      const isNavigation = this.aiStore.isNavigationSearch();
+      const threads = this.emailsStore.threads();
+      const searchToken = this.aiStore.searchToken();
 
-  constructor() { }
+      if (status === 'complete' && isNavigation && threads.length >= 1 && searchToken) {
+        const firstThread = threads[0];
+        const accountId = this.accountsStore.activeAccountId();
+        if (accountId && firstThread) {
+          // Clear the navigation flag FIRST to prevent the effect from re-entering
+          // when loadThread() causes the threads signal to update.
+          this.aiStore.clearNavigationFlag();
+          void this.emailsStore.loadThread(accountId, firstThread.xGmThrid);
+        }
+      }
+    });
+  }
 
   ngAfterViewInit(): void {
     // Defer one tick so RouterLink href is set before next CD (avoids NG0100)
@@ -131,10 +158,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       this.emailsStore.loadThreads(activeAccount.id, normalizedFolderId);
       this.lastLoadedAccountId = activeAccount.id;
       this.lastLoadedFolderId = normalizedFolderId;
-      // Reset category filter and cache on folder switch
-      this.activeCategoryFilter.set(null);
-      this.aiStore.clearCategoryCache();
-      this.emailLists?.forEach(list => list.setCategoryFilter(null));
 
       // Fire-and-forget on-demand sync for Trash and Spam folders.
       // The thread list loads immediately from local DB; the renderer refreshes
@@ -476,15 +499,27 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     await this.emailsStore.loadThreads(accountId, 'INBOX');
     this.lastLoadedAccountId = accountId;
     this.lastLoadedFolderId = 'INBOX';
-    // Reset category filter and cache on account switch
-    this.activeCategoryFilter.set(null);
-    this.aiStore.clearCategoryCache();
-    this.emailLists?.forEach(list => list.setCategoryFilter(null));
+  }
+
+  /**
+   * Called when the user clicks a source email card in the AI chat panel.
+   * Activates search mode and triggers a navigation search for the referenced email.
+   * When the search completes (single result), the auto-select effect in the constructor
+   * will load the thread into the reading pane.
+   */
+  onChatSourceClicked(xGmMsgId: string): void {
+    const accountId = this.accountsStore.activeAccountId();
+    if (!accountId) {
+      return;
+    }
+    this.foldersStore.activateSearch('Source email');
+    this.emailsStore.clearThreadsForStreaming();
+    void this.aiStore.startNavigationSearch(accountId, xGmMsgId);
   }
 
   openNewCompose(): void {
     const activeAccount = this.accountsStore.activeAccount();
-    if (!activeAccount) return;
+    if (!activeAccount) { return; }
     this.composeStore.openCompose({
       mode: 'new',
       accountId: activeAccount.id,
@@ -531,12 +566,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
   onSearchDismissed(): void {
     this.onSearchCleared();
-  }
-
-  onCategoryFilterChanged(category: AiCategory | null): void {
-    this.activeCategoryFilter.set(category);
-    // Update all email list instances
-    this.emailLists?.forEach(list => list.setCategoryFilter(category));
   }
 
   /**

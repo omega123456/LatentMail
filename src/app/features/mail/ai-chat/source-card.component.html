@@ -1,0 +1,10 @@
+<div class="source-card" (click)="onClick()" (keydown.enter)="onClick()" (keydown.space)="$event.preventDefault(); onClick()" tabindex="0" role="button" [attr.aria-label]="'Open email: ' + source().subject">
+  <span class="material-symbols-outlined source-icon" aria-hidden="true">mail</span>
+  <div class="source-content">
+    <div class="source-header">
+      <span class="source-sender">{{ source().fromName || source().fromAddress }}</span>
+      <span class="source-date">{{ formatDate(source().date) }}</span>
+    </div>
+    <div class="source-subject">{{ source().subject }}</div>
+  </div>
+</div>

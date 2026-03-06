@@ -37,6 +37,7 @@ import {
   translateFiltersToGmailQuery,
   hasFilters,
 } from '../utils/search-filter-translator';
+import { SearchOptions } from './search-options';
 
 const log = LoggerService.getInstance();
 
@@ -71,26 +72,18 @@ export class SemanticSearchService extends BaseSearchService {
    * as a single array. The callback is called at least once with the local-phase results
    * (which may be an empty array) and then once per IMAP round with newly confirmed IDs.
    *
-   * @param naturalQuery - The user's search query (natural language)
-   * @param accountId - The account to search within
-   * @param userEmail - The account's email address (for LLM context)
-   * @param todayDate - Today's date as YYYY-MM-DD (for LLM relative-date resolution)
-   * @param folders - List of folder names for LLM context
-   * @param onBatch - Callback invoked with each incremental batch of confirmed message IDs.
-   *                  Called at least once with phase 'local' (before IMAP work begins),
-   *                  then once per IMAP round with phase 'imap'. Batches may be empty.
+   * @param options - Search options including naturalQuery, accountId, userEmail, todayDate,
+   *                  folders, and onBatch callback.
    * @returns 'complete' if all phases succeeded, 'partial' if some IMAP rounds failed
    *          but some results were emitted, 'error' if the search failed entirely before
    *          any results could be produced.
    */
-  async search(
-    naturalQuery: string,
-    accountId: number,
-    userEmail: string,
-    todayDate: string,
-    folders: string[],
-    onBatch: (msgIds: string[], phase: 'local' | 'imap') => void
-  ): Promise<'complete' | 'partial' | 'error'> {
+  async search(options: SearchOptions): Promise<'complete' | 'partial' | 'error'> {
+    const { naturalQuery = '', accountId = 0, userEmail = '', todayDate = '', folders = [], onBatch } = options;
+    if (!onBatch) {
+      log.warn('[SemanticSearch] search called without onBatch callback');
+      return 'error';
+    }
     const vectorDb = VectorDbService.getInstance();
 
     if (!vectorDb.vectorsAvailable) {

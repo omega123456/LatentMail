@@ -8,7 +8,6 @@ import { UiStore } from '../../../store/ui.store';
 import { AiStore } from '../../../store/ai.store';
 import { EmailListItemComponent } from './email-list-item.component';
 import { Thread } from '../../../core/models/email.model';
-import { AiCategory } from '../../../core/models/ai.model';
 import { FoldersStore } from '../../../store/folders.store';
 import { AccountsStore } from '../../../store/accounts.store';
 import { CommandRegistryService } from '../../../core/services/command-registry.service';
@@ -36,18 +35,9 @@ export class EmailListComponent implements OnDestroy {
   readonly threadSelected = output<Thread>();
   readonly threadContextMenu = output<{ thread: Thread; x: number; y: number }>();
 
-  /** Active category filter from the header */
-  readonly categoryFilter = signal<AiCategory | null>(null);
-
-  /** Threads filtered by category when a category filter is active */
+  /** Threads to display (direct passthrough — no category filtering) */
   readonly filteredThreads = computed(() => {
-    const threads = this.emailsStore.threads();
-    const filter = this.categoryFilter();
-    if (!filter) {
-      return threads;
-    }
-    const cache = this.aiStore.categoryCache();
-    return threads.filter(t => cache[t.xGmThrid] === filter);
+    return this.emailsStore.threads();
   });
 
   /**
@@ -775,9 +765,5 @@ export class EmailListComponent implements OnDestroy {
       // Also clears fetchError before attempting (set in the store's loadMore).
       this.emailsStore.loadMore(activeAccount.id, activeFolderId);
     }
-  }
-
-  setCategoryFilter(category: AiCategory | null): void {
-    this.categoryFilter.set(category);
   }
 }

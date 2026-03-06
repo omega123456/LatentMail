@@ -70,10 +70,6 @@ export interface AiSearchResult {
   query: string;
 }
 
-export interface AiCategorization {
-  category: 'Primary' | 'Updates' | 'Promotions' | 'Social' | 'Newsletters';
-}
-
 export interface AiFilterSuggestion {
   name: string;
   conditions: Array<{ field: string; operator: string; value: string }>;
@@ -86,4 +82,37 @@ export interface AiFollowUpResult {
   suggestedDate?: string;
 }
 
-export type AiCategory = 'Primary' | 'Updates' | 'Promotions' | 'Social' | 'Newsletters';
+export interface SourceEmail {
+  xGmMsgId: string;
+  fromName: string;
+  fromAddress: string;
+  subject: string;
+  date: string;  // ISO date string
+}
+
+export interface ChatMessage {
+  id: string;              // Unique message ID
+  role: 'user' | 'assistant';
+  content: string;         // Message text (progressively built for streaming)
+  sources: SourceEmail[];  // Empty for user messages, populated for AI messages
+  timestamp: Date;
+  streaming: boolean;      // True while tokens are still arriving
+  error: string | null;    // Error message if generation failed
+}
+
+export interface ChatStreamPayload {
+  requestId: string;
+  token: string;
+}
+
+export interface ChatSourcesPayload {
+  requestId: string;
+  sources: SourceEmail[];
+}
+
+export interface ChatDonePayload {
+  requestId: string;
+  success: boolean;
+  cancelled?: boolean;
+  error?: string;
+}

@@ -1,0 +1,122 @@
+<div
+  class="chat-panel"
+  [class.panel-open]="uiStore.aiChatPanelOpen()"
+  [class.panel-disabled]="chatStore.panelStatus() === 'disabled'"
+  role="complementary"
+  aria-label="AI Chat Assistant"
+>
+  <!-- Collapsed strip -->
+  @if (!uiStore.aiChatPanelOpen()) {
+    <div
+      class="collapsed-strip"
+      (click)="togglePanel()"
+      (keydown.enter)="togglePanel()"
+      (keydown.space)="$event.preventDefault(); togglePanel()"
+      tabindex="0"
+      role="button"
+      aria-label="Open AI Assistant"
+      [class.strip-disabled]="chatStore.panelStatus() === 'disabled'"
+    >
+      <span class="material-symbols-outlined strip-icon" aria-hidden="true">auto_awesome</span>
+    </div>
+  }
+
+  <!-- Expanded panel -->
+  @if (uiStore.aiChatPanelOpen()) {
+    <div class="expanded-panel">
+      <!-- Header -->
+      <div class="panel-header">
+        <div class="header-title">
+          <span class="material-symbols-outlined header-icon" aria-hidden="true">auto_awesome</span>
+          <span>AI Assistant</span>
+        </div>
+        <div class="header-actions">
+          @if (chatStore.panelStatus() !== 'disabled') {
+            <button mat-icon-button class="header-btn" (click)="newChat()" matTooltip="New chat" aria-label="New chat">
+              <span class="material-symbols-outlined" aria-hidden="true">edit_note</span>
+            </button>
+          }
+          <button mat-icon-button class="header-btn" (click)="closePanel()" aria-label="Close panel">
+            <span class="material-symbols-outlined" aria-hidden="true">close</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Message area -->
+      <div class="message-list" #messageList aria-live="polite" aria-label="Chat messages">
+        <!-- Empty state -->
+        @if (chatStore.messages().length === 0 && chatStore.panelStatus() !== 'disabled') {
+          <div class="empty-state">
+            <span class="material-symbols-outlined empty-icon" aria-hidden="true">auto_awesome</span>
+            <p class="empty-heading">Ask about your inbox</p>
+            <div class="example-prompts">
+              @for (prompt of examplePrompts; track prompt) {
+                <div
+                  class="example-chip"
+                  (click)="useExamplePrompt(prompt)"
+                  (keydown.enter)="useExamplePrompt(prompt)"
+                  (keydown.space)="$event.preventDefault(); useExamplePrompt(prompt)"
+                  tabindex="0"
+                  role="button"
+                >
+                  {{ prompt }}
+                </div>
+              }
+            </div>
+          </div>
+        }
+
+        <!-- Disabled state -->
+        @if (chatStore.panelStatus() === 'disabled') {
+          <div class="disabled-state">
+            <span class="material-symbols-outlined disabled-icon" aria-hidden="true">manage_search</span>
+            <p class="disabled-heading">AI index not built</p>
+            <p class="disabled-subtext">Build the index in Settings<br>to search your inbox with AI</p>
+          </div>
+        }
+
+        <!-- Messages -->
+        @for (message of chatStore.messages(); track message.id) {
+          <app-chat-message
+            [message]="message"
+            (sourceClicked)="onSourceClicked($event)"
+          />
+        }
+      </div>
+
+      <!-- Input area -->
+      <div class="input-area">
+        <textarea
+          class="chat-input"
+          [(ngModel)]="inputText"
+          (keydown)="onKeyDown($event)"
+          [disabled]="chatStore.inputDisabled() || chatStore.panelStatus() === 'disabled'"
+          [placeholder]="chatStore.panelStatus() === 'disabled' ? 'Index required...' : 'Ask a question...'"
+          rows="1"
+          aria-label="Chat input"
+        ></textarea>
+        @if (chatStore.inputDisabled()) {
+          <button
+            mat-mini-fab
+            class="send-btn stop-btn"
+            (click)="stopStream()"
+            aria-label="Stop generating"
+            matTooltip="Stop"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">stop_circle</span>
+          </button>
+        } @else {
+          <button
+            mat-mini-fab
+            class="send-btn"
+            (click)="sendMessage()"
+            [disabled]="!inputText.trim() || chatStore.panelStatus() === 'disabled'"
+            aria-label="Send message"
+          >
+            <span class="material-symbols-outlined" aria-hidden="true">arrow_upward</span>
+          </button>
+        }
+      </div>
+    </div>
+  }
+</div>

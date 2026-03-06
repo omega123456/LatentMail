@@ -58,8 +58,6 @@ const electronAPI = {
       ipcRenderer.invoke('ai:summarize', threadContent, requestId) as Promise<IpcResponse>,
     compose: (prompt: string, context?: string, requestId?: string) =>
       ipcRenderer.invoke('ai:compose', prompt, context, requestId) as Promise<IpcResponse>,
-    categorize: (emailContent: string) =>
-      ipcRenderer.invoke('ai:categorize', emailContent) as Promise<IpcResponse>,
     search: (accountId: string, naturalQuery: string, folders?: string[], mode?: string) =>
       ipcRenderer.invoke('ai:search', accountId, naturalQuery, folders, mode) as Promise<IpcResponse>,
     transform: (text: string, transformation: string, requestId?: string) =>
@@ -86,6 +84,12 @@ const electronAPI = {
       ipcRenderer.invoke('ai:build-index') as Promise<IpcResponse>,
     cancelIndex: () =>
       ipcRenderer.invoke('ai:cancel-index') as Promise<IpcResponse>,
+    chat: (question: string, conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>, accountId: number) =>
+      ipcRenderer.invoke('ai:chat', { question, conversationHistory, accountId }) as Promise<IpcResponse>,
+    chatCancel: (requestId: string) =>
+      ipcRenderer.invoke('ai:chat:cancel', { requestId }) as Promise<IpcResponse>,
+    chatNavigate: (accountId: number, xGmMsgId: string) =>
+      ipcRenderer.invoke('ai:chat:navigate', { accountId, xGmMsgId }) as Promise<IpcResponse>,
   },
 
   // Compose operations (signatures & contacts only — draft ops moved to queue)
@@ -223,6 +227,10 @@ const electronAPI = {
       // AI semantic search streaming events
       'ai:search:batch',
       'ai:search:complete',
+      // AI chat streaming events
+      'ai:chat:stream',
+      'ai:chat:sources',
+      'ai:chat:done',
       // Sync pause state changes (CLI pause-sync / resume-sync)
       'sync:paused-state-changed',
     ];

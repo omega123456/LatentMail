@@ -330,6 +330,8 @@ export class OllamaService {
    * Send a streaming chat completion request.
    * Calls `onToken` for each token as it arrives, and `onDone` when finished.
    * Returns the full accumulated response text.
+   *
+   * If `options.signal` is provided, aborting it will abort the HTTP connection.
    */
   async chatStream(
     messages: OllamaChatMessage[],
@@ -339,6 +341,7 @@ export class OllamaService {
       temperature?: number;
       format?: 'json' | string;
       numPredict?: number;
+      signal?: AbortSignal;
     }
   ): Promise<string> {
     const model = options?.model || this.currentModel;
@@ -362,6 +365,14 @@ export class OllamaService {
     }
 
     const controller = new AbortController();
+    // Wire up external cancellation signal if provided
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+    }
     const timeout = setTimeout(() => controller.abort(), 300_000); // 5 min for streaming
     try {
       const response = await fetch(`${this.baseUrl}/api/chat`, {
@@ -647,36 +658,6 @@ export class OllamaService {
     }
 
     return this.chat(messages, { temperature: 0.5 });
-  }
-
-  /** Categorize an email into categories */
-  async categorizeEmail(emailContent: string): Promise<string> {
-    const cacheKey = this.getCacheKey('categorize', emailContent);
-    const cached = this.getCachedResult('categorize', cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    const messages: OllamaChatMessage[] = [
-      {
-        role: 'system',
-        content: loadPrompt('categorize-email'),
-      },
-      {
-        role: 'user',
-        content: emailContent,
-      },
-    ];
-
-    const result = await this.chat(messages, { format: 'json', temperature: 0.3 });
-    try {
-      const parsed = JSON.parse(result) as { category: string };
-      const category = parsed.category || 'Primary';
-      this.setCachedResult('categorize', cacheKey, category);
-      return category;
-    } catch {
-      return 'Primary';
-    }
   }
 
   /**
@@ -1271,8 +1252,8 @@ export class OllamaService {
   private setCachedResult(operation: string, inputHash: string, result: string): void {
     try {
       const db = DatabaseService.getInstance();
-      // Default expiry: 7 days for summaries, indefinite for categorization
-      const expiresInDays = operation === 'categorize' ? null : 7;
+      // Default expiry: 7 days
+      const expiresInDays = 7;
       db.setAiCacheResult(operation, inputHash, this.currentModel, result, expiresInDays);
     } catch (err) {
       log.warn('Failed to cache AI result:', err);

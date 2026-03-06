@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { randomUUID } from 'crypto';
 import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, IPC_EVENTS, ipcSuccess, ipcError } from './ipc-channels';
+import { runStreamingSearch } from './streaming-search-helper';
 
 const log = LoggerService.getInstance();
 import { OllamaService } from '../services/ollama-service';
@@ -11,6 +12,9 @@ import { EmbeddingService } from '../services/embedding-service';
 import { SemanticSearchService } from '../services/semantic-search-service';
 import { SearchIntent } from '../utils/search-query-generator';
 import { KeywordSearchService } from '../services/keyword-search-service';
+import { InboxChatService } from '../services/inbox-chat-service';
+import { MessageIdSearchService } from '../services/message-id-search-service';
+import { ImapCrawlService } from '../services/imap-crawl-service';
 
 function isAllowedOllamaUrl(rawUrl: string): boolean {
   try {
@@ -256,97 +260,6 @@ export function registerAiIpcHandlers(): void {
     }
   );
 
-  ipcMain.handle(IPC_CHANNELS.AI_CATEGORIZE, async (_event, emailContent: string) => {
-    try {
-      if (!emailContent || typeof emailContent !== 'string') {
-        return ipcError('AI_INVALID_INPUT', 'Email content is required');
-      }
-      const category = await ollama.categorizeEmail(emailContent);
-      return ipcSuccess({ category });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to categorize email';
-      log.error('Failed to categorize:', err);
-      if (message.includes('No AI model selected')) {
-        return ipcError('AI_NO_MODEL', message);
-      }
-      return ipcError('AI_CATEGORIZE_FAILED', message);
-    }
-  });
-
-  /**
-   * Shared helper that fires a streaming search in the background and emits incremental
-   * batch/complete push events to the renderer window.  Defined as a const inside
-   * registerAiIpcHandlers() so that it is available to the AI_SEARCH handler below.
-   */
-  const runStreamingSearch = (
-    service: {
-      search: (
-        query: string,
-        accountId: number,
-        userEmail: string,
-        todayDate: string,
-        folders: string[],
-        onBatch: (msgIds: string[], phase: 'local' | 'imap') => void
-      ) => Promise<'complete' | 'partial' | 'error'>;
-    },
-    serviceLabel: string,
-    searchToken: string,
-    browserWindow: BrowserWindow | null,
-    query: string,
-    accountId: number,
-    userEmail: string,
-    todayDate: string,
-    folderContext: string[],
-    maxResults: number
-  ): void => {
-    let emittedCount = 0;
-    service.search(
-      query,
-      accountId,
-      userEmail,
-      todayDate,
-      folderContext,
-      (msgIds: string[], phase: 'local' | 'imap') => {
-        if (!browserWindow || browserWindow.isDestroyed()) {
-          return;
-        }
-        if (emittedCount >= maxResults) {
-          return;
-        }
-        const remaining = maxResults - emittedCount;
-        const cappedMsgIds = msgIds.slice(0, remaining);
-        emittedCount += cappedMsgIds.length;
-        browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_BATCH, {
-          searchToken,
-          msgIds: cappedMsgIds,
-          phase,
-        });
-      }
-    )
-      .then((status) => {
-        if (!browserWindow || browserWindow.isDestroyed()) {
-          return;
-        }
-        log.info(`[AI] search: ${serviceLabel} search finished with status=${status}, totalResults=${emittedCount}`);
-        browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
-          searchToken,
-          status,
-          totalResults: emittedCount,
-        });
-      })
-      .catch((searchErr) => {
-        log.warn(`[AI] search: ${serviceLabel} search threw unexpectedly:`, searchErr);
-        if (!browserWindow || browserWindow.isDestroyed()) {
-          return;
-        }
-        browserWindow.webContents.send(IPC_EVENTS.AI_SEARCH_COMPLETE, {
-          searchToken,
-          status: 'error',
-          totalResults: emittedCount,
-        });
-      });
-  };
-
   ipcMain.handle(IPC_CHANNELS.AI_SEARCH, async (event, accountId: string, naturalQuery: string, folders?: unknown, mode?: unknown) => {
     try {
       if (!accountId || isNaN(Number(accountId))) {
@@ -390,15 +303,27 @@ export function registerAiIpcHandlers(): void {
       const searchToken = randomUUID();
       const browserWindow = BrowserWindow.fromWebContents(event.sender);
 
+      const searchOptions = {
+        naturalQuery,
+        accountId: numAccountId,
+        userEmail,
+        todayDate,
+        folders: folderContext,
+      };
+
       if (useMode === 'keyword' || !isSemanticPipelineReady) {
         if (useMode === 'semantic' && !isSemanticPipelineReady) {
           log.debug('[AI] search: semantic pipeline not ready, falling back to keyword');
         }
         const keywordService = KeywordSearchService.getInstance();
-        runStreamingSearch(keywordService, 'keyword', searchToken, browserWindow, naturalQuery, numAccountId, userEmail, todayDate, folderContext, MAX_RESULTS);
+        runStreamingSearch(keywordService, browserWindow ?? BrowserWindow.getAllWindows()[0], searchOptions, 'keyword', searchToken, MAX_RESULTS).catch((runError) => {
+          log.error('[AI] AI_SEARCH keyword runStreamingSearch error:', runError);
+        });
       } else {
         const semanticService = SemanticSearchService.getInstance();
-        runStreamingSearch(semanticService, 'semantic', searchToken, browserWindow, naturalQuery, numAccountId, userEmail, todayDate, folderContext, MAX_RESULTS);
+        runStreamingSearch(semanticService, browserWindow ?? BrowserWindow.getAllWindows()[0], searchOptions, 'semantic', searchToken, MAX_RESULTS).catch((runError) => {
+          log.error('[AI] AI_SEARCH semantic runStreamingSearch error:', runError);
+        });
       }
 
       return ipcSuccess({ searchToken });
@@ -710,6 +635,173 @@ export function registerAiIpcHandlers(): void {
       const message = err instanceof Error ? err.message : 'Failed to cancel index build';
       log.error('[AI] cancel-index failed:', { message }, err);
       return ipcError('AI_CANCEL_INDEX_FAILED', message);
+    }
+  });
+
+  // ---- Inbox Chat (RAG pipeline) handlers ----
+
+  const inboxChatService = new InboxChatService(
+    DatabaseService.getInstance(),
+    OllamaService.getInstance(),
+    VectorDbService.getInstance(),
+  );
+
+  ipcMain.handle(IPC_CHANNELS.AI_CHAT, async (event, payload: unknown): Promise<ReturnType<typeof ipcSuccess | typeof ipcError>> => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return ipcError('AI_INVALID_INPUT', 'Payload must be an object');
+      }
+
+      const { question, conversationHistory, accountId } = payload as {
+        question: unknown;
+        conversationHistory: unknown;
+        accountId: unknown;
+      };
+
+      if (!question || typeof question !== 'string' || question.trim().length === 0) {
+        return ipcError('AI_INVALID_INPUT', 'Question is required');
+      }
+      if (question.trim().length > 2000) {
+        return ipcError('AI_INVALID_INPUT', 'Question too long (max 2000 characters)');
+      }
+      if (!accountId || typeof accountId !== 'number') {
+        return ipcError('AI_INVALID_INPUT', 'Account ID is required');
+      }
+
+      // Validate conversation history shape and cap to last 10 turns
+      const safeHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      if (Array.isArray(conversationHistory)) {
+        const cappedHistory = conversationHistory.slice(-10);
+        for (const turn of cappedHistory) {
+          if (
+            turn &&
+            typeof turn === 'object' &&
+            (turn.role === 'user' || turn.role === 'assistant') &&
+            typeof turn.content === 'string'
+          ) {
+            safeHistory.push({ role: turn.role, content: turn.content });
+          }
+        }
+      }
+
+      const requestId = randomUUID();
+      const browserWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0];
+      if (!browserWindow) {
+        return ipcError('AI_CHAT_NO_WINDOW', 'No window available to receive chat events');
+      }
+
+      log.info('[AI] chat request', { requestId, questionLen: question.trim().length, accountId, historyLen: safeHistory.length });
+
+      // Start the RAG pipeline asynchronously — return requestId immediately so the
+      // renderer can start listening for AI_CHAT_STREAM / AI_CHAT_SOURCES / AI_CHAT_DONE events.
+      inboxChatService.chat(requestId, question.trim(), safeHistory, accountId, {
+        onToken: (token) => {
+          if (!browserWindow.isDestroyed()) {
+            browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_STREAM, { requestId, token });
+          }
+        },
+        onSources: (sources) => {
+          if (!browserWindow.isDestroyed()) {
+            browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_SOURCES, { requestId, sources });
+          }
+        },
+        onDone: (cancelled, error) => {
+          if (!browserWindow.isDestroyed()) {
+            browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_DONE, {
+              requestId,
+              success: !error,
+              cancelled,
+              error,
+            });
+          }
+        },
+      }).catch((pipelineErr) => {
+        log.error('[AI] chat pipeline threw unexpectedly:', pipelineErr);
+        if (!browserWindow.isDestroyed()) {
+          browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_DONE, {
+            requestId,
+            success: false,
+            cancelled: false,
+            error: pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr),
+          });
+        }
+      });
+
+      return ipcSuccess({ requestId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start chat';
+      log.error('[AI] chat handler error:', err);
+      return ipcError('AI_CHAT_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AI_CHAT_CANCEL, async (_event, payload: unknown): Promise<ReturnType<typeof ipcSuccess | typeof ipcError>> => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return ipcError('AI_INVALID_INPUT', 'Payload must be an object');
+      }
+      const { requestId } = payload as { requestId: unknown };
+      if (!requestId || typeof requestId !== 'string') {
+        return ipcError('AI_INVALID_INPUT', 'Request ID is required');
+      }
+      inboxChatService.cancel(requestId);
+      log.info('[AI] chat cancel request', { requestId });
+      return ipcSuccess({ cancelled: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to cancel chat';
+      log.error('[AI] chat cancel error:', err);
+      return ipcError('AI_CHAT_CANCEL_FAILED', message);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.AI_CHAT_NAVIGATE, async (event, payload: unknown): Promise<ReturnType<typeof ipcSuccess | typeof ipcError>> => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return ipcError('AI_INVALID_INPUT', 'Payload must be an object');
+      }
+
+      const { accountId, xGmMsgId } = payload as { accountId: unknown; xGmMsgId: unknown };
+
+      if (!accountId || (typeof accountId !== 'number' && typeof accountId !== 'string')) {
+        return ipcError('AI_INVALID_INPUT', 'accountId is required');
+      }
+      if (!xGmMsgId || typeof xGmMsgId !== 'string') {
+        return ipcError('AI_INVALID_INPUT', 'xGmMsgId is required');
+      }
+
+      const numericAccountId = Number(accountId);
+      if (isNaN(numericAccountId) || numericAccountId <= 0) {
+        return ipcError('AI_INVALID_INPUT', 'accountId must be a valid positive number');
+      }
+
+      const browserWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0];
+      if (!browserWindow) {
+        return ipcError('AI_CHAT_NAVIGATE_NO_WINDOW', 'No window available to receive search events');
+      }
+
+      const searchToken = randomUUID();
+      const messageIdSearchService = new MessageIdSearchService(
+        DatabaseService.getInstance(),
+        ImapCrawlService.getInstance(),
+      );
+
+      runStreamingSearch(
+        messageIdSearchService,
+        browserWindow,
+        { xGmMsgId, accountId: numericAccountId },
+        'MessageIdSearch',
+        searchToken,
+        1,
+      ).catch((navigateError) => {
+        log.error('[AI] AI_CHAT_NAVIGATE runStreamingSearch error:', navigateError);
+      });
+
+      log.info('[AI] chat navigate request', { accountId: numericAccountId, xGmMsgId });
+      return ipcSuccess({ searchToken });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to navigate to source email';
+      log.error('[AI] chat navigate error:', err);
+      return ipcError('AI_CHAT_NAVIGATE_FAILED', message);
     }
   });
 }

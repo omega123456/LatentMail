@@ -57,7 +57,7 @@
         </div>
         }
         <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
-        <app-email-list-header (categoryFilterChanged)="onCategoryFilterChanged($event)" />
+        <app-email-list-header />
         <app-email-list #emailList1 (threadSelected)="onThreadSelected($event)" (threadContextMenu)="onThreadContextMenu($event)" />
       </div>
 
@@ -76,7 +76,7 @@
         }
         <div class="email-list-panel-full">
           <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
-          <app-email-list-header (categoryFilterChanged)="onCategoryFilterChanged($event)" />
+          <app-email-list-header />
           <app-email-list #emailList2 (threadSelected)="onThreadSelected($event)" (threadContextMenu)="onThreadContextMenu($event)" />
         </div>
 
@@ -99,11 +99,16 @@
           }
           <div class="email-list-panel-full">
             <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
-            <app-email-list-header (categoryFilterChanged)="onCategoryFilterChanged($event)" />
+            <app-email-list-header />
             <app-email-list #emailList3 (threadSelected)="onThreadSelected($event)" (threadContextMenu)="onThreadContextMenu($event)" />
           </div>
         </div>
         }
+
+      <!-- AI Chat Panel - shared across all layouts -->
+      <app-ai-chat-panel
+        (sourceClicked)="onChatSourceClicked($event)"
+      />
     </div>
 
     <!-- Status bar: thin bar at bottom -->
