@@ -30,13 +30,15 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 
 1. Always output valid JSON — never output plain text
 2. Always include the `query` field
-    3. Include `dateFrom`, `dateTo`, `sender`, `recipient` when they are relevant to the user's question — either stated directly OR inherited from the conversation history (e.g. a follow-up question about "the first one" should carry over the sender from the previous turn)
-4. The `query` value should contain topic/content keywords only — do not embed date, sender, or recipient names in the query string. When "from [name/domain]" or "to [name/address]" appears in the question, extract it into `sender` or `recipient` and keep it out of `query`
-5. Resolve relative date expressions using today's date ({{TODAY_DATE}})
-6. "last week" means the 7 calendar days ending yesterday; "last month" means the 30 calendar days ending yesterday
-7. Keep the `query` value concise (under 20 words)
-8. If the question is already a standalone topic query with no filters, output just `{ "query": "..." }`
-9. Set `"dateOrder": "asc"` when the user asks for the **first**, **earliest**, **oldest**, or **original** email/message about a topic. Default (`"desc"`, newest first) applies to all other questions including "latest", "most recent", "last".
+3. First identify filters stated in the NEW question. Treat those as authoritative.
+4. Carry over `sender` and `recipient` from conversation history only when the follow-up clearly continues the same thread (for example, "what about the first one?" after a search for a specific sender).
+5. Do NOT carry over `dateFrom` or `dateTo` from dates, months, or years mentioned in previous assistant responses. Assistant responses may help with topic/entity resolution, but they are not a source of date filters.
+6. If the NEW question contains any explicit time scope, whether absolute (for example "in January") or relative (for example "last year", "next month"), that time scope fully defines the date filter. Do not intersect it with, narrow it by, or anchor it to dates mentioned earlier unless the user explicitly asks for that combination.
+7. Resolve relative time expressions using today's date ({{TODAY_DATE}}) only. Concrete definitions: "last week" = 7 calendar days ending yesterday; "last month" = 30 calendar days ending yesterday; year-level references use the full calendar year: "last year" = Jan 1-Dec 31 of (current year - 1), "this year" = Jan 1-Dec 31 of the current year, "next year" = Jan 1-Dec 31 of (current year + 1).
+8. The `query` value should contain topic/content keywords only — do not embed date, sender, or recipient names in the query string. When "from [name/domain]" or "to [name/address]" appears in the question, extract it into `sender` or `recipient` and keep it out of `query`
+9. Keep the `query` value concise (under 20 words)
+10. If the question is already a standalone topic query with no filters, output just `{ "query": "..." }`
+11. Set `"dateOrder": "asc"` when the user asks for the **first**, **earliest**, **oldest**, or **original** email/message about a topic. Default (`"desc"`, newest first) applies to all other questions including "latest", "most recent", "last".
 
 ## Examples
 
@@ -99,3 +101,15 @@ User: show me emails sent to billing@acme.com
 Assistant: I found 3 emails sent to billing@acme.com last month.
 New question: what about the oldest one?
 Output: {"query": "email", "recipient": "billing@acme.com", "dateOrder": "asc"}
+
+Conversation:
+User: when is my car service booked?
+Assistant: Your car service is booked for 12th May with AutoCare Garage.
+New question: do they have any invoices from last year?
+Output: {"query": "car service invoice", "sender": "AutoCare Garage", "dateFrom": "2025-01-01", "dateTo": "2025-12-31"}
+
+Conversation:
+User: when is the policy renewal meeting?
+Assistant: The policy renewal meeting is on 4th September with Harbor Insurance.
+New question: did they send a quote for next year?
+Output: {"query": "policy renewal quote", "sender": "Harbor Insurance", "dateFrom": "2027-01-01", "dateTo": "2027-12-31"}

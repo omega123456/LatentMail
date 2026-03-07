@@ -24,6 +24,7 @@ export interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
   stream?: boolean;
+  think?: boolean;
   options?: {
     temperature?: number;
     top_p?: number;
@@ -277,6 +278,7 @@ export class OllamaService {
     temperature?: number;
     format?: 'json' | string;
     numPredict?: number;
+    think?: boolean;
   }): Promise<string> {
     const model = options?.model || this.currentModel;
     if (!model) {
@@ -289,8 +291,9 @@ export class OllamaService {
       model,
       messages,
       stream: false,
+      think: options?.think ?? false,
       options: {
-        temperature: options?.temperature ?? 0.7,
+        temperature: options?.temperature ?? 0.3,
         num_predict: options?.numPredict,
       },
     };
@@ -341,6 +344,7 @@ export class OllamaService {
       temperature?: number;
       format?: 'json' | string;
       numPredict?: number;
+      think?: boolean;
       signal?: AbortSignal;
     }
   ): Promise<string> {
@@ -355,8 +359,9 @@ export class OllamaService {
       model,
       messages,
       stream: true,
+      think: options?.think ?? false,
       options: {
-        temperature: options?.temperature ?? 0.7,
+        temperature: options?.temperature ?? 0.3,
         num_predict: options?.numPredict,
       },
     };
@@ -527,7 +532,7 @@ export class OllamaService {
       },
     ];
 
-    const result = await this.chat(messages, { format: 'json', temperature: 0.8 });
+    const result = await this.chat(messages, { format: 'json', temperature: 0.5 });
 
     log.info('[Ollama] reply-suggestions raw response', { contentLen: result.length, content: result });
 
