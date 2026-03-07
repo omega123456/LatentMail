@@ -85,7 +85,9 @@ export class AiChatPanelComponent implements AfterViewChecked {
   }
 
   togglePanel(): void {
-    if (!this.uiStore.aiChatPanelOpen()) {
+    if (this.uiStore.aiChatPanelOpen()) {
+      this.uiStore.toggleAiChatPanel();
+    } else if (this.chatStore.panelStatus() !== 'disabled') {
       this.uiStore.toggleAiChatPanel();
     }
   }

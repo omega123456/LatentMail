@@ -18,9 +18,10 @@
       (click)="togglePanel()"
       (keydown.enter)="togglePanel()"
       (keydown.space)="$event.preventDefault(); togglePanel()"
-      tabindex="0"
+      [attr.tabindex]="chatStore.panelStatus() === 'disabled' ? -1 : 0"
       role="button"
-      aria-label="Open AI Assistant"
+      [attr.aria-label]="chatStore.panelStatus() === 'disabled' ? 'AI Assistant (index required)' : 'Open AI Assistant'"
+      [attr.aria-disabled]="chatStore.panelStatus() === 'disabled' ? 'true' : null"
       [class.strip-disabled]="chatStore.panelStatus() === 'disabled'"
     >
       <span class="material-symbols-outlined strip-icon" aria-hidden="true">auto_awesome</span>
