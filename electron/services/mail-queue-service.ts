@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import * as fastq from 'fastq';
 
@@ -359,7 +360,7 @@ export class MailQueueService {
       type,
       payload,
       status: 'pending',
-      createdAt: new Date().toISOString(),
+      createdAt: DateTime.utc().toISO(),
       retryCount: 0,
       description,
       dedupKey,
@@ -450,7 +451,7 @@ export class MailQueueService {
       }
       item.status = 'cancelled';
       item.error = undefined;
-      item.completedAt = new Date().toISOString();
+      item.completedAt = DateTime.utc().toISO();
       this.cleanupDedupKey(item);
       this.emitUpdate(item);
       // Clear any pending retry timer
@@ -474,7 +475,7 @@ export class MailQueueService {
 
     item.status = 'cancelled';
     item.error = undefined;
-    item.completedAt = new Date().toISOString();
+    item.completedAt = DateTime.utc().toISO();
     this.cleanupDedupKey(item);
     this.emitUpdate(item);
 
@@ -530,7 +531,7 @@ export class MailQueueService {
 
       item.status = 'failed';
       item.error = reason;
-      item.completedAt = new Date().toISOString();
+      item.completedAt = DateTime.utc().toISO();
       this.emitUpdate(item);
       failed++;
     }
@@ -627,7 +628,7 @@ export class MailQueueService {
 
       // Success
       item.status = 'completed';
-      item.completedAt = new Date().toISOString();
+      item.completedAt = DateTime.utc().toISO();
       this.cleanupDedupKey(item);
       this.emitUpdate(item);
       log.info(`[MailQueue] Completed ${item.type} (${item.queueId})`);
@@ -642,7 +643,7 @@ export class MailQueueService {
       if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older' || item.type === 'add-labels' || item.type === 'remove-labels' || item.type === 'body-fetch') {
         item.status = 'failed';
         item.error = errMsg;
-        item.completedAt = new Date().toISOString();
+        item.completedAt = DateTime.utc().toISO();
         this.cleanupDedupKey(item);
         this.emitUpdate(item);
         if (item.type === 'fetch-older') {
@@ -669,7 +670,7 @@ export class MailQueueService {
       if (failImmediately) {
         item.status = 'failed';
         item.error = errMsg;
-        item.completedAt = new Date().toISOString();
+        item.completedAt = DateTime.utc().toISO();
         this.emitUpdate(item);
         if (item.type === 'move' || item.type === 'delete') {
           this.clearPendingOpsOnFailure(item);
@@ -695,7 +696,7 @@ export class MailQueueService {
       // Permanent failure or max retries exceeded
       item.status = 'failed';
       item.error = errMsg;
-      item.completedAt = new Date().toISOString();
+      item.completedAt = DateTime.utc().toISO();
       this.emitUpdate(item);
       log.error(`[MailQueue] Permanently failed ${item.type} (${item.queueId}) after ${item.retryCount} retries: ${errMsg}`);
 
@@ -854,7 +855,7 @@ export class MailQueueService {
         subject: payload.subject || '',
         textBody: fetched?.textBody || payload.textBody || '',
         htmlBody: fetched?.htmlBody || payload.htmlBody || '',
-        date: fetched?.date || new Date().toISOString(),
+        date: fetched?.date || DateTime.utc().toISO(),
         isRead: true,
         isStarred: false,
         isImportant: false,
@@ -877,7 +878,7 @@ export class MailQueueService {
           accountId: item.accountId,
           xGmThrid,
           subject: payload.subject || '',
-          lastMessageDate: new Date().toISOString(),
+          lastMessageDate: DateTime.utc().toISO(),
           participants: formatParticipant(
             account.email,
             typeof (account as Record<string, unknown>)['display_name'] === 'string'
@@ -1067,7 +1068,7 @@ export class MailQueueService {
         subject: payload.subject || '',
         textBody: fetched?.textBody || payload.textBody || '',
         htmlBody: fetched?.htmlBody || payload.htmlBody || '',
-        date: fetched?.date || new Date().toISOString(),
+        date: fetched?.date || DateTime.utc().toISO(),
         isRead: true,
         isStarred: false,
         isImportant: false,
@@ -1084,7 +1085,7 @@ export class MailQueueService {
           accountId: item.accountId,
           xGmThrid,
           subject: payload.subject || '',
-          lastMessageDate: new Date().toISOString(),
+          lastMessageDate: DateTime.utc().toISO(),
           participants: formatParticipant(
             account.email,
             typeof (account as Record<string, unknown>)['display_name'] === 'string'
@@ -1617,7 +1618,7 @@ export class MailQueueService {
       String(item.accountId),
       payload.folder,
       payload.isInitial,
-      new Date(payload.sinceDate),
+      DateTime.fromISO(payload.sinceDate).toJSDate(),
       payload.showNotifications,
     );
 
@@ -1699,7 +1700,7 @@ export class MailQueueService {
     const affectedFolders = await syncService.syncAllMail(
       String(item.accountId),
       payload.isInitial,
-      new Date(payload.sinceDate),
+      DateTime.fromISO(payload.sinceDate).toJSDate(),
       knownPaths,
     );
 
@@ -2150,8 +2151,8 @@ export class MailQueueService {
     for (const [threadId, threadEmails] of threadMap) {
       const uniqueEmails = [...new Map(threadEmails.map(e => [e.xGmMsgId, e])).values()];
 
-      const latest = uniqueEmails.reduce((a, b) =>
-        new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+      const latest = uniqueEmails.reduce((accumulator, current) =>
+        DateTime.fromISO(accumulator.date).toMillis() > DateTime.fromISO(current.date).toMillis() ? accumulator : current
       );
       const participants = formatParticipantList(uniqueEmails);
       const allRead = uniqueEmails.every(e => e.isRead);

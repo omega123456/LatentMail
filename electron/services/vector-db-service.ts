@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { app } from 'electron';
+import { DateTime } from 'luxon';
 import type BetterSqlite3 from 'better-sqlite3';
 import { isWindows, isMacOS, isLinux, isX64, isArm64 } from '../utils/platform';
 import { LoggerService } from './logger-service';
@@ -381,7 +382,7 @@ export class VectorDbService {
 
     this.db.prepare(
       'INSERT INTO vec_config (key, value) VALUES (:key, :value) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-    ).run({ key: 'created_at', value: new Date().toISOString() });
+    ).run({ key: 'created_at', value: DateTime.utc().toISO() });
 
     this.currentModel = model;
     this.currentDimension = dimension;

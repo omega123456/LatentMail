@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { DateTime } from 'luxon';
 import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError, IpcResponse } from './ipc-channels';
 
@@ -46,8 +47,8 @@ export function registerMailIpcHandlers(): void {
         if (typeof d === 'number') {
           return Number.isFinite(d) ? d : 0;
         }
-        const parsed = Date.parse(String(d));
-        return Number.isFinite(parsed) ? parsed : 0;
+        const dt = DateTime.fromISO(String(d));
+        return dt.isValid ? dt.toMillis() : 0;
       };
       const latestMsg = messagesWithFolders.reduce((a, b) => {
         return parseTs(b['date']) > parseTs(a['date']) ? b : a;
@@ -819,8 +820,8 @@ export function registerMailIpcHandlers(): void {
         return ipcError('INVALID_ACCOUNT', `Invalid accountId: ${accountId}`);
       }
 
-      const parsedDate = new Date(beforeDate);
-      if (isNaN(parsedDate.getTime())) {
+      const parsedDate = DateTime.fromISO(beforeDate);
+      if (!parsedDate.isValid) {
         return ipcError('INVALID_DATE', `Invalid beforeDate: ${beforeDate}`);
       }
 

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import { Umzug } from 'umzug';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { createBetterSqlite3Storage } from '../database/umzug-storage';
 
@@ -1963,7 +1964,7 @@ export class DatabaseService {
   setAiCacheResult(operation: string, inputHash: string, model: string, resultText: string, expiresInDays: number | null): void {
     if (!this.db) throw new Error('Database not initialized');
     const expiresAt = expiresInDays != null
-      ? new Date(Date.now() + (Math.floor(expiresInDays) * 24 * 60 * 60 * 1000)).toISOString()
+      ? DateTime.utc().plus({ days: Math.floor(expiresInDays) }).toISO()
       : null;
 
     this.db.prepare(

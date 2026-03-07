@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Notification, nativeImage } from 'electron';
 import * as path from 'path';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { ImapService } from './imap-service';
 import { TrayService } from './tray-service';
@@ -302,7 +303,7 @@ export class SyncService {
     const lockManager = FolderLockManager.getInstance();
     const imapService = ImapService.getInstance();
     const numAccountId = Number(accountId);
-    const sinceDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const sinceDate = DateTime.utc().minus({ days: 30 }).toJSDate();
 
     log.info(`[SyncService] syncFolderWithReconciliation: starting for folder ${folder} account ${accountId}`);
 
@@ -432,7 +433,7 @@ export class SyncService {
           existingFolderState.uidValidity === mailboxStatus.uidValidity;
         const folderSinceDate = hasUsableFolderState
           ? sinceDate
-          : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+          : DateTime.utc().minus({ days: 30 }).toJSDate();
         emails = await imapService.fetchEmails(accountId, folder, { limit: fetchLimit, since: folderSinceDate });
       }
     }
@@ -457,8 +458,9 @@ export class SyncService {
         flagChangeCount++;
       } else {
         newCount++;
-        if (showNotifications && folder === 'INBOX') {
-          const emailTimestamp = Date.parse(email.date);
+      if (showNotifications && folder === 'INBOX') {
+          const dt = DateTime.fromISO(email.date);
+          const emailTimestamp = dt.isValid ? dt.toMillis() : NaN;
           const now = Date.now();
           const isRecent = !isNaN(emailTimestamp) && emailTimestamp <= now && (now - emailTimestamp) <= NOTIFICATION_RECENCY_WINDOW_MS;
           if (isRecent) {
@@ -538,7 +540,7 @@ export class SyncService {
     for (const [threadId, threadEmails] of threadMap) {
       const uniqueEmails = [...new Map(threadEmails.map((e) => [e.xGmMsgId, e])).values()];
       const latest = uniqueEmails.reduce((a, b) =>
-        new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+        DateTime.fromISO(a.date).toMillis() > DateTime.fromISO(b.date).toMillis() ? a : b
       );
       const participants = formatParticipantList(uniqueEmails);
       const allRead = uniqueEmails.every((e) => e.isRead);
@@ -708,7 +710,7 @@ export class SyncService {
       } else {
         // Date-based fetch (initial sync or CONDSTORE not available / UIDVALIDITY reset)
         const fetchSinceDate = (uidValidityChanged || !existingFolderState)
-          ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+          ? DateTime.utc().minus({ days: 30 }).toJSDate()
           : sinceDate;
         emails = await imapService.fetchEmails(accountId, ALL_MAIL_PATH, { limit: fetchLimit, since: fetchSinceDate });
       }

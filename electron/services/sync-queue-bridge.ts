@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 
@@ -240,8 +241,8 @@ export class SyncQueueBridge {
     const syncState = db.getAccountSyncState(accountId);
     const isInitial = !syncState.lastSyncAt;
     const sinceDate = isInitial
-      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days for initial sync
-      : new Date(syncState.lastSyncAt!);
+      ? DateTime.utc().minus({ days: 30 }).toJSDate() // Last 30 days for initial sync
+      : DateTime.fromISO(syncState.lastSyncAt!).toJSDate();
 
     log.info(`[SyncQueueBridge] enqueueSyncForAccount: account=${accountId}, isInitial=${isInitial}, sinceDate=${sinceDate.toISOString()}`);
 
@@ -260,7 +261,7 @@ export class SyncQueueBridge {
     );
 
     // Update account sync state timestamp now (reflects when we last triggered a sync).
-    db.updateAccountSyncState(accountId, new Date().toISOString());
+    db.updateAccountSyncState(accountId, DateTime.utc().toISO());
 
     // Emit done to update the "Last synced" indicator in the status bar.
     this.emitProgress(accountIdStr, 100, 'done');
@@ -291,8 +292,8 @@ export class SyncQueueBridge {
     const syncState = db.getAccountSyncState(numAccountId);
     const isInitial = !syncState.lastSyncAt;
     const sinceDate = isInitial
-      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-      : new Date(syncState.lastSyncAt!);
+      ? DateTime.utc().minus({ days: 30 }).toJSDate()
+      : DateTime.fromISO(syncState.lastSyncAt!).toJSDate();
 
     const dedupKey = `sync-folder:${numAccountId}:INBOX`;
     queue.enqueue(
@@ -331,8 +332,8 @@ export class SyncQueueBridge {
     const syncState = db.getAccountSyncState(numAccountId);
     const isInitial = !syncState.lastSyncAt;
     const sinceDate = isInitial
-      ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-      : new Date(syncState.lastSyncAt!);
+      ? DateTime.utc().minus({ days: 30 }).toJSDate()
+      : DateTime.fromISO(syncState.lastSyncAt!).toJSDate();
 
     // Use the same dedup key as the periodic timer sync to prevent pile-up
     const dedupKey = `sync-allmail:${numAccountId}`;

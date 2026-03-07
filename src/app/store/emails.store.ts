@@ -2,6 +2,7 @@ import { computed, inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { signalStore, withState, withMethods, withComputed, patchState, withHooks } from '@ngrx/signals';
 import { debounceTime } from 'rxjs';
+import { DateTime } from 'luxon';
 import { ElectronService } from '../core/services/electron.service';
 import { MailFetchOlderDonePayload } from '../core/services/electron.service';
 import { Thread, Email } from '../core/models/email.model';
@@ -104,10 +105,12 @@ function getOldestThreadDate(threads: Thread[]): string | null {
 }
 
 function isOlderDate(candidate: string, reference: string): boolean {
-  const candidateMs = new Date(candidate).getTime();
-  const referenceMs = new Date(reference).getTime();
-  if (!Number.isFinite(candidateMs) || !Number.isFinite(referenceMs)) return false;
-  return candidateMs < referenceMs;
+  const candidateDt = DateTime.fromISO(candidate);
+  const referenceDt = DateTime.fromISO(reference);
+  if (!candidateDt.isValid || !referenceDt.isValid) {
+    return false;
+  }
+  return candidateDt.toMillis() < referenceDt.toMillis();
 }
 
 export const EmailsStore = signalStore(
@@ -217,7 +220,7 @@ export const EmailsStore = signalStore(
               hasMore: true,
               dbExhausted: dbHasLess,
               currentPage: 0,
-              serverCursorDate: getOldestThreadDate(threads) ?? (threads.length === 0 ? new Date().toISOString() : null),
+              serverCursorDate: getOldestThreadDate(threads) ?? (threads.length === 0 ? DateTime.utc().toISO() : null),
               hasLoadedMore: false,
               preserveListPosition: false,
             });
@@ -646,7 +649,7 @@ export const EmailsStore = signalStore(
 
         // Convert map back to array and sort by date descending (same comparator as searchEmails)
         const merged = Array.from(existingMap.values()).sort(
-          (a, b) => new Date(b.lastMessageDate).getTime() - new Date(a.lastMessageDate).getTime()
+          (threadA, threadB) => DateTime.fromISO(threadB.lastMessageDate).toMillis() - DateTime.fromISO(threadA.lastMessageDate).toMillis()
         );
 
         patchState(store, { threads: merged });
@@ -663,7 +666,7 @@ export const EmailsStore = signalStore(
             patchState(store, {
               syncing: false,
               syncProgress: 100,
-              lastSyncTime: new Date().toISOString(),
+              lastSyncTime: DateTime.utc().toISO(),
             });
           } else {
             patchState(store, {
@@ -686,7 +689,7 @@ export const EmailsStore = signalStore(
           syncProgress: progress,
           syncing: !isDone,
           // Set lastSyncTime whenever sync completes (via progress event from main process)
-          ...(isDone ? { lastSyncTime: new Date().toISOString() } : {}),
+          ...(isDone ? { lastSyncTime: DateTime.utc().toISO() } : {}),
         });
       },
 
@@ -799,7 +802,7 @@ export const EmailsStore = signalStore(
               // Threads at or older than the boundary may be paginated below the fold — keep them.
               const boundary =
                 freshThreads.length > 0
-                  ? new Date(freshThreads[freshThreads.length - 1].lastMessageDate).getTime()
+                  ? DateTime.fromISO(freshThreads[freshThreads.length - 1].lastMessageDate).toMillis()
                   : null;
 
               // Step 1: Filter existing threads — remove confirmed deletions, update kept ones
@@ -814,12 +817,12 @@ export const EmailsStore = signalStore(
                   if (boundary === null) {
                     return true; // No fresh threads, can't determine boundary — keep
                   }
-                  // Only remove if the thread's date is strictly newer than the boundary.
-                  // Threads at exactly the boundary date are ties — err on the side of keeping.
-                  const threadDate = t.lastMessageDate
-                    ? new Date(t.lastMessageDate).getTime()
-                    : 0;
-                  return threadDate <= boundary; // Keep paginated threads and boundary ties
+                   // Only remove if the thread's date is strictly newer than the boundary.
+                   // Threads at exactly the boundary date are ties — err on the side of keeping.
+                   const threadDate = t.lastMessageDate
+                     ? DateTime.fromISO(t.lastMessageDate).toMillis()
+                     : 0;
+                   return threadDate <= boundary; // Keep paginated threads and boundary ties
                 })
                 .map(t => {
                   const fresh = freshMap.get(t.xGmThrid);

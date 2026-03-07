@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { ImapService } from './imap-service';
@@ -27,10 +28,11 @@ export async function executeFetchOlder(
   const db = DatabaseService.getInstance();
   const imapService = ImapService.getInstance();
 
-  const parsedDate = new Date(beforeDate);
-  if (isNaN(parsedDate.getTime())) {
+  const parsedDt = DateTime.fromISO(beforeDate);
+  if (!parsedDt.isValid) {
     throw new Error(`Invalid beforeDate: ${beforeDate}`);
   }
+  const parsedDate = parsedDt.toJSDate();
 
   const sanitizedLimit = Math.max(1, Number(limit) || 50);
 
@@ -90,7 +92,7 @@ export async function executeFetchOlder(
   for (const [threadId, threadEmails] of threadMap) {
     const uniqueEmails = [...new Map(threadEmails.map((e) => [e.xGmMsgId, e])).values()];
     const latest = uniqueEmails.reduce((a, b) =>
-      new Date(a.date).getTime() > new Date(b.date).getTime() ? a : b
+      DateTime.fromISO(a.date).toMillis() > DateTime.fromISO(b.date).toMillis() ? a : b
     );
     const participants = formatParticipantList(uniqueEmails);
     const allRead = uniqueEmails.every((e) => e.isRead);
@@ -134,22 +136,21 @@ export async function executeFetchOlder(
   threads = attachThreadDraftStatus(db, threads, folderId, accountId);
 
   const oldestEmailTs = emails.reduce((minTs, email) => {
-    const ts = new Date(email.date).getTime();
-    if (!Number.isFinite(ts)) {
+    const dt = DateTime.fromISO(email.date);
+    if (!dt.isValid) {
       return minTs;
     }
+    const ts = dt.toMillis();
     return ts < minTs ? ts : minTs;
   }, Number.POSITIVE_INFINITY);
 
   let nextBeforeDate: string | null = null;
   if (Number.isFinite(oldestEmailTs)) {
-    nextBeforeDate = new Date(oldestEmailTs).toISOString();
+    nextBeforeDate = DateTime.fromMillis(oldestEmailTs).toUTC().toISO();
   }
 
-  if (!nextBeforeDate || new Date(nextBeforeDate).getTime() >= parsedDate.getTime()) {
-    const fallback = new Date(parsedDate);
-    fallback.setDate(fallback.getDate() - 1);
-    nextBeforeDate = fallback.toISOString();
+  if (!nextBeforeDate || DateTime.fromISO(nextBeforeDate).toMillis() >= parsedDt.toMillis()) {
+    nextBeforeDate = parsedDt.minus({ days: 1 }).toUTC().toISO();
   }
 
   log.info(

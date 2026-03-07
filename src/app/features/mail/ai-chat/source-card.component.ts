@@ -1,4 +1,5 @@
 import { Component, input, output, ChangeDetectionStrategy } from '@angular/core';
+import { DateTime } from 'luxon';
 import { SourceEmail } from '../../../core/models/ai.model';
 
 @Component({
@@ -21,14 +22,12 @@ export class SourceCardComponent {
 
   formatDate(isoDate: string): string {
     if (!isoDate) { return ''; }
-    const date = new Date(isoDate);
-    if (isNaN(date.getTime())) { return isoDate; }
-    const now = new Date();
-    const isThisYear = date.getFullYear() === now.getFullYear();
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: isThisYear ? undefined : 'numeric',
-    });
+    const dt = DateTime.fromISO(isoDate);
+    if (!dt.isValid) { return isoDate; }
+    const isThisYear = dt.hasSame(DateTime.now(), 'year');
+    return dt.toLocaleString(
+      { month: 'short', day: 'numeric', ...(isThisYear ? {} : { year: 'numeric' }) },
+      { locale: 'en-US' }
+    );
   }
 }

@@ -13,6 +13,7 @@
 
 import { ImapFlow, FetchMessageObject } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { ImapService } from './imap-service';
 
@@ -425,7 +426,7 @@ export class ImapCrawlService {
       fromAddress,
       fromName,
       toAddresses,
-      date: envelope.date?.toISOString() || new Date().toISOString(),
+      date: (envelope.date ? DateTime.fromJSDate(envelope.date).toUTC().toISO() : null) ?? DateTime.utc().toISO()!,
       isRead: flags.includes('\\Seen'),
       isStarred: flags.includes('\\Flagged'),
       isDraft: flags.includes('\\Draft'),
@@ -480,7 +481,7 @@ export class ImapCrawlService {
       fromAddress,
       fromName,
       toAddresses,
-      date: envelope.date?.toISOString() || new Date().toISOString(),
+      date: (envelope.date ? DateTime.fromJSDate(envelope.date).toUTC().toISO() : null) ?? DateTime.utc().toISO()!,
       isRead: flags.includes('\\Seen'),
       isStarred: flags.includes('\\Flagged'),
       isDraft: flags.includes('\\Draft'),

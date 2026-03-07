@@ -1,6 +1,7 @@
 import { Component, inject, output, OnInit, OnDestroy, effect, signal, computed, viewChild, ElementRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
+import { DateTime } from 'luxon';
 import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { EmailsStore } from '../../../store/emails.store';
 import { FoldersStore } from '../../../store/folders.store';
@@ -404,7 +405,7 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
 
     return messages.map(m => {
       const from = m.fromName ? `${m.fromName} <${m.fromAddress}>` : m.fromAddress;
-      const date = m.date ? new Date(m.date).toLocaleString() : '';
+      const date = m.date ? DateTime.fromISO(m.date).toLocaleString(DateTime.DATETIME_SHORT) : '';
       const body = m.textBody || m.snippet || '';
       return `From: ${from}\nDate: ${date}\nSubject: ${m.subject || '(no subject)'}\n\n${body}`;
     }).join('\n\n---\n\n');

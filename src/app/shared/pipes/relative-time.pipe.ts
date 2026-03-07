@@ -1,4 +1,5 @@
 import { Pipe, PipeTransform } from '@angular/core';
+import { DateTime } from 'luxon';
 
 @Pipe({
   name: 'relativeTime',
@@ -6,51 +7,39 @@ import { Pipe, PipeTransform } from '@angular/core';
 })
 export class RelativeTimePipe implements PipeTransform {
   transform(value: string | Date | null | undefined): string {
-    if (!value) return '';
+    if (!value) {
+      return '';
+    }
 
-    const date = typeof value === 'string' ? new Date(value) : value;
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSecs = Math.floor(diffMs / 1000);
-    const diffMins = Math.floor(diffSecs / 60);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
+    const dt = typeof value === 'string' ? DateTime.fromISO(value) : DateTime.fromJSDate(value);
+
+    if (!dt.isValid) {
+      return '';
+    }
+
+    const diff = DateTime.now().diff(dt, ['days', 'hours', 'minutes', 'seconds']);
 
     // Today: show time
-    if (this.isToday(date, now)) {
-      return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (dt.hasSame(DateTime.now(), 'day')) {
+      return dt.toLocaleString(DateTime.TIME_SIMPLE);
     }
 
     // Yesterday
-    if (this.isYesterday(date, now)) {
+    if (dt.hasSame(DateTime.now().minus({ days: 1 }), 'day')) {
       return 'Yesterday';
     }
 
-    // Within last 7 days: show day name
-    if (diffDays < 7) {
-      return date.toLocaleDateString(undefined, { weekday: 'short' });
+    // Within last 7 days: show short weekday name
+    if (diff.as('days') < 7) {
+      return dt.toFormat('ccc');
     }
 
-    // Same year: show month day
-    if (date.getFullYear() === now.getFullYear()) {
-      return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    // Same year: show month and day
+    if (dt.hasSame(DateTime.now(), 'year')) {
+      return dt.toLocaleString({ month: 'short', day: 'numeric' });
     }
 
     // Different year: show full date
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  }
-
-  private isToday(date: Date, now: Date): boolean {
-    return date.getDate() === now.getDate()
-      && date.getMonth() === now.getMonth()
-      && date.getFullYear() === now.getFullYear();
-  }
-
-  private isYesterday(date: Date, now: Date): boolean {
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    return date.getDate() === yesterday.getDate()
-      && date.getMonth() === yesterday.getMonth()
-      && date.getFullYear() === yesterday.getFullYear();
+    return dt.toLocaleString({ month: 'short', day: 'numeric', year: 'numeric' });
   }
 }

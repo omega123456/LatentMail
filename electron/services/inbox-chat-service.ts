@@ -240,7 +240,7 @@ export class InboxChatService {
       // Step 6: Load the system prompt from the prompts directory and inject
       // the current date/time and the user's email address so the LLM has
       // temporal awareness and directional reasoning (sent vs. received).
-      const currentDateTimeFormatted = new Intl.DateTimeFormat(undefined, {
+      const currentDateTimeFormatted = DateTime.now().toLocaleString({
         weekday: 'long',
         year: 'numeric',
         month: 'long',
@@ -248,7 +248,7 @@ export class InboxChatService {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true,
-      }).format(new Date());
+      });
 
       const rawSystemPrompt = this.loadPrompt('inbox-chat-system.md');
       const systemPrompt = rawSystemPrompt
@@ -316,12 +316,7 @@ export class InboxChatService {
 
     // Inject today's date into the prompt so the LLM can resolve relative date expressions.
     // Use the local calendar date (not UTC) to match the user's timezone.
-    const now = new Date();
-    const todayDate = [
-      now.getFullYear(),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0'),
-    ].join('-');
+    const todayDate = DateTime.now().toLocal().toISODate() ?? '';
     const systemPrompt = rawPrompt.replace(/\{\{TODAY_DATE\}\}/g, todayDate);
 
     const historyText = history
@@ -519,16 +514,6 @@ export class InboxChatService {
       }
     }
 
-    // Formatter for human-readable dates in chunk headers (LLM context only)
-    const chunkDateFormatter = new Intl.DateTimeFormat(undefined, {
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-
     // Prepend email header to the first chunk from each email so the LLM has context
     const firstChunkSeen = new Set<string>();
     return chunks.map(chunk => {
@@ -548,8 +533,10 @@ export class InboxChatService {
       // The raw ISO date string is preserved in the EnrichedChunk.date field for the renderer.
       let formattedDate: string;
       if (date) {
-        const parsedDate = new Date(date);
-        formattedDate = isNaN(parsedDate.getTime()) ? date : chunkDateFormatter.format(parsedDate);
+        const parsedDateTime = DateTime.fromISO(date);
+        formattedDate = parsedDateTime.isValid
+          ? parsedDateTime.toLocaleString({ month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+          : date;
       } else {
         formattedDate = '';
       }

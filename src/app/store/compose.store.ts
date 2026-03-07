@@ -1,4 +1,5 @@
 import { computed, inject } from '@angular/core';
+import { DateTime } from 'luxon';
 
 /** Extracts the raw email address from a "Name <email>" or plain email string. */
 function extractEmailFromParticipant(participant: string): string {
@@ -195,7 +196,7 @@ export const ComposeStore = signalStore(
           patchState(store, {
             serverConfirmed: true,
             saving: false,
-            lastSavedAt: new Date().toISOString(),
+            lastSavedAt: DateTime.utc().toISO(),
             serverXGmMsgId: update.result?.xGmMsgId || store.serverXGmMsgId(),
           });
         } else if (update.status === 'failed') {
@@ -343,7 +344,7 @@ export const ComposeStore = signalStore(
           references = msg.messageId || msg.xGmMsgId;
 
           // Build quoted block for read-only display (not put through TipTap)
-          const date = new Date(msg.date).toLocaleString();
+          const date = DateTime.fromISO(msg.date).toLocaleString(DateTime.DATETIME_SHORT);
           const from = msg.fromName ? `${msg.fromName} &lt;${msg.fromAddress}&gt;` : msg.fromAddress;
           quotedHtml = `<div class="quoted-block" style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 0; color: #666;">` +
             `<p>On ${date}, ${from} wrote:</p>` +

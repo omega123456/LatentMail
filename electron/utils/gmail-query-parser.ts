@@ -15,6 +15,8 @@
  * Does NOT support OR, () grouping at the SQL level.
  */
 
+import { DateTime } from 'luxon';
+
 export interface ParsedQuery {
   whereClause: string;
   params: Record<string, unknown>;
@@ -52,14 +54,8 @@ function escapeLike(value: string): string {
 /** Convert Gmail date (YYYY/MM/DD) to ISO date string (YYYY-MM-DD). */
 function gmailDateToIso(dateStr: string): string | null {
   const normalized = dateStr.replace(/\//g, '-');
-  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (!match) {
-    return null;
-  }
-  const year = match[1];
-  const month = match[2].padStart(2, '0');
-  const day = match[3].padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const dt = DateTime.fromFormat(normalized, 'yyyy-M-d');
+  return dt.isValid ? dt.toISODate() : null;
 }
 
 /**
@@ -73,27 +69,21 @@ function parseRelativeTime(value: string): string | null {
   }
   const amount = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
-  const now = new Date();
 
   switch (unit) {
     case 'd': {
-      now.setDate(now.getDate() - amount);
-      break;
+      return DateTime.utc().minus({ days: amount }).toISO();
     }
     case 'm': {
-      now.setMonth(now.getMonth() - amount);
-      break;
+      return DateTime.utc().minus({ months: amount }).toISO();
     }
     case 'y': {
-      now.setFullYear(now.getFullYear() - amount);
-      break;
+      return DateTime.utc().minus({ years: amount }).toISO();
     }
     default: {
       return null;
     }
   }
-
-  return now.toISOString();
 }
 
 function normalizeParamPrefix(rawPrefix: string | undefined): string {

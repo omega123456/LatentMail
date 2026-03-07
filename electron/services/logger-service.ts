@@ -2,6 +2,7 @@ import { app } from 'electron';
 import log from 'electron-log/main';
 import fs from 'fs';
 import path from 'path';
+import { DateTime } from 'luxon';
 import { isMacOS } from '../utils/platform';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -55,8 +56,7 @@ export class LoggerService {
     log.initialize();
 
     log.transports.file.resolvePathFn = (variables, message) => {
-      const date = message?.date ?? new Date();
-      const dateStr = date.toISOString().split('T')[0];
+      const dateStr = DateTime.fromJSDate(message?.date ?? new Date()).toLocal().toISODate() ?? '';
       return path.join(variables.libraryDefaultDir, `main-${dateStr}.log`);
     };
     log.transports.file.maxSize = 0; // Daily rotation only; no size-based rotation
@@ -88,9 +88,7 @@ export class LoggerService {
         return;
       }
 
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - LOG_RETENTION_DAYS);
-      cutoff.setHours(0, 0, 0, 0);
+      const cutoffDateTime = DateTime.now().minus({ days: LOG_RETENTION_DAYS }).startOf('day');
 
       const entries = fs.readdirSync(logDir, { withFileTypes: true });
       for (const entry of entries) {
@@ -102,8 +100,8 @@ export class LoggerService {
           continue;
         }
         const [, y, m, d] = match;
-        const fileDate = new Date(parseInt(y!, 10), parseInt(m!, 10) - 1, parseInt(d!, 10));
-        if (fileDate < cutoff) {
+        const fileDateTime = DateTime.fromObject({ year: parseInt(y!, 10), month: parseInt(m!, 10), day: parseInt(d!, 10) });
+        if (fileDateTime.toMillis() < cutoffDateTime.toMillis()) {
           const fullPath = path.join(logDir, entry.name);
           fs.unlinkSync(fullPath);
           log.info(`[LoggerService] Removed old log file: ${entry.name}`);
@@ -187,11 +185,8 @@ export class LoggerService {
         return [];
       }
 
-      const now = new Date();
-      const todayStr = now.toISOString().split('T')[0];
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const todayStr = DateTime.now().toLocal().toISODate() ?? '';
+      const yesterdayStr = DateTime.now().toLocal().minus({ days: 1 }).toISODate() ?? '';
 
       const readFileLines = (filePath: string): string[] => {
         if (!fs.existsSync(filePath)) {

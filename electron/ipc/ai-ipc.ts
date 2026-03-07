@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { randomUUID } from 'crypto';
+import { DateTime } from 'luxon';
 import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, IPC_EVENTS, ipcSuccess, ipcError } from './ipc-channels';
 import { runStreamingSearch } from './streaming-search-helper';
@@ -276,7 +277,7 @@ export function registerAiIpcHandlers(): void {
       const numAccountId = Number(accountId);
       const account = db.getAccountById(numAccountId);
       const userEmail = account?.email || '';
-      const todayDate = new Date().toISOString().split('T')[0];
+      const todayDate = DateTime.utc().toISODate();
       const labels = db.getLabelsByAccount(numAccountId);
       const folderContext = buildFolderContext(folders, labels, numAccountId);
 

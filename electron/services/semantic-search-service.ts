@@ -25,6 +25,7 @@
  */
 
 import { FetchQueryObject } from 'imapflow';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { OllamaService } from './ollama-service';
 import { VectorDbService } from './vector-db-service';
@@ -625,7 +626,7 @@ export class SemanticSearchService extends BaseSearchService {
       fromAddress,
       fromName,
       toAddresses,
-      date: envelope.date?.toISOString() || new Date().toISOString(),
+      date: (envelope.date ? DateTime.fromJSDate(envelope.date).toUTC().toISO() : null) ?? DateTime.utc().toISO()!,
       isRead: flags.includes('\\Seen'),
       isStarred: flags.includes('\\Flagged'),
       isDraft: flags.includes('\\Draft'),

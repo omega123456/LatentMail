@@ -4,6 +4,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatTabsModule } from '@angular/material/tabs';
+import { DateTime } from 'luxon';
 import { QueueStore, QueueItemSnapshot } from '../../store/queue.store';
 
 @Component({
@@ -33,8 +34,8 @@ export class QueueSettingsComponent {
     [...this.mailItems()].sort((itemA, itemB) => {
       const order: Record<string, number> = { processing: 0, pending: 1, failed: 2, cancelled: 3, completed: 4 };
       const diff = (order[itemA.status] ?? 4) - (order[itemB.status] ?? 4);
-      if (diff !== 0) return diff;
-      return new Date(itemB.createdAt).getTime() - new Date(itemA.createdAt).getTime();
+      if (diff !== 0) { return diff; }
+      return DateTime.fromISO(itemB.createdAt).toMillis() - DateTime.fromISO(itemA.createdAt).toMillis();
     }),
   );
 
@@ -65,8 +66,8 @@ export class QueueSettingsComponent {
     [...this.prefetchItems()].sort((itemA, itemB) => {
       const order: Record<string, number> = { processing: 0, pending: 1, failed: 2, cancelled: 3, completed: 4 };
       const diff = (order[itemA.status] ?? 4) - (order[itemB.status] ?? 4);
-      if (diff !== 0) return diff;
-      return new Date(itemB.createdAt).getTime() - new Date(itemA.createdAt).getTime();
+      if (diff !== 0) { return diff; }
+      return DateTime.fromISO(itemB.createdAt).toMillis() - DateTime.fromISO(itemA.createdAt).toMillis();
     }),
   );
 
@@ -171,14 +172,14 @@ export class QueueSettingsComponent {
   }
 
   relativeTime(isoDate: string): string {
-    const diff = Date.now() - new Date(isoDate).getTime();
-    const seconds = Math.floor(diff / 1000);
-    if (seconds < 60) return 'just now';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return `${Math.floor(hours / 24)}d ago`;
+    const duration = DateTime.now().diff(DateTime.fromISO(isoDate), ['days', 'hours', 'minutes', 'seconds']);
+    const seconds = Math.floor(duration.as('seconds'));
+    if (seconds < 60) { return 'just now'; }
+    const minutes = Math.floor(duration.as('minutes'));
+    if (minutes < 60) { return `${minutes}m ago`; }
+    const hours = Math.floor(duration.as('hours'));
+    if (hours < 24) { return `${hours}h ago`; }
+    return `${Math.floor(duration.as('days'))}d ago`;
   }
 
   // ---------------------------------------------------------------------------

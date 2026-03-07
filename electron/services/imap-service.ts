@@ -1,4 +1,5 @@
 import { ImapFlow, FetchMessageObject } from 'imapflow';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { simpleParser } from 'mailparser';
 
@@ -619,7 +620,7 @@ export class ImapService {
     }
 
     const emails = Array.from(byMessageId.values());
-    emails.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    emails.sort((a, b) => DateTime.fromISO(a.date).toMillis() - DateTime.fromISO(b.date).toMillis());
     return emails;
   }
 
@@ -640,8 +641,7 @@ export class ImapService {
       // IMAP BEFORE is date-only (not datetime). To avoid missing same-day
       // messages that are older by time-of-day, add 1 day to the search date.
       // Overlap is handled by deduplication in the DB upsert and renderer.
-      const adjustedDate = new Date(beforeDate);
-      adjustedDate.setDate(adjustedDate.getDate() + 1);
+      const adjustedDate = DateTime.fromJSDate(beforeDate).plus({ days: 1 }).toJSDate();
 
       const searchResult = await client.search(
         { before: adjustedDate },
@@ -1390,7 +1390,7 @@ export class ImapService {
         subject,
         textBody: '',
         htmlBody: '',
-        date: envelope.date?.toISOString() || new Date().toISOString(),
+        date: (envelope.date ? DateTime.fromJSDate(envelope.date).toUTC() : DateTime.utc()).toISO() ?? DateTime.utc().toISO()!,
         isRead: flags.includes('\\Seen'),
         isStarred: flags.includes('\\Flagged'),
         isImportant: labels.includes('\\Important'),

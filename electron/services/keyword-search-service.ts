@@ -14,6 +14,7 @@
  */
 
 import { BaseSearchService, SearchBatchCallback } from './base-search-service';
+import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { ImapService, FetchedEmail } from './imap-service';
@@ -188,7 +189,7 @@ export class KeywordSearchService extends BaseSearchService {
               ...new Map(threadEmails.map((email) => [email.xGmMsgId, email])).values(),
             ];
             const latest = uniqueEmails.reduce((accumulator, current) =>
-              new Date(accumulator.date).getTime() > new Date(current.date).getTime()
+              DateTime.fromISO(accumulator.date).toMillis() > DateTime.fromISO(current.date).toMillis()
                 ? accumulator
                 : current
             );

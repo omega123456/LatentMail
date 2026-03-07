@@ -2,6 +2,7 @@ import { Component, computed, inject, OnInit, OnDestroy, signal } from '@angular
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
+import { DateTime } from 'luxon';
 import { AccountsStore } from '../../../store/accounts.store';
 import { EmailsStore } from '../../../store/emails.store';
 import { AiStore } from '../../../store/ai.store';
@@ -42,23 +43,23 @@ export class StatusBarComponent implements OnInit, OnDestroy {
     if (!iso) {
       return 'Never';
     }
-    const diff = Date.now() - new Date(iso).getTime();
-    const seconds = Math.floor(diff / 1000);
+    const duration = DateTime.now().diff(DateTime.fromISO(iso), ['days', 'hours', 'minutes', 'seconds']);
+    const seconds = Math.floor(duration.as('seconds'));
     if (seconds < 10) {
       return 'just now';
     }
     if (seconds < 60) {
       return `${seconds}s ago`;
     }
-    const minutes = Math.floor(seconds / 60);
+    const minutes = Math.floor(duration.as('minutes'));
     if (minutes < 60) {
       return `${minutes}m ago`;
     }
-    const hours = Math.floor(minutes / 60);
+    const hours = Math.floor(duration.as('hours'));
     if (hours < 24) {
       return `${hours}h ago`;
     }
-    const days = Math.floor(hours / 24);
+    const days = Math.floor(duration.as('days'));
     return `${days}d ago`;
   });
 
@@ -191,7 +192,7 @@ export class StatusBarComponent implements OnInit, OnDestroy {
     if (!iso) {
       return 'Never synced';
     }
-    return new Date(iso).toLocaleString(undefined, {
+    return DateTime.fromISO(iso).toLocaleString({
       month: 'short',
       day: 'numeric',
       year: 'numeric',

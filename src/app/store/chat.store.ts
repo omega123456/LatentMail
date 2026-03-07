@@ -1,5 +1,6 @@
 import { computed, effect, inject } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState, withHooks } from '@ngrx/signals';
+import { DateTime } from 'luxon';
 import { ElectronService } from '../core/services/electron.service';
 import { AccountsStore } from './accounts.store';
 import { AiStore } from './ai.store';
@@ -64,7 +65,7 @@ export const ChatStore = signalStore(
           role: 'user',
           content: question,
           sources: [],
-          timestamp: new Date(),
+          timestamp: DateTime.now().toJSDate(),
           streaming: false,
           error: null,
         };
@@ -74,7 +75,7 @@ export const ChatStore = signalStore(
           role: 'assistant',
           content: '',
           sources: [],
-          timestamp: new Date(),
+          timestamp: DateTime.now().toJSDate(),
           streaming: true,
           error: null,
         };
