@@ -3325,6 +3325,7 @@ export class DatabaseService {
            AND ef_draft.x_gm_msgid = e.x_gm_msgid
            AND ef_draft.folder = '[Gmail]/Drafts'
        )`,
+
     ];
     const filterParams: Record<string, string | number> = {};
 

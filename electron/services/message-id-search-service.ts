@@ -47,11 +47,22 @@ export class MessageIdSearchService {
 
     try {
       // Step 1: Check local DB first — instant, no IMAP round-trip needed.
+      // Also verify a threads row exists: getThreadsByXGmMsgIds joins emails→threads,
+      // so an email with no thread row would resolve to 0 results and appear as a dead link.
       const localEmail = this.databaseService.getEmailByXGmMsgId(accountId, xGmMsgId);
       if (localEmail) {
-        log.info(`[MessageIdSearchService] Found message ${xGmMsgId} in local DB`);
-        onBatch([xGmMsgId], 'local');
-        return 'complete';
+        const xGmThrid = localEmail['xGmThrid'] as string | undefined;
+        const threadExists = xGmThrid
+          ? this.databaseService.getThreadById(accountId, xGmThrid) !== null
+          : false;
+
+        if (threadExists) {
+          log.info(`[MessageIdSearchService] Found message ${xGmMsgId} in local DB`);
+          onBatch([xGmMsgId], 'local');
+          return 'complete';
+        }
+
+        log.info(`[MessageIdSearchService] Message ${xGmMsgId} found in emails table but has no thread row — falling back to IMAP`);
       }
 
       // Emit an empty local batch to signal local phase completion.
