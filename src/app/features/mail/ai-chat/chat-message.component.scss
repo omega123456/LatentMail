@@ -16,6 +16,8 @@
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .ai-message {
@@ -39,6 +41,8 @@
 .ai-message-body {
   flex: 1;
   min-width: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message-content {
