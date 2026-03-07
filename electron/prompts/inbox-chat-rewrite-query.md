@@ -24,7 +24,7 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 - `dateTo` (optional): include ONLY when the user explicitly asks about emails up to a specific date. Use inclusive bounds (the exact end date, not adjusted).
 - `sender` (optional): include ONLY when the user explicitly asks about emails from a specific person or address.
 - `recipient` (optional): include ONLY when the user explicitly asks about emails sent to a specific person or address.
-- `dateOrder` (optional): sort direction for results. Use `"asc"` (oldest first) when the user is asking for the first, earliest, or oldest occurrence of something. Use `"desc"` (newest first) in all other cases. Omit when defaulting to `"desc"`.
+- `dateOrder` (optional): sort direction for results. Use `"asc"` (oldest first) ONLY when the user explicitly asks for the first, earliest, oldest, or original email/message. Use `"desc"` (newest first) in all other cases. Omit when defaulting to `"desc"`.
 
 ## Rules
 
@@ -38,7 +38,9 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 8. The `query` value should contain topic/content keywords only — do not embed date, sender, or recipient names in the query string. When "from [name/domain]" or "to [name/address]" appears in the question, extract it into `sender` or `recipient` and keep it out of `query`
 9. Keep the `query` value concise (under 20 words)
 10. If the question is already a standalone topic query with no filters, output just `{ "query": "..." }`
-11. Set `"dateOrder": "asc"` when the user asks for the **first**, **earliest**, **oldest**, or **original** email/message about a topic. Default (`"desc"`, newest first) applies to all other questions including "latest", "most recent", "last".
+11. Set `"dateOrder": "asc"` only when the NEW question explicitly asks for the **first**, **earliest**, **oldest**, or **original** email/message about a topic.
+12. Do NOT set `"dateOrder": "asc"` for questions that ask for a fact, event date, or agreed date without requesting oldest-first retrieval. Phrases like "when did we...", "what date did we agree...", "when was it scheduled...", or "what day was..." are fact lookup questions, not ordering instructions.
+13. Default (`"desc"`, newest first) applies to all other questions including "latest", "most recent", "last", and date lookup questions that do not explicitly request first/earliest/oldest/original.
 
 ## Examples
 
@@ -89,6 +91,16 @@ Output: {"query": "email", "sender": "Netflix"}
 Conversation: (empty)
 New question: Show me the latest email I sent to the finance team
 Output: {"query": "email", "recipient": "finance team"}
+
+Conversation:
+User: We need to confirm the contractor visit.
+Assistant: I found emails about the contractor visit and window fitting.
+New question: what date did we agree for the window fitting?
+Output: {"query": "window fitting agreed date"}
+
+Conversation: (empty)
+New question: When was the onboarding call scheduled?
+Output: {"query": "onboarding call scheduled date"}
 
 Conversation:
 User: what was the latest email I got from Dropbox?

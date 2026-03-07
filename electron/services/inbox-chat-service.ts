@@ -219,6 +219,16 @@ export class InboxChatService {
         return chunkB.similarity - chunkA.similarity;
       });
 
+      const chunkPreview = filteredChunks.slice(0, FINAL_CHUNK_LIMIT).map(chunk => {
+        const row = this.databaseService.getEmailByXGmMsgId(accountId, chunk.xGmMsgId);
+        const subject = (row && (row as Record<string, unknown>).subject != null)
+          ? String((row as Record<string, unknown>).subject)
+          : '(no subject)';
+        const date = dateMap.get(chunk.xGmMsgId) ?? '(no date)';
+        return { subject, date };
+      });
+      log.debug('[InboxChatService] Filtered chunks (subject, date):', chunkPreview);
+
       // Step 3c: Cap the final chunk list before passing to the LLM
       const chunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
 
