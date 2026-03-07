@@ -270,6 +270,11 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 - **Always use curly braces for control statements** — no single-line `if`/`else`/`for`/`while`/`do`. Every branch or loop body must be wrapped in `{ }`.
 - **Use full words for variable and parameter names** — no single letters (e.g. use `deltaX` not `dx`, `width` not `w`) and no abbreviations (e.g. use `element` not `el`, `bounds` not `rect`, `index` not `i` where readability benefits). Exception: very short loop variables in tiny scope (e.g. `index` in a 2-line loop) may use a full word like `index`; avoid `i`, `j`, `n`, `x`, etc.
 
+### Dates and Time
+
+- **Always use the Luxon library** for date/time handling in both the main process (`electron/`) and the renderer (`src/`). Do not use native `Date`, `moment`, or other date libraries.
+- Import from `luxon`: use `DateTime`, `Duration`, `Interval`, and helpers like `DateTime.now()`, `DateTime.fromISO()`, `.toISO()`, `.toFormat()` for parsing, formatting, and arithmetic. Store or exchange ISO 8601 strings when persisting or crossing IPC; use Luxon to parse and format them.
+
 ### TypeScript
 
 - Use strict mode (enabled in both `tsconfig.json` and `tsconfig.electron.json`)
@@ -336,13 +341,14 @@ Use `sqlite3` CLI or DB Browser for SQLite to inspect.
 
 ## Common Gotchas
 
-1. **SQL placeholders**: Use **named** placeholders only (`:name` + object params). Do not add new queries with positional `?` and arrays — see Database conventions above.
-2. **Native modules**: If you see "Module did not self-register", run `npx @electron/rebuild`
-3. **IMAP UID drift**: Always snapshot UIDs at enqueue time, never resolve during execution
-4. **Folder locking**: Forgetting `withLock()` can corrupt UIDs or cause race conditions
-5. **OAuth token refresh**: Tokens expire after 1 hour; refresh timer runs automatically
-6. **Schema migrations**: Always test on a copy of a real database, not a fresh one
-7. **Queue persistence**: Don't clear queue table manually; use `queue:clear-completed` IPC
-8. **Draft-send lifecycle**: Send operation must either succeed or leave draft untouched (no orphan drafts)
-9. **Gmail folder names**: Use `[Gmail]/...` paths, not localized names (e.g., `[Gmail]/Sent Mail`, not "Sent")
-10. **Trash folder**: Use `getTrashFolder(accountId)` and pass as `:trashFolder`; do not hardcode `[Gmail]/Trash` or join on `labels.special_use` in raw SQL (Bin/other locales break).
+1. **Dates**: Use **Luxon** only for date/time logic and formatting; do not use native `Date` or other date libraries — see Dates and Time in Code Style and Conventions.
+2. **SQL placeholders**: Use **named** placeholders only (`:name` + object params). Do not add new queries with positional `?` and arrays — see Database conventions above.
+3. **Native modules**: If you see "Module did not self-register", run `npx @electron/rebuild`
+4. **IMAP UID drift**: Always snapshot UIDs at enqueue time, never resolve during execution
+5. **Folder locking**: Forgetting `withLock()` can corrupt UIDs or cause race conditions
+6. **OAuth token refresh**: Tokens expire after 1 hour; refresh timer runs automatically
+7. **Schema migrations**: Always test on a copy of a real database, not a fresh one
+8. **Queue persistence**: Don't clear queue table manually; use `queue:clear-completed` IPC
+9. **Draft-send lifecycle**: Send operation must either succeed or leave draft untouched (no orphan drafts)
+10. **Gmail folder names**: Use `[Gmail]/...` paths, not localized names (e.g., `[Gmail]/Sent Mail`, not "Sent")
+11. **Trash folder**: Use `getTrashFolder(accountId)` and pass as `:trashFolder`; do not hardcode `[Gmail]/Trash` or join on `labels.special_use` in raw SQL (Bin/other locales break).
