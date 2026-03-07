@@ -31,7 +31,7 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 1. Always output valid JSON — never output plain text
 2. Always include the `query` field
 3. Only include `dateFrom`, `dateTo`, `sender`, `recipient` when they are **explicitly** relevant to the user's question
-4. The `query` value should contain topic/content keywords only — do not embed date or sender constraints in the query string
+4. The `query` value should contain topic/content keywords only — do not embed date, sender, or recipient names in the query string. When "from [name/domain]" or "to [name/address]" appears in the question, extract it into `sender` or `recipient` and keep it out of `query`
 5. Resolve relative date expressions using today's date ({{TODAY_DATE}})
 6. "last week" means the 7 calendar days ending yesterday; "last month" means the 30 calendar days ending yesterday
 7. Keep the `query` value concise (under 20 words)
@@ -79,3 +79,11 @@ Output: {"query": "invoice", "dateOrder": "asc"}
 Conversation: (empty)
 New question: What is the latest update on the merger?
 Output: {"query": "merger update"}
+
+Conversation: (empty)
+New question: What was the most recent email I got from Netflix?
+Output: {"query": "email", "sender": "Netflix"}
+
+Conversation: (empty)
+New question: Show me the latest email I sent to the finance team
+Output: {"query": "email", "recipient": "finance team"}

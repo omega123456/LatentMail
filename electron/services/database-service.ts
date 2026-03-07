@@ -3309,26 +3309,23 @@ export class DatabaseService {
       return new Set<string>();
     }
 
-    const noFiltersApplied =
-      filters.dateFrom === undefined &&
-      filters.dateTo === undefined &&
-      filters.folder === undefined &&
-      filters.sender === undefined &&
-      filters.recipient === undefined &&
-      filters.hasAttachment === undefined &&
-      filters.isRead === undefined &&
-      filters.isStarred === undefined;
-
-    if (noFiltersApplied) {
-      return new Set<string>(xGmMsgIds);
-    }
+    // Note: we no longer short-circuit when no filters are provided, because we
+    // always need to exclude Drafts folder emails regardless of other filters.
 
     const matchingIds = new Set<string>();
     const CHUNK_SIZE = 500;
 
     const needsFolderJoin = filters.folder !== undefined;
 
-    const filterClauses: string[] = [];
+    const filterClauses: string[] = [
+      // Always exclude emails that exist in the Drafts folder
+      `AND NOT EXISTS (
+         SELECT 1 FROM email_folders ef_draft
+         WHERE ef_draft.account_id = e.account_id
+           AND ef_draft.x_gm_msgid = e.x_gm_msgid
+           AND ef_draft.folder = '[Gmail]/Drafts'
+       )`,
+    ];
     const filterParams: Record<string, string | number> = {};
 
     if (filters.dateFrom !== undefined) {
