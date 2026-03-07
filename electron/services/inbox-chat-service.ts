@@ -186,8 +186,8 @@ export class InboxChatService {
       if (filteredChunks.length === 0) {
         // No chunks survived filtering — send a friendly fallback message
         callbacks.onToken(
-          "I don't see any emails in your index that are relevant to that question. " +
-          'Try asking about something else, or make sure your email index is up to date.'
+          "I couldn't find any emails that match what you're looking for. " +
+          'Try rephrasing your question, or ask about a different topic. If you just added mail, give sync a moment to finish.'
         );
         callbacks.onSources([]);
         callbacks.onDone(false);
