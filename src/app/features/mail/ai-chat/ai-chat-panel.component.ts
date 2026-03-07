@@ -44,6 +44,11 @@ export class AiChatPanelComponent implements AfterViewChecked {
   protected inputText = '';
   private shouldScrollToBottom = false;
 
+  /** Up/Down arrow history: index into user messages (oldest=0). -1 = not cycling. */
+  private historyIndex = -1;
+  /** Draft text to restore when cycling Down past the most recent. */
+  private draftBeforeHistory = '';
+
   constructor() {
     // Scroll the message list on every streamed token so the view follows in real time.
     this.electronService.onAiChatStream$
@@ -104,10 +109,50 @@ export class AiChatPanelComponent implements AfterViewChecked {
   }
 
   onKeyDown(event: KeyboardEvent): void {
+    const userMessages = this.getUserMessageContents();
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (userMessages.length === 0) {
+        return;
+      }
+      if (this.historyIndex < 0) {
+        this.draftBeforeHistory = this.inputText;
+        this.historyIndex = userMessages.length - 1;
+        this.inputText = userMessages[this.historyIndex];
+      } else if (this.historyIndex > 0) {
+        this.historyIndex -= 1;
+        this.inputText = userMessages[this.historyIndex];
+      }
+      this.cdr.markForCheck();
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (this.historyIndex < 0) {
+        return;
+      }
+      this.historyIndex += 1;
+      if (this.historyIndex >= userMessages.length) {
+        this.historyIndex = -1;
+        this.inputText = this.draftBeforeHistory;
+      } else {
+        this.inputText = userMessages[this.historyIndex];
+      }
+      this.cdr.markForCheck();
+      return;
+    }
+    this.historyIndex = -1;
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       this.sendMessage();
     }
+  }
+
+  private getUserMessageContents(): string[] {
+    return this.chatStore
+      .messages()
+      .filter((message) => message.role === 'user')
+      .map((message) => message.content);
   }
 
   sendMessage(): void {
@@ -118,6 +163,8 @@ export class AiChatPanelComponent implements AfterViewChecked {
     if (!accountId) { return; }
 
     this.inputText = '';
+    this.historyIndex = -1;
+    this.draftBeforeHistory = '';
     this.shouldScrollToBottom = true;
     this.chatStore.sendMessage(question, accountId);
   }

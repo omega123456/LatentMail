@@ -30,7 +30,7 @@ Return ONLY a JSON object — no explanation, no preamble, no markdown fences. T
 
 1. Always output valid JSON — never output plain text
 2. Always include the `query` field
-3. Only include `dateFrom`, `dateTo`, `sender`, `recipient` when they are **explicitly** relevant to the user's question
+    3. Include `dateFrom`, `dateTo`, `sender`, `recipient` when they are relevant to the user's question — either stated directly OR inherited from the conversation history (e.g. a follow-up question about "the first one" should carry over the sender from the previous turn)
 4. The `query` value should contain topic/content keywords only — do not embed date, sender, or recipient names in the query string. When "from [name/domain]" or "to [name/address]" appears in the question, extract it into `sender` or `recipient` and keep it out of `query`
 5. Resolve relative date expressions using today's date ({{TODAY_DATE}})
 6. "last week" means the 7 calendar days ending yesterday; "last month" means the 30 calendar days ending yesterday
@@ -87,3 +87,15 @@ Output: {"query": "email", "sender": "Netflix"}
 Conversation: (empty)
 New question: Show me the latest email I sent to the finance team
 Output: {"query": "email", "recipient": "finance team"}
+
+Conversation:
+User: what was the latest email I got from Dropbox?
+Assistant: The most recent email from Dropbox was a file sharing notification on February 15.
+New question: when was the first one?
+Output: {"query": "file sharing notification", "sender": "Dropbox", "dateOrder": "asc"}
+
+Conversation:
+User: show me emails sent to billing@acme.com
+Assistant: I found 3 emails sent to billing@acme.com last month.
+New question: what about the oldest one?
+Output: {"query": "email", "recipient": "billing@acme.com", "dateOrder": "asc"}
