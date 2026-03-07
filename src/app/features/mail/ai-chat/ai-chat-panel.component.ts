@@ -19,6 +19,7 @@ import { UiStore } from '../../../store/ui.store';
 import { AccountsStore } from '../../../store/accounts.store';
 import { ElectronService } from '../../../core/services/electron.service';
 import { ChatMessageComponent } from './chat-message.component';
+import { ResizablePanelDirective } from '../resizable-panel.directive';
 
 @Component({
   selector: 'app-ai-chat-panel',
@@ -26,7 +27,7 @@ import { ChatMessageComponent } from './chat-message.component';
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './ai-chat-panel.component.html',
   styleUrl: './ai-chat-panel.component.scss',
-  imports: [MatButtonModule, MatTooltipModule, FormsModule, ChatMessageComponent],
+  imports: [MatButtonModule, MatTooltipModule, FormsModule, ChatMessageComponent, ResizablePanelDirective],
 })
 export class AiChatPanelComponent implements AfterViewChecked {
   protected readonly chatStore = inject(ChatStore);
@@ -136,6 +137,10 @@ export class AiChatPanelComponent implements AfterViewChecked {
 
   onSourceClicked(xGmMsgId: string): void {
     this.sourceClicked.emit(xGmMsgId);
+  }
+
+  onPanelResized(width: number): void {
+    this.uiStore.setAiChatPanelWidth(width);
   }
 
   onMessageTokenAdded(): void {

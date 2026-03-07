@@ -2,6 +2,12 @@
   class="chat-panel"
   [class.panel-open]="uiStore.aiChatPanelOpen()"
   [class.panel-disabled]="chatStore.panelStatus() === 'disabled'"
+  [style.width.px]="uiStore.aiChatPanelOpen() ? uiStore.aiChatPanelWidth() : null"
+  appResizablePanel
+  side="left"
+  [minSize]="280"
+  [maxSize]="700"
+  (resized)="onPanelResized($event)"
   role="complementary"
   aria-label="AI Chat Assistant"
 >

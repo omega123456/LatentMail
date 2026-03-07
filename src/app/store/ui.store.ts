@@ -13,6 +13,7 @@ export interface UiState {
   layout: LayoutMode;
   density: DensityMode;
   aiChatPanelOpen: boolean;
+  aiChatPanelWidth: number;
 }
 
 const initialState: UiState = {
@@ -25,6 +26,7 @@ const initialState: UiState = {
   layout: 'three-column',
   density: 'comfortable',
   aiChatPanelOpen: false,
+  aiChatPanelWidth: 360,
 };
 
 function loadUiState(): Partial<UiState> {
@@ -41,6 +43,8 @@ function loadUiState(): Partial<UiState> {
   if (layout) partial.layout = layout;
   const density = localStorage.getItem('density') as DensityMode | null;
   if (density) partial.density = density;
+  const aiChatPanelWidth = localStorage.getItem('ui.aiChatPanelWidth');
+  if (aiChatPanelWidth) partial.aiChatPanelWidth = Number(aiChatPanelWidth);
   // aiChatPanelOpen is never restored — always start closed
   return partial;
 }
@@ -112,6 +116,10 @@ export const UiStore = signalStore(
     toggleAiChatPanel(): void {
       const open = !store.aiChatPanelOpen();
       patchState(store, { aiChatPanelOpen: open });
+    },
+    setAiChatPanelWidth(width: number): void {
+      patchState(store, { aiChatPanelWidth: Math.max(280, Math.min(700, width)) });
+      localStorage.setItem('ui.aiChatPanelWidth', String(store.aiChatPanelWidth()));
     },
   }))
 );
