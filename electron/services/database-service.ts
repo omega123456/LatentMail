@@ -105,10 +105,10 @@ export class DatabaseService {
 
   // ---- Account operations ----
 
-  getAccounts(): Array<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean }> {
+  getAccounts(): Array<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean; lastSyncAt: string | null }> {
     if (!this.db) throw new Error('Database not initialized');
-    const rows = this.db.prepare('SELECT id, email, display_name, avatar_url, is_active, needs_reauth FROM accounts WHERE is_active = 1').all();
-    return rows.map((row) => this.mapRow<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean }>(row as Record<string, unknown>));
+    const rows = this.db.prepare('SELECT id, email, display_name, avatar_url, is_active, needs_reauth, last_sync_at FROM accounts WHERE is_active = 1').all();
+    return rows.map((row) => this.mapRow<{ id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean; lastSyncAt: string | null }>(row as Record<string, unknown>));
   }
 
   getAccountById(id: number): { id: number; email: string; displayName: string; avatarUrl: string | null; isActive: boolean; needsReauth: boolean } | null {

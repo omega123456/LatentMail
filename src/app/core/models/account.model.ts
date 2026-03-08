@@ -5,6 +5,7 @@ export interface Account {
   avatarUrl?: string | null;
   isActive: boolean;
   needsReauth?: boolean;
+  lastSyncAt?: string | null;
 }
 
 export interface Folder {

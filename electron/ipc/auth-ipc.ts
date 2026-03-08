@@ -93,6 +93,7 @@ export function registerAuthIpcHandlers(): void {
             avatarUrl: avatarUrl,
             isActive: account.isActive,
             needsReauth: account.needsReauth,
+            lastSyncAt: account.lastSyncAt ?? null,
           };
         })
       );

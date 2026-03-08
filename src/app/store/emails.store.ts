@@ -682,15 +682,21 @@ export const EmailsStore = signalStore(
         }
       },
 
-      /** Update sync progress (called from sync events) */
-      updateSyncProgress(progress: number): void {
-        const isDone = progress >= 100;
+      /** Update sync progress (called from sync events). When status is 'error', clears syncing and optionally sets error; does not set lastSyncTime. */
+      updateSyncProgress(progress: number, status?: 'syncing' | 'done' | 'error', errorMessage?: string): void {
+        const isDone = progress >= 100 || status === 'done';
+        const isError = status === 'error';
         patchState(store, {
           syncProgress: progress,
-          syncing: !isDone,
-          // Set lastSyncTime whenever sync completes (via progress event from main process)
+          syncing: !isDone && !isError,
           ...(isDone ? { lastSyncTime: DateTime.utc().toISO() } : {}),
+          ...(isError && errorMessage != null ? { error: errorMessage } : {}),
         });
+      },
+
+      /** Set last sync time (used for hydration from DB on startup; not for sync completion). */
+      setLastSyncTime(iso: string | null): void {
+        patchState(store, { lastSyncTime: iso });
       },
 
       /** Set the entire multi-selection. If ids is non-empty, clears single-select state. */

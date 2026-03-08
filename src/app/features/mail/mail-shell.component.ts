@@ -53,6 +53,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly cdr = inject(ChangeDetectorRef);
   private syncSub?: Subscription;
   private commandSub?: Subscription;
+  private syncSafeguardTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLoadedAccountId: number | null = null;
   private lastLoadedFolderId: string | null = null;
   // Search active state is now managed by FoldersStore
@@ -96,6 +97,17 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
         }
       }
     });
+
+    /**
+     * Hydrate last sync time from the active account's persisted lastSyncAt (from DB)
+     * so the status bar shows "Last synced: X" after restart instead of "Never".
+     */
+    effect(() => {
+      const activeAccount = this.accountsStore.activeAccount();
+      if (activeAccount?.lastSyncAt != null) {
+        this.emailsStore.setLastSyncTime(activeAccount.lastSyncAt);
+      }
+    });
   }
 
   ngAfterViewInit(): void {
@@ -111,11 +123,19 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     this.syncSub = this.electronService.onEvent<{
       accountId: string;
       progress: number;
-      status: string;
+      status: 'syncing' | 'done' | 'error';
+      error?: string;
     }>('mail:sync').subscribe(event => {
-      this.emailsStore.updateSyncProgress(event.progress);
+      const status = event.status as 'syncing' | 'done' | 'error';
+      this.emailsStore.updateSyncProgress(event.progress, status, event.error);
 
-      if (event.status === 'done') {
+      if (status === 'done' || status === 'error') {
+        this.clearSyncSafeguardTimer();
+      } else if (event.progress < 100) {
+        this.startOrResetSyncSafeguardTimer();
+      }
+
+      if (status === 'done') {
         const activeAccount = this.accountsStore.activeAccount();
         if (activeAccount && String(activeAccount.id) === event.accountId) {
           this.foldersStore.loadFolders(activeAccount.id);
@@ -135,8 +155,24 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnDestroy(): void {
+    this.clearSyncSafeguardTimer();
     this.syncSub?.unsubscribe();
     this.commandSub?.unsubscribe();
+  }
+
+  private startOrResetSyncSafeguardTimer(): void {
+    this.clearSyncSafeguardTimer();
+    this.syncSafeguardTimer = setTimeout(() => {
+      this.syncSafeguardTimer = null;
+      this.emailsStore.updateSyncProgress(0, 'error', 'Sync timed out');
+    }, 30_000);
+  }
+
+  private clearSyncSafeguardTimer(): void {
+    if (this.syncSafeguardTimer != null) {
+      clearTimeout(this.syncSafeguardTimer);
+      this.syncSafeguardTimer = null;
+    }
   }
 
   onFolderSelected(folderId: string): void {
