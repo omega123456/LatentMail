@@ -364,7 +364,9 @@ export class EmbeddingService {
    *   falls back to searchAllUids to distinguish complete vs UID-renumbered
    * - Deferred sentinel commits: sentinel records are collected in memory and
    *   committed together with worker results + cursor in one atomic transaction
-   * - On per-account completion: clears build_interrupted and cursor progress row
+   * - On per-account completion: clears build_interrupted; cursor (last_uid) is PRESERVED
+   *   so subsequent "check for new emails" calls use searchUidsAfter(cursor) instead of
+   *   searchAllUids(), fetching only newly-arrived UIDs from the IMAP server.
    *
    * On IMAP connection failure: reconnects (up to MAX_RECONNECT_ATTEMPTS) and resumes.
    * vector_indexed_emails serves as the checkpoint — after reconnect, already-indexed
@@ -417,6 +419,10 @@ export class EmbeddingService {
 
       let accountWorkerError: string | null = null;
       let reconnectAttempts = 0;
+      // Tracks the highest UID committed for this account across all batches.
+      // Initialized to the stored cursor so the completion log is accurate even
+      // if all UIDs are skipped (already indexed) and no new batch cursor is written.
+      let lastCommittedCursorUid = db.getEmbeddingCrawlCursor(account.id);
 
       // Outer loop: reconnect-and-resume on IMAP failure
       while (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS && this.buildState === 'building') {
@@ -631,6 +637,7 @@ export class EmbeddingService {
               ];
 
               db.batchInsertVectorIndexedEmails(account.id, allRecordsForBatch, batchCursorUid);
+              lastCommittedCursorUid = batchCursorUid;
 
               totalSentinels += deferredSentinelRecords.length;
               this.currentBuildIndexed += deferredSentinelRecords.length + batchDoneResults.length;
@@ -645,6 +652,7 @@ export class EmbeddingService {
                 deferredSentinelRecords,
                 batchCursorUid
               );
+              lastCommittedCursorUid = batchCursorUid;
               totalSentinels += deferredSentinelRecords.length;
               this.currentBuildIndexed += deferredSentinelRecords.length;
               isFirstBatch = false;
@@ -652,6 +660,7 @@ export class EmbeddingService {
               // Entirely skipped batch (all already indexed) — no progress to broadcast
               // Still advance cursor to skip these UIDs on resume
               db.upsertEmbeddingCrawlCursor(account.id, batchCursorUid);
+              lastCommittedCursorUid = batchCursorUid;
               isFirstBatch = false;
             }
 
@@ -706,16 +715,22 @@ export class EmbeddingService {
         break;
       }
 
-      // Account completed successfully — clear build_interrupted and cursor progress.
-      // Only do this if the build is still active (not cancelled). If cancelled,
-      // buildState is 'idle' here and we must preserve the cursor for manual resume.
+      // Account completed successfully — clear build_interrupted but KEEP the cursor.
+      // The cursor (last_uid) records the highest UID processed in this build.
+      // Preserving it means "Check for new emails to index" can call
+      // searchUidsAfter(cursor) instead of searchAllUids(), so only emails
+      // received after the last build are fetched from IMAP — not the full mailbox.
+      // Only update if the build is still active (not cancelled). If cancelled,
+      // buildState is 'idle' here and the cursor is already preserved.
       if (this.buildState === 'building') {
         try {
           db.setEmbeddingBuildInterrupted(account.id, false);
-          db.clearEmbeddingCrawlProgress(account.id);
-          log.info(`[EmbeddingService] Account ${account.id}: build complete, cursor cleared`);
+          log.info(
+            `[EmbeddingService] Account ${account.id}: build complete, ` +
+            `cursor preserved at uid=${lastCommittedCursorUid} for incremental check`
+          );
         } catch (err) {
-          log.warn(`[EmbeddingService] Failed to clear crawl progress for account ${account.id}:`, err);
+          log.warn(`[EmbeddingService] Failed to clear build_interrupted for account ${account.id}:`, err);
         }
       }
     }

@@ -2706,7 +2706,10 @@ export class DatabaseService {
 
   /**
    * Delete the embedding crawl progress row for a specific account.
-   * Called when a build completes successfully for that account.
+   * Called on UID-renumbering detection (cursor reset) or when the embedding model changes.
+   * Not called on normal build completion — the cursor is preserved after a successful build
+   * so that "Check for new emails to index" can use searchUidsAfter(cursor) instead of
+   * searchAllUids(), fetching only newly-arrived UIDs.
    *
    * @param accountId - Account ID to clear progress for
    */
