@@ -225,6 +225,17 @@ export class OAuthService {
       log.warn(`Failed to cancel queue items for account ${accountId} (continuing):`, err);
     }
 
+    // Step 3b: Cancel and disconnect body-fetch queue items for the account
+    try {
+      const { BodyFetchQueueService } = require('./body-fetch-queue-service');
+      const cancelledBodyCount = BodyFetchQueueService.getInstance().cancelAllForAccount(numericAccountId);
+      log.info(`Cancelled ${cancelledBodyCount} pending body-fetch queue items for account ${accountId}`);
+      await BodyFetchQueueService.getInstance().disconnectAccount(numericAccountId);
+      log.info(`Disconnected body-fetch dedicated connection for account ${accountId}`);
+    } catch (err) {
+      log.warn(`Failed to cancel/disconnect body-fetch queue for account ${accountId} (continuing):`, err);
+    }
+
     // Step 4: Disconnect IMAP connections for the account
     try {
       const { ImapService } = require('./imap-service');

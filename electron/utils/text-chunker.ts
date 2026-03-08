@@ -4,7 +4,7 @@
  * Responsible for:
  * - Stripping HTML tags and decoding common entities
  * - Splitting text into overlapping word-window chunks suitable for embedding
- * - Prepending the email subject to the first chunk for contextual grounding
+ * - Prepending selected email metadata to the first chunk for contextual grounding
  */
 
 import { stripVTControlCharacters } from 'util';
@@ -71,10 +71,10 @@ export function stripHtml(html: string): string {
  * CHUNK_OVERLAP_WORDS words of overlap between consecutive chunks.
  *
  * @param text - Plain text to chunk (HTML should already be stripped)
- * @param subject - Email subject to prepend to the first chunk
+ * @param metadata - Email metadata to prepend to the first chunk
  * @returns Array of chunk strings; empty array if text is empty/null
  */
-export function chunkText(text: string | null | undefined, subject?: string): string[] {
+export function chunkText(text: string | null | undefined, metadata?: EmbeddingChunkMetadata): string[] {
   if (!text || text.trim().length === 0) {
     return [];
   }
@@ -111,9 +111,25 @@ export function chunkText(text: string | null | undefined, subject?: string): st
     startIndex += CHUNK_SIZE_WORDS - CHUNK_OVERLAP_WORDS;
   }
 
-  // Prepend subject to the first chunk for contextual grounding
-  if (chunks.length > 0 && subject && subject.trim().length > 0) {
-    chunks[0] = `Subject: ${subject.trim()}\n\n${chunks[0]}`;
+  const metadataLines: string[] = [];
+  const subject = metadata?.subject?.trim() ?? '';
+  const fromAddress = metadata?.fromAddress?.trim() ?? '';
+  const toAddresses = metadata?.toAddresses?.trim() ?? '';
+
+  if (fromAddress.length > 0) {
+    metadataLines.push(`From: ${fromAddress}`);
+  }
+
+  if (metadata?.includeToAddresses && toAddresses.length > 0) {
+    metadataLines.push(`To: ${toAddresses}`);
+  }
+
+  if (subject.length > 0) {
+    metadataLines.push(`Subject: ${subject}`);
+  }
+
+  if (chunks.length > 0 && metadataLines.length > 0) {
+    chunks[0] = `${metadataLines.join('\n')}\n\n${chunks[0]}`;
   }
 
   return chunks;
@@ -125,18 +141,24 @@ export function chunkText(text: string | null | undefined, subject?: string): st
  *
  * @param textBody - Plain text body (preferred)
  * @param htmlBody - HTML body (used if textBody is absent)
- * @param subject - Email subject to prepend to the first chunk
+ * @param metadata - Email metadata to prepend to the first chunk
  * @returns Array of chunk strings; empty array if both bodies are absent/empty
  */
 export function chunkEmailBody(
   textBody: string | null | undefined,
   htmlBody: string | null | undefined,
-  subject?: string
+  metadata?: EmbeddingChunkMetadata
 ): string[] {
   // Prefer text_body for cleaner embedding input; fall back to stripped HTML
   const rawText = (textBody && textBody.trim().length > 0)
     ? textBody
     : (htmlBody ? stripHtml(htmlBody) : null);
 
-  return chunkText(rawText, subject);
+  return chunkText(rawText, metadata);
+}
+export interface EmbeddingChunkMetadata {
+  subject?: string;
+  fromAddress?: string;
+  toAddresses?: string;
+  includeToAddresses?: boolean;
 }

@@ -876,9 +876,14 @@ export class ImapService {
    * Create a dedicated (non-pooled) IMAP connection for the given account.
    * The connection is NOT registered in the shared connections pool — the caller
    * owns the connection lifecycle (connect, error handling, logout).
-   * Used by ImapCrawlService for the full-mailbox vector indexing pipeline.
+   *
+   * @param accountId  Account ID as string.
+   * @param logTag     Optional tag used in logger prefix (default: 'CRAWL').
+   *                   Results in log lines like `[IMAP-CRAWL 1]` or `[IMAP-BODYFETCH 1]`.
+   *                   Used by ImapCrawlService (full-mailbox indexing pipeline) and
+   *                   BodyFetchQueueService (dedicated body-fetch connections).
    */
-  async createDedicatedConnection(accountId: string): Promise<ImapFlow> {
+  async createDedicatedConnection(accountId: string, logTag: string = 'CRAWL'): Promise<ImapFlow> {
     const oauthService = OAuthService.getInstance();
     const db = DatabaseService.getInstance();
     const account = db.getAccountById(Number(accountId));
@@ -898,17 +903,128 @@ export class ImapService {
         accessToken: accessToken,
       },
       logger: {
-        debug: (msg: unknown) => log.debug(`[IMAP-CRAWL ${accountId}]`, msg),
-        info: (msg: unknown) => log.info(`[IMAP-CRAWL ${accountId}]`, msg),
-        warn: (msg: unknown) => log.warn(`[IMAP-CRAWL ${accountId}]`, msg),
-        error: (msg: unknown) => log.error(`[IMAP-CRAWL ${accountId}]`, msg),
+        debug: (msg: unknown) => log.debug(`[IMAP-${logTag} ${accountId}]`, msg),
+        info: (msg: unknown) => log.info(`[IMAP-${logTag} ${accountId}]`, msg),
+        warn: (msg: unknown) => log.warn(`[IMAP-${logTag} ${accountId}]`, msg),
+        error: (msg: unknown) => log.error(`[IMAP-${logTag} ${accountId}]`, msg),
       },
       emitLogs: false,
     });
 
     await client.connect();
-    log.info(`[IMAP] Dedicated crawl connection established for account ${accountId} (${account.email})`);
+    log.info(`[IMAP] Dedicated ${logTag.toLowerCase()} connection established for account ${accountId} (${account.email})`);
     return client;
+  }
+
+  /**
+   * Resolve UIDs for multiple X-GM-MSGID values in a specific folder using a pre-existing client.
+   * Mirrors resolveUidsByXGmMsgId() (the single-lock loop variant) but uses an externally-provided
+   * ImapFlow client instead of calling this.connect(accountId).
+   *
+   * The caller is responsible for the client lifecycle (connect, error handling, logout).
+   * Used by BodyFetchQueueService which owns a dedicated connection per account.
+   *
+   * @param client      An already-connected ImapFlow client.
+   * @param folder      Mailbox path to search within (e.g. '[Gmail]/All Mail').
+   * @param xGmMsgIds   List of Gmail message IDs (X-GM-MSGID string form).
+   * @returns Map of X-GM-MSGID → UID (only entries where UID was resolved).
+   */
+  async resolveUidsByXGmMsgIdWithClient(
+    client: ImapFlow,
+    folder: string,
+    xGmMsgIds: string[],
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+
+    const lock = await client.getMailboxLock(folder);
+    try {
+      for (const xGmMsgId of xGmMsgIds) {
+        try {
+          const searchResult = await client.search(
+            { emailId: xGmMsgId } as Record<string, unknown>,
+            { uid: true },
+          ) as number[] | false;
+
+          if (searchResult && searchResult.length > 0) {
+            result.set(xGmMsgId, searchResult[0]);
+          }
+        } catch (err) {
+          log.warn(`[IMAP] resolveUidsByXGmMsgIdWithClient: failed to resolve ${xGmMsgId} in ${folder}:`, err);
+        }
+      }
+    } finally {
+      lock.release();
+    }
+
+    return result;
+  }
+
+  /**
+   * Fetch a single message by UID from a specific folder using a pre-existing client.
+   * Mirrors fetchMessageByUid() but uses an externally-provided ImapFlow client instead of
+   * calling this.connect(accountId).
+   *
+   * The caller is responsible for the client lifecycle (connect, error handling, logout).
+   * Used by BodyFetchQueueService which owns a dedicated connection per account.
+   *
+   * @param client  An already-connected ImapFlow client.
+   * @param folder  Mailbox path to fetch from (e.g. '[Gmail]/All Mail').
+   * @param uid     UID of the message to fetch.
+   * @returns Parsed FetchedEmail or null if the message was not found.
+   */
+  async fetchMessageByUidWithClient(
+    client: ImapFlow,
+    folder: string,
+    uid: number,
+  ): Promise<FetchedEmail | null> {
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const msg = await client.fetchOne(String(uid), {
+        uid: true,
+        envelope: true,
+        flags: true,
+        bodyStructure: true,
+        headers: true,
+        source: true,
+        labels: true,
+        threadId: true,
+        emailId: true,
+        size: true,
+      } as any, { uid: true });
+
+      if (!msg) {
+        return null;
+      }
+
+      const fetchMsg = msg as FetchMessageObject;
+      const email = this.parseMessage(fetchMsg, folder);
+      if (!email) {
+        return null;
+      }
+
+      // Parse body from source
+      if (fetchMsg.source) {
+        try {
+          const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
+            ? fetchMsg.source
+            : Buffer.from(fetchMsg.source);
+          const parsed = await simpleParser(sourceBuffer);
+          const { htmlBody, attachments } = this.resolveInlineImages(
+            parsed.html || '',
+            parsed.attachments || [],
+          );
+          email.textBody = (parsed.text || '').trim();
+          email.htmlBody = htmlBody.trim();
+          email.attachments = attachments;
+        } catch (err) {
+          log.warn('fetchMessageByUidWithClient: failed to parse message body:', err);
+        }
+      }
+
+      return email;
+    } finally {
+      lock.release();
+    }
   }
 
   /**

@@ -27,7 +27,7 @@ export class QueueSettingsComponent {
   readonly mailPageSize = signal(25);
 
   readonly mailItems = computed(() =>
-    this.queueStore.items().filter((item) => item.type !== 'body-fetch'),
+    this.queueStore.items(),
   );
 
   readonly sortedMailItems = computed(() =>
@@ -45,11 +45,11 @@ export class QueueSettingsComponent {
     return allItems.slice(startIndex, startIndex + this.mailPageSize());
   });
 
-  readonly mailPendingCount = computed(() => this.mailItems().filter((item) => item.status === 'pending').length);
-  readonly mailProcessingCount = computed(() => this.mailItems().filter((item) => item.status === 'processing').length);
-  readonly mailCompletedCount = computed(() => this.mailItems().filter((item) => item.status === 'completed').length);
-  readonly mailFailedCount = computed(() => this.mailItems().filter((item) => item.status === 'failed').length);
-  readonly mailActiveCount = computed(() => this.mailItems().filter((item) => item.status === 'pending' || item.status === 'processing').length);
+  readonly mailPendingCount = computed(() => this.queueStore.pendingCount());
+  readonly mailProcessingCount = computed(() => this.queueStore.processingCount());
+  readonly mailCompletedCount = computed(() => this.queueStore.completedCount());
+  readonly mailFailedCount = computed(() => this.queueStore.failedCount());
+  readonly mailActiveCount = computed(() => this.queueStore.items().filter((item) => item.status === 'pending' || item.status === 'processing').length);
 
   // ---------------------------------------------------------------------------
   // Body-prefetch tab
@@ -59,7 +59,7 @@ export class QueueSettingsComponent {
   readonly prefetchPageSize = signal(25);
 
   readonly prefetchItems = computed(() =>
-    this.queueStore.items().filter((item) => item.type === 'body-fetch'),
+    this.queueStore.bodyFetchItems(),
   );
 
   readonly sortedPrefetchItems = computed(() =>
@@ -77,11 +77,12 @@ export class QueueSettingsComponent {
     return allItems.slice(startIndex, startIndex + this.prefetchPageSize());
   });
 
-  readonly prefetchPendingCount = computed(() => this.prefetchItems().filter((item) => item.status === 'pending').length);
-  readonly prefetchProcessingCount = computed(() => this.prefetchItems().filter((item) => item.status === 'processing').length);
-  readonly prefetchCompletedCount = computed(() => this.prefetchItems().filter((item) => item.status === 'completed').length);
-  readonly prefetchFailedCount = computed(() => this.prefetchItems().filter((item) => item.status === 'failed').length);
-  readonly prefetchActiveCount = computed(() => this.prefetchItems().filter((item) => item.status === 'pending' || item.status === 'processing').length);
+  readonly prefetchPendingCount = computed(() => this.queueStore.bodyFetchPendingCount());
+  readonly prefetchProcessingCount = computed(() => this.queueStore.bodyFetchProcessingCount());
+  readonly prefetchCompletedCount = computed(() => this.queueStore.bodyFetchCompletedCount());
+  readonly prefetchFailedCount = computed(() => this.queueStore.bodyFetchFailedCount());
+  readonly prefetchCancelledCount = computed(() => this.queueStore.bodyFetchCancelledCount());
+  readonly prefetchActiveCount = computed(() => this.queueStore.bodyFetchActiveCount());
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -200,5 +201,10 @@ export class QueueSettingsComponent {
 
   async cancel(queueId: string): Promise<void> {
     await this.queueStore.cancelOperation(queueId);
+  }
+
+  /** Cancel a specific pending body-fetch operation by its queue ID. */
+  async cancelPrefetchItem(queueId: string): Promise<void> {
+    await this.queueStore.cancelBodyFetchOperation(queueId);
   }
 }

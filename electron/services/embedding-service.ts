@@ -60,6 +60,7 @@ const SKIPPED_FILTERED = 'SKIPPED_FILTERED';
 /** Gmail paths used for spam/trash/draft filtering. */
 const SPAM_PATH = '[Gmail]/Spam';
 const DRAFTS_PATH = '[Gmail]/Drafts';
+const SENT_PATH = '[Gmail]/Sent Mail';
 
 /** Reconnect-and-resume configuration. */
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -554,6 +555,9 @@ export class EmbeddingService {
                   xGmMsgId: email.xGmMsgId,
                   accountId: account.id,
                   subject: email.subject,
+                  fromAddress: email.fromAddress,
+                  toAddresses: email.toAddresses,
+                  isSentFolder: email.rawLabels.includes(SENT_PATH),
                   textBody: truncatedText || null,
                   htmlBody: truncatedHtml || null,
                   hash,
@@ -796,6 +800,9 @@ export class EmbeddingService {
             xGmMsgId: email.xGmMsgId,
             accountId: email.accountId,
             subject: email.subject,
+            fromAddress: email.fromAddress,
+            toAddresses: email.toAddresses,
+            isSentFolder: email.isSentFolder,
             textBody: email.textBody ?? null,
             htmlBody: email.htmlBody ?? null,
             hash,

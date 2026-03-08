@@ -2,6 +2,7 @@ import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { ImapService } from './imap-service';
 import { ALL_MAIL_PATH } from './sync-service';
+import type { ImapFlow } from 'imapflow';
 
 const log = LoggerService.getInstance();
 
@@ -69,12 +70,17 @@ export class BodyPrefetchService {
    * 4. Persist attachment metadata if present (independent of body update; failures are warnings).
    * 5. Returns a summary count for logging.
    *
-   * @param accountId  The account whose emails are being fetched.
-   * @param emails     The batch of email descriptors to fetch bodies for.
+   * @param accountId      The account whose emails are being fetched.
+   * @param emails         The batch of email descriptors to fetch bodies for.
+   * @param dedicatedClient  Optional pre-existing ImapFlow client (owned by BodyFetchQueueService).
+   *                         When provided, uses resolveUidsByXGmMsgIdWithClient and
+   *                         fetchMessageByUidWithClient instead of the shared-pool methods.
+   *                         When omitted, falls back to the shared-pool methods (existing behaviour).
    */
   async fetchAndStoreBodies(
     accountId: number,
     emails: Array<{ xGmMsgId: string; xGmThrid: string }>,
+    dedicatedClient?: ImapFlow,
   ): Promise<BodyFetchSummary> {
     const summary: BodyFetchSummary = { fetched: 0, skipped: 0, failed: 0 };
 
@@ -90,7 +96,11 @@ export class BodyPrefetchService {
     const xGmMsgIds = emails.map((email) => email.xGmMsgId);
     let uidMap: Map<string, number>;
     try {
-      uidMap = await imapService.resolveUidsByXGmMsgId(accountIdStr, ALL_MAIL_PATH, xGmMsgIds);
+      if (dedicatedClient) {
+        uidMap = await imapService.resolveUidsByXGmMsgIdWithClient(dedicatedClient, ALL_MAIL_PATH, xGmMsgIds);
+      } else {
+        uidMap = await imapService.resolveUidsByXGmMsgId(accountIdStr, ALL_MAIL_PATH, xGmMsgIds);
+      }
     } catch (resolveErr) {
       log.warn(
         `[BodyPrefetch] Failed to resolve UIDs for account ${accountId} in ${ALL_MAIL_PATH}: ${
@@ -114,7 +124,11 @@ export class BodyPrefetchService {
 
       let fetched: Awaited<ReturnType<typeof imapService.fetchMessageByUid>>;
       try {
-        fetched = await imapService.fetchMessageByUid(accountIdStr, ALL_MAIL_PATH, uid);
+        if (dedicatedClient) {
+          fetched = await imapService.fetchMessageByUidWithClient(dedicatedClient, ALL_MAIL_PATH, uid);
+        } else {
+          fetched = await imapService.fetchMessageByUid(accountIdStr, ALL_MAIL_PATH, uid);
+        }
       } catch (fetchErr) {
         log.warn(
           `[BodyPrefetch] Failed to fetch body for xGmMsgId=${email.xGmMsgId} uid=${uid} (account=${accountId}): ${

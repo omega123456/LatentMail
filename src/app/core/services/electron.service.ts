@@ -203,6 +203,11 @@ interface ElectronAPI {
   bimi: {
     getLogo: (email: string) => Promise<IpcResponse<{ logoUrl: string | null }>>;
   };
+  bodyQueue: {
+    getStatus: () => Promise<IpcResponse>;
+    clearCompleted: () => Promise<IpcResponse>;
+    cancel: (queueId: string) => Promise<IpcResponse>;
+  };
   sync: {
     getPaused: () => Promise<IpcResponse<{ paused: boolean }>>;
     pause: () => Promise<IpcResponse<{ paused: boolean }>>;
@@ -544,6 +549,23 @@ export class ElectronService {
     return this.invoke(() => this.api!.bimi.getLogo(email)) as Promise<
       IpcResponse<{ logoUrl: string | null }>
     >;
+  }
+
+  // ---- Body-fetch queue operations ----
+
+  /** Fetch the current status of all items in the body-fetch queue. */
+  async getBodyQueueStatus(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.bodyQueue.getStatus());
+  }
+
+  /** Clear completed/cancelled items from the body-fetch queue. */
+  async clearCompletedBodyQueue(): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.bodyQueue.clearCompleted());
+  }
+
+  /** Cancel a specific body-fetch queue operation by its queue ID. */
+  async cancelBodyQueueOperation(queueId: string): Promise<IpcResponse> {
+    return this.invoke(() => this.api!.bodyQueue.cancel(queueId));
   }
 
   // ---- Sync state operations ----

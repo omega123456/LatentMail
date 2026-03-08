@@ -42,6 +42,11 @@ export const IPC_CHANNELS = {
   QUEUE_CANCEL: 'queue:cancel',
   QUEUE_GET_PENDING_COUNT: 'queue:get-pending-count',
 
+  // Body-fetch queue operations
+  BODY_QUEUE_GET_STATUS: 'body-queue:get-status',
+  BODY_QUEUE_CLEAR_COMPLETED: 'body-queue:clear-completed',
+  BODY_QUEUE_CANCEL: 'body-queue:cancel',
+
   // Compose operations (signatures & contacts only — draft ops moved to queue)
   COMPOSE_SEARCH_CONTACTS: 'compose:search-contacts',
   COMPOSE_GET_SIGNATURES: 'compose:get-signatures',
@@ -121,6 +126,9 @@ export const IPC_EVENTS = {
   MAIL_FETCH_OLDER_DONE: 'mail:fetch-older-done',
   SYSTEM_NOTIFICATION: 'system:notification',
   SYSTEM_TRAY_ACTION: 'system:tray-action',
+
+  // Body-fetch queue push events
+  BODY_QUEUE_UPDATE: 'body-queue:update',
 
   // OS file drag-and-drop (Win32 native addon → renderer)
   OS_FILE_DRAG_ENTER: 'os-file:drag-enter',

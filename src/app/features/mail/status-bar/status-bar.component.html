@@ -55,10 +55,10 @@
     <span class="status-separator">|</span>
     <button
       class="status-item queue-status"
-      [class.processing]="queueStore.processingCount() > 0"
-      [class.failed]="queueStore.failedCount() > 0 && queueStore.processingCount() === 0"
-      [class.pending]="queueStore.pendingCount() > 0 && queueStore.processingCount() === 0 && queueStore.failedCount() === 0"
-      [class.idle]="queueStore.activeCount() === 0 && queueStore.failedCount() === 0"
+      [class.processing]="combinedIsProcessing()"
+      [class.failed]="combinedHasFailed()"
+      [class.pending]="queueStore.activeCount() > 0 && !combinedIsProcessing() && !combinedHasFailed()"
+      [class.idle]="combinedIsIdle()"
       [title]="queueTooltip()"
       [attr.aria-label]="queueAriaLabel()"
       aria-live="polite"
@@ -66,18 +66,18 @@
       (click)="navigateToQueue()">
       <span
         class="material-symbols-outlined"
-        [class.spinning]="queueStore.processingCount() > 0">
+        [class.spinning]="combinedIsProcessing()">
         {{ queueIcon() }}
       </span>
       <span class="queue-count">
-        @if (queueStore.failedCount() > 0 && queueStore.processingCount() === 0 && queueStore.pendingCount() === 0) {
-          {{ queueStore.failedCount() }} failed
+        @if (combinedHasFailed()) {
+          {{ combinedFailedCount() }} failed
         } @else {
           {{ queueStore.activeCount() }}
         }
       </span>
-      @if (queueStore.failedCount() > 0 && queueStore.processingCount() > 0) {
-        <span class="queue-failed-dot" title="{{ queueStore.failedCount() }} failed"></span>
+      @if (combinedFailedCount() > 0 && combinedIsProcessing()) {
+        <span class="queue-failed-dot" title="{{ combinedFailedCount() }} failed"></span>
       }
     </button>
   </div>

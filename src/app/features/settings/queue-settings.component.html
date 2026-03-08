@@ -171,9 +171,9 @@
         </div>
 
         <!-- Actions -->
-        @if (prefetchCompletedCount() > 0) {
+        @if (prefetchCompletedCount() + prefetchCancelledCount() + prefetchFailedCount() > 0) {
           <div class="actions">
-            <button mat-stroked-button (click)="clearCompleted()" title="Clears completed items from both queues">
+            <button mat-stroked-button (click)="clearCompleted()" title="Clears completed and cancelled items from both queues">
               <span class="material-symbols-outlined">clear_all</span>
               Clear All Completed
             </button>
@@ -200,13 +200,14 @@
                     {{ itemStatusLabel(item) }}
                   </span>
                   <span class="item-time">{{ relativeTime(item.createdAt) }}</span>
-                  @if (item.status === 'cancelled') {
+                  @if (item.status === 'pending') {
                     <div class="item-actions">
-                      <button mat-icon-button (click)="cancel(item.queueId)" title="Dismiss">
+                      <button mat-icon-button (click)="cancelPrefetchItem(item.queueId)" title="Cancel">
                         <span class="material-symbols-outlined">close</span>
                       </button>
                     </div>
                   }
+                  <!-- Cancelled body-fetch items are cleared via the "Clear All Completed" button above -->
                 </div>
               }
             </div>

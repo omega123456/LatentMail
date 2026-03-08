@@ -202,6 +202,13 @@ const electronAPI = {
     resume: () => ipcRenderer.invoke('sync:resume') as Promise<IpcResponse>,
   },
 
+  // Body-fetch queue operations
+  bodyQueue: {
+    getStatus: () => ipcRenderer.invoke('body-queue:get-status') as Promise<IpcResponse>,
+    clearCompleted: () => ipcRenderer.invoke('body-queue:clear-completed') as Promise<IpcResponse>,
+    cancel: (queueId: string) => ipcRenderer.invoke('body-queue:cancel', queueId) as Promise<IpcResponse>,
+  },
+
   // Event listeners (for push events from main process)
   on: (channel: string, callback: IpcCallback) => {
     const validChannels = [
@@ -235,6 +242,8 @@ const electronAPI = {
       'ai:chat:done',
       // Sync pause state changes (CLI pause-sync / resume-sync)
       'sync:paused-state-changed',
+      // Body-fetch queue push events
+      'body-queue:update',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, callback);

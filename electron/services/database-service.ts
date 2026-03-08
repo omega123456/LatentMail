@@ -2761,6 +2761,9 @@ export class DatabaseService {
     xGmMsgId: string;
     accountId: number;
     subject: string;
+    fromAddress: string;
+    toAddresses: string;
+    isSentFolder: boolean;
     textBody: string | null;
     htmlBody: string | null;
   }> {
@@ -2769,10 +2772,17 @@ export class DatabaseService {
     }
 
     const trashFolder = this.getTrashFolder(accountId);
+    const sentFolder = '[Gmail]/Sent Mail';
     const rows = this.db.prepare(
-      `SELECT e.x_gm_msgid, e.account_id, e.subject, e.text_body, e.html_body
-       FROM emails e
-       WHERE e.account_id = :accountId
+      `SELECT e.x_gm_msgid, e.account_id, e.subject, e.from_address, e.to_addresses, e.text_body, e.html_body,
+              EXISTS (
+                SELECT 1 FROM email_folders ef_sent
+                WHERE ef_sent.account_id = e.account_id
+                  AND ef_sent.x_gm_msgid = e.x_gm_msgid
+                  AND ef_sent.folder = :sentFolder
+              ) AS is_sent_folder
+        FROM emails e
+        WHERE e.account_id = :accountId
          AND e.is_draft = 0
          AND (
            (e.text_body IS NOT NULL AND e.text_body != '')
@@ -2792,23 +2802,30 @@ export class DatabaseService {
        ORDER BY e.date DESC
        LIMIT :batchSize`
     ).all({
-      accountId,
-      batchSize,
-      trashFolder,
-      spamFolder: '[Gmail]/Spam',
-      draftsFolder: '[Gmail]/Drafts',
-    }) as Array<{
-      x_gm_msgid: string;
-      account_id: number;
-      subject: string;
-      text_body: string | null;
-      html_body: string | null;
-    }>;
+        accountId,
+        batchSize,
+        trashFolder,
+        sentFolder,
+        spamFolder: '[Gmail]/Spam',
+        draftsFolder: '[Gmail]/Drafts',
+      }) as Array<{
+        x_gm_msgid: string;
+        account_id: number;
+        subject: string;
+        from_address: string | null;
+        to_addresses: string | null;
+        text_body: string | null;
+        html_body: string | null;
+        is_sent_folder: number;
+      }>;
 
     return rows.map((row) => ({
       xGmMsgId: row.x_gm_msgid,
       accountId: row.account_id,
       subject: row.subject || '',
+      fromAddress: row.from_address || '',
+      toAddresses: row.to_addresses || '',
+      isSentFolder: row.is_sent_folder === 1,
       textBody: row.text_body,
       htmlBody: row.html_body,
     }));

@@ -4,6 +4,7 @@ import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 
 const log = LoggerService.getInstance();
 import { MailQueueService, QueueOperationType, QueuePayload, AddLabelsPayload, RemoveLabelsPayload } from '../services/mail-queue-service';
+import { BodyFetchQueueService } from '../services/body-fetch-queue-service';
 import { DatabaseService } from '../services/database-service';
 import { ALL_MAIL_PATH } from '../services/sync-service';
 
@@ -247,6 +248,38 @@ export function registerQueueIpcHandlers(): void {
     } catch (err) {
       log.error('Failed to get pending count:', err);
       return ipcError('QUEUE_PENDING_COUNT_FAILED', 'Failed to get pending count');
+    }
+  });
+
+  // Body-fetch queue: get all items
+  ipcMain.handle(IPC_CHANNELS.BODY_QUEUE_GET_STATUS, async () => {
+    try {
+      return { success: true, data: BodyFetchQueueService.getInstance().getAllItems() };
+    } catch (err) {
+      log.error('Failed to get body queue status:', err);
+      return ipcError('BODY_QUEUE_STATUS_FAILED', 'Failed to get body queue status');
+    }
+  });
+
+  // Body-fetch queue: clear completed items
+  ipcMain.handle(IPC_CHANNELS.BODY_QUEUE_CLEAR_COMPLETED, async () => {
+    try {
+      BodyFetchQueueService.getInstance().clearCompleted();
+      return { success: true };
+    } catch (err) {
+      log.error('Failed to clear body queue completed items:', err);
+      return ipcError('BODY_QUEUE_CLEAR_FAILED', 'Failed to clear body queue completed items');
+    }
+  });
+
+  // Body-fetch queue: cancel a specific pending item
+  ipcMain.handle(IPC_CHANNELS.BODY_QUEUE_CANCEL, async (_event, queueId: string) => {
+    try {
+      const result = BodyFetchQueueService.getInstance().cancel(queueId);
+      return { success: true, data: result };
+    } catch (err) {
+      log.error('Failed to cancel body queue item:', err);
+      return ipcError('BODY_QUEUE_CANCEL_FAILED', 'Failed to cancel body queue item');
     }
   });
 

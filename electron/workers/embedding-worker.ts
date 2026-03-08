@@ -46,6 +46,9 @@ export interface EmailBatchItem {
   xGmMsgId: string;
   accountId: number;
   subject: string;
+  fromAddress: string;
+  toAddresses: string;
+  isSentFolder: boolean;
   textBody: string | null;
   htmlBody: string | null;
   /** SHA-256 hash of the body content (computed on main thread) */
@@ -236,7 +239,12 @@ function deleteExistingChunks(accountId: number, xGmMsgId: string): void {
  * Returns the hash on success, or null if the email should be skipped.
  */
 async function processEmail(email: EmailBatchItem): Promise<BatchResult | null> {
-  const chunks = chunkEmailBody(email.textBody, email.htmlBody, email.subject);
+  const chunks = chunkEmailBody(email.textBody, email.htmlBody, {
+    subject: email.subject,
+    fromAddress: email.fromAddress,
+    toAddresses: email.toAddresses,
+    includeToAddresses: email.isSentFolder,
+  });
 
   if (chunks.length === 0) {
     postLog('debug', `[EmbeddingWorker] No chunks for email ${email.xGmMsgId} — skipping`);

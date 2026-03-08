@@ -95,58 +95,104 @@ export class StatusBarComponent implements OnInit, OnDestroy {
       });
   }
 
-  /** Computed icon for the queue status indicator. Always returns an icon (idle = 'done'). */
+  /** Computed icon for the queue status indicator. Checks both main and body-fetch queues.
+   *  Shows 'autorenew' if either queue is processing, 'error' if either has failures and
+   *  no items are actively processing (aligned with combinedHasFailed()), 'hourglass_empty'
+   *  if either has pending items, 'done' only when both are fully idle.
+   *
+   *  Uses combinedHasFailed() for the error state so the icon is always in sync with the
+   *  CSS class applied in the template (which also uses combinedHasFailed()).
+   */
   readonly queueIcon = computed(() => {
-    const processing = this.queueStore.processingCount() > 0;
-    const failed = this.queueStore.failedCount() > 0;
-    const pending = this.queueStore.pendingCount() > 0;
-    if (processing) {
+    const mainProcessing = this.queueStore.processingCount() > 0;
+    const bodyFetchProcessing = this.queueStore.bodyFetchProcessingCount() > 0;
+    const mainPending = this.queueStore.pendingCount() > 0;
+    const bodyFetchPending = this.queueStore.bodyFetchPendingCount() > 0;
+    if (mainProcessing || bodyFetchProcessing) {
       return 'autorenew';
     }
-    if (failed) {
+    // Only show error icon when combinedHasFailed() is true (failures exist AND nothing is
+    // actively processing). This keeps the icon consistent with the CSS class used in the
+    // template, which also uses combinedHasFailed(). Without this alignment, a mixed
+    // pending+failed state would show an error icon but a pending CSS class.
+    if (this.combinedHasFailed()) {
       return 'error';
     }
-    if (pending) {
+    if (mainPending || bodyFetchPending) {
       return 'hourglass_empty';
     }
     return 'done';
   });
 
-  /** Tooltip text for the queue status indicator. */
+  /** True if either the main queue or body-fetch queue has items actively processing. */
+  readonly combinedIsProcessing = computed(() =>
+    this.queueStore.processingCount() > 0 || this.queueStore.bodyFetchProcessingCount() > 0
+  );
+
+  /**
+   * True if either queue has failed items AND no items are currently processing.
+   * Same semantics as the previous single-queue "show error when not actively processing" check.
+   */
+  readonly combinedHasFailed = computed(() =>
+    (this.queueStore.failedCount() > 0 || this.queueStore.bodyFetchFailedCount() > 0) &&
+    this.queueStore.activeCount() === 0
+  );
+
+  /** True only when both queues are fully idle (no active items, no failures). */
+  readonly combinedIsIdle = computed(() =>
+    this.queueStore.activeCount() === 0 &&
+    this.queueStore.failedCount() === 0 &&
+    this.queueStore.bodyFetchFailedCount() === 0
+  );
+
+  /** Total failed count across both queues (used for the badge in the status bar). */
+  readonly combinedFailedCount = computed(() =>
+    this.queueStore.failedCount() + this.queueStore.bodyFetchFailedCount()
+  );
+
+  /** Tooltip text for the queue status indicator — includes counts from both queues. */
   readonly queueTooltip = computed(() => {
-    const processing = this.queueStore.processingCount();
-    const pending = this.queueStore.pendingCount();
-    const failed = this.queueStore.failedCount();
+    const mainProcessing = this.queueStore.processingCount();
+    const mainPending = this.queueStore.pendingCount();
+    const mainFailed = this.queueStore.failedCount();
+    const bodyFetchProcessing = this.queueStore.bodyFetchProcessingCount();
+    const bodyFetchPending = this.queueStore.bodyFetchPendingCount();
+    const bodyFetchFailed = this.queueStore.bodyFetchFailedCount();
     const desc = this.queueStore.currentProcessingDescription();
     const parts: string[] = [];
     if (desc) {
       parts.push(`Processing: ${desc}`);
     }
     const counts: string[] = [];
-    if (pending > 0) {
-      counts.push(`${pending} pending`);
+    const totalPending = mainPending + bodyFetchPending;
+    const totalProcessing = mainProcessing + bodyFetchProcessing;
+    const totalFailed = mainFailed + bodyFetchFailed;
+    if (totalPending > 0) {
+      counts.push(`${totalPending} pending`);
     }
-    if (processing > 0) {
-      counts.push(`${processing} processing`);
+    if (totalProcessing > 0) {
+      counts.push(`${totalProcessing} processing`);
     }
-    if (failed > 0) {
-      counts.push(`${failed} failed`);
+    if (totalFailed > 0) {
+      counts.push(`${totalFailed} failed`);
     }
     if (counts.length > 0) {
       parts.push(counts.join(', '));
     }
-    if (failed > 0 && processing === 0 && pending === 0) {
+    if (totalFailed > 0 && totalProcessing === 0 && totalPending === 0) {
       parts.push('Click to view');
     }
     const text = parts.join(' | ');
     return text || 'Queue: idle — click to open queue settings';
   });
 
-  /** Aria label for the queue status indicator. */
+  /** Aria label for the queue status indicator — includes combined counts from both queues. */
   readonly queueAriaLabel = computed(() => {
     const active = this.queueStore.activeCount();
-    const failed = this.queueStore.failedCount();
-    return `Queue: ${active} active, ${failed} failed — open queue settings`;
+    const mainFailed = this.queueStore.failedCount();
+    const bodyFetchFailed = this.queueStore.bodyFetchFailedCount();
+    const totalFailed = mainFailed + bodyFetchFailed;
+    return `Queue: ${active} active, ${totalFailed} failed — open queue settings`;
   });
 
   navigateToQueue(): void {

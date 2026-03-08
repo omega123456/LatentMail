@@ -7,6 +7,7 @@ const log = LoggerService.getInstance();
 import { SyncService } from './sync-service';
 import { ImapService } from './imap-service';
 import { MailQueueService } from './mail-queue-service';
+import { BodyFetchQueueService } from './body-fetch-queue-service';
 
 import { IPC_EVENTS } from '../ipc/ipc-channels';
 
@@ -118,9 +119,12 @@ export class SyncQueueBridge {
     // Stop the background timer
     this.stop();
     // Tear down all IDLE and shared IMAP connections so they are recreated fresh on resume.
+    // pause() on BodyFetchQueueService sets the isPaused flag BEFORE disconnecting so that
+    // any in-flight fastq workers fail fast instead of lazily opening a new connection.
     Promise.all([
       SyncService.getInstance().stopAllIdle(),
       ImapService.getInstance().disconnectAllShared(),
+      BodyFetchQueueService.getInstance().pause(),
     ]).catch((err) => {
       log.warn('[SyncQueueBridge] pause(): teardown failed:', err);
     });
@@ -140,6 +144,7 @@ export class SyncQueueBridge {
     this.sleepStopped = false; // User resumed; we are no longer in sleep-stopped state
     this.emitPausedStateChanged(false);
     SyncService.getInstance().setGlobalIdleSuppression(false);
+    BodyFetchQueueService.getInstance().resume();
     // start() triggers an immediate sync tick and restarts IDLE for all accounts.
     this.start();
     log.info('[SyncQueueBridge] Background sync resumed');
@@ -174,9 +179,12 @@ export class SyncQueueBridge {
     this.stop();
     // Close shared IMAP connections so they are recreated fresh on wake.
     // Stale TCP sockets after sleep may report usable=true but hang on any command.
+    // pause() on BodyFetchQueueService sets the isPaused flag BEFORE disconnecting so that
+    // any in-flight fastq workers fail fast instead of lazily opening a new connection.
     Promise.all([
       SyncService.getInstance().stopAllIdle(),
       ImapService.getInstance().disconnectAllShared(),
+      BodyFetchQueueService.getInstance().pause(),
     ]).catch((err) => {
       log.warn('[SyncQueueBridge] stopForSleep(): teardown failed:', err);
     });
@@ -198,6 +206,7 @@ export class SyncQueueBridge {
       return;
     }
     SyncService.getInstance().setGlobalIdleSuppression(false);
+    BodyFetchQueueService.getInstance().resume();
     this.start();
     log.info('[SyncQueueBridge] Sync started after wake');
   }
