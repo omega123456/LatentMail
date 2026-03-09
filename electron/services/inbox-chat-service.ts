@@ -225,9 +225,9 @@ export class InboxChatService {
           ? String((row as Record<string, unknown>).subject)
           : '(no subject)';
         const date = dateMap.get(chunk.xGmMsgId) ?? '(no date)';
-        return { subject, date };
+        return { subject, date, similarity: chunk.similarity };
       });
-      log.debug('[InboxChatService] Filtered chunks (subject, date):', chunkPreview);
+      log.debug('[InboxChatService] Filtered chunks (subject, date, similarity):', chunkPreview);
 
       // Step 3c: Cap the final chunk list before passing to the LLM
       const chunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
