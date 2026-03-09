@@ -38,7 +38,7 @@ Each object in the array:
 2. Every object must include the `query` field
 3. First identify filters stated in the NEW question. Treat those as authoritative.
 4. Carry over `sender` and `recipient` from conversation history only when the follow-up clearly continues the same thread (for example, "what about the first one?" after a search for a specific sender).
-5. Do NOT carry over `dateFrom` or `dateTo` from dates, months, or years mentioned in previous assistant responses. Assistant responses may help with topic/entity resolution, but they are not a source of date filters.
+5. **NEVER carry over `dateFrom` or `dateTo` from dates mentioned in previous assistant responses.** Even if the assistant said "I found an email from March 6th", that date must NOT become a date filter in follow-up queries. Assistant responses may help with topic/entity resolution only — they are never a source of date filters. A date filter may only come from an explicit time expression in the NEW question itself (e.g. "last week", "in January", "since March").
 6. If the NEW question contains any explicit time scope, whether absolute (for example "in January") or relative (for example "last year", "next month"), that time scope fully defines the date filter. Do not intersect it with, narrow it by, or anchor it to dates mentioned earlier unless the user explicitly asks for that combination.
 7. Resolve relative time expressions using today's date ({{TODAY_DATE}}) only. Concrete definitions: "last week" = 7 calendar days ending yesterday; "last month" = 30 calendar days ending yesterday; year-level references use the full calendar year: "last year" = Jan 1-Dec 31 of (current year - 1), "this year" = Jan 1-Dec 31 of the current year, "next year" = Jan 1-Dec 31 of (current year + 1).
 8. The `query` value should contain topic/content keywords only — do not embed date expressions, sender names, or recipient names in the query string. When "from [name/domain]" or "to [name/address]" appears in the question, extract it into `sender` or `recipient` and keep it out of `query`.
@@ -62,6 +62,8 @@ Use this table to determine whether to set `"dateOrder": "asc"` or omit it. When
 | Time-scoped query ("since", "after", "before", "in [month]") | "emails since March", "messages after the 5th", "invoices in Q2" | omit (default desc) |
 
 **The only trigger for `"asc"` is an explicit request for the chronologically first/earliest/oldest result. Everything else omits `dateOrder`.**
+
+**Date filter triggers:** `dateFrom`/`dateTo` may ONLY come from an explicit time expression in the NEW question. Dates mentioned in previous assistant responses (e.g. "I found an email from March 6th") must NEVER become date filters.
 
 ## Examples
 
@@ -245,6 +247,18 @@ Output: [
   {"query": "car maintenance invoice", "dateFrom": "2025-01-01", "dateTo": "2025-12-31"},
   {"query": "billing statement receipt", "sender": "AutoCare Garage", "dateFrom": "2025-01-01", "dateTo": "2025-12-31"},
   {"query": "vehicle service receipt", "sender": "AutoCare Garage"}
+]
+
+Conversation:
+User: show me the latest security scan report
+Assistant: I found a security scan report email from March 6th from your IT team.
+New question: what about the firewall report?
+Output: [
+  {"query": "firewall report status"},
+  {"query": "firewall security log summary"},
+  {"query": "network firewall audit report"},
+  {"query": "firewall configuration review"},
+  {"query": "firewall alerts events"}
 ]
 
 Conversation:

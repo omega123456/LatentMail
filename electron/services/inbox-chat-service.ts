@@ -4,7 +4,7 @@ import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { OllamaService } from './ollama-service';
-import { VectorDbService } from './vector-db-service';
+import { VectorDbService, VectorSearchResult } from './vector-db-service';
 import { SemanticSearchFilters } from '../utils/search-filter-translator';
 
 const log = LoggerService.getInstance();
@@ -61,6 +61,19 @@ interface RewriteResult {
   dateOrder: 'asc' | 'desc';
 }
 
+/** Enriched chunks and the formatted context string built from a single variant. */
+interface VariantContext {
+  enrichedChunks: EnrichedChunk[];
+  contextString: string;
+}
+
+/** Result returned by streamVariantAnswer(). */
+interface StreamResult {
+  aborted: boolean;
+  error: string | undefined;
+  accumulatedResponse: string;
+}
+
 export class InboxChatService {
   private activeControllers = new Map<string, AbortController>();
 
@@ -82,115 +95,28 @@ export class InboxChatService {
     this.activeControllers.set(requestId, controller);
 
     try {
-      // ── Step 1: Multi-query rewrite ──────────────────────────────────────────
-      // Calls the rewrite LLM to produce 5 ranked variants. Falls back to the
-      // raw question for all 5 slots if the LLM call or parse fails.
-      let variants: RewriteResult[] = [];
-      try {
-        variants = await this.rewriteMultiQuery(question, conversationHistory, controller.signal);
-        log.info('[chat] Multi-query rewrite produced variants:', {
-          count: variants.length,
-          queries: variants.map((variant, index) => ({ index, query: variant.query })),
-        });
-      } catch (rewriteError) {
-        if (controller.signal.aborted) {
-          callbacks.onDone(true);
-          return;
-        }
-        log.warn('[chat] Query rewriting failed, falling back to raw question for all slots:', rewriteError);
-        const fallbackVariant: RewriteResult = { query: question, filters: {}, dateOrder: 'desc' };
-        variants = Array.from({ length: 5 }, () => ({ ...fallbackVariant }));
-      }
+      // ── Phase 1: Rewrite question into multiple search variants ───────────────
+      const variants = await this.rewriteVariantsWithFallback(question, conversationHistory, controller.signal);
+      if (controller.signal.aborted) { callbacks.onDone(true); return; }
 
-      // ── Step 2: Cancellation check after rewrite ─────────────────────────────
-      if (controller.signal.aborted) {
-        callbacks.onDone(true);
-        return;
-      }
+      // ── Phase 2: Batch-embed all unique query strings ─────────────────────────
+      const embeddingMap = await this.buildEmbeddingMap(variants, controller.signal);
+      if (controller.signal.aborted) { callbacks.onDone(true); return; }
 
-      // ── Step 3: Batch embed all unique query strings in a single call ─────────
-      // Deduplicate first so we don't pay for duplicate embeddings.
-      const uniqueQueryStrings = [...new Set(variants.map(variant => variant.query))];
-      log.debug('[chat] Batch-embedding unique query strings:', {
-        totalVariants: variants.length,
-        uniqueCount: uniqueQueryStrings.length,
-        queries: uniqueQueryStrings,
-      });
+      // ── Phase 3: Build the system prompt (static for this entire request) ─────
+      const systemPrompt = this.buildSystemPrompt(accountEmail);
 
-      let embeddingMap: Map<string, number[]>;
-      try {
-        const rawEmbeddings = await this.ollamaService.embed(uniqueQueryStrings, { signal: controller.signal });
-
-        // Validate strict 1:1 mapping: Ollama must return exactly one non-empty vector
-        // per input string. A length mismatch or an empty vector means we cannot safely
-        // map variants to embeddings — throw so the outer catch handles it as a fatal
-        // pipeline error rather than silently skipping variants.
-        if (rawEmbeddings.length !== uniqueQueryStrings.length) {
-          throw new Error(
-            `Embed response length mismatch: expected ${uniqueQueryStrings.length}, got ${rawEmbeddings.length}`
-          );
-        }
-        for (let vectorIndex = 0; vectorIndex < rawEmbeddings.length; vectorIndex++) {
-          const vector = rawEmbeddings[vectorIndex];
-          if (!vector || vector.length === 0) {
-            throw new Error(
-              `Embed response invalid: vector at index ${vectorIndex} is empty`
-            );
-          }
-        }
-
-        embeddingMap = new Map<string, number[]>();
-        for (let index = 0; index < uniqueQueryStrings.length; index++) {
-          embeddingMap.set(uniqueQueryStrings[index], rawEmbeddings[index]);
-        }
-        log.debug('[chat] Embeddings computed:', { mappedCount: embeddingMap.size });
-      } catch (embedError) {
-        if (controller.signal.aborted) {
-          callbacks.onDone(true);
-          return;
-        }
-        throw embedError;
-      }
-
-      // ── Step 4: Cancellation check after batch embed ─────────────────────────
-      if (controller.signal.aborted) {
-        callbacks.onDone(true);
-        return;
-      }
-
-      // ── Step 5: Load system prompt once before the loop ───────────────────────
-      // {{CURRENT_DATETIME}} and {{USER_EMAIL}} are static for the entire request.
-      const currentDateTimeFormatted = DateTime.now().toLocaleString({
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-      const rawSystemPrompt = this.loadPrompt('inbox-chat-system.md');
-      const systemPrompt = rawSystemPrompt
-        .replaceAll('{{CURRENT_DATETIME}}', currentDateTimeFormatted)
-        .replaceAll('{{USER_EMAIL}}', accountEmail);
-
-      // ── Step 6: Initialize loop state ─────────────────────────────────────────
+      // ── Phase 4: Iterate variants, stopping at the first successful synthesis ─
       const processedVariantKeys = new Set<string>();
-      let cachedContextString: string | null = null;
-      let cachedEnrichedChunks: EnrichedChunk[] | null = null;
-
-      // ── Step 7: Loop over variants ───────────────────────────────────────────
+      let cachedContext: VariantContext | null = null;
       const lastVariantIndex = variants.length - 1;
+
       for (let index = 0; index < variants.length; index++) {
         const variant = variants[index];
 
-        // 7a. Cancellation check at top of each iteration
-        if (controller.signal.aborted) {
-          callbacks.onDone(true);
-          return;
-        }
+        if (controller.signal.aborted) { callbacks.onDone(true); return; }
 
-        // 7b. Duplicate check — NEVER skip the last variant
+        // Skip exact duplicates (query + filters), but never skip the final variant
         const variantKey = JSON.stringify({ query: variant.query, filters: variant.filters });
         if (index < lastVariantIndex && processedVariantKeys.has(variantKey)) {
           log.debug(`[chat] Variant ${index} is duplicate, skipping`, { query: variant.query });
@@ -198,13 +124,6 @@ export class InboxChatService {
         }
         processedVariantKeys.add(variantKey);
 
-        log.debug(`[chat] Processing variant ${index}:`, {
-          query: variant.query,
-          filters: variant.filters,
-          dateOrder: variant.dateOrder,
-        });
-
-        // 7c. Get embedding from the pre-built map
         const embedding = embeddingMap.get(variant.query);
         if (!embedding) {
           // Shouldn't happen — every variant.query was in uniqueQueryStrings
@@ -212,211 +131,90 @@ export class InboxChatService {
           continue;
         }
 
-        // 7d. Determine filter presence and vector budget for this variant
-        const variantFilters = variant.filters;
-        const hasVariantFilters =
-          variantFilters.dateFrom !== undefined ||
-          variantFilters.dateTo !== undefined ||
-          variantFilters.sender !== undefined ||
-          variantFilters.recipient !== undefined;
-        const vectorBudget = VECTOR_CANDIDATE_BUDGET;
+        log.debug(`[chat] Processing variant ${index}:`, {
+          query: variant.query,
+          filters: variant.filters,
+          dateOrder: variant.dateOrder,
+        });
 
-        // 7e. Vector search using this variant's embedding
-        const candidateChunks = this.vectorDbService.search(embedding, accountId, vectorBudget);
+        // Vector search + DB/similarity filtering for this variant
+        const filteredChunks = this.filterVariantChunks(variant, embedding, accountId, index);
 
-        // 7f. Apply structured DB filters and similarity threshold
-        let filteredChunks: typeof candidateChunks;
-        if (hasVariantFilters) {
-          // Normalize local date strings to UTC ISO bounds per variant
-          const normalizedFilters = this.normalizeFilterDates(variantFilters);
-
-          const uniqueMsgIds = [...new Set(candidateChunks.map(chunk => chunk.xGmMsgId))];
-          const matchingMsgIdSet = this.databaseService.filterEmailsByMsgIds(
-            accountId,
-            uniqueMsgIds,
-            normalizedFilters,
-          );
-          filteredChunks = candidateChunks
-            .filter(chunk => matchingMsgIdSet.has(chunk.xGmMsgId))
-            .filter(chunk => chunk.similarity >= SIMILARITY_THRESHOLD);
-
-          log.debug(`[chat] Variant ${index} DB filter + similarity applied:`, {
-            candidateCount: candidateChunks.length,
-            afterFilter: filteredChunks.length,
-            filters: normalizedFilters,
-          });
-        } else {
-          // Semantic-only: apply similarity threshold
-          filteredChunks = candidateChunks.filter(
-            chunk => chunk.similarity >= SIMILARITY_THRESHOLD
-          );
-          log.debug(`[chat] Variant ${index} similarity filter applied:`, {
-            candidateCount: candidateChunks.length,
-            afterFilter: filteredChunks.length,
-          });
-        }
-
-        // 7g. Zero-chunk check
+        // Handle zero-chunk result
         if (filteredChunks.length === 0) {
           if (index < lastVariantIndex) {
             log.debug(`[chat] Variant ${index} produced 0 chunks after filtering, skipping`);
             continue;
           }
-          // Last variant with zero chunks: use cached context if available
-          if (cachedContextString !== null && cachedEnrichedChunks !== null) {
-            log.debug(`[chat] Variant ${index} (last) produced 0 chunks, falling back to cached context from earlier variant`);
-            // Fall through to synthesis below using cached data (handled in step 7o)
+          if (cachedContext !== null) {
+            log.debug(`[chat] Variant ${index} (last) produced 0 chunks, falling back to cached context`);
           } else {
-            // No cached context and no chunks from any variant — all exhausted
-            break;
+            break; // No context from any variant — all exhausted
           }
         }
 
-        // 7h. Enrich chunks (skip if using cached fallback for variant 4)
-        let enrichedChunks: EnrichedChunk[];
-        let contextString: string;
+        // Build context — use the cached fallback if the last variant has zero chunks
         const usingCachedContext = (index === lastVariantIndex && filteredChunks.length === 0);
+        const variantContext: VariantContext = usingCachedContext
+          ? cachedContext!
+          : this.prepareVariantContext(filteredChunks, variant, accountId, index);
 
-        if (usingCachedContext) {
-          // Already checked above that these are non-null; use the cached values
-          enrichedChunks = cachedEnrichedChunks!;
-          contextString = cachedContextString!;
-        } else {
-          // 7i. Sort by date using this variant's dateOrder
-          const uniqueMsgIdsForSort = [...new Set(filteredChunks.map(chunk => chunk.xGmMsgId))];
-          const dateMap = this.databaseService.getEmailDatesByMsgIds(accountId, uniqueMsgIdsForSort);
-          filteredChunks.sort((chunkA, chunkB) => {
-            const dateA = dateMap.get(chunkA.xGmMsgId);
-            const dateB = dateMap.get(chunkB.xGmMsgId);
-            if (!dateA && !dateB) {
-              return chunkB.similarity - chunkA.similarity;
-            }
-            if (!dateA) {
-              return 1;
-            }
-            if (!dateB) {
-              return -1;
-            }
-            const dateCmp = variant.dateOrder === 'asc'
-              ? dateA.localeCompare(dateB)
-              : dateB.localeCompare(dateA);
-            if (dateCmp !== 0) {
-              return dateCmp;
-            }
-            return chunkB.similarity - chunkA.similarity;
-          });
+        if (controller.signal.aborted) { callbacks.onDone(true); return; }
 
-          const chunkPreview = filteredChunks.slice(0, FINAL_CHUNK_LIMIT).map(chunk => {
-            const row = this.databaseService.getEmailByXGmMsgId(accountId, chunk.xGmMsgId);
-            const subject = (row && (row as Record<string, unknown>).subject != null)
-              ? String((row as Record<string, unknown>).subject)
-              : '(no subject)';
-            const date = dateMap.get(chunk.xGmMsgId) ?? '(no date)';
-            return { subject, date, similarity: chunk.similarity };
-          });
-          log.debug(`[chat] Variant ${index} filtered chunks (subject, date, similarity):`, chunkPreview);
-
-          // 7j. Cap at FINAL_CHUNK_LIMIT
-          const cappedChunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
-
-          // 7h (continued). Enrich the capped chunks
-          enrichedChunks = this.enrichChunks(cappedChunks, accountId);
-
-          // 7k. Build context string
-          contextString = this.buildContextString(enrichedChunks);
-
-          // Note: cache update (step 7l) is deferred until after relevance passes for
-          // variants 0–3, and just before synthesis for variant 4. This ensures the
-          // cache only ever holds context from variants that actually passed quality checks.
-        }
-
-        // 7m. Cancellation check before LLM calls
-        if (controller.signal.aborted) {
-          callbacks.onDone(true);
-          return;
-        }
-
-        // 7n. Relevance pre-check for all but last variant; last variant always proceeds
+        // Relevance pre-check for all variants except the last
+        // (checkRelevance handles its own non-abort errors by returning true)
         if (index < lastVariantIndex) {
           let isRelevant: boolean;
           try {
-            isRelevant = await this.checkRelevance(question, conversationHistory, contextString, controller.signal);
+            isRelevant = await this.checkRelevance(
+              question, conversationHistory, variantContext.contextString, controller.signal
+            );
           } catch (relevanceError) {
             if (controller.signal.aborted) {
-              callbacks.onDone(true);
-              return;
+              throw relevanceError;
             }
-            // If relevance check itself throws (non-abort), conservatively treat as relevant
-            log.warn(`[chat] Variant ${index} relevance check threw, treating as relevant:`, relevanceError);
+            // Unexpected non-abort exception — conservatively treat context as relevant
+            log.warn(`[chat] Variant ${index} relevance check threw unexpectedly, treating as relevant:`, relevanceError);
             isRelevant = true;
           }
-
           if (!isRelevant) {
             log.debug(`[chat] Variant ${index} failed relevance check, skipping`, { query: variant.query });
             continue;
           }
           log.info(`[chat] Variant ${index} passed relevance check, proceeding to synthesis`, { query: variant.query });
 
-          // 7l. Cache update: record the first variant that passed the relevance check.
-          // Doing this AFTER the check ensures the cache only holds relevant context.
-          if (cachedContextString === null) {
-            cachedContextString = contextString;
-            cachedEnrichedChunks = enrichedChunks;
+          // Cache the first relevance-passing context for use as fallback on the last variant
+          if (cachedContext === null) {
+            cachedContext = variantContext;
             log.debug(`[chat] Cached context from variant ${index} (first relevance-passing result)`);
           }
         } else {
           log.info(`[chat] Variant ${index} (last): skipping relevance check, proceeding directly to synthesis`);
-
-          // 7l (last variant). Cache update: last variant has no relevance check, so update
-          // the cache here (before synthesis) if not already populated and not using
-          // the cached fallback path.
-          if (!usingCachedContext && cachedContextString === null) {
-            cachedContextString = contextString;
-            cachedEnrichedChunks = enrichedChunks;
+          if (!usingCachedContext && cachedContext === null) {
+            cachedContext = variantContext;
             log.debug(`[chat] Cached context from variant ${index} (proceeding to synthesis)`);
           }
         }
 
-        // 7o. Synthesis — stream the answer
+        // Stream the synthesized answer
         log.debug(`[chat] Variant ${index}: beginning synthesis`);
-        const messages = this.buildMessages(systemPrompt, contextString, conversationHistory, question);
+        const messages = this.buildMessages(systemPrompt, variantContext.contextString, conversationHistory, question);
+        const streamResult = await this.streamVariantAnswer(messages, controller, requestId, index, callbacks);
 
-        let streamError: string | undefined;
-        let accumulatedResponse: string = '';
-        try {
-          await this.ollamaService.chatStream(messages, (token: string) => {
-            if (!controller.signal.aborted) {
-              accumulatedResponse += token;
-              callbacks.onToken(token);
-            }
-          }, { signal: controller.signal });
-        } catch (streamErr) {
-          if (controller.signal.aborted) {
-            log.info('[chat] Stream cancelled by user for requestId:', requestId);
-          } else {
-            streamError = streamErr instanceof Error ? streamErr.message : String(streamErr);
-            log.error('[chat] Stream error for variant', index, ':', streamErr);
-          }
-        }
-
-        // Emit sources and done — on cancellation or error, emit no sources
-        if (controller.signal.aborted || streamError !== undefined) {
+        if (streamResult.aborted || streamResult.error !== undefined) {
           callbacks.onSources([]);
-          callbacks.onDone(controller.signal.aborted, streamError);
+          callbacks.onDone(streamResult.aborted, streamResult.error);
           return;
         }
 
-        // Parse citations and emit results
-        const citedSources = this.parseCitedSources(accumulatedResponse, enrichedChunks);
+        const citedSources = this.parseCitedSources(streamResult.accumulatedResponse, variantContext.enrichedChunks);
         callbacks.onSources(citedSources);
         callbacks.onDone(false);
         log.debug(`[chat] Variant ${index} answer streamed successfully`);
-
-        // Break: first successful synthesis wins
         return;
       }
 
-      // ── Step 8: All variants exhausted — no relevant emails found ─────────────
+      // ── All variants exhausted — no relevant emails found ─────────────────────
       log.info('[chat] All variants exhausted, no relevant emails found');
       callbacks.onToken(
         "I couldn't find any emails that match what you're looking for. " +
@@ -443,6 +241,224 @@ export class InboxChatService {
       controller.abort();
       log.info('[InboxChatService] Cancelled chat request:', requestId);
     }
+  }
+
+  // ── Private helpers for chat() ─────────────────────────────────────────────
+
+  /**
+   * Calls the multi-query rewriter and returns 5 ranked variants.
+   * On abort the error is rethrown (outer catch handles it). On any other
+   * failure, logs and returns 5 copies of the raw question as a fallback so
+   * the pipeline can still attempt a synthesis.
+   */
+  private async rewriteVariantsWithFallback(
+    question: string,
+    conversationHistory: ConversationTurn[],
+    signal: AbortSignal,
+  ): Promise<RewriteResult[]> {
+    try {
+      const variants = await this.rewriteMultiQuery(question, conversationHistory, signal);
+      log.info('[chat] Multi-query rewrite produced variants:', {
+        count: variants.length,
+        queries: variants.map((variant, index) => ({ index, query: variant.query })),
+      });
+      return variants;
+    } catch (rewriteError) {
+      if (signal.aborted) {
+        throw rewriteError;
+      }
+      log.warn('[chat] Query rewriting failed, falling back to raw question for all slots:', rewriteError);
+      const fallbackVariant: RewriteResult = { query: question, filters: {}, dateOrder: 'desc' };
+      return Array.from({ length: 5 }, () => ({ ...fallbackVariant }));
+    }
+  }
+
+  /**
+   * Batch-embeds all unique query strings from the variants and returns a map
+   * from query string → embedding vector.
+   *
+   * Validates a strict 1:1 mapping: throws if Ollama returns the wrong number
+   * of vectors or any vector is empty. Errors propagate to the outer catch in
+   * chat() which handles both abort and fatal pipeline errors.
+   */
+  private async buildEmbeddingMap(
+    variants: RewriteResult[],
+    signal: AbortSignal,
+  ): Promise<Map<string, number[]>> {
+    const uniqueQueryStrings = [...new Set(variants.map(variant => variant.query))];
+    log.debug('[chat] Batch-embedding unique query strings:', {
+      totalVariants: variants.length,
+      uniqueCount: uniqueQueryStrings.length,
+      queries: uniqueQueryStrings,
+    });
+
+    const rawEmbeddings = await this.ollamaService.embed(uniqueQueryStrings, { signal });
+
+    if (rawEmbeddings.length !== uniqueQueryStrings.length) {
+      throw new Error(
+        `Embed response length mismatch: expected ${uniqueQueryStrings.length}, got ${rawEmbeddings.length}`
+      );
+    }
+    for (let vectorIndex = 0; vectorIndex < rawEmbeddings.length; vectorIndex++) {
+      const vector = rawEmbeddings[vectorIndex];
+      if (!vector || vector.length === 0) {
+        throw new Error(`Embed response invalid: vector at index ${vectorIndex} is empty`);
+      }
+    }
+
+    const embeddingMap = new Map<string, number[]>();
+    for (let index = 0; index < uniqueQueryStrings.length; index++) {
+      embeddingMap.set(uniqueQueryStrings[index], rawEmbeddings[index]);
+    }
+    log.debug('[chat] Embeddings computed:', { mappedCount: embeddingMap.size });
+    return embeddingMap;
+  }
+
+  /**
+   * Loads the inbox-chat system prompt and injects the current datetime and
+   * the account email address. The result is static for the lifetime of a
+   * single chat() request.
+   */
+  private buildSystemPrompt(accountEmail: string): string {
+    const currentDateTimeFormatted = DateTime.now().toLocaleString({
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const rawSystemPrompt = this.loadPrompt('inbox-chat-system.md');
+    return rawSystemPrompt
+      .replaceAll('{{CURRENT_DATETIME}}', currentDateTimeFormatted)
+      .replaceAll('{{USER_EMAIL}}', accountEmail);
+  }
+
+  /**
+   * Runs a vector search for the variant's embedding then applies structured
+   * DB filters (date / sender / recipient) and the similarity threshold.
+   * Returns the filtered candidate chunks ready for enrichment.
+   */
+  private filterVariantChunks(
+    variant: RewriteResult,
+    embedding: number[],
+    accountId: number,
+    variantIndex: number,
+  ): VectorSearchResult[] {
+    const candidateChunks = this.vectorDbService.search(embedding, accountId, VECTOR_CANDIDATE_BUDGET);
+
+    const hasFilters =
+      variant.filters.dateFrom !== undefined ||
+      variant.filters.dateTo !== undefined ||
+      variant.filters.sender !== undefined ||
+      variant.filters.recipient !== undefined;
+
+    if (hasFilters) {
+      // Normalize local calendar date strings to UTC ISO bounds
+      const normalizedFilters = this.normalizeFilterDates(variant.filters);
+      const uniqueMsgIds = [...new Set(candidateChunks.map(chunk => chunk.xGmMsgId))];
+      const matchingMsgIdSet = this.databaseService.filterEmailsByMsgIds(
+        accountId,
+        uniqueMsgIds,
+        normalizedFilters,
+      );
+      const filteredChunks = candidateChunks
+        .filter(chunk => matchingMsgIdSet.has(chunk.xGmMsgId))
+        .filter(chunk => chunk.similarity >= SIMILARITY_THRESHOLD);
+      log.debug(`[chat] Variant ${variantIndex} DB filter + similarity applied:`, {
+        candidateCount: candidateChunks.length,
+        afterFilter: filteredChunks.length,
+        filters: normalizedFilters,
+      });
+      return filteredChunks;
+    }
+
+    // Semantic-only: apply similarity threshold
+    const filteredChunks = candidateChunks.filter(chunk => chunk.similarity >= SIMILARITY_THRESHOLD);
+    log.debug(`[chat] Variant ${variantIndex} similarity filter applied:`, {
+      candidateCount: candidateChunks.length,
+      afterFilter: filteredChunks.length,
+    });
+    return filteredChunks;
+  }
+
+  /**
+   * Sorts chunks by the variant's preferred date order, caps at FINAL_CHUNK_LIMIT,
+   * enriches them with email metadata, and builds the formatted context string.
+   * Returns a VariantContext ready to pass to the relevance check and synthesis.
+   */
+  private prepareVariantContext(
+    filteredChunks: VectorSearchResult[],
+    variant: RewriteResult,
+    accountId: number,
+    variantIndex: number,
+  ): VariantContext {
+    // Sort by date, falling back to similarity score when dates are equal or absent
+    const uniqueMsgIds = [...new Set(filteredChunks.map(chunk => chunk.xGmMsgId))];
+    const dateMap = this.databaseService.getEmailDatesByMsgIds(accountId, uniqueMsgIds);
+    filteredChunks.sort((chunkA, chunkB) => {
+      const dateA = dateMap.get(chunkA.xGmMsgId);
+      const dateB = dateMap.get(chunkB.xGmMsgId);
+      if (!dateA && !dateB) { return chunkB.similarity - chunkA.similarity; }
+      if (!dateA) { return 1; }
+      if (!dateB) { return -1; }
+      const dateCmp = variant.dateOrder === 'asc'
+        ? dateA.localeCompare(dateB)
+        : dateB.localeCompare(dateA);
+      return dateCmp !== 0 ? dateCmp : chunkB.similarity - chunkA.similarity;
+    });
+
+    // Log a preview of the top chunks for debugging
+    const chunkPreview = filteredChunks.slice(0, FINAL_CHUNK_LIMIT).map(chunk => {
+      const row = this.databaseService.getEmailByXGmMsgId(accountId, chunk.xGmMsgId);
+      const subject = (row && (row as Record<string, unknown>).subject != null)
+        ? String((row as Record<string, unknown>).subject)
+        : '(no subject)';
+      const date = dateMap.get(chunk.xGmMsgId) ?? '(no date)';
+      return { subject, date, similarity: chunk.similarity };
+    });
+    log.debug(`[chat] Variant ${variantIndex} filtered chunks (subject, date, similarity):`, chunkPreview);
+
+    const cappedChunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
+    const enrichedChunks = this.enrichChunks(cappedChunks, accountId);
+    const contextString = this.buildContextString(enrichedChunks);
+    return { enrichedChunks, contextString };
+  }
+
+  /**
+   * Streams the synthesis answer for a single variant.
+   * Accumulates tokens locally (forwarding each to callbacks.onToken) and
+   * returns a StreamResult describing whether the stream aborted, errored, or
+   * completed successfully.
+   */
+  private async streamVariantAnswer(
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    controller: AbortController,
+    requestId: string,
+    variantIndex: number,
+    callbacks: ChatStreamCallbacks,
+  ): Promise<StreamResult> {
+    let error: string | undefined;
+    let accumulatedResponse = '';
+
+    try {
+      await this.ollamaService.chatStream(messages, (token: string) => {
+        if (!controller.signal.aborted) {
+          accumulatedResponse += token;
+          callbacks.onToken(token);
+        }
+      }, { signal: controller.signal });
+    } catch (streamErr) {
+      if (controller.signal.aborted) {
+        log.info('[chat] Stream cancelled by user for requestId:', requestId);
+      } else {
+        error = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        log.error('[chat] Stream error for variant', variantIndex, ':', streamErr);
+      }
+    }
+
+    return { aborted: controller.signal.aborted, error, accumulatedResponse };
   }
 
   /**
