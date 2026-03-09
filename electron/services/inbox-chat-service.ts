@@ -40,15 +40,7 @@ export interface ChatStreamCallbacks {
 }
 
 /** Maximum number of vector search candidate chunks when no filters are present. */
-const VECTOR_CANDIDATE_BUDGET = 200;
-
-/**
- * Maximum number of vector search candidate chunks when structured filters
- * (date/sender/recipient) are present. A larger budget ensures broad filter
- * queries (e.g., "all emails from Alice") can find enough DB-matched candidates
- * even when the semantic query is generic.
- */
-const VECTOR_CANDIDATE_BUDGET_FILTERED = 1360;
+const VECTOR_CANDIDATE_BUDGET = 1360;
 
 /**
  * Minimum cosine similarity score for a chunk to be considered relevant when
@@ -90,166 +82,84 @@ export class InboxChatService {
     this.activeControllers.set(requestId, controller);
 
     try {
-      // Step 1: Query rewriting (always runs — extracts semantic query + structured filters)
-      let embeddingQuery = question;
-      let extractedFilters: SemanticSearchFilters = {};
-      let sortDirection: 'asc' | 'desc' = 'desc';
+      // ── Step 1: Multi-query rewrite ──────────────────────────────────────────
+      // Calls the rewrite LLM to produce 5 ranked variants. Falls back to the
+      // raw question for all 5 slots if the LLM call or parse fails.
+      let variants: RewriteResult[] = [];
       try {
-        const rewriteResult = await this.rewriteQuery(question, conversationHistory);
-        embeddingQuery = rewriteResult.query;
-        extractedFilters = rewriteResult.filters;
-        sortDirection = rewriteResult.dateOrder;
-        log.info('[InboxChatService] Rewrote query:', {
-          original: question,
-          rewritten: embeddingQuery,
-          filters: extractedFilters,
-          dateOrder: sortDirection,
+        variants = await this.rewriteMultiQuery(question, conversationHistory, controller.signal);
+        log.info('[chat] Multi-query rewrite produced variants:', {
+          count: variants.length,
+          queries: variants.map((variant, index) => ({ index, query: variant.query })),
         });
       } catch (rewriteError) {
-        log.warn('[InboxChatService] Query rewriting failed, using raw question:', rewriteError);
-        embeddingQuery = question;
-        extractedFilters = {};
+        if (controller.signal.aborted) {
+          callbacks.onDone(true);
+          return;
+        }
+        log.warn('[chat] Query rewriting failed, falling back to raw question for all slots:', rewriteError);
+        const fallbackVariant: RewriteResult = { query: question, filters: {}, dateOrder: 'desc' };
+        variants = Array.from({ length: 5 }, () => ({ ...fallbackVariant }));
       }
 
-      // Check cancellation after query rewriting — the rewrite is the first async
-      // LLM call and may take a noticeable amount of time; bail out early if the
-      // user already cancelled before we proceed to embedding and vector search.
+      // ── Step 2: Cancellation check after rewrite ─────────────────────────────
       if (controller.signal.aborted) {
         callbacks.onDone(true);
         return;
       }
 
-      // Step 2: Embed the query (embed() takes a string array, returns number[][])
-      const embeddings = await this.ollamaService.embed([embeddingQuery]);
-      const embedding = embeddings[0];
-      if (!embedding || embedding.length === 0) {
-        throw new Error('Failed to generate embedding for query');
-      }
-
-      // Check cancellation after embedding — allows fast bail-out before the
-      // more expensive vector search + LLM steps.
-      if (controller.signal.aborted) {
-        callbacks.onDone(true);
-        return;
-      }
-
-      // Determine whether structured filters were extracted — used to choose the
-      // vector search budget and filtering strategy below.
-      const hasExtractedFilters =
-        extractedFilters.dateFrom !== undefined ||
-        extractedFilters.dateTo !== undefined ||
-        extractedFilters.sender !== undefined ||
-        extractedFilters.recipient !== undefined;
-
-      // Step 3: Vector search — retrieve candidates before filtering.
-      // Use a larger budget when structured filters are present so that broad
-      // filter queries (e.g., "all emails from Alice") don't miss matches that
-      // rank lower semantically but perfectly match the filter criteria.
-      const vectorBudget = hasExtractedFilters ? VECTOR_CANDIDATE_BUDGET_FILTERED : VECTOR_CANDIDATE_BUDGET;
-      const candidateChunks = this.vectorDbService.search(embedding, accountId, vectorBudget);
-
-      // Step 3a: Apply structured DB filters (date/sender/recipient) if any were extracted,
-      // then (filtered branch only) apply similarity threshold. When no filters: apply
-      // similarity threshold only.
-      let filteredChunks: typeof candidateChunks;
-
-      if (hasExtractedFilters) {
-        // Normalize local date strings to UTC ISO timestamp bounds for accurate filtering.
-        // The LLM emits local calendar dates (YYYY-MM-DD); emails are stored as UTC timestamps.
-        // dateFrom → start of that local calendar day in UTC
-        // dateTo   → start of the NEXT local calendar day in UTC (exclusive upper bound)
-        const normalizedFilters = this.normalizeFilterDates(extractedFilters);
-
-        // Filters-first: pass all candidates through DB filtering, then filter by similarity.
-        const uniqueMsgIds = [...new Set(candidateChunks.map(chunk => chunk.xGmMsgId))];
-        const matchingMsgIdSet = this.databaseService.filterEmailsByMsgIds(
-          accountId,
-          uniqueMsgIds,
-          normalizedFilters,
-        );
-        filteredChunks = candidateChunks
-          .filter(chunk => matchingMsgIdSet.has(chunk.xGmMsgId))
-          .filter(chunk => chunk.similarity >= SIMILARITY_THRESHOLD);
-
-        log.info('[InboxChatService] DB filter + similarity applied:', {
-          candidateCount: candidateChunks.length,
-          afterFilter: filteredChunks.length,
-          filters: normalizedFilters,
-        });
-      } else {
-        // Semantic-only: apply similarity threshold to discard irrelevant noise
-        filteredChunks = candidateChunks.filter(
-          chunk => chunk.similarity >= SIMILARITY_THRESHOLD
-        );
-      }
-
-      if (filteredChunks.length === 0) {
-        // No chunks survived filtering — send a friendly fallback message
-        callbacks.onToken(
-          "I couldn't find any emails that match what you're looking for. " +
-          'Try rephrasing your question, or ask about a different topic. If you just added mail, give sync a moment to finish.'
-        );
-        callbacks.onSources([]);
-        callbacks.onDone(false);
-        return;
-      }
-
-      // Step 3b: Sort by date (direction determined by the query rewrite LLM, default desc),
-      // then by similarity descending within the same date. Chunks without a date go to the end.
-      const uniqueMsgIdsForSort = [...new Set(filteredChunks.map(chunk => chunk.xGmMsgId))];
-      const dateMap = this.databaseService.getEmailDatesByMsgIds(accountId, uniqueMsgIdsForSort);
-      filteredChunks.sort((chunkA, chunkB) => {
-        const dateA = dateMap.get(chunkA.xGmMsgId);
-        const dateB = dateMap.get(chunkB.xGmMsgId);
-        if (!dateA && !dateB) {
-          return chunkB.similarity - chunkA.similarity;
-        }
-        if (!dateA) {
-          return 1;
-        }
-        if (!dateB) {
-          return -1;
-        }
-        const dateCmp = sortDirection === 'asc'
-          ? dateA.localeCompare(dateB)
-          : dateB.localeCompare(dateA);
-        if (dateCmp !== 0) {
-          return dateCmp;
-        }
-        return chunkB.similarity - chunkA.similarity;
+      // ── Step 3: Batch embed all unique query strings in a single call ─────────
+      // Deduplicate first so we don't pay for duplicate embeddings.
+      const uniqueQueryStrings = [...new Set(variants.map(variant => variant.query))];
+      log.debug('[chat] Batch-embedding unique query strings:', {
+        totalVariants: variants.length,
+        uniqueCount: uniqueQueryStrings.length,
+        queries: uniqueQueryStrings,
       });
 
-      const chunkPreview = filteredChunks.slice(0, FINAL_CHUNK_LIMIT).map(chunk => {
-        const row = this.databaseService.getEmailByXGmMsgId(accountId, chunk.xGmMsgId);
-        const subject = (row && (row as Record<string, unknown>).subject != null)
-          ? String((row as Record<string, unknown>).subject)
-          : '(no subject)';
-        const date = dateMap.get(chunk.xGmMsgId) ?? '(no date)';
-        return { subject, date, similarity: chunk.similarity };
-      });
-      log.debug('[InboxChatService] Filtered chunks (subject, date, similarity):', chunkPreview);
+      let embeddingMap: Map<string, number[]>;
+      try {
+        const rawEmbeddings = await this.ollamaService.embed(uniqueQueryStrings, { signal: controller.signal });
 
-      // Step 3c: Cap the final chunk list before passing to the LLM
-      const chunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
+        // Validate strict 1:1 mapping: Ollama must return exactly one non-empty vector
+        // per input string. A length mismatch or an empty vector means we cannot safely
+        // map variants to embeddings — throw so the outer catch handles it as a fatal
+        // pipeline error rather than silently skipping variants.
+        if (rawEmbeddings.length !== uniqueQueryStrings.length) {
+          throw new Error(
+            `Embed response length mismatch: expected ${uniqueQueryStrings.length}, got ${rawEmbeddings.length}`
+          );
+        }
+        for (let vectorIndex = 0; vectorIndex < rawEmbeddings.length; vectorIndex++) {
+          const vector = rawEmbeddings[vectorIndex];
+          if (!vector || vector.length === 0) {
+            throw new Error(
+              `Embed response invalid: vector at index ${vectorIndex} is empty`
+            );
+          }
+        }
 
-      // Check cancellation after vector search — before the LLM streaming call.
+        embeddingMap = new Map<string, number[]>();
+        for (let index = 0; index < uniqueQueryStrings.length; index++) {
+          embeddingMap.set(uniqueQueryStrings[index], rawEmbeddings[index]);
+        }
+        log.debug('[chat] Embeddings computed:', { mappedCount: embeddingMap.size });
+      } catch (embedError) {
+        if (controller.signal.aborted) {
+          callbacks.onDone(true);
+          return;
+        }
+        throw embedError;
+      }
+
+      // ── Step 4: Cancellation check after batch embed ─────────────────────────
       if (controller.signal.aborted) {
         callbacks.onDone(true);
         return;
       }
 
-      // Step 4: Enrich chunks with email metadata from the local database
-      const enrichedChunks = this.enrichChunks(chunks, accountId);
-
-      // Step 5: Build a formatted context string for the LLM.
-      // Chunks are numbered [1], [2], … [N] in the context; the LLM is
-      // instructed to cite those numbers inline so we can map them back to
-      // source emails after streaming completes.
-      const contextString = this.buildContextString(enrichedChunks);
-
-      // Step 6: Load the system prompt from the prompts directory and inject
-      // the current date/time and the user's email address so the LLM has
-      // temporal awareness and directional reasoning (sent vs. received).
+      // ── Step 5: Load system prompt once before the loop ───────────────────────
+      // {{CURRENT_DATETIME}} and {{USER_EMAIL}} are static for the entire request.
       const currentDateTimeFormatted = DateTime.now().toLocaleString({
         weekday: 'long',
         year: 'numeric',
@@ -259,54 +169,268 @@ export class InboxChatService {
         minute: '2-digit',
         hour12: true,
       });
-
       const rawSystemPrompt = this.loadPrompt('inbox-chat-system.md');
       const systemPrompt = rawSystemPrompt
         .replaceAll('{{CURRENT_DATETIME}}', currentDateTimeFormatted)
         .replaceAll('{{USER_EMAIL}}', accountEmail);
 
-      // Step 7: Assemble the full message list for the LLM
-      const messages = this.buildMessages(systemPrompt, contextString, conversationHistory, question);
+      // ── Step 6: Initialize loop state ─────────────────────────────────────────
+      const processedVariantKeys = new Set<string>();
+      let cachedContextString: string | null = null;
+      let cachedEnrichedChunks: EnrichedChunk[] | null = null;
 
-      // Step 8: Stream LLM response, forwarding tokens to the caller and
-      // accumulating the full response text for post-stream citation parsing.
-      let streamError: string | undefined;
-      let accumulatedResponse: string = '';
-      try {
-        await this.ollamaService.chatStream(messages, (token: string) => {
-          if (!controller.signal.aborted) {
-            accumulatedResponse += token;
-            callbacks.onToken(token);
-          }
-        }, { signal: controller.signal });
-      } catch (streamErr) {
-        // Distinguish between cancellation and genuine errors
+      // ── Step 7: Loop over variants ───────────────────────────────────────────
+      const lastVariantIndex = variants.length - 1;
+      for (let index = 0; index < variants.length; index++) {
+        const variant = variants[index];
+
+        // 7a. Cancellation check at top of each iteration
         if (controller.signal.aborted) {
-          // Aborted — not a real error, just user cancellation
-          log.info('[InboxChatService] Stream cancelled by user for requestId:', requestId);
-        } else {
-          streamError = streamErr instanceof Error ? streamErr.message : String(streamErr);
-          log.error('[InboxChatService] Stream error:', streamErr);
+          callbacks.onDone(true);
+          return;
         }
-      }
 
-      // Step 9: Emit sources and completion signal.
-      // On cancellation or error, partial citations are unreliable — emit no
-      // sources so the UI shows nothing rather than misleading partial results.
-      if (controller.signal.aborted || streamError !== undefined) {
-        callbacks.onSources([]);
-        callbacks.onDone(controller.signal.aborted, streamError);
+        // 7b. Duplicate check — NEVER skip the last variant
+        const variantKey = JSON.stringify({ query: variant.query, filters: variant.filters });
+        if (index < lastVariantIndex && processedVariantKeys.has(variantKey)) {
+          log.debug(`[chat] Variant ${index} is duplicate, skipping`, { query: variant.query });
+          continue;
+        }
+        processedVariantKeys.add(variantKey);
+
+        log.debug(`[chat] Processing variant ${index}:`, {
+          query: variant.query,
+          filters: variant.filters,
+          dateOrder: variant.dateOrder,
+        });
+
+        // 7c. Get embedding from the pre-built map
+        const embedding = embeddingMap.get(variant.query);
+        if (!embedding) {
+          // Shouldn't happen — every variant.query was in uniqueQueryStrings
+          log.warn(`[chat] Variant ${index} has no embedding, skipping`, { query: variant.query });
+          continue;
+        }
+
+        // 7d. Determine filter presence and vector budget for this variant
+        const variantFilters = variant.filters;
+        const hasVariantFilters =
+          variantFilters.dateFrom !== undefined ||
+          variantFilters.dateTo !== undefined ||
+          variantFilters.sender !== undefined ||
+          variantFilters.recipient !== undefined;
+        const vectorBudget = VECTOR_CANDIDATE_BUDGET;
+
+        // 7e. Vector search using this variant's embedding
+        const candidateChunks = this.vectorDbService.search(embedding, accountId, vectorBudget);
+
+        // 7f. Apply structured DB filters and similarity threshold
+        let filteredChunks: typeof candidateChunks;
+        if (hasVariantFilters) {
+          // Normalize local date strings to UTC ISO bounds per variant
+          const normalizedFilters = this.normalizeFilterDates(variantFilters);
+
+          const uniqueMsgIds = [...new Set(candidateChunks.map(chunk => chunk.xGmMsgId))];
+          const matchingMsgIdSet = this.databaseService.filterEmailsByMsgIds(
+            accountId,
+            uniqueMsgIds,
+            normalizedFilters,
+          );
+          filteredChunks = candidateChunks
+            .filter(chunk => matchingMsgIdSet.has(chunk.xGmMsgId))
+            .filter(chunk => chunk.similarity >= SIMILARITY_THRESHOLD);
+
+          log.debug(`[chat] Variant ${index} DB filter + similarity applied:`, {
+            candidateCount: candidateChunks.length,
+            afterFilter: filteredChunks.length,
+            filters: normalizedFilters,
+          });
+        } else {
+          // Semantic-only: apply similarity threshold
+          filteredChunks = candidateChunks.filter(
+            chunk => chunk.similarity >= SIMILARITY_THRESHOLD
+          );
+          log.debug(`[chat] Variant ${index} similarity filter applied:`, {
+            candidateCount: candidateChunks.length,
+            afterFilter: filteredChunks.length,
+          });
+        }
+
+        // 7g. Zero-chunk check
+        if (filteredChunks.length === 0) {
+          if (index < lastVariantIndex) {
+            log.debug(`[chat] Variant ${index} produced 0 chunks after filtering, skipping`);
+            continue;
+          }
+          // Last variant with zero chunks: use cached context if available
+          if (cachedContextString !== null && cachedEnrichedChunks !== null) {
+            log.debug(`[chat] Variant ${index} (last) produced 0 chunks, falling back to cached context from earlier variant`);
+            // Fall through to synthesis below using cached data (handled in step 7o)
+          } else {
+            // No cached context and no chunks from any variant — all exhausted
+            break;
+          }
+        }
+
+        // 7h. Enrich chunks (skip if using cached fallback for variant 4)
+        let enrichedChunks: EnrichedChunk[];
+        let contextString: string;
+        const usingCachedContext = (index === lastVariantIndex && filteredChunks.length === 0);
+
+        if (usingCachedContext) {
+          // Already checked above that these are non-null; use the cached values
+          enrichedChunks = cachedEnrichedChunks!;
+          contextString = cachedContextString!;
+        } else {
+          // 7i. Sort by date using this variant's dateOrder
+          const uniqueMsgIdsForSort = [...new Set(filteredChunks.map(chunk => chunk.xGmMsgId))];
+          const dateMap = this.databaseService.getEmailDatesByMsgIds(accountId, uniqueMsgIdsForSort);
+          filteredChunks.sort((chunkA, chunkB) => {
+            const dateA = dateMap.get(chunkA.xGmMsgId);
+            const dateB = dateMap.get(chunkB.xGmMsgId);
+            if (!dateA && !dateB) {
+              return chunkB.similarity - chunkA.similarity;
+            }
+            if (!dateA) {
+              return 1;
+            }
+            if (!dateB) {
+              return -1;
+            }
+            const dateCmp = variant.dateOrder === 'asc'
+              ? dateA.localeCompare(dateB)
+              : dateB.localeCompare(dateA);
+            if (dateCmp !== 0) {
+              return dateCmp;
+            }
+            return chunkB.similarity - chunkA.similarity;
+          });
+
+          const chunkPreview = filteredChunks.slice(0, FINAL_CHUNK_LIMIT).map(chunk => {
+            const row = this.databaseService.getEmailByXGmMsgId(accountId, chunk.xGmMsgId);
+            const subject = (row && (row as Record<string, unknown>).subject != null)
+              ? String((row as Record<string, unknown>).subject)
+              : '(no subject)';
+            const date = dateMap.get(chunk.xGmMsgId) ?? '(no date)';
+            return { subject, date, similarity: chunk.similarity };
+          });
+          log.debug(`[chat] Variant ${index} filtered chunks (subject, date, similarity):`, chunkPreview);
+
+          // 7j. Cap at FINAL_CHUNK_LIMIT
+          const cappedChunks = filteredChunks.slice(0, FINAL_CHUNK_LIMIT);
+
+          // 7h (continued). Enrich the capped chunks
+          enrichedChunks = this.enrichChunks(cappedChunks, accountId);
+
+          // 7k. Build context string
+          contextString = this.buildContextString(enrichedChunks);
+
+          // Note: cache update (step 7l) is deferred until after relevance passes for
+          // variants 0–3, and just before synthesis for variant 4. This ensures the
+          // cache only ever holds context from variants that actually passed quality checks.
+        }
+
+        // 7m. Cancellation check before LLM calls
+        if (controller.signal.aborted) {
+          callbacks.onDone(true);
+          return;
+        }
+
+        // 7n. Relevance pre-check for all but last variant; last variant always proceeds
+        if (index < lastVariantIndex) {
+          let isRelevant: boolean;
+          try {
+            isRelevant = await this.checkRelevance(question, conversationHistory, contextString, controller.signal);
+          } catch (relevanceError) {
+            if (controller.signal.aborted) {
+              callbacks.onDone(true);
+              return;
+            }
+            // If relevance check itself throws (non-abort), conservatively treat as relevant
+            log.warn(`[chat] Variant ${index} relevance check threw, treating as relevant:`, relevanceError);
+            isRelevant = true;
+          }
+
+          if (!isRelevant) {
+            log.debug(`[chat] Variant ${index} failed relevance check, skipping`, { query: variant.query });
+            continue;
+          }
+          log.info(`[chat] Variant ${index} passed relevance check, proceeding to synthesis`, { query: variant.query });
+
+          // 7l. Cache update: record the first variant that passed the relevance check.
+          // Doing this AFTER the check ensures the cache only holds relevant context.
+          if (cachedContextString === null) {
+            cachedContextString = contextString;
+            cachedEnrichedChunks = enrichedChunks;
+            log.debug(`[chat] Cached context from variant ${index} (first relevance-passing result)`);
+          }
+        } else {
+          log.info(`[chat] Variant ${index} (last): skipping relevance check, proceeding directly to synthesis`);
+
+          // 7l (last variant). Cache update: last variant has no relevance check, so update
+          // the cache here (before synthesis) if not already populated and not using
+          // the cached fallback path.
+          if (!usingCachedContext && cachedContextString === null) {
+            cachedContextString = contextString;
+            cachedEnrichedChunks = enrichedChunks;
+            log.debug(`[chat] Cached context from variant ${index} (proceeding to synthesis)`);
+          }
+        }
+
+        // 7o. Synthesis — stream the answer
+        log.debug(`[chat] Variant ${index}: beginning synthesis`);
+        const messages = this.buildMessages(systemPrompt, contextString, conversationHistory, question);
+
+        let streamError: string | undefined;
+        let accumulatedResponse: string = '';
+        try {
+          await this.ollamaService.chatStream(messages, (token: string) => {
+            if (!controller.signal.aborted) {
+              accumulatedResponse += token;
+              callbacks.onToken(token);
+            }
+          }, { signal: controller.signal });
+        } catch (streamErr) {
+          if (controller.signal.aborted) {
+            log.info('[chat] Stream cancelled by user for requestId:', requestId);
+          } else {
+            streamError = streamErr instanceof Error ? streamErr.message : String(streamErr);
+            log.error('[chat] Stream error for variant', index, ':', streamErr);
+          }
+        }
+
+        // Emit sources and done — on cancellation or error, emit no sources
+        if (controller.signal.aborted || streamError !== undefined) {
+          callbacks.onSources([]);
+          callbacks.onDone(controller.signal.aborted, streamError);
+          return;
+        }
+
+        // Parse citations and emit results
+        const citedSources = this.parseCitedSources(accumulatedResponse, enrichedChunks);
+        callbacks.onSources(citedSources);
+        callbacks.onDone(false);
+        log.debug(`[chat] Variant ${index} answer streamed successfully`);
+
+        // Break: first successful synthesis wins
         return;
       }
 
-      // Parse [N] citation markers from the completed response and build the
-      // source list containing only the emails the LLM actually referenced.
-      const citedSources = this.parseCitedSources(accumulatedResponse, enrichedChunks);
-      callbacks.onSources(citedSources);
+      // ── Step 8: All variants exhausted — no relevant emails found ─────────────
+      log.info('[chat] All variants exhausted, no relevant emails found');
+      callbacks.onToken(
+        "I couldn't find any emails that match what you're looking for. " +
+        'Try rephrasing your question, or ask about a different topic. If you just added mail, give sync a moment to finish.'
+      );
+      callbacks.onSources([]);
       callbacks.onDone(false);
     } catch (error) {
+      if (controller.signal.aborted) {
+        callbacks.onDone(true);
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error('[InboxChatService] Chat pipeline error:', error);
+      log.error('[chat] Chat pipeline error:', error);
       callbacks.onDone(false, errorMessage);
     } finally {
       this.activeControllers.delete(requestId);
@@ -321,8 +445,24 @@ export class InboxChatService {
     }
   }
 
-  private async rewriteQuery(question: string, history: ConversationTurn[]): Promise<RewriteResult> {
-    const rawPrompt = this.loadPrompt('inbox-chat-rewrite-query.md');
+  /**
+   * Calls the multi-query rewriter LLM to produce 5 ranked RewriteResult variants
+   * for the given question and conversation history.
+   *
+   * The LLM is instructed to return a JSON array of exactly 5 objects. This method
+   * handles robust parsing:
+   * - Top-level JSON array → used directly
+   * - JSON object with any array-valued property (e.g. `{ queries: [...] }`) → array extracted
+   * - Parse failure or fewer than 5 valid items → padded with fallback entries
+   *
+   * Always returns exactly 5 RewriteResult items. Index 0 is the best-guess variant.
+   */
+  private async rewriteMultiQuery(
+    question: string,
+    history: ConversationTurn[],
+    signal: AbortSignal,
+  ): Promise<RewriteResult[]> {
+    const rawPrompt = this.loadPrompt('inbox-chat-rewrite-multi-query.md');
 
     // Inject today's date into the prompt so the LLM can resolve relative date expressions.
     // Use the local calendar date (not UTC) to match the user's timezone.
@@ -335,72 +475,121 @@ export class InboxChatService {
     const conversationLabel = history.length > 0 ? `Conversation:\n${historyText}\n` : 'Conversation: (empty)\n';
     const userMessage = `${conversationLabel}New question: ${question}`;
 
-    // Request JSON output with sufficient token budget for the response object
+    // Request JSON output with a large token budget to accommodate the 5-variant array
     const rawResult = await this.ollamaService.chat(
       [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
-      { numPredict: 200, format: 'json' }
+      { temperature: 0.3, numPredict: 1200, format: 'json', signal }
     );
 
-    return this.parseRewriteResult(rawResult, question);
+    return this.parseMultiQueryResult(rawResult, question);
   }
 
   /**
-   * Parses the raw LLM output from rewriteQuery() into a RewriteResult.
+   * Parses the raw LLM output from rewriteMultiQuery() into an array of exactly
+   * 5 RewriteResult objects.
    *
-   * If the output is valid JSON with the expected shape, returns the parsed
-   * result. If parsing fails or the `query` field is missing or not a string,
-   * falls back to treating the raw output as the plain query with no filters.
+   * Parsing strategy:
+   * 1. JSON.parse() the trimmed output.
+   * 2. If the result is an array, use it directly.
+   * 3. If the result is an object, scan its properties for the first array value
+   *    (handles wrapped responses like `{ "queries": [...] }` or `{ "results": [...] }`).
+   * 4. Validate each array element with isValidRewriteResponse(); salvage all valid items.
+   * 5. Pad with fallback entries if fewer than 5 valid items were found.
    */
-  private parseRewriteResult(rawOutput: string, originalQuestion: string): RewriteResult {
+  private parseMultiQueryResult(rawOutput: string, originalQuestion: string): RewriteResult[] {
+    const fallback: RewriteResult = { query: originalQuestion, filters: {}, dateOrder: 'desc' };
     const trimmed = rawOutput.trim();
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
     } catch (parseError) {
-      log.warn('[InboxChatService] rewriteQuery JSON parse failed, using raw output as query:', {
-        rawOutput: trimmed,
+      log.warn('[InboxChatService] rewriteMultiQuery JSON parse failed, padding with fallbacks:', {
+        rawOutput: trimmed.slice(0, 200),
         parseError,
       });
-      return { query: trimmed || originalQuestion, filters: {}, dateOrder: 'desc' };
+      return Array.from({ length: 5 }, () => ({ ...fallback }));
     }
 
-    // Type guard: validate the parsed object has the expected shape
-    if (!this.isValidRewriteResponse(parsed)) {
-      log.warn('[InboxChatService] rewriteQuery JSON shape invalid, using original question:', {
-        parsed,
+    // Resolve the candidate array from the parsed value
+    let candidateArray: unknown[];
+
+    if (Array.isArray(parsed)) {
+      candidateArray = parsed;
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      // LLM wrapped the array in an object — find the first property whose value is an array
+      const wrappedArray = Object.values(parsed as Record<string, unknown>).find(
+        value => Array.isArray(value)
+      );
+      if (Array.isArray(wrappedArray)) {
+        candidateArray = wrappedArray;
+        log.debug('[InboxChatService] rewriteMultiQuery: unwrapped nested array from object response');
+      } else {
+        log.warn('[InboxChatService] rewriteMultiQuery: parsed object has no array property, padding with fallbacks:', { parsed });
+        return Array.from({ length: 5 }, () => ({ ...fallback }));
+      }
+    } else {
+      log.warn('[InboxChatService] rewriteMultiQuery: unexpected parsed type, padding with fallbacks:', {
+        type: typeof parsed,
       });
-      return { query: originalQuestion, filters: {}, dateOrder: 'desc' };
+      return Array.from({ length: 5 }, () => ({ ...fallback }));
     }
 
-    const filters: SemanticSearchFilters = {};
+    // Validate and convert each candidate element; salvage as many as possible
+    const validResults: RewriteResult[] = [];
+    for (const candidate of candidateArray) {
+      if (!this.isValidRewriteResponse(candidate)) {
+        log.debug('[InboxChatService] rewriteMultiQuery: skipping invalid array element:', { candidate });
+        continue;
+      }
 
-    if (typeof parsed.dateFrom === 'string' && parsed.dateFrom.length > 0) {
-      filters.dateFrom = parsed.dateFrom;
+      const filters: SemanticSearchFilters = {};
+
+      if (typeof candidate.dateFrom === 'string' && candidate.dateFrom.length > 0) {
+        filters.dateFrom = candidate.dateFrom;
+      }
+
+      if (typeof candidate.dateTo === 'string' && candidate.dateTo.length > 0) {
+        filters.dateTo = candidate.dateTo;
+      }
+
+      if (typeof candidate.sender === 'string' && candidate.sender.length > 0) {
+        filters.sender = candidate.sender;
+      }
+
+      if (typeof candidate.recipient === 'string' && candidate.recipient.length > 0) {
+        filters.recipient = candidate.recipient;
+      }
+
+      const dateOrder: 'asc' | 'desc' = candidate.dateOrder === 'asc' ? 'asc' : 'desc';
+
+      validResults.push({
+        query: candidate.query || originalQuestion,
+        filters,
+        dateOrder,
+      });
+
+      // Stop once we have 5 — extras are discarded
+      if (validResults.length === 5) {
+        break;
+      }
     }
 
-    if (typeof parsed.dateTo === 'string' && parsed.dateTo.length > 0) {
-      filters.dateTo = parsed.dateTo;
+    // Pad up to exactly 5 if the LLM returned fewer valid items
+    while (validResults.length < 5) {
+      validResults.push({ ...fallback });
     }
 
-    if (typeof parsed.sender === 'string' && parsed.sender.length > 0) {
-      filters.sender = parsed.sender;
-    }
+    log.info('[InboxChatService] rewriteMultiQuery parsed variants:', {
+      validCount: validResults.length,
+      candidateCount: candidateArray.length,
+      firstQuery: validResults[0].query,
+    });
 
-    if (typeof parsed.recipient === 'string' && parsed.recipient.length > 0) {
-      filters.recipient = parsed.recipient;
-    }
-
-    const dateOrder: 'asc' | 'desc' = parsed.dateOrder === 'asc' ? 'asc' : 'desc';
-
-    return {
-      query: parsed.query || originalQuestion,
-      filters,
-      dateOrder,
-    };
+    return validResults;
   }
 
   /**
@@ -642,6 +831,84 @@ export class InboxChatService {
 
     messages.push({ role: 'user', content: question });
     return messages;
+  }
+
+  /**
+   * Assesses whether the retrieved email chunks are relevant to the user's question.
+   *
+   * Calls the relevance-check LLM with a lightweight JSON prompt. The LLM receives:
+   * - System message: the relevance-check assessor prompt (do NOT answer, only judge)
+   * - Middle messages: conversation history turns for follow-up context
+   * - Final user message: the full enriched context string + the question
+   *
+   * The LLM returns `{"relevant": true}` or `{"relevant": false}`.
+   *
+   * Fallback: if parsing fails or the `relevant` field is absent/non-boolean,
+   * returns `true` (conservative — proceed to synthesis rather than skipping).
+   */
+  private async checkRelevance(
+    question: string,
+    conversationHistory: ConversationTurn[],
+    contextString: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const systemPrompt = this.loadPrompt('inbox-chat-relevance-check.md');
+
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    for (const turn of conversationHistory) {
+      messages.push({ role: turn.role, content: turn.content });
+    }
+
+    messages.push({
+      role: 'user',
+      content: `## Email Context\n\n${contextString}\n\n## Question\n\n${question}`,
+    });
+
+    let rawResult: string;
+    try {
+      rawResult = await this.ollamaService.chat(messages, {
+        temperature: 0.3,
+        numPredict: 50,
+        format: 'json',
+        signal,
+      });
+    } catch (callError) {
+      // If the user aborted, rethrow so the calling loop's catch block handles
+      // cancellation correctly. We must NOT fall through to synthesis after an abort.
+      if (signal.aborted) {
+        throw callError;
+      }
+      // For all other failures (network, model, timeout, etc.) conservatively
+      // treat the context as relevant so synthesis still proceeds.
+      log.warn('[InboxChatService] checkRelevance: LLM call failed, defaulting to relevant=true:', callError);
+      return true;
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(rawResult.trim());
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        'relevant' in parsed &&
+        typeof (parsed as Record<string, unknown>)['relevant'] === 'boolean'
+      ) {
+        return (parsed as Record<string, unknown>)['relevant'] as boolean;
+      }
+
+      log.warn('[InboxChatService] checkRelevance: missing or non-boolean "relevant" field, defaulting to true:', {
+        rawResult: rawResult.slice(0, 200),
+      });
+      return true;
+    } catch (parseError) {
+      log.warn('[InboxChatService] checkRelevance: JSON parse failed, defaulting to relevant=true:', {
+        rawResult: rawResult.slice(0, 200),
+        parseError,
+      });
+      return true;
+    }
   }
 
   private loadPrompt(filename: string): string {

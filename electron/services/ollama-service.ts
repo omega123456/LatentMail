@@ -193,17 +193,28 @@ export class OllamaService {
    * Returns a 2D array of float vectors (one vector per input string).
    *
    * @param texts - Array of strings to embed
-   * @param model - Embedding model name (defaults to currentEmbeddingModel)
-   * @param timeoutMs - Request timeout in milliseconds (default 60s)
+   * @param options - Optional settings: model name, timeout in ms, and AbortSignal for cancellation
    */
-  async embed(texts: string[], model?: string, timeoutMs: number = 60_000): Promise<number[][]> {
-    const embeddingModel = model || this.currentEmbeddingModel;
+  async embed(texts: string[], options?: {
+    model?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<number[][]> {
+    const embeddingModel = options?.model || this.currentEmbeddingModel;
     if (!embeddingModel) {
       throw new Error('No embedding model selected. Please select an embedding model in Settings > AI.');
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // Wire up external cancellation signal if provided
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+    }
+    const timeout = setTimeout(() => controller.abort(), options?.timeoutMs ?? 60_000);
 
     try {
       const response = await fetch(`${this.baseUrl}/api/embed`, {
@@ -238,7 +249,7 @@ export class OllamaService {
    * @returns Vector dimension (e.g. 768 for nomic-embed-text)
    */
   async validateEmbeddingModel(model: string): Promise<number> {
-    const embeddings = await this.embed(['test'], model, 10_000);
+    const embeddings = await this.embed(['test'], { model, timeoutMs: 10_000 });
     if (!embeddings[0] || embeddings[0].length === 0) {
       throw new Error('Embedding model returned empty vector');
     }
@@ -279,6 +290,7 @@ export class OllamaService {
     format?: 'json' | string;
     numPredict?: number;
     think?: boolean;
+    signal?: AbortSignal;
   }): Promise<string> {
     const model = options?.model || this.currentModel;
     if (!model) {
@@ -302,6 +314,14 @@ export class OllamaService {
     }
 
     const controller = new AbortController();
+    // Wire up external cancellation signal if provided
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+    }
     const timeout = setTimeout(() => controller.abort(), 120_000); // 2 min timeout
     try {
       const response = await fetch(`${this.baseUrl}/api/chat`, {
