@@ -169,7 +169,8 @@ if (runApp) {
       logger.warn('Failed to initialize OAuth refresh timers:', err);
     }
 
-    // Timer for delayed sync resume after wake (5s delay to avoid Power Nap brief wakes).
+    // Delay before resuming sync after wake (avoids Power Nap brief wakes on macOS; gives Windows time for DNS/network).
+    const resumeAfterWakeDelayMs = isWindows() ? 15_000 : 7_000;
     let resumeSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 
     // Re-schedule refresh timers when system resumes from sleep (timers may have fired in a burst or not at all).
@@ -179,7 +180,7 @@ if (runApp) {
       } catch (err) {
         logger.warn('Failed to re-initialize OAuth refresh timers on resume:', err);
       }
-      // Resume sync after 5s delay on all platforms (avoids starting during Power Nap on macOS).
+      // Resume sync after delay (7s default; 15s on Windows to allow DNS/network to be ready after sleep).
       if (resumeSyncTimeout) {
         clearTimeout(resumeSyncTimeout);
       }
@@ -190,7 +191,7 @@ if (runApp) {
         } catch (err) {
           logger.warn('Failed to start sync after wake:', err);
         }
-      }, 5_000);
+      }, resumeAfterWakeDelayMs);
     });
 
     // Pause sync when system sleeps (all platforms). Cancel any pending delayed resume.
