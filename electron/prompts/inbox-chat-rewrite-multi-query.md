@@ -6,17 +6,58 @@ Your task: Given a conversation history and a new question, produce a JSON array
 
 ## Output format
 
-Return ONLY a JSON array — no explanation, no preamble, no markdown fences. The schema is:
+You MUST respond with ONLY a raw JSON array. No other output is allowed.
 
-```
+RULES — violation of any rule means your response is wrong:
+1. Do NOT write any text before the JSON array
+2. Do NOT write any text after the JSON array
+3. Do NOT wrap it in markdown code fences (no ```json or ```)
+4. Do NOT explain your reasoning or describe what you are doing
+5. The array MUST contain EXACTLY 5 objects — never 4, never 6, always 5
+6. Every object must have at least the `query` key
+7. All other keys (`dateFrom`, `dateTo`, `sender`, `recipient`, `dateOrder`) are optional — omit them when not applicable
+8. Date values must be strings in `YYYY-MM-DD` format
+9. The only allowed value for `dateOrder` is `"asc"` — never write `"desc"`; omit the field instead
+
+CORRECT response (query-only, when no filters apply):
 [
-  { "query": "...", "dateFrom": "YYYY-MM-DD", "dateTo": "YYYY-MM-DD", "sender": "...", "recipient": "...", "dateOrder": "desc" },
-  { "query": "...", ... },
-  { "query": "...", ... },
-  { "query": "...", ... },
-  { "query": "...", ... }
+  {"query": "project kickoff"},
+  {"query": "project kickoff meeting invitation"},
+  {"query": "project start launch kickoff"},
+  {"query": "kickoff agenda schedule"},
+  {"query": "project initiation kickoff"}
 ]
+
+CORRECT response (with optional filters and ordering where applicable):
+[
+  {"query": "invoice", "sender": "AutoCare Garage", "dateFrom": "2025-01-01", "dateTo": "2025-12-31"},
+  {"query": "invoice receipt payment", "sender": "AutoCare Garage", "dateFrom": "2025-01-01", "dateTo": "2025-12-31"},
+  {"query": "car maintenance invoice", "dateFrom": "2025-01-01", "dateTo": "2025-12-31"},
+  {"query": "billing statement receipt", "sender": "AutoCare Garage"},
+  {"query": "vehicle service receipt", "dateOrder": "asc"}
+]
+
+WRONG — do not do this (markdown fences):
+```json
+[{"query": "..."}]
 ```
+
+WRONG — do not do this (text before array):
+Here are the queries: [{"query": "..."}]
+
+WRONG — do not do this (fewer than 5 objects):
+[{"query": "..."}, {"query": "..."}, {"query": "..."}]
+
+WRONG — do not do this (more than 5 objects):
+[{"query": "..."}, {"query": "..."}, {"query": "..."}, {"query": "..."}, {"query": "..."}, {"query": "..."}]
+
+WRONG — do not do this (explicit desc):
+[{"query": "...", "dateOrder": "desc"}]
+
+Your entire response must be a single JSON array of EXACTLY 5 objects and nothing else.
+
+Each object in the array has this shape (all fields except `query` are optional):
+{ "query": "...", "dateFrom": "YYYY-MM-DD", "dateTo": "YYYY-MM-DD", "sender": "...", "recipient": "...", "dateOrder": "asc" }
 
 Each object in the array:
 - `query` (required): a clean semantic search query containing only keywords and concepts, not a natural-language question. Resolve pronouns and references using conversation context.
@@ -34,7 +75,7 @@ Each object in the array:
 
 ## Rules
 
-1. Always output valid JSON — the top-level value must be a JSON array of exactly 5 objects
+1. Always output valid JSON — the top-level value must be a JSON array of EXACTLY 5 objects, no more, no fewer. If you cannot think of 5 meaningfully different queries, vary the keywords, synonyms, or filter combinations until you have 5.
 2. Every object must include the `query` field
 3. First identify filters stated in the NEW question. Treat those as authoritative.
 4. Carry over `sender` and `recipient` from conversation history only when the follow-up clearly continues the same thread (for example, "what about the first one?" after a search for a specific sender).
