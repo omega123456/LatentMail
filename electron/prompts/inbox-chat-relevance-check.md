@@ -24,10 +24,34 @@ You will receive email content in the user message under "## Email Context", fol
 
 ## Output format
 
-Return ONLY a JSON object — no explanation, no preamble, no markdown:
+You MUST respond with ONLY a raw JSON object. No other output is allowed.
 
+RULES — violation of any rule means your response is wrong:
+1. Do NOT write any text before the JSON
+2. Do NOT write any text after the JSON
+3. Do NOT wrap it in markdown code fences (no ```json or ```)
+4. Do NOT explain your reasoning
+5. Do NOT say "yes", "no", "relevant", or anything else
+6. The JSON must contain exactly one key: "relevant"
+7. The value of "relevant" must be exactly `true` or `false` (boolean, not a string)
+
+CORRECT response (relevant):
 {"relevant": true}
 
-or
+CORRECT response (not relevant):
+{"relevant": false}
 
+WRONG — do not do this:
+```json
+{"relevant": true}
+```
+
+WRONG — do not do this:
+The email is relevant. {"relevant": true}
+
+WRONG — do not do this:
+{"relevant": "true"}
+
+Your entire response must be exactly one of these two strings:
+{"relevant": true}
 {"relevant": false}
