@@ -35,8 +35,8 @@ yarn make
 ### Testing
 
 ```bash
-# Run Angular unit tests
-yarn test
+# Run Backend Tests
+yarn test:backend
 ```
 
 ### Native Module Rebuilding

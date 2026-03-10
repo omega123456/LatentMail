@@ -75,6 +75,48 @@ export class DatabaseService {
     return this.db;
   }
 
+  /**
+   * Close the current database connection and reopen at the given path.
+   * Re-runs PRAGMAs and Umzug migrations on the new handle.
+   *
+   * Used by the test infrastructure to restore the database from a template snapshot.
+   * Call close() first to safely unlock the file before overwriting it, then call
+   * reopen() to open the restored copy.
+   *
+   * @param dbFilePath - Absolute path to the database file. If omitted, uses getDbPath().
+   */
+  async reopen(dbFilePath?: string): Promise<void> {
+    this.close();
+
+    const targetPath = dbFilePath ?? this.getDbPath();
+    this.dbPath = targetPath;
+    log.info(`[DatabaseService] Reopening database at: ${targetPath}`);
+
+    const dir = path.dirname(targetPath);
+    fs.mkdirSync(dir, { recursive: true });
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3');
+    this.db = new BetterSqlite3(targetPath);
+
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('foreign_keys = ON');
+
+    const migrationsDir = path.join(__dirname, '..', 'database', 'migrations');
+    const umzug = new Umzug({
+      migrations: {
+        glob: ['*.js', { cwd: migrationsDir }],
+      },
+      context: { db: this.db, databaseService: this },
+      storage: createBetterSqlite3Storage(this.db),
+      logger: log,
+    });
+
+    await umzug.up();
+    log.info('[DatabaseService] Database reopened and migrations applied');
+  }
+
   // ---- Settings operations ----
 
   getSetting(key: string): string | null {

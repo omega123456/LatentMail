@@ -700,4 +700,63 @@ export class VectorDbService {
     }
     this.vectorsAvailable = false;
   }
+
+  /**
+   * Close the current vector database connection and reopen at the given path.
+   * Re-loads the sqlite-vec extension, re-runs PRAGMAs, and re-creates the schema.
+   *
+   * Used by the test infrastructure to restore the vector database from a template snapshot.
+   * Call close() first, then overwrite the file, then call reopen().
+   *
+   * @param dbFilePath - Absolute path to the new database file. If omitted, resolves via
+   *                     DATABASE_PATH env var or app.getPath('userData').
+   */
+  reopen(dbFilePath?: string): void {
+    this.close();
+
+    let targetPath: string;
+    if (dbFilePath) {
+      targetPath = dbFilePath;
+    } else if (process.env['DATABASE_PATH']) {
+      // In test environments, use the same directory as the main DB
+      targetPath = path.join(path.dirname(process.env['DATABASE_PATH']), 'latentmail-vectors.db');
+    } else {
+      const userDataPath = app.getPath('userData');
+      targetPath = path.join(userDataPath, 'latentmail-vectors.db');
+    }
+
+    this.dbPath = targetPath;
+    log.info(`[VectorDbService] Reopening vector database at: ${targetPath}`);
+
+    try {
+      const dir = path.dirname(targetPath);
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fsModule = require('fs') as typeof import('fs');
+      fsModule.mkdirSync(dir, { recursive: true });
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3');
+      this.db = new BetterSqlite3(targetPath);
+
+      this.loadSqliteVec();
+      if (!this.vectorsAvailable) {
+        this.db.close();
+        this.db = null;
+        return;
+      }
+
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('synchronous = NORMAL');
+
+      this.createSchema();
+      this.loadConfig();
+
+      log.info(`[VectorDbService] Reopened successfully. Model: ${this.currentModel ?? 'none'}`);
+    } catch (error) {
+      log.warn('[VectorDbService] Reopen failed:', error);
+      this.vectorsAvailable = false;
+      this.db = null;
+    }
+  }
 }
