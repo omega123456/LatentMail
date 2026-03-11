@@ -56,6 +56,15 @@ After installing dependencies or updating Electron, rebuild native modules:
 npx @electron/rebuild
 ```
 
+### Git Hooks (Worktree Support)
+
+Git hooks live in `.githooks/` (versioned) rather than `.git/hooks/`. This ensures hooks work across git worktrees, where each worktree has a separate `$GIT_DIR`.
+
+The `postinstall` script automatically sets `core.hooksPath` to `.githooks/` on `yarn install`.
+
+**Current hooks:**
+- `post-checkout` — Runs `yarn install` when creating a new worktree (detects initial checkout)
+
 ### Native Drag-and-Drop Addon (Windows Only)
 
 The app includes a C++ NAPI addon (`native/win32-drop-target/`) that fixes OS file drag-and-drop on Windows (broken by a Chromium regression in Electron 28+). The addon uses `DragAcceptFiles` + window subclassing to intercept `WM_DROPFILES` messages, bypassing Chromium's broken OLE handler.
