@@ -49,10 +49,24 @@ export class SmtpService {
 
     const accessToken = await oauthService.getAccessToken(accountId);
 
+    // Allow env var overrides for test environments.
+    // SMTP_HOST overrides the server hostname (e.g. pointing to a local fake SMTP server).
+    // SMTP_PORT overrides the port number.
+    // SMTP_SECURE overrides TLS explicitly; defaults to true (secure) regardless of host override.
+    const smtpHostOverride = process.env['SMTP_HOST'];
+    const smtpPortOverride = process.env['SMTP_PORT'];
+    const smtpSecureOverride = process.env['SMTP_SECURE'];
+
+    const smtpHost = smtpHostOverride || 'smtp.gmail.com';
+    const smtpPort = smtpPortOverride ? Number(smtpPortOverride) : 465;
+    const smtpSecure = smtpSecureOverride !== undefined
+      ? smtpSecureOverride === 'true' || smtpSecureOverride === '1'
+      : true;
+
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
       auth: {
         type: 'OAuth2',
         user: account.email,

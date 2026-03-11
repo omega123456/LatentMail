@@ -105,8 +105,9 @@ export class SyncQueueBridge {
    * Pause background sync and all IMAP IDLE connections.
    * Sets global reconnect suppression FIRST to prevent reconnects during async teardown.
    * Idempotent: calling when already paused is a no-op.
+   * Returns a Promise that resolves once the async teardown has completed.
    */
-  pause(): void {
+  async pause(): Promise<void> {
     if (this.paused) {
       log.info('[SyncQueueBridge] pause() called but already paused — no-op');
       return;
@@ -121,13 +122,15 @@ export class SyncQueueBridge {
     // Tear down all IDLE and shared IMAP connections so they are recreated fresh on resume.
     // pause() on BodyFetchQueueService sets the isPaused flag BEFORE disconnecting so that
     // any in-flight fastq workers fail fast instead of lazily opening a new connection.
-    Promise.all([
-      SyncService.getInstance().stopAllIdle(),
-      ImapService.getInstance().disconnectAllShared(),
-      BodyFetchQueueService.getInstance().pause(),
-    ]).catch((err) => {
+    try {
+      await Promise.all([
+        SyncService.getInstance().stopAllIdle(),
+        ImapService.getInstance().disconnectAllShared(),
+        BodyFetchQueueService.getInstance().pause(),
+      ]);
+    } catch (err) {
       log.warn('[SyncQueueBridge] pause(): teardown failed:', err);
-    });
+    }
     log.info('[SyncQueueBridge] Background sync paused');
   }
 

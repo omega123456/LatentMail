@@ -139,10 +139,24 @@ export class ImapService {
 
     const accessToken = await oauthService.getAccessToken(accountId);
 
+    // Allow env var overrides for test environments.
+    // IMAP_HOST overrides the server hostname (e.g. pointing to a local fake IMAP server).
+    // IMAP_PORT overrides the port number.
+    // IMAP_SECURE overrides TLS explicitly; defaults to true (secure) regardless of host override.
+    const imapHostOverride = process.env['IMAP_HOST'];
+    const imapPortOverride = process.env['IMAP_PORT'];
+    const imapSecureOverride = process.env['IMAP_SECURE'];
+
+    const imapHost = imapHostOverride || 'imap.gmail.com';
+    const imapPort = imapPortOverride ? Number(imapPortOverride) : 993;
+    const imapSecure = imapSecureOverride !== undefined
+      ? imapSecureOverride === 'true' || imapSecureOverride === '1'
+      : true;
+
     const client = new ImapFlow({
-      host: 'imap.gmail.com',
-      port: 993,
-      secure: true,
+      host: imapHost,
+      port: imapPort,
+      secure: imapSecure,
       auth: {
         user: account.email,
         accessToken: accessToken,
@@ -894,10 +908,22 @@ export class ImapService {
 
     const accessToken = await oauthService.getAccessToken(accountId);
 
+    // Allow env var overrides for test environments (same logic as createConnection).
+    // IMAP_SECURE defaults to true regardless of whether IMAP_HOST is overridden.
+    const imapHostOverride = process.env['IMAP_HOST'];
+    const imapPortOverride = process.env['IMAP_PORT'];
+    const imapSecureOverride = process.env['IMAP_SECURE'];
+
+    const imapHost = imapHostOverride || 'imap.gmail.com';
+    const imapPort = imapPortOverride ? Number(imapPortOverride) : 993;
+    const imapSecure = imapSecureOverride !== undefined
+      ? imapSecureOverride === 'true' || imapSecureOverride === '1'
+      : true;
+
     const client = new ImapFlow({
-      host: 'imap.gmail.com',
-      port: 993,
-      secure: true,
+      host: imapHost,
+      port: imapPort,
+      secure: imapSecure,
       auth: {
         user: account.email,
         accessToken: accessToken,
@@ -1048,10 +1074,22 @@ export class ImapService {
 
     const accessToken = await oauthService.getAccessToken(accountId);
 
+    // Allow env var overrides for test environments (same logic as createConnection).
+    // IMAP_SECURE defaults to true regardless of whether IMAP_HOST is overridden.
+    const imapHostOverride = process.env['IMAP_HOST'];
+    const imapPortOverride = process.env['IMAP_PORT'];
+    const imapSecureOverride = process.env['IMAP_SECURE'];
+
+    const imapHost = imapHostOverride || 'imap.gmail.com';
+    const imapPort = imapPortOverride ? Number(imapPortOverride) : 993;
+    const imapSecure = imapSecureOverride !== undefined
+      ? imapSecureOverride === 'true' || imapSecureOverride === '1'
+      : true;
+
     const client = new ImapFlow({
-      host: 'imap.gmail.com',
-      port: 993,
-      secure: true,
+      host: imapHost,
+      port: imapPort,
+      secure: imapSecure,
       auth: {
         user: account.email,
         accessToken: accessToken,

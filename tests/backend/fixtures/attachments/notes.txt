@@ -1,0 +1,3 @@
+Hello World! This is a test attachment file.
+It contains plain text content for testing attachment handling.
+Line 3 of the text file.

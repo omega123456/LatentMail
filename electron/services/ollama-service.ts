@@ -63,6 +63,28 @@ export class OllamaService {
 
   /** Load Ollama settings from database */
   private loadSettings(): void {
+    // OLLAMA_URL env var is the highest-priority override.
+    // When set, use it as baseUrl and skip the DB lookup entirely.
+    const ollamaUrlOverride = process.env['OLLAMA_URL'];
+    if (ollamaUrlOverride) {
+      this.baseUrl = ollamaUrlOverride;
+      // Still try to load model preferences from DB even when URL is overridden.
+      try {
+        const db = DatabaseService.getInstance();
+        const model = db.getSetting('ollamaModel');
+        if (model) {
+          this.currentModel = model;
+        }
+        const embeddingModel = db.getSetting('ollamaEmbeddingModel');
+        if (embeddingModel) {
+          this.currentEmbeddingModel = embeddingModel;
+        }
+      } catch (err) {
+        log.warn('Failed to load Ollama model settings from DB (URL was overridden):', err);
+      }
+      return;
+    }
+
     try {
       const db = DatabaseService.getInstance();
       const url = db.getSetting('ollamaUrl');

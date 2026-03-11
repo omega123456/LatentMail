@@ -1,0 +1,19 @@
+From: alice@example.com
+To: bob@example.com
+Subject: Thread test: first message
+Date: Fri, 05 Jan 2024 09:00:00 +0000
+Message-ID: <thread-msg-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+X-GM-MSGID: 1000000000000011
+X-GM-THRID: 2000000000000011
+X-GM-LABELS: \Inbox
+
+Hi Bob,
+
+I wanted to start a conversation about the upcoming project meeting.
+Are you available on Thursday?
+
+Best,
+Alice

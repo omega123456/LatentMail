@@ -106,11 +106,24 @@ const GMAIL_SENT_FOLDER = '[Gmail]/Sent Mail';
 const GMAIL_STARRED_FOLDER = '[Gmail]/Starred';
 const POST_OP_FETCH_LIMIT = 5;
 const MAX_RETRIES = 10;
-const BACKOFF_BASE_MS = 2_000;
-const BACKOFF_CAP_MS = 60_000;
+/** Default base delay (ms) for exponential backoff. Override via QUEUE_RETRY_BASE_MS env var. */
+const DEFAULT_BACKOFF_BASE_MS = 2_000;
+/** Default cap (ms) for exponential backoff. Override via QUEUE_RETRY_MAX_MS env var. */
+const DEFAULT_BACKOFF_CAP_MS = 60_000;
 
+/**
+ * Compute the exponential backoff delay for a given retry count.
+ * Reads QUEUE_RETRY_BASE_MS and QUEUE_RETRY_MAX_MS from the environment on
+ * each call so that tests can configure shorter delays without restarting.
+ */
 function backoffDelay(retryCount: number): number {
-  return Math.min(BACKOFF_BASE_MS * Math.pow(2, retryCount), BACKOFF_CAP_MS);
+  const baseMs = process.env['QUEUE_RETRY_BASE_MS']
+    ? Number(process.env['QUEUE_RETRY_BASE_MS'])
+    : DEFAULT_BACKOFF_BASE_MS;
+  const capMs = process.env['QUEUE_RETRY_MAX_MS']
+    ? Number(process.env['QUEUE_RETRY_MAX_MS'])
+    : DEFAULT_BACKOFF_CAP_MS;
+  return Math.min(baseMs * Math.pow(2, retryCount), capMs);
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,13 @@ import * as os from 'os';
  * @returns The pipe/socket path string.
  */
 export function getPipePath(isDev: boolean): string {
+  // CLI_PIPE_PATH env var overrides the computed path entirely.
+  // Used in test environments to direct CLI communication to a predictable location.
+  const pipePathOverride = process.env['CLI_PIPE_PATH'];
+  if (pipePathOverride) {
+    return pipePathOverride;
+  }
+
   const rawUsername = os.userInfo().username;
   // Sanitize: keep only alphanumeric, underscore, and hyphen characters.
   // Fall back to the numeric UID if the sanitized name is empty (e.g. purely non-ASCII username).

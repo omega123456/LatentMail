@@ -1,0 +1,19 @@
+From: alice@example.com
+To: bob@example.com
+Subject: Plain text test message
+Date: Mon, 01 Jan 2024 10:00:00 +0000
+Message-ID: <plain-text-001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+X-GM-MSGID: 1000000000000001
+X-GM-THRID: 2000000000000001
+X-GM-LABELS: \Inbox
+
+Hello Bob,
+
+This is a plain text email message used for testing purposes.
+It has no HTML content, no attachments, and no inline images.
+
+Best regards,
+Alice

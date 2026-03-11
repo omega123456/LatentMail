@@ -4,11 +4,12 @@
  * This file replaces production main.ts for test runs. It:
  *   1. Registers custom protocol schemes (MUST be before app.whenReady())
  *   2. Creates a temp directory and sets userData path
- *   3. Sets all required env vars BEFORE importing any production modules
+ *   3. Starts all mock servers (IMAP, SMTP, OAuth, Ollama) and sets env vars
+ *      BEFORE importing any production modules
  *   4. Uses dynamic require() for ALL production service imports (avoids early
  *      singleton initialization at module scope before userData is set)
  *   5. Initializes services in a deterministic order (DB → Logger → VectorDB → Embedding)
- *   6. Skips services not needed for testing (SyncQueueBridge, OAuthService, TrayService, etc.)
+ *   6. Skips services not needed for testing (SyncQueueBridge, TrayService, etc.)
  *   7. Wraps ipcMain.handle with a recording shim AFTER activity tracking patch
  *   8. Creates a hidden BrowserWindow with a test preload script
  *   9. Monkey-patches webContents.send to forward events to TestEventBus
@@ -28,6 +29,12 @@ import * as path from 'path';
 // Static imports for test infrastructure only — these do NOT import production services
 import { TestEventBus } from './infrastructure/test-event-bus';
 import { createMochaRunner, runMocha } from './infrastructure/mocha-setup';
+import { GmailImapServer } from './mocks/imap/gmail-imap-server';
+import { MessageStore } from './mocks/imap/message-store';
+import { StateInspector } from './mocks/imap/state-inspector';
+import { SmtpCaptureServer } from './mocks/smtp/smtp-capture-server';
+import { FakeOAuthServer } from './mocks/oauth/fake-oauth-server';
+import { FakeOllamaServer } from './mocks/ollama/fake-ollama-server';
 
 // ---- Protocol registration (must be BEFORE app.whenReady()) ----
 protocol.registerSchemesAsPrivileged([
@@ -45,6 +52,11 @@ app.setPath('userData', tempDir);
 const testDbPath = path.join(tempDir, 'latentmail.test.db');
 process.env['DATABASE_PATH'] = testDbPath;
 process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
+// Speed up queue retries dramatically in tests
+process.env['QUEUE_RETRY_BASE_MS'] = '50';
+process.env['QUEUE_RETRY_MAX_MS'] = '500';
+// Enable OAuth test mode so login() doesn't open a system browser
+process.env['OAUTH_TEST_MODE'] = '1';
 
 // ---- IPC handler map (exported for test helpers) ----
 // Populated by the ipcMain.handle shim below.
@@ -53,9 +65,77 @@ export const ipcHandlerMap = new Map<string, (...args: unknown[]) => unknown>();
 // ---- Hidden BrowserWindow (exported for test helpers to get webContents) ----
 export let hiddenWindow: BrowserWindow | null = null;
 
+// ---- Mock server singletons (exported for test helpers) ----
+export const imapStore = new MessageStore();
+export const imapServer = new GmailImapServer(imapStore);
+export const imapStateInspector = new StateInspector(imapServer, imapStore);
+export const smtpServer = new SmtpCaptureServer();
+export const oauthServer = new FakeOAuthServer();
+export const ollamaServer = new FakeOllamaServer();
+
 // ---- App startup ----
 app.whenReady().then(async () => {
   console.log('[test-main] Electron app ready. Temp dir:', tempDir);
+
+  // ---- Step 0: Start all mock servers and configure env vars ----
+  // This MUST happen before any production service singletons are created,
+  // since singletons capture config at construction time.
+
+  // Start fake IMAP server
+  let imapPort: number;
+  try {
+    imapPort = await imapServer.start();
+    process.env['IMAP_HOST'] = '127.0.0.1';
+    process.env['IMAP_PORT'] = String(imapPort);
+    process.env['IMAP_SECURE'] = 'false';
+    console.log(`[test-main] Fake IMAP server started on port ${imapPort}`);
+  } catch (error) {
+    console.error('[test-main] Failed to start fake IMAP server:', error);
+    app.exit(1);
+    return;
+  }
+
+  // Start fake SMTP server
+  let smtpPort: number;
+  try {
+    smtpPort = await smtpServer.start();
+    process.env['SMTP_HOST'] = '127.0.0.1';
+    process.env['SMTP_PORT'] = String(smtpPort);
+    process.env['SMTP_SECURE'] = 'false';
+    console.log(`[test-main] Fake SMTP server started on port ${smtpPort}`);
+  } catch (error) {
+    console.error('[test-main] Failed to start fake SMTP server:', error);
+    app.exit(1);
+    return;
+  }
+
+  // Start fake OAuth HTTPS server
+  let oauthPort: number;
+  try {
+    oauthPort = await oauthServer.start();
+    const oauthBaseUrl = oauthServer.getBaseUrl();
+    process.env['GOOGLE_TOKEN_URL'] = `${oauthBaseUrl}/o/oauth2/token`;
+    process.env['GOOGLE_USERINFO_URL'] = `${oauthBaseUrl}/oauth2/v3/userinfo`;
+    process.env['GOOGLE_REVOKE_URL'] = `${oauthBaseUrl}/o/oauth2/revoke`;
+    process.env['GOOGLE_AUTH_URL'] = `${oauthBaseUrl}/o/oauth2/v2/auth`;
+    console.log(`[test-main] Fake OAuth server started on port ${oauthPort}`);
+  } catch (error) {
+    console.error('[test-main] Failed to start fake OAuth server:', error);
+    app.exit(1);
+    return;
+  }
+
+  // Start fake Ollama server
+  let ollamaPort: number;
+  try {
+    ollamaPort = await ollamaServer.start();
+    process.env['OLLAMA_URL'] = ollamaServer.getBaseUrl();
+    console.log(`[test-main] Fake Ollama server started on port ${ollamaPort}`);
+  } catch (error) {
+    console.error('[test-main] Failed to start fake Ollama server:', error);
+    app.exit(1);
+    return;
+  }
 
   // Step 1: Initialize DatabaseService
   // Dynamic require AFTER app.setPath() and env vars are set
@@ -281,7 +361,20 @@ app.whenReady().then(async () => {
 
   console.log(`[test-main] Tests complete. Failures: ${failures}`);
 
-  // Step 14: Cleanup temp directory
+  // Step 14: Shut down all mock servers
+  try {
+    await Promise.allSettled([
+      imapServer.stop(),
+      smtpServer.stop(),
+      oauthServer.stop(),
+      ollamaServer.stop(),
+    ]);
+    console.log('[test-main] All mock servers stopped');
+  } catch (error) {
+    console.warn('[test-main] Error stopping mock servers (non-fatal):', error);
+  }
+
+  // Step 15: Cleanup temp directory
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });
   } catch {

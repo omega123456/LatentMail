@@ -1,0 +1,56 @@
+From: eve@example.com
+To: frank@example.com
+Subject: Multipart message with attachment
+Date: Wed, 03 Jan 2024 12:00:00 +0000
+Message-ID: <multipart-attachment-003@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==attachment_boundary_001=="
+X-GM-MSGID: 1000000000000003
+X-GM-THRID: 2000000000000003
+X-GM-LABELS: \Inbox
+
+--==attachment_boundary_001==
+Content-Type: multipart/alternative; boundary="==alt_boundary_001=="
+
+--==alt_boundary_001==
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+Hello Frank,
+
+Please find the attached document.
+
+Best,
+Eve
+
+--==alt_boundary_001==
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>Hello Frank,</p>
+  <p>Please find the attached document.</p>
+  <p>Best,<br>Eve</p>
+</body>
+</html>
+
+--==alt_boundary_001==--
+
+--==attachment_boundary_001==
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="notes.txt"
+
+SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0IGF0dGFjaG1lbnQu
+
+--==attachment_boundary_001==
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="small.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk
++M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+
+--==attachment_boundary_001==--

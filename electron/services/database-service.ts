@@ -1505,7 +1505,7 @@ export class DatabaseService {
 
     // Primary: resolve by special_use attribute (populated after first sync post-migration)
     const bySpecialUse = this.db.prepare(
-      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND special_use = '\Trash' LIMIT 1`
+      `SELECT gmail_label_id FROM labels WHERE account_id = :accountId AND special_use = '\\Trash' LIMIT 1`
     ).get({ accountId }) as { gmail_label_id: string } | undefined;
     if (bySpecialUse !== undefined && bySpecialUse.gmail_label_id.length > 0) {
       return bySpecialUse.gmail_label_id;

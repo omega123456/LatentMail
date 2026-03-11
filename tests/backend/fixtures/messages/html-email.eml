@@ -1,0 +1,22 @@
+From: carol@example.com
+To: dave@example.com
+Subject: HTML test message
+Date: Tue, 02 Jan 2024 11:00:00 +0000
+Message-ID: <html-email-002@example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+X-GM-MSGID: 1000000000000002
+X-GM-THRID: 2000000000000002
+X-GM-LABELS: \Inbox
+
+<!DOCTYPE html>
+<html>
+<head><title>HTML Test</title></head>
+<body>
+  <h1>Hello Dave,</h1>
+  <p>This is an <strong>HTML email</strong> used for testing.</p>
+  <p>It has <em>rich formatting</em> but no attachments.</p>
+  <p>Best regards,<br>Carol</p>
+</body>
+</html>

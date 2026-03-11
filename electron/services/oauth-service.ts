@@ -10,11 +10,32 @@ import { DatabaseService } from './database-service';
 import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from '../secrets';
 import { clearAvatarCacheForAccount, getCachedAvatarUrl } from './avatar-cache-service';
 
-// Google OAuth2 endpoints
-const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo';
-const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+// Google OAuth2 endpoints — overridable via environment variables for test environments.
+// When env vars are set, they replace the production Google URLs entirely.
+const GOOGLE_AUTH_URL_DEFAULT = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_TOKEN_URL_DEFAULT = 'https://oauth2.googleapis.com/token';
+const GOOGLE_USERINFO_URL_DEFAULT = 'https://www.googleapis.com/oauth2/v3/userinfo';
+const GOOGLE_REVOKE_URL_DEFAULT = 'https://oauth2.googleapis.com/revoke';
+
+/** Resolve the Google token endpoint URL, with env var override support. */
+function resolveTokenUrl(): string {
+  return process.env['GOOGLE_TOKEN_URL'] || GOOGLE_TOKEN_URL_DEFAULT;
+}
+
+/** Resolve the Google userinfo endpoint URL, with env var override support. */
+function resolveUserInfoUrl(): string {
+  return process.env['GOOGLE_USERINFO_URL'] || GOOGLE_USERINFO_URL_DEFAULT;
+}
+
+/** Resolve the Google token revocation URL, with env var override support. */
+function resolveRevokeUrl(): string {
+  return process.env['GOOGLE_REVOKE_URL'] || GOOGLE_REVOKE_URL_DEFAULT;
+}
+
+/** Resolve the Google authorization URL, with env var override support. */
+function resolveAuthUrl(): string {
+  return process.env['GOOGLE_AUTH_URL'] || GOOGLE_AUTH_URL_DEFAULT;
+}
 
 /** Max retries for invalid_grant before marking account as needing re-auth (transient after sleep). */
 const INVALID_GRANT_MAX_RETRIES = 2;
@@ -106,9 +127,28 @@ export class OAuthService {
     // Build the authorization URL
     const authUrl = this.buildAuthUrl(redirectUri, codeChallenge, state);
 
-    // Open the system browser
-    log.info('Opening system browser for OAuth consent...');
-    await shell.openExternal(authUrl);
+    // In OAUTH_TEST_MODE, skip opening the system browser.
+    // Instead, emit an 'oauth:test-auth-url' event on all BrowserWindows so that
+    // test code (via TestEventBus) can programmatically trigger the callback.
+    // The loopback port and state are also emitted so tests can call triggerCallback().
+    if (process.env['OAUTH_TEST_MODE'] === '1') {
+      log.info('[OAuthService] OAUTH_TEST_MODE enabled — emitting test event instead of opening browser');
+      try {
+        const { BrowserWindow } = require('electron') as typeof import('electron');
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('oauth:test-auth-url', { authUrl, loopbackPort: port, state });
+          }
+        }
+      } catch (emitErr) {
+        log.warn('[OAuthService] Failed to emit oauth:test-auth-url event:', emitErr);
+      }
+    } else {
+      // Open the system browser (production path)
+      log.info('Opening system browser for OAuth consent...');
+      await shell.openExternal(authUrl);
+    }
 
     // Wait for the user to complete auth in the browser
     let callbackResult;
@@ -428,7 +468,7 @@ export class OAuthService {
       prompt: 'consent',          // Always show consent to get refresh token
     });
 
-    return `${GOOGLE_AUTH_URL}?${params.toString()}`;
+    return `${resolveAuthUrl()}?${params.toString()}`;
   }
 
   private exchangeCodeForTokens(code: string, redirectUri: string, codeVerifier: string): Promise<OAuthTokens> {
@@ -447,7 +487,7 @@ export class OAuthService {
     const body = new URLSearchParams(params).toString();
 
     return new Promise((resolve, reject) => {
-      const req = https.request(GOOGLE_TOKEN_URL, {
+      const req = https.request(resolveTokenUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -493,7 +533,7 @@ export class OAuthService {
     const body = new URLSearchParams(params).toString();
 
     return new Promise((resolve, reject) => {
-      const req = https.request(GOOGLE_TOKEN_URL, {
+      const req = https.request(resolveTokenUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -528,7 +568,7 @@ export class OAuthService {
 
   private fetchUserInfo(accessToken: string): Promise<UserInfo> {
     return new Promise((resolve, reject) => {
-      const req = https.request(GOOGLE_USERINFO_URL, {
+      const req = https.request(resolveUserInfoUrl(), {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -563,7 +603,7 @@ export class OAuthService {
     const body = `token=${encodeURIComponent(token)}`;
 
     return new Promise((resolve, reject) => {
-      const req = https.request(GOOGLE_REVOKE_URL, {
+      const req = https.request(resolveRevokeUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
