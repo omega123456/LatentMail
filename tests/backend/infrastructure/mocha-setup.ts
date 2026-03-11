@@ -3,11 +3,55 @@
  *
  * Called from test-main.ts after all services have been initialized.
  * Discovers compiled test files from dist-test/tests/backend/suites/.
+ *
+ * Supports optional filtering via environment variables (set by run-electron-tests.js):
+ *
+ *   MOCHA_GREP        — Regex string passed to Mocha's `grep` option; filters tests by
+ *                       their full name (describe + it title chain), case-insensitive.
+ *                       Equivalent to PHPUnit's --filter for method names.
+ *
+ *   MOCHA_FILE_FILTER — Substring matched against each suite filename (case-insensitive).
+ *                       Only suite files whose name contains this substring are loaded.
+ *                       Equivalent to running a single test file in PHPUnit.
+ *
+ * Set via the run-electron-tests.js CLI:
+ *   yarn test:backend --filter=<regex>       → MOCHA_GREP
+ *   yarn test:backend --file=<substring>     → MOCHA_FILE_FILTER
+ *   yarn test:backend --list                 → list available suites and exit
  */
 
 import Mocha from 'mocha';
 import * as path from 'path';
 import * as fs from 'fs';
+
+/**
+ * Parse a user-supplied grep pattern into a RegExp.
+ *
+ * Supports two forms:
+ *   - Bare regex source:    "login"          → /login/i  (case-insensitive by default)
+ *   - Slash-delimited form: "/login/i"       → /login/i  (flags taken from the literal)
+ *
+ * If the pattern is not a valid regex, returns a literal-string match instead of
+ * throwing so that the runner always starts and reports a useful diagnostic.
+ */
+function parseGrepPattern(pattern: string): RegExp {
+  const slashLiteralMatch = /^\/(.+)\/([gimsuy]*)$/.exec(pattern);
+  if (slashLiteralMatch !== null) {
+    try {
+      return new RegExp(slashLiteralMatch[1], slashLiteralMatch[2]);
+    } catch {
+      console.warn(`[mocha-setup] Invalid regex in --filter: "${pattern}", falling back to literal match`);
+      return new RegExp(pattern.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&'));
+    }
+  }
+
+  try {
+    return new RegExp(pattern, 'i');
+  } catch {
+    console.warn(`[mocha-setup] Invalid regex in --filter: "${pattern}", falling back to literal match`);
+    return new RegExp(pattern.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&'), 'i');
+  }
+}
 
 /**
  * Create a configured Mocha instance and add all discovered test files.
@@ -20,21 +64,55 @@ import * as fs from 'fs';
  * so we navigate up one level to reach the suites directory.
  */
 export function createMochaRunner(): Mocha {
-  const mocha = new Mocha({
+  const grepPattern = process.env['MOCHA_GREP'];
+  const fileFilter = process.env['MOCHA_FILE_FILTER'];
+
+  const mochaOptions: Mocha.MochaOptions = {
     timeout: 30_000,
     reporter: 'spec',
-  });
+    // Fail the run if zero tests execute — catches typos in --filter / --file
+    // and guards against accidentally deleting all suite files.
+    failZero: true,
+  };
+
+  // Apply test-name grep if provided (Mocha accepts a regex string or RegExp)
+  if (grepPattern !== undefined && grepPattern.length > 0) {
+    mochaOptions.grep = parseGrepPattern(grepPattern);
+    console.log(`[mocha-setup] Grep filter active: ${String(mochaOptions.grep)}`);
+  }
+
+  const mocha = new Mocha(mochaOptions);
 
   // Navigate from dist-test/tests/backend/infrastructure/ up to dist-test/tests/backend/suites/
   const suitesDir = path.join(__dirname, '..', 'suites');
 
-  if (fs.existsSync(suitesDir)) {
-    const files = fs.readdirSync(suitesDir).filter((file) => file.endsWith('.test.js'));
-    for (const file of files) {
-      mocha.addFile(path.join(suitesDir, file));
-    }
-  } else {
+  if (!fs.existsSync(suitesDir)) {
     console.warn(`[mocha-setup] Suites directory not found: ${suitesDir}`);
+    return mocha;
+  }
+
+  let files = fs.readdirSync(suitesDir).filter((file) => file.endsWith('.test.js'));
+
+  // Apply file-name filter if provided (substring match, case-insensitive)
+  if (fileFilter !== undefined && fileFilter.length > 0) {
+    const lowerFilter = fileFilter.toLowerCase();
+    const allFiles = files;
+    files = files.filter((file) => file.toLowerCase().includes(lowerFilter));
+
+    if (files.length === 0) {
+      console.warn(
+        `[mocha-setup] No suite files matched --file="${fileFilter}". ` +
+          `Available suites: ${allFiles.map((file) => file.replace('.test.js', '')).join(', ')}`,
+      );
+    } else {
+      console.log(
+        `[mocha-setup] File filter "${fileFilter}" matched: ${files.map((file) => file.replace('.test.js', '')).join(', ')}`,
+      );
+    }
+  }
+
+  for (const file of files) {
+    mocha.addFile(path.join(suitesDir, file));
   }
 
   return mocha;

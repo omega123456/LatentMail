@@ -35,8 +35,17 @@ yarn make
 ### Testing
 
 ```bash
-# Run Backend Tests
+# Run all backend tests
 yarn test:backend
+
+# Filter tests by name (regex match on describe/it titles)
+yarn test:backend --filter="sync"
+
+# Run tests from a specific suite file (substring match)
+yarn test:backend --file="database-settings"
+
+# List available test suites
+yarn test:backend --list
 ```
 
 ### Native Module Rebuilding
@@ -269,6 +278,8 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 - **Always use curly braces for control statements** — no single-line `if`/`else`/`for`/`while`/`do`. Every branch or loop body must be wrapped in `{ }`.
 - **Use full words for variable and parameter names** — no single letters (e.g. use `deltaX` not `dx`, `width` not `w`) and no abbreviations (e.g. use `element` not `el`, `bounds` not `rect`, `index` not `i` where readability benefits). Exception: very short loop variables in tiny scope (e.g. `index` in a 2-line loop) may use a full word like `index`; avoid `i`, `j`, `n`, `x`, etc.
+- **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:backend` before finishing and ensure all tests pass. Do not leave a session with failing tests. If tests fail, fix them before completing the task.
+- **New code requires test coverage** — Any new functionality, service, IPC handler, or non-trivial logic must have corresponding tests in `tests/backend/`. Do not add features without tests. Tests live in `tests/backend/suites/` and follow the existing patterns (Mocha + Chai). See "Backend Testing" section below for details.
 
 ### Dates and Time
 
@@ -338,6 +349,135 @@ SQLite database location:
 - **Linux**: `~/.config/LatentMail/latentmail.db`
 
 Use `sqlite3` CLI or DB Browser for SQLite to inspect.
+
+## Backend Testing
+
+### Philosophy: Functional/E2E Tests Only
+
+This project uses **functional and end-to-end tests**, NOT unit tests. Tests exercise the real application code paths — real services, real database operations, real IPC handlers. The goal is to verify actual behavior, not isolated functions.
+
+**DO NOT**:
+- Write unit tests that test functions in isolation
+- Mock internal services, classes, or functions
+- Use dependency injection to swap internal implementations
+- Test private methods or internal state directly
+
+**DO**:
+- Test through the public IPC interface (`callIpc()`)
+- Use real service instances (DatabaseService, ImapService, etc.)
+- Exercise complete workflows (e.g., sync → store → retrieve)
+- Verify end-to-end behavior from API input to database state
+
+### Mocking Policy: External Services Only
+
+**Only mock external network services** — systems that live outside this codebase and would require real network I/O:
+
+| Mock Server | Location | What It Replaces |
+|-------------|----------|------------------|
+| `GmailImapServer` | `tests/backend/mocks/imap/gmail-imap-server.ts` | Real Gmail IMAP servers |
+| `SmtpCaptureServer` | `tests/backend/mocks/smtp/smtp-capture-server.ts` | Real SMTP relay |
+| `FakeOAuthServer` | `tests/backend/mocks/oauth/fake-oauth-server.ts` | Google OAuth endpoints |
+| `FakeOllamaServer` | `tests/backend/mocks/ollama/fake-ollama-server.ts` | Local Ollama AI server |
+
+**Never mock**:
+- `DatabaseService` — use the real SQLite instance (restored to a clean snapshot between suites)
+- `MailQueueService` — test queue operations against the real implementation
+- `SyncService`, `ImapService`, `SmtpService` — these are the code under test
+- Any internal helper, utility, or service class
+
+### Test Structure
+
+```
+tests/backend/
+├── fixtures/              # Shared test data (emails, accounts)
+├── infrastructure/        # Test framework setup
+│   ├── mocha-setup.ts     # Mocha runner configuration
+│   ├── suite-lifecycle.ts # quiesceAndRestore() for DB isolation
+│   ├── test-helpers.ts    # callIpc(), getDatabase(), seedTestAccount()
+│   └── test-event-bus.ts  # Captures IPC events for assertions
+├── mocks/                 # External service mocks (IMAP, SMTP, OAuth, Ollama)
+├── suites/                # Test files (*.test.ts)
+└── test-main.ts           # Test entry point, initializes all services
+```
+
+### Writing a New Test Suite
+
+1. **Create** a file in `tests/backend/suites/` named `<feature>.test.ts`
+
+2. **Import** required helpers:
+
+```typescript
+import { expect } from 'chai';
+import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
+import { callIpc, getDatabase, seedTestAccount } from '../infrastructure/test-helpers';
+```
+
+3. **Initialize** with `quiesceAndRestore()` in `before()` to reset DB state:
+
+```typescript
+describe('My Feature', () => {
+  before(async () => {
+    await quiesceAndRestore();
+  });
+
+  it('does something', async () => {
+    // Seed an account if needed
+    const { accountId } = seedTestAccount({ email: 'user@example.com' });
+
+    // Call IPC handlers directly
+    const result = await callIpc('my:ipc-channel', accountId, 'arg2');
+    expect(result.success).to.be.true;
+
+    // Assert database state
+    const db = getDatabase();
+    const rows = db.getDatabase().prepare('SELECT * FROM my_table WHERE ...').all();
+    expect(rows).to.have.length(1);
+  });
+});
+```
+
+### Key Test Helpers
+
+- **`quiesceAndRestore()`** — Resets DB to clean snapshot, clears credentials, resets mock servers. Call in `before()` hook.
+- **`seedTestAccount(options)`** — Creates a test account in DB + credentials + configures all mock servers to accept it. Returns `{ accountId, email, accessToken }`.
+- **`callIpc(channel, ...args)`** — Invokes IPC handlers directly (no Electron wire protocol). Returns the handler's response.
+- **`getDatabase()`** — Returns `DatabaseService` instance for direct DB assertions.
+- **`waitForEvent(channel, options)`** — Waits for an IPC event on `TestEventBus` (useful for async operations).
+- **`triggerSyncAndWait(accountId)`** — Triggers a sync and waits for completion. Inject IMAP messages first via `imapStateInspector.injectMessage()`.
+
+### IMAP State Inspector
+
+For sync tests, use the `imapStateInspector` to inject messages into the fake IMAP server:
+
+```typescript
+import { imapStateInspector } from '../test-main';
+
+// Inject a message into a folder
+imapStateInspector.injectMessage('INBOX', {
+  uid: 100,
+  xGmMsgid: '1234567890',
+  xGmThrid: '1234567890',
+  flags: [],
+  internalDate: DateTime.now().toJSDate(),
+  envelope: { subject: 'Test Email', from: [{ address: 'sender@example.com' }], ... },
+  bodyStructure: { ... },
+});
+
+// Then trigger sync
+await triggerSyncAndWait(accountId);
+
+// Assert the email was stored
+const db = getDatabase();
+const email = db.getDatabase().prepare('SELECT * FROM emails WHERE x_gm_msgid = :msgId').get({ msgId: '1234567890' });
+expect(email).to.exist;
+```
+
+### Test Isolation
+
+Each test suite gets a fresh database snapshot via `quiesceAndRestore()`. This ensures:
+- Tests don't leak state to other suites
+- Each suite starts with a known clean state
+- Tests can mutate the DB freely without cleanup
 
 ## Common Gotchas
 
