@@ -1,5 +1,4 @@
 import * as http from 'http';
-import * as url from 'url';
 import { LoggerService } from './logger-service';
 
 const log = LoggerService.getInstance();
@@ -43,8 +42,15 @@ export class OAuthLoopbackServer {
           return;
         }
 
-        const parsedUrl = url.parse(req.url, true);
-        const pathname = parsedUrl.pathname;
+        let requestUrl: URL;
+        try {
+          requestUrl = new URL(req.url, 'http://localhost');
+        } catch {
+          res.writeHead(400);
+          res.end('Bad Request');
+          return;
+        }
+        const pathname = requestUrl.pathname;
 
         // Only handle the /callback path
         if (pathname !== '/callback') {
@@ -53,10 +59,10 @@ export class OAuthLoopbackServer {
           return;
         }
 
-        const query = parsedUrl.query;
-        const code = query['code'] as string | undefined;
-        const state = query['state'] as string | undefined;
-        const error = query['error'] as string | undefined;
+        const query = requestUrl.searchParams;
+        const code = query.get('code') ?? undefined;
+        const state = query.get('state') ?? undefined;
+        const error = query.get('error') ?? undefined;
 
         if (error) {
           log.warn(`OAuth callback received error: ${error}`);

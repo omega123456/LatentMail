@@ -13,9 +13,9 @@ export function registerSyncIpcHandlers(): void {
     return ipcSuccess({ paused });
   });
 
-  ipcMain.handle(IPC_CHANNELS.SYNC_PAUSE, () => {
+  ipcMain.handle(IPC_CHANNELS.SYNC_PAUSE, async () => {
     const bridge = SyncQueueBridge.getInstance();
-    bridge.pause();
+    await bridge.pause();
     return ipcSuccess({ paused: true });
   });
 

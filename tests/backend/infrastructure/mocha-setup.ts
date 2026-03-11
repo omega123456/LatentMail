@@ -49,6 +49,14 @@ export function createMochaRunner(): Mocha {
  */
 export function runMocha(mocha: Mocha): Promise<number> {
   return new Promise((resolve) => {
-    mocha.run((failures) => resolve(failures));
+    const runner = mocha.run((failures) => {
+      const pendingCount = runner.stats?.pending ?? 0;
+      if (pendingCount > 0) {
+        console.error(`[mocha-setup] Pending tests are not allowed: ${pendingCount}`);
+        resolve(failures + pendingCount);
+        return;
+      }
+      resolve(failures);
+    });
   });
 }

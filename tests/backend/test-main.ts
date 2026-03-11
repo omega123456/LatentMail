@@ -42,8 +42,24 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'account-avatar', privileges: { bypassCSP: true, standard: true } },
 ]);
 
+// ---- Disable GPU hardware acceleration (prevents full-screen GPU helper window flash on Windows) ----
+app.disableHardwareAcceleration();
+
+// ---- Forward Node.js process warnings to the test log file, not stdout ----
+process.on('warning', (warning) => {
+  // Lazily access electron-log — it may not be initialized yet at this point.
+  // If it fails, we silently ignore (the warning goes nowhere rather than to stdout).
+  try {
+    const electronLog = require('electron-log/main');
+    electronLog.warn(`[Node.js process warning] ${warning.name}: ${warning.message}`);
+  } catch {
+    // electron-log not yet available — warning is intentionally not printed to stdout
+  }
+});
+
 // ---- Create isolated temp directory for this test run ----
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-test-'));
+const tempDir = process.env['LATENTMAIL_TEST_TEMP_DIR'] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-test-'));
+fs.mkdirSync(tempDir, { recursive: true });
 
 // ---- Set userData to our temp dir BEFORE any modules are loaded ----
 app.setPath('userData', tempDir);
@@ -51,7 +67,6 @@ app.setPath('userData', tempDir);
 // ---- Set environment variables BEFORE any production module imports ----
 const testDbPath = path.join(tempDir, 'latentmail.test.db');
 process.env['DATABASE_PATH'] = testDbPath;
-process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
 // Speed up queue retries dramatically in tests
 process.env['QUEUE_RETRY_BASE_MS'] = '50';
 process.env['QUEUE_RETRY_MAX_MS'] = '500';
@@ -64,6 +79,88 @@ export const ipcHandlerMap = new Map<string, (...args: unknown[]) => unknown>();
 
 // ---- Hidden BrowserWindow (exported for test helpers to get webContents) ----
 export let hiddenWindow: BrowserWindow | null = null;
+
+function forceHiddenWindowInvisible(): void {
+  if (hiddenWindow === null || hiddenWindow.isDestroyed()) {
+    return;
+  }
+
+  try {
+    if (hiddenWindow.isFullScreen()) {
+      hiddenWindow.setFullScreen(false);
+    }
+  } catch {
+    // Best effort only during test teardown
+  }
+
+  try {
+    if (hiddenWindow.isMaximized()) {
+      hiddenWindow.unmaximize();
+    }
+  } catch {
+    // Best effort only during test teardown
+  }
+
+  try {
+    if (hiddenWindow.isMinimized()) {
+      hiddenWindow.restore();
+    }
+  } catch {
+    // Best effort only during test teardown
+  }
+
+  try {
+    hiddenWindow.setBounds({ x: -10000, y: -10000, width: 1, height: 1 }, false);
+  } catch {
+    // Best effort only during test teardown
+  }
+
+  try {
+    hiddenWindow.setOpacity(0);
+  } catch {
+    // Best effort only during test teardown
+  }
+
+  try {
+    hiddenWindow.hide();
+  } catch {
+    // Best effort only during test teardown
+  }
+}
+
+async function destroyHiddenWindow(): Promise<void> {
+  if (hiddenWindow === null || hiddenWindow.isDestroyed()) {
+    hiddenWindow = null;
+    return;
+  }
+
+  forceHiddenWindowInvisible();
+
+  await new Promise<void>((resolve) => {
+    const windowToDestroy = hiddenWindow;
+    if (windowToDestroy === null || windowToDestroy.isDestroyed()) {
+      hiddenWindow = null;
+      resolve();
+      return;
+    }
+
+    windowToDestroy.once('closed', () => {
+      if (hiddenWindow === windowToDestroy) {
+        hiddenWindow = null;
+      }
+      resolve();
+    });
+
+    try {
+      windowToDestroy.destroy();
+    } catch {
+      if (hiddenWindow === windowToDestroy) {
+        hiddenWindow = null;
+      }
+      resolve();
+    }
+  });
+}
 
 // ---- Mock server singletons (exported for test helpers) ----
 export const imapStore = new MessageStore();
@@ -139,6 +236,19 @@ app.whenReady().then(async () => {
 
   // Step 1: Initialize DatabaseService
   // Dynamic require AFTER app.setPath() and env vars are set
+
+  // Pre-silence electron-log's console transport BEFORE importing any production modules.
+  // Many service modules call LoggerService.getInstance() at module scope (e.g.
+  // `const log = LoggerService.getInstance()`), which initializes the singleton and
+  // registers a console transport. By disabling it here first, all subsequent log output
+  // from production code goes only to the daily log file in temp userData.
+  try {
+    const electronLog = require('electron-log/main');
+    electronLog.transports.console.level = false;
+  } catch {
+    // Non-fatal — logging may remain noisy but tests still run
+  }
+
   const { DatabaseService } = require('../../electron/services/database-service') as typeof import('../../electron/services/database-service');
   const dbService = DatabaseService.getInstance();
 
@@ -158,6 +268,16 @@ app.whenReady().then(async () => {
     console.log('[test-main] LoggerService re-initialized');
   } catch (error) {
     console.warn('[test-main] LoggerService re-initialization failed (non-fatal):', error);
+  }
+
+  // Ensure the console transport remains silenced even after LoggerService.initialize()
+  // overwrites the file transport level (it does not touch the console transport, but
+  // belt-and-suspenders to guarantee clean test output).
+  try {
+    const electronLog = require('electron-log/main');
+    electronLog.transports.console.level = false;
+  } catch {
+    // Non-fatal
   }
 
   // Step 3: Initialize VectorDbService
@@ -270,6 +390,21 @@ app.whenReady().then(async () => {
     show: false,
     width: 800,
     height: 600,
+    x: -10000,
+    y: -10000,
+    useContentSize: true,
+    fullscreenable: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: false,
+    paintWhenInitiallyHidden: false,
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'infrastructure', 'test-preload.js'),
       nodeIntegration: false,
@@ -361,7 +496,15 @@ app.whenReady().then(async () => {
 
   console.log(`[test-main] Tests complete. Failures: ${failures}`);
 
-  // Step 14: Shut down all mock servers
+  // Step 14: Ensure the hidden window cannot become visible during shutdown.
+  try {
+    await destroyHiddenWindow();
+    console.log('[test-main] Hidden window destroyed');
+  } catch (error) {
+    console.warn('[test-main] Failed to destroy hidden window cleanly (non-fatal):', error);
+  }
+
+  // Step 15: Shut down all mock servers
   try {
     await Promise.allSettled([
       imapServer.stop(),
@@ -374,9 +517,9 @@ app.whenReady().then(async () => {
     console.warn('[test-main] Error stopping mock servers (non-fatal):', error);
   }
 
-  // Step 15: Cleanup temp directory
+  // Step 16: Cleanup temp directory
   try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   } catch {
     // Non-fatal cleanup error
   }

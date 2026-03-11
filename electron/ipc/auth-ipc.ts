@@ -5,7 +5,6 @@ import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 const log = LoggerService.getInstance();
 import { DatabaseService } from '../services/database-service';
 import { OAuthService } from '../services/oauth-service';
-import { SyncService } from '../services/sync-service';
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
 import { getCachedAvatarUrl } from '../services/avatar-cache-service';
 
@@ -18,17 +17,24 @@ export function registerAuthIpcHandlers(): void {
       const account = await oauthService.login();
 
       // Trigger initial sync and start IDLE for the new account.
-      // Uses SyncQueueBridge so the sync goes through the per-account FIFO queue,
-      // consistent with background sync and startup behaviour.
+      // Routes through SyncQueueBridge so:
+      //   1. enqueueSyncForAccount() respects testSuspended / paused state and returns null
+      //      when the bridge is suspended or stopped — IDLE is not started in those cases.
+      //   2. startIdleForAccount() applies the same lifecycle fencing as the background-sync
+      //      startup path, including the IdleLifecycleToken post-connect check that tears down
+      //      any IMAP connection that opened while a pause/sleep-stop was in flight.
       const bridge = SyncQueueBridge.getInstance();
-      const syncService = SyncService.getInstance();
       bridge.enqueueSyncForAccount(account.id, false)
-        .then(() => {
-          return syncService.startIdle(String(account.id), () => {
-            bridge.enqueueInboxSync(String(account.id));
-          });
+        .then((queueId) => {
+          if (queueId === null) {
+            // Bridge is suspended or stopped — do not start IDLE.
+            log.debug(`[AuthIPC] enqueueSyncForAccount returned null for account ${account.id} — skipping IDLE start`);
+            return;
+          }
+          // Start IDLE through the bridge so the lifecycle fence is applied consistently.
+          bridge.startIdleForAccount(String(account.id));
         })
-        .catch(err => {
+        .catch((err) => {
           log.warn('Post-login sync or IDLE failed:', err);
         });
 

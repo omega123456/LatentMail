@@ -131,7 +131,12 @@ export interface LoadedEml {
  * @returns LoadedEml with raw bytes and parsed headers
  */
 export function loadEml(name: MessageFixtureName): LoadedEml {
-  const raw = loadFixture(`messages/${name}.eml`);
+  const rawBytes = loadFixture(`messages/${name}.eml`);
+  // Normalize line endings to CRLF so the raw buffer is valid RFC 5322.
+  // IMAP requires CRLF; the .eml files on disk use LF (checked in on Windows/Unix).
+  // Replace any standalone \r\n first (idempotent), then replace any remaining \n with \r\n.
+  const normalized = rawBytes.toString('binary').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+  const raw = Buffer.from(normalized, 'binary');
   const text = raw.toString('utf8');
   const headers = parseEmlHeaders(text);
   return { raw, headers };

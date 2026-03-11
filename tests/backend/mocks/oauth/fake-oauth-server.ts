@@ -7,9 +7,9 @@
  *   POST /o/oauth2/revoke   — token revocation
  *
  * Uses a self-signed TLS certificate (generated via the `selfsigned` package at
- * startup) so that `https.request()` calls from OAuthService are satisfied.
- * The test environment sets NODE_TLS_REJECT_UNAUTHORIZED=0 in test-main.ts,
- * so the self-signed cert is accepted without a certificate authority chain.
+ * startup) so that HTTPS calls from OAuthService are satisfied.
+ * OAuthService explicitly allows self-signed TLS only for loopback HTTPS test
+ * endpoints while OAUTH_TEST_MODE=1, avoiding a global TLS override.
  *
  * Usage in tests:
  *   const server = new FakeOAuthServer();

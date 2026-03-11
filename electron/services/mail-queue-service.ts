@@ -155,6 +155,27 @@ export class MailQueueService {
    */
   private activeDedupKeys = new Map<string, string>();
 
+  /**
+   * When true, enqueue() is a no-op (returns a sentinel value).
+   * Set by resetForTesting() to prevent in-flight async callers from creating
+   * new queue items after the queue has been cleared.
+   * Cleared automatically at the start of the next enqueue() call once the
+   * suspension is lifted by calling resumeFromTesting().
+   */
+  private suspended = false;
+
+  /**
+   * Monotonically increasing generation counter, incremented by resetForTesting().
+   * Workers capture this at the start of execution and re-check it after every
+   * await that may take significant time (IMAP calls, DB writes, etc.).
+   * If the counter has changed, the worker is running against a stale suite and
+   * must abandon all further DB writes / event emissions to avoid corrupting the
+   * new suite's state.
+   *
+   * NOT intended for production use.
+   */
+  private testGeneration = 0;
+
   private constructor() {}
 
   static getInstance(): MailQueueService {
@@ -184,6 +205,14 @@ export class MailQueueService {
     providedQueueId?: string,
     dedupKey?: string,
   ): string {
+    // When suspended (after resetForTesting()), silently drop the item.
+    // This prevents in-flight async callers from creating new queue items
+    // after the queue was cleared for test suite isolation.
+    if (this.suspended) {
+      log.debug(`[MailQueue] Suspended: dropping ${type} enqueue (dedupKey=${dedupKey ?? 'none'})`);
+      return providedQueueId || randomUUID();
+    }
+
     // Deduplication: if a matching item is already active, return its id without re-enqueueing.
     if (dedupKey) {
       const existingId = this.activeDedupKeys.get(dedupKey);
@@ -408,6 +437,12 @@ export class MailQueueService {
       return;
     }
 
+    // Capture the current test generation at the start of execution.
+    // After each significant await we re-check; if the generation changed,
+    // quiesceAndRestore() has run and this worker is stale — abandon immediately
+    // to prevent writes against the freshly-restored next-suite DB.
+    const capturedGeneration = this.testGeneration;
+
     item.status = 'processing';
     this.emitUpdate(item);
 
@@ -432,13 +467,13 @@ export class MailQueueService {
           await this.processSend(item);
           break;
         case 'sync-folder':
-          await this.processSyncFolder(item);
+          await this.processSyncFolder(item, capturedGeneration);
           break;
         case 'sync-thread':
-          await this.processSyncThread(item);
+          await this.processSyncThread(item, capturedGeneration);
           break;
         case 'sync-allmail':
-          await this.processSyncAllMail(item);
+          await this.processSyncAllMail(item, capturedGeneration);
           break;
         case 'fetch-older':
           await this.processFetchOlder(item);
@@ -454,6 +489,15 @@ export class MailQueueService {
           break;
         default:
           throw new Error(`Unknown operation type: ${(item as QueueItem).type}`);
+      }
+
+      // Guard: if quiesceAndRestore() ran while this worker was awaiting, abandon
+      // all post-processing (DB writes, event emissions) to avoid corrupting the
+      // next suite's state.  This is particularly important for sync operations whose
+      // processX() method can take several seconds of IMAP round-trips.
+      if (this.testGeneration !== capturedGeneration) {
+        log.debug(`[MailQueue] worker: generation changed — abandoning stale ${item.type} (${item.queueId})`);
+        return;
       }
 
       // Best-effort post-operation fetch: confirm server state and update local DB.
@@ -482,6 +526,13 @@ export class MailQueueService {
       // Sync and fetch-older operations fail immediately on any error — no retry/backoff.
       // Rationale: network blips are transient; the next timer tick or user scroll re-enqueues.
       if (item.type === 'sync-folder' || item.type === 'sync-thread' || item.type === 'sync-allmail' || item.type === 'fetch-older' || item.type === 'add-labels' || item.type === 'remove-labels') {
+        // Generation check: if quiesceAndRestore() ran while the sync worker was in-flight,
+        // skip the terminal emitUpdate() and fetch-older done event so stale events cannot
+        // revive queue items or trigger UI reloads in the new test suite.
+        if (this.testGeneration !== capturedGeneration) {
+          log.debug(`[MailQueue] worker: generation changed in failure path — abandoning stale ${item.type} terminal emit (${item.queueId})`);
+          return;
+        }
         item.status = 'failed';
         item.error = errMsg;
         item.completedAt = DateTime.utc().toISO();
@@ -1424,8 +1475,12 @@ export class MailQueueService {
    * (Pattern A: lock → fetch → upsert → reconcile → release lock).
    * After success, emits MAIL_FOLDER_UPDATED so the renderer reloads the folder.
    * After UIDVALIDITY reset, fails pending operations targeting the affected folder.
+   *
+   * @param capturedGeneration  Generation counter snapshot from the worker entry point.
+   *                            Checked after syncFolder() returns to prevent stale
+   *                            DB writes / event emissions after quiesceAndRestore().
    */
-  private async processSyncFolder(item: QueueItem): Promise<void> {
+  private async processSyncFolder(item: QueueItem, capturedGeneration: number): Promise<void> {
     const payload = item.payload as SyncFolderPayload;
     const syncService = SyncService.getInstance();
 
@@ -1436,6 +1491,14 @@ export class MailQueueService {
       DateTime.fromISO(payload.sinceDate).toJSDate(),
       payload.showNotifications,
     );
+
+    // Generation check after the (potentially long) IMAP+DB syncFolder() call.
+    // If quiesceAndRestore() ran while we were awaiting, bail out before writing
+    // stale events/state to the freshly-restored next-suite DB.
+    if (this.testGeneration !== capturedGeneration) {
+      log.debug(`[MailQueue] processSyncFolder: generation changed — abandoning stale sync-folder post-processing (${item.queueId})`);
+      return;
+    }
 
     // UIDVALIDITY reset: fail any pending operations targeting this folder.
     // syncFolder() has already wiped folder data in the DB.
@@ -1493,17 +1556,28 @@ export class MailQueueService {
    * Delegates to SyncService.syncAllMail() which fetches from [Gmail]/All Mail,
    * maps labels to folders, reconciles email_folders, and returns affected folders.
    * Emits MAIL_FOLDER_UPDATED for all affected folders.
+   *
+   * @param capturedGeneration  Generation counter snapshot from the worker entry point.
+   *                            Checked after each major await to prevent stale
+   *                            DB writes / event emissions / follow-up enqueues after
+   *                            quiesceAndRestore() has run between suites.
    */
-  private async processSyncAllMail(item: QueueItem): Promise<void> {
+  private async processSyncAllMail(item: QueueItem, capturedGeneration: number): Promise<void> {
     const payload = item.payload as SyncAllMailPayload;
     const syncService = SyncService.getInstance();
-    const db = DatabaseService.getInstance();
 
     // Build known mailbox paths set for label validation.
     // We need the full mailbox list (including All Mail path for the filter).
     let knownPaths: Set<string>;
     try {
       const mailboxes = await syncService.getMailboxesForSync(String(item.accountId));
+
+      // Generation check after the async getMailboxesForSync() call.
+      if (this.testGeneration !== capturedGeneration) {
+        log.debug(`[MailQueue] processSyncAllMail: generation changed after getMailboxesForSync — abandoning stale sync-allmail (${item.queueId})`);
+        return;
+      }
+
       knownPaths = new Set(mailboxes.map((mb) => mb.path));
     } catch (err) {
       log.warn(`[MailQueue] processSyncAllMail: failed to fetch mailbox list, proceeding with empty set:`, err);
@@ -1516,6 +1590,15 @@ export class MailQueueService {
       DateTime.fromISO(payload.sinceDate).toJSDate(),
       knownPaths,
     );
+
+    // Generation check after the (potentially long) IMAP+DB syncAllMail() call.
+    // If quiesceAndRestore() ran while we were awaiting, bail out to prevent
+    // stale folder-updated events and follow-up body-fetch enqueues from reaching
+    // the freshly-restored next-suite DB/queue state.
+    if (this.testGeneration !== capturedGeneration) {
+      log.debug(`[MailQueue] processSyncAllMail: generation changed after syncAllMail — abandoning stale post-processing (${item.queueId})`);
+      return;
+    }
 
     // Emit folder-updated for all affected folders
     if (affectedFolders.size > 0) {
@@ -1550,12 +1633,22 @@ export class MailQueueService {
    * Delegates IMAP thread fetch + DB body upsert + stale-message reconciliation
    * to SyncService.syncThread(). After success, emits MAIL_THREAD_REFRESH so
    * the renderer re-loads the thread with freshly-fetched bodies.
+   *
+   * @param capturedGeneration  Generation counter snapshot from the worker entry point.
+   *                            Checked after syncThread() returns to prevent stale
+   *                            thread-refresh events after quiesceAndRestore().
    */
-  private async processSyncThread(item: QueueItem): Promise<void> {
+  private async processSyncThread(item: QueueItem, capturedGeneration: number): Promise<void> {
     const payload = item.payload as SyncThreadPayload;
     const syncService = SyncService.getInstance();
 
     await syncService.syncThread(String(item.accountId), payload.xGmThrid);
+
+    // Generation check after the async IMAP+DB syncThread() call.
+    if (this.testGeneration !== capturedGeneration) {
+      log.debug(`[MailQueue] processSyncThread: generation changed — abandoning stale thread-refresh emit (${item.queueId})`);
+      return;
+    }
 
     // Emit thread-refresh so the renderer re-loads the thread with bodies.
     this.emitThreadRefresh(item.accountId, payload.xGmThrid, 'sync');
@@ -2308,5 +2401,62 @@ export class MailQueueService {
       clearTimeout(timer);
       this.retryTimers.delete(id);
     }
+  }
+
+  /**
+   * Kill all fastq queues and clear all in-memory state.
+   *
+   * This is intended for use in test teardown (e.g. `quiesceAndRestore()`) to
+   * prevent in-flight operations from one test suite bleeding into the next.
+   * After calling this method the queue is fully empty and ready for a new test
+   * suite — no pending items, no active workers, no dedup keys.
+   *
+   * The queue enters a "suspended" state after this call: any in-flight async
+   * callers (e.g., a background sync tick that has not yet called enqueue()) will
+   * silently drop their items. Call resumeFromTesting() to lift the suspension
+   * before the next test suite begins enqueueing items.
+   *
+   * The testGeneration counter is incremented so that workers that are mid-flight
+   * (already inside worker() when this is called) detect the suite boundary on
+   * their next generation check and abandon all further DB writes / event emissions.
+   *
+   * NOT intended for production use.
+   */
+  resetForTesting(): void {
+    // Increment the generation counter FIRST so any in-flight worker that checks
+    // this.testGeneration after resuming from an await will detect the boundary
+    // and bail out before writing to the restored DB or emitting stale events.
+    this.testGeneration++;
+
+    // Cancel all retry timers first
+    this.cancelAllRetries();
+
+    // Kill all fastq instances — this prevents them from processing any more items
+    for (const queue of this.queues.values()) {
+      queue.kill();
+    }
+    this.queues.clear();
+
+    // Clear all in-memory item tracking
+    this.items.clear();
+    this.queueIdToServerIds.clear();
+    this.activeDedupKeys.clear();
+    this.pausedAccounts.clear();
+
+    // Enter suspended state so in-flight async callers (e.g., a background sync tick
+    // that has already started getMailboxesForSync() but hasn't called enqueue() yet)
+    // silently drop their items instead of polluting the new test suite's queue.
+    this.suspended = true;
+  }
+
+  /**
+   * Lift the test suspension so normal enqueue() calls work again.
+   * Must be called after quiesceAndRestore() completes and before the first
+   * test-suite enqueue in the new suite.
+   *
+   * NOT intended for production use.
+   */
+  resumeFromTesting(): void {
+    this.suspended = false;
   }
 }

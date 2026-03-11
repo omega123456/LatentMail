@@ -747,14 +747,16 @@ export function registerMailIpcHandlers(): void {
     }
   });
 
-  // Trigger manual sync for an account — enqueues per-folder items via the queue bridge.
-  // Returns immediately; progress is visible via the queue status indicator.
+  // Trigger manual sync for an account — enqueues a sync-allmail item via the queue bridge.
+  // Returns the queueId of the enqueued item so callers can track this exact sync via
+  // queue:update events. Returns null when the enqueue was suppressed (test suspension
+  // or dedup key collision with an already-running sync).
   ipcMain.handle(IPC_CHANNELS.MAIL_SYNC_ACCOUNT, async (_event, accountId: string) => {
     try {
       log.info(`Manual sync triggered for account ${accountId}`);
       const bridge = SyncQueueBridge.getInstance();
-      await bridge.enqueueSyncForAccount(Number(accountId), false);
-      return ipcSuccess(null);
+      const queueId = await bridge.enqueueSyncForAccount(Number(accountId), false);
+      return ipcSuccess({ queueId });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Sync failed';
       log.error('Manual sync failed:', err);

@@ -64,6 +64,27 @@ export class FilterService {
   }
 
   /**
+   * Clear the per-account concurrency guard.
+   *
+   * An in-flight `processNewEmails()` call that was still awaiting its final
+   * `db.markEmailsAsFiltered()` when `MailQueueService.resetForTesting()` killed
+   * the parent fastq worker will leave the `processingAccounts` set populated.
+   * The next test suite then calls `processNewEmails()` for the same accountId
+   * (always 1 after a DB template restore) and the guard returns early, causing
+   * `is_filtered` to remain 0 for the new suite's emails.
+   *
+   * Called by `quiesceAndRestore()` as part of inter-suite teardown.
+   * NOT intended for production use.
+   */
+  resetForTesting(): void {
+    const count = this.processingAccounts.size;
+    this.processingAccounts.clear();
+    if (count > 0) {
+      log.debug(`[FilterService] resetForTesting: cleared ${count} in-flight processingAccounts entry(ies)`);
+    }
+  }
+
+  /**
    * Process all unfiltered INBOX emails for a given account.
    * Called by SyncService after INBOX sync/IDLE, and by manual "Run Filters Now".
    * Returns result stats for the manual trigger UI.

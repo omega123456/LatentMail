@@ -70,14 +70,32 @@ export class CliServer {
   }
 
   /**
-   * Stop the pipe server. Synchronous (calls server.close() without awaiting).
+   * Stop the pipe server. Returns a Promise that resolves once the server has
+   * fully closed (all in-flight connections drained). On Windows this prevents
+   * a race where the test tries to re-bind the same pipe before the OS has
+   * released the handle.
    */
-  stop(): void {
-    if (this.server) {
-      this.server.close();
-      this.server = null;
-      log.info('[CliServer] Stopped');
+  stop(): Promise<void> {
+    if (!this.server) {
+      return Promise.resolve();
     }
+    const server = this.server;
+    this.server = null;
+    return new Promise<void>((resolve) => {
+      server.close(() => {
+        if (process.platform !== 'win32') {
+          try {
+            if (fs.existsSync(this.pipePath)) {
+              fs.unlinkSync(this.pipePath);
+            }
+          } catch (unlinkError) {
+            log.warn('[CliServer] Failed to remove socket file during stop():', unlinkError);
+          }
+        }
+        log.info('[CliServer] Stopped');
+        resolve();
+      });
+    });
   }
 
   /**

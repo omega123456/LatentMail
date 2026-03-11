@@ -91,6 +91,21 @@ export class ImapService {
    */
   private idleMailboxLocks: Map<string, { release: () => void }> = new Map();
 
+  /**
+   * Monotonically increasing generation counter for test isolation.
+   * Incremented by disconnectAllAndClearPending() (called from quiesceAndRestore()).
+   * connect() captures this at entry and re-checks after the async createConnection()
+   * resolves; if the counter has changed, the fresh client is immediately discarded
+   * (logout fire-and-forget) instead of being added to the shared pool.
+   *
+   * This prevents a late-resolving stale connect() call from a previous test suite
+   * from repopulating this.connections with a client bound to the old account/DB state,
+   * which would then be reused by the next suite's IMAP operations.
+   *
+   * NOT intended for production use.
+   */
+  private connectGeneration = 0;
+
   private constructor() {}
 
   static getInstance(): ImapService {
@@ -116,11 +131,26 @@ export class ImapService {
       return pending;
     }
 
+    // Capture the generation counter before the async createConnection() call.
+    // If disconnectAllAndClearPending() runs while we are awaiting, the counter
+    // will be incremented and we must discard the newly-created client rather
+    // than add it to the pool — preventing stale connections from a previous
+    // test suite from repopulating this.connections.
+    const capturedGeneration = this.connectGeneration;
+
     const connectPromise = this.createConnection(accountId);
     this.connecting.set(accountId, connectPromise);
 
     try {
       const client = await connectPromise;
+
+      // Guard: discard the client if the pool was reset while we were connecting.
+      if (this.connectGeneration !== capturedGeneration) {
+        log.info(`[ImapService] connect(${accountId}): generation changed during connect — discarding stale client`);
+        client.logout().catch(() => {});
+        throw new Error(`IMAP connection for account ${accountId} discarded after pool reset`);
+      }
+
       this.connections.set(accountId, client);
       return client;
     } finally {
@@ -209,6 +239,28 @@ export class ImapService {
   async disconnectAllShared(): Promise<void> {
     const promises = Array.from(this.connections.keys()).map(accountId => this.disconnect(accountId));
     await Promise.allSettled(promises);
+  }
+
+  /**
+   * Disconnect all connections (shared and IDLE) and clear the pending-connection
+   * map so that in-flight connect() calls do not bleed into the next test suite.
+   *
+   * Intended for use in test teardown (quiesceAndRestore). NOT for production use.
+   *
+   * Increments connectGeneration BEFORE disconnecting so that any late-resolving
+   * stale connect() call that was already past its connecting.set() checkpoint
+   * will detect the generation mismatch after it awaits createConnection(), discard
+   * the freshly-created client, and never add it to this.connections.
+   */
+  async disconnectAllAndClearPending(): Promise<void> {
+    // Increment FIRST so that any in-flight connect() call that resolves after
+    // this point detects the stale pool and discards its new client.
+    this.connectGeneration++;
+
+    await this.disconnectAll();
+    // Clear pending connection promises so subsequent connect() calls always
+    // create fresh connections with the current account credentials from DB.
+    this.connecting.clear();
   }
 
   /**

@@ -86,6 +86,18 @@ export class BodyFetchQueueService {
    */
   private isPaused: boolean = false;
 
+  /**
+   * Monotonically increasing generation counter, incremented by resetForTesting().
+   * Workers capture this at the start of execution and re-check it after the
+   * ensureDedicatedConnection() and fetchAndStoreBodies() awaits.
+   * If the counter has changed, quiesceAndRestore() has run and this worker is
+   * stale — it abandons all further DB writes / event emissions to prevent
+   * corrupting the next suite's state.
+   *
+   * NOT intended for production use.
+   */
+  private testGeneration = 0;
+
   private constructor() {}
 
   static getInstance(): BodyFetchQueueService {
@@ -98,6 +110,80 @@ export class BodyFetchQueueService {
   // -------------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------------
+
+  /**
+   * Hard-reset the body-fetch queue for inter-suite test isolation.
+   *
+   * Synchronously kills all fastq workers, sets isPaused (so any in-flight worker
+   * that calls ensureDedicatedConnection() after this point fails fast), clears all
+   * tracking maps, and fire-and-forgets logout on every dedicated IMAP connection.
+   *
+   * Logout is NOT awaited — the ImapService shared connections are also being torn
+   * down in parallel by quiesceAndRestore(), so the dedicated connections may already
+   * be gone by the time logout() resolves.  Firing without awaiting keeps the reset
+   * synchronous and avoids blocking the quiesceAndRestore() chain on a slow TCP
+   * teardown.  Any in-flight worker that opened a dedicated connection will hit the
+   * isPaused guard and log a "paused" error — that is the intended behaviour.
+   *
+   * The companion `resumeFromTesting()` call is NOT issued here — quiesceAndRestore()
+   * keeps BodyFetchQueueService in "paused" state until seedTestAccount() calls
+   * resumeFromTesting() at the start of the new suite.
+   *
+   * NOT intended for production use.
+   */
+  resetForTesting(): void {
+    // 1. Increment the generation counter FIRST so any in-flight worker that calls
+    //    ensureDedicatedConnection() or fetchAndStoreBodies() after this point can
+    //    detect the suite boundary and bail out before writing to the restored DB.
+    this.testGeneration++;
+
+    // 2. Set isPaused FIRST so any in-flight worker that calls ensureDedicatedConnection()
+    //    after this point throws immediately instead of creating a new IMAP session
+    //    against the just-restored database.
+    this.isPaused = true;
+
+    // 2. Kill all fastq instances — prevents NEW items from being dispatched to workers.
+    //    fastq.kill() does NOT abort in-flight workers; they continue but will hit the
+    //    isPaused guard in ensureDedicatedConnection() and mark themselves as failed.
+    for (const queue of this.queues.values()) {
+      queue.kill();
+    }
+    this.queues.clear();
+
+    // 3. Clear all in-memory tracking state.
+    this.items.clear();
+    this.activeDedupKeys.clear();
+
+    // 4. Fire-and-forget logout on all dedicated connections, then clear the map.
+    //    We do NOT await these — the shared IMAP connections are torn down in parallel
+    //    by quiesceAndRestore() and client.logout() may never resolve if the TCP layer
+    //    is already gone.  Clearing the map synchronously ensures no stale references
+    //    survive into the new suite.
+    for (const [accountId, client] of this.dedicatedConnections) {
+      client.logout().catch(() => {
+        // Best-effort — connection may already be gone
+        log.debug(`[BodyFetchQueue] resetForTesting: logout error for account ${accountId} (ignored)`);
+      });
+    }
+    this.dedicatedConnections.clear();
+
+    log.debug('[BodyFetchQueue] resetForTesting: queue killed, state cleared, connections released');
+  }
+
+  /**
+   * Lift the isPaused flag after a resetForTesting() call so the queue accepts
+   * new enqueues and creates fresh IMAP connections lazily.
+   *
+   * Called by seedTestAccount() alongside MailQueueService.resumeFromTesting() and
+   * SyncQueueBridge.resumeForTesting() so that all three services are unblocked at
+   * the same point in the test lifecycle.
+   *
+   * NOT intended for production use.
+   */
+  resumeFromTesting(): void {
+    this.isPaused = false;
+    log.debug('[BodyFetchQueue] resumeFromTesting: queue unpaused');
+  }
 
   /**
    * Pause the body-fetch queue.
@@ -407,6 +493,12 @@ export class BodyFetchQueueService {
       return;
     }
 
+    // Capture the current test generation at the start of execution.
+    // After ensureDedicatedConnection() and fetchAndStoreBodies() we re-check;
+    // if the generation changed quiesceAndRestore() ran while we were awaiting
+    // and we must abandon the result to avoid corrupting the next suite's DB.
+    const capturedGeneration = this.testGeneration;
+
     item.status = 'processing';
     this.emitUpdate(item);
 
@@ -415,8 +507,21 @@ export class BodyFetchQueueService {
       // If connection creation fails, the catch block below marks the item as failed.
       const dedicatedClient = await this.ensureDedicatedConnection(workItem.accountId);
 
+      // Generation check after async connection creation.
+      if (this.testGeneration !== capturedGeneration) {
+        log.debug(`[BodyFetchQueue] worker: generation changed after connect — abandoning stale body-fetch (${workItem.queueId})`);
+        dedicatedClient.logout().catch(() => {});
+        return;
+      }
+
       const prefetchService = BodyPrefetchService.getInstance();
       await prefetchService.fetchAndStoreBodies(workItem.accountId, workItem.emails, dedicatedClient);
+
+      // Generation check after the (potentially long) body fetch.
+      if (this.testGeneration !== capturedGeneration) {
+        log.debug(`[BodyFetchQueue] worker: generation changed after fetch — abandoning stale body-fetch (${workItem.queueId})`);
+        return;
+      }
 
       // Schedule incremental vector indexing after bodies are stored.
       // Same pattern as MailQueueService.processBodyFetch().
@@ -438,6 +543,33 @@ export class BodyFetchQueueService {
       // Body-fetch failures are marked immediately with no retry.
       // The next periodic sync cycle will re-enqueue body fetches for any remaining missing bodies.
       const errorMessage = err instanceof Error ? err.message : String(err);
+
+      // Generation check in the failure path: if quiesceAndRestore() ran while this
+      // worker was in-flight (e.g. during ensureDedicatedConnection or fetchAndStoreBodies),
+      // skip the terminal emitUpdate() so stale 'failed' events cannot repopulate queue
+      // state or trigger UI refreshes in the new test suite.
+      if (this.testGeneration !== capturedGeneration) {
+        log.debug(`[BodyFetchQueue] worker: generation changed in failure path — abandoning stale terminal emit (${workItem.queueId})`);
+        // Best-effort teardown of any connection that may have been opened
+        const connectionErr = err as Error & { code?: string };
+        const errorLower = errorMessage.toLowerCase();
+        const isConnectionError =
+          errorLower.includes('connection') ||
+          errorLower.includes('socket') ||
+          errorLower.includes('timeout') ||
+          errorLower.includes('econnreset') ||
+          errorLower.includes('econnrefused') ||
+          connectionErr.code === 'ECONNRESET' ||
+          connectionErr.code === 'ECONNREFUSED';
+        if (isConnectionError) {
+          const staleClient = this.dedicatedConnections.get(workItem.accountId);
+          if (staleClient) {
+            this.dedicatedConnections.delete(workItem.accountId);
+            staleClient.logout().catch(() => {});
+          }
+        }
+        return;
+      }
 
       item.status = 'failed';
       item.error = errorMessage;

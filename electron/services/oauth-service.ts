@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import * as http from 'http';
 import * as https from 'https';
 import { shell } from 'electron';
 import { LoggerService } from './logger-service';
@@ -35,6 +36,38 @@ function resolveRevokeUrl(): string {
 /** Resolve the Google authorization URL, with env var override support. */
 function resolveAuthUrl(): string {
   return process.env['GOOGLE_AUTH_URL'] || GOOGLE_AUTH_URL_DEFAULT;
+}
+
+interface ResolvedOAuthRequest {
+  requestModule: typeof http | typeof https;
+  requestUrl: URL;
+  requestOptions: https.RequestOptions;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+}
+
+function resolveOAuthRequest(
+  urlString: string,
+  requestOptions: https.RequestOptions,
+): ResolvedOAuthRequest {
+  const requestUrl = new URL(urlString);
+  const isHttpsRequest = requestUrl.protocol === 'https:';
+  const allowSelfSignedLoopback = (
+    process.env['OAUTH_TEST_MODE'] === '1' &&
+    isHttpsRequest &&
+    isLoopbackHostname(requestUrl.hostname)
+  );
+
+  return {
+    requestModule: isHttpsRequest ? https : http,
+    requestUrl,
+    requestOptions: {
+      ...requestOptions,
+      ...(allowSelfSignedLoopback ? { rejectUnauthorized: false } : {}),
+    },
+  };
 }
 
 /** Max retries for invalid_grant before marking account as needing re-auth (transient after sleep). */
@@ -247,10 +280,17 @@ export class OAuthService {
       this.refreshTimers.delete(accountId);
     }
 
-    // Step 2: Stop IDLE watchers for the account (prevents new sync triggers from its IMAP connection)
+    // Step 2: Stop IDLE watchers for the account (prevents new sync triggers from its IMAP connection).
+    // SyncService tracks IDLE state by string account IDs — must pass accountId (string), not
+    // numericAccountId. Both INBOX IDLE and All Mail IDLE must be stopped; awaiting both ensures
+    // their IMAP disconnects complete before account data is deleted below.
     try {
       const { SyncService } = require('./sync-service');
-      SyncService.getInstance().stopIdle(numericAccountId);
+      const syncServiceInstance = SyncService.getInstance();
+      await Promise.all([
+        syncServiceInstance.stopIdle(accountId),
+        syncServiceInstance.stopIdleAllMail(accountId),
+      ]);
       log.info(`Stopped IDLE watchers for account ${accountId}`);
     } catch (err) {
       log.warn(`Failed to stop IDLE for account ${accountId} (continuing):`, err);
@@ -487,13 +527,14 @@ export class OAuthService {
     const body = new URLSearchParams(params).toString();
 
     return new Promise((resolve, reject) => {
-      const req = https.request(resolveTokenUrl(), {
+      const { requestModule, requestUrl, requestOptions } = resolveOAuthRequest(resolveTokenUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Content-Length': Buffer.byteLength(body),
         },
-      }, (res) => {
+      });
+      const req = requestModule.request(requestUrl, requestOptions, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
@@ -533,13 +574,14 @@ export class OAuthService {
     const body = new URLSearchParams(params).toString();
 
     return new Promise((resolve, reject) => {
-      const req = https.request(resolveTokenUrl(), {
+      const { requestModule, requestUrl, requestOptions } = resolveOAuthRequest(resolveTokenUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Content-Length': Buffer.byteLength(body),
         },
-      }, (res) => {
+      });
+      const req = requestModule.request(requestUrl, requestOptions, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
@@ -568,12 +610,13 @@ export class OAuthService {
 
   private fetchUserInfo(accessToken: string): Promise<UserInfo> {
     return new Promise((resolve, reject) => {
-      const req = https.request(resolveUserInfoUrl(), {
+      const { requestModule, requestUrl, requestOptions } = resolveOAuthRequest(resolveUserInfoUrl(), {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
         },
-      }, (res) => {
+      });
+      const req = requestModule.request(requestUrl, requestOptions, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
@@ -603,13 +646,14 @@ export class OAuthService {
     const body = `token=${encodeURIComponent(token)}`;
 
     return new Promise((resolve, reject) => {
-      const req = https.request(resolveRevokeUrl(), {
+      const { requestModule, requestUrl, requestOptions } = resolveOAuthRequest(resolveRevokeUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Content-Length': Buffer.byteLength(body),
         },
-      }, (res) => {
+      });
+      const req = requestModule.request(requestUrl, requestOptions, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {

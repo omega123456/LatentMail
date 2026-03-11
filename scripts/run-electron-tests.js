@@ -14,6 +14,8 @@
 'use strict';
 
 const { spawn, execSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 // Set console code page to UTF-8 on Windows for proper Mocha symbol rendering
@@ -27,21 +29,38 @@ if (process.platform === 'win32') {
 
 const electronBin = require('electron');
 const testEntry = path.join(__dirname, '..', 'dist-test', 'tests', 'backend', 'test-main.js');
+const testTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-test-'));
 
 // Build a clean environment: inherit everything EXCEPT ELECTRON_RUN_AS_NODE
 const cleanEnv = Object.assign({}, process.env);
 delete cleanEnv['ELECTRON_RUN_AS_NODE'];
+cleanEnv['LATENTMAIL_TEST_TEMP_DIR'] = testTempDir;
 
-const child = spawn(String(electronBin), [testEntry], {
+function cleanupTempDir() {
+  try {
+    fs.rmSync(testTempDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch (error) {
+    console.error('[run-electron-tests] Failed to clean up test temp directory:', testTempDir, error.message);
+  }
+}
+
+const child = spawn(String(electronBin), ['--no-warnings', testEntry], {
   env: cleanEnv,
   stdio: 'inherit',
 });
 
 child.on('close', (code) => {
+  cleanupTempDir();
   process.exit(code ?? 1);
 });
 
 child.on('error', (error) => {
+  cleanupTempDir();
   console.error('[run-electron-tests] Failed to launch Electron:', error.message);
   process.exit(1);
 });

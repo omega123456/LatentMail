@@ -98,6 +98,22 @@ export class PendingOpService {
     return this.pendingOps.get(key) ?? new Set<string>();
   }
 
+  /**
+   * Clear ALL pending ops across all accounts and threads.
+   *
+   * Intended for use by the test suite quiesce/restore protocol only.
+   * In production, pending ops are cleared per-thread by the queue worker
+   * post-op handlers (clear() method). Using this method in production code
+   * would cause FETCH_THREAD to re-fetch messages that still have in-flight
+   * server operations, which is incorrect.
+   *
+   * NOT intended for production use.
+   */
+  clearAll(): void {
+    this.pendingOps.clear();
+    log.debug('[PendingOpService] Cleared all pending ops (test reset)');
+  }
+
   private makeKey(accountId: number, xGmThrid: string): string {
     return `${accountId}:${xGmThrid}`;
   }

@@ -137,6 +137,23 @@ interface MailFolderUpdatedPayload {
   count?: number;
 }
 
+/**
+ * Token passed into startIdle / startIdleAllMail to enable post-connect lifecycle validation.
+ *
+ * Because the IMAP connection attempt is async (may take several seconds), a pause/sleep-stop/
+ * reset can change the lifecycle state while the connect is in flight. The token captures the
+ * lifecycle generation at call time; startIdle re-checks it after the await and tears down the
+ * newly-opened connection if the token is stale or global suppression has been activated.
+ */
+export interface IdleLifecycleToken {
+  /**
+   * Returns true if the lifecycle is still in the same state as when the token was created
+   * (generation unchanged AND global suppression not active). Returns false if the connection
+   * should be torn down.
+   */
+  isValid: () => boolean;
+}
+
 export class SyncService {
   private static instance: SyncService;
   private idleAccounts: Set<string> = new Set();
@@ -174,6 +191,18 @@ export class SyncService {
    */
   private globalIdleSuppression = false;
 
+  /**
+   * Monotonically-increasing lifecycle generation counter for reconnect tokens.
+   *
+   * Incremented every time the IDLE state is intentionally reset (pause, stop, or test reset).
+   * Reconnect lifecycle tokens capture the generation at token-creation time; the token's
+   * isValid() returns false if the current generation no longer matches the captured value.
+   * This ensures that a still-in-flight IMAP connect from a previous lifecycle epoch cannot
+   * silently establish itself after suppression is lifted — even if the boolean suppression
+   * flags have been cleared by the time the async connect resolves.
+   */
+  private idleLifecycleGeneration = 0;
+
   private constructor() {}
 
   static getInstance(): SyncService {
@@ -188,8 +217,15 @@ export class SyncService {
    * When set to true, scheduleIdleReconnect() will skip scheduling new timers.
    * Called by SyncQueueBridge.pause() and SyncQueueBridge.resume().
    * Does NOT interact with the per-account idleSuppressReconnect Set.
+   *
+   * Incrementing the lifecycle generation when suppression is activated ensures that
+   * any in-flight reconnect tokens created before this call will see isValid()=false
+   * even after the suppression flag is lifted for the new lifecycle epoch.
    */
   setGlobalIdleSuppression(suppress: boolean): void {
+    if (suppress) {
+      this.idleLifecycleGeneration++;
+    }
     this.globalIdleSuppression = suppress;
     log.info(`[SyncService] Global IDLE reconnect suppression: ${suppress}`);
   }
@@ -1113,10 +1149,22 @@ export class SyncService {
    * Uses a dedicated IMAP connection. On new mail, calls the provided onNewMail callback
    * (typically SyncQueueBridge.enqueueInboxSync). Reconnects with exponential backoff on disconnect.
    *
-   * @param accountId   Account ID as string.
-   * @param onNewMail   Callback invoked when the server signals new mail has arrived.
+   * The optional lifecycleToken provides post-connect lifecycle validation: after the IMAP
+   * connect await returns (which may take several seconds), startIdle re-checks whether the
+   * token is still current and whether global suppression is active. If the lifecycle state
+   * changed while the connection was in flight (e.g. pause/sleep-stop/reset fired), the
+   * newly-opened IDLE connection is torn down immediately and the method returns without
+   * leaving a stale IDLE connection alive.
+   *
+   * @param accountId      Account ID as string.
+   * @param onNewMail      Callback invoked when the server signals new mail has arrived.
+   * @param lifecycleToken Optional token for post-connect lifecycle validation.
    */
-  async startIdle(accountId: string, onNewMail: () => void): Promise<void> {
+  async startIdle(
+    accountId: string,
+    onNewMail: () => void,
+    lifecycleToken?: IdleLifecycleToken,
+  ): Promise<void> {
     if (this.idleAccounts.has(accountId)) {
       return;
     }
@@ -1158,7 +1206,28 @@ export class SyncService {
         },
       );
 
-      // Connection established — clear suppress flag so future disconnects trigger reconnect
+      // Post-connect lifecycle check: the IMAP connection attempt above is async and may
+      // take several seconds. If pause(), stopForSleep(), or resetForTesting() ran while
+      // it was in flight, the lifecycle token will have changed (or global suppression will
+      // be active). In that case, tear down the connection we just opened and return without
+      // leaving a stale IDLE connection alive.
+      if (lifecycleToken && !lifecycleToken.isValid()) {
+        log.warn(
+          `[IDLE] startIdle: lifecycle state changed while INBOX IDLE connect was in flight ` +
+          `for account ${accountId} — tearing down stale connection`,
+        );
+        // Suppress reconnect so the teardown disconnect does not reschedule.
+        this.idleSuppressReconnect.add(accountId);
+        this.idleAccounts.delete(accountId);
+        this.idleNewMailCallbacks.delete(accountId);
+        await imapService.disconnectIdle(accountId, 'INBOX').catch((disconnectErr) => {
+          log.warn(`[IDLE] startIdle: failed to disconnect stale INBOX IDLE for account ${accountId}:`, disconnectErr);
+        });
+        return;
+      }
+
+      // Connection established and lifecycle is still valid — clear suppress flag so
+      // future disconnects trigger reconnect.
       this.idleSuppressReconnect.delete(accountId);
 
       log.info(`[IDLE] Started on INBOX for account ${accountId}`);
@@ -1192,6 +1261,13 @@ export class SyncService {
     const timer = setTimeout(async () => {
       this.idleReconnectTimers.delete(accountId);
 
+      // Re-check suppression immediately — pause/sleep-stop/reset may have fired
+      // after the timer was scheduled but before it fired.
+      if (this.globalIdleSuppression || this.idleSuppressReconnect.has(accountId)) {
+        log.info(`[IDLE] scheduleIdleReconnect: suppression active at fire time for account ${accountId} — skipping reconnect`);
+        return;
+      }
+
       try {
         // Get a fresh access token (handles refresh automatically)
         const oauthService = OAuthService.getInstance();
@@ -1201,9 +1277,29 @@ export class SyncService {
         return; // Don't retry — account likely needs reauth
       }
 
+      // Re-check suppression again after the async token refresh — a pause/sleep-stop/reset
+      // may have arrived while getAccessToken was awaiting.
+      if (this.globalIdleSuppression || this.idleSuppressReconnect.has(accountId)) {
+        log.info(`[IDLE] scheduleIdleReconnect: suppression became active during token refresh for account ${accountId} — skipping reconnect`);
+        return;
+      }
+
+      // Build a lifecycle token so startIdle can tear down the connection if lifecycle
+      // changes again while the IMAP connect is in flight.
+      // Capture the current generation: if stopIdle/setGlobalIdleSuppression increments
+      // the generation before the async connect resolves, isValid() will return false,
+      // ensuring the new connection is immediately torn down.
+      const capturedGeneration = this.idleLifecycleGeneration;
+      const lifecycleToken: IdleLifecycleToken = {
+        isValid: () =>
+          this.idleLifecycleGeneration === capturedGeneration &&
+          !this.globalIdleSuppression &&
+          !this.idleSuppressReconnect.has(accountId),
+      };
+
       // Re-use the stored callback for the new IDLE connection.
       const storedCallback = this.idleNewMailCallbacks.get(accountId) ?? (() => {});
-      await this.startIdle(accountId, storedCallback);
+      await this.startIdle(accountId, storedCallback, lifecycleToken);
     }, delay);
 
     this.idleReconnectTimers.set(accountId, timer);
@@ -1220,7 +1316,10 @@ export class SyncService {
     this.idleAccounts.delete(accountId);
     this.idleNewMailCallbacks.delete(accountId);
 
-    // Suppress reconnect — this is an intentional stop
+    // Suppress reconnect — this is an intentional stop.
+    // Increment the lifecycle generation so any in-flight reconnect tokens from
+    // a previous epoch see isValid()=false even after suppression flags are lifted.
+    this.idleLifecycleGeneration++;
     this.idleSuppressReconnect.add(accountId);
 
     // Clear reconnect timer
@@ -1267,6 +1366,79 @@ export class SyncService {
     log.info('[IDLE] All IDLE connections stopped');
   }
 
+  /**
+   * Reset ALL IDLE state for test isolation.
+   *
+   * Intended to be called by quiesceAndRestore() BEFORE the IMAP disconnect so that
+   * the onClose callbacks fired by disconnectAllAndClearPending() cannot schedule new
+   * reconnect timers for the next suite.
+   *
+   * Steps performed (synchronous — no IMAP I/O):
+   *   1. Set globalIdleSuppression=true so scheduleIdleReconnect() and
+   *      scheduleIdleAllMailReconnect() are no-ops even if they are called
+   *      concurrently from a firing onClose callback.
+   *   2. Cancel every pending INBOX reconnect timer.
+   *   3. Cancel every pending All Mail reconnect timer.
+   *   4. Clear all stored onNewMail / onExpunge callbacks (stale closures from
+   *      the previous suite should never be called by the next suite's reconnects).
+   *   5. Clear the idleAccounts / idleAllMailAccounts tracking sets so any in-flight
+   *      onClose callback that inspects them finds nothing.
+   *   6. Clear all reconnect delay state (resets backoff for the next suite).
+   *   7. Clear all suppress-reconnect sets (no lingering per-account suppression).
+   *
+   * NOTE: globalIdleSuppression remains true after this call.
+   * seedTestAccount() calls SyncService.setGlobalIdleSuppression(false) via
+   * SyncQueueBridge.resumeForTesting() — which calls bridge.start() which in turn
+   * starts IDLE fresh for the new suite.  Tests that start IDLE manually
+   * (e.g. mail-sync-idle.test.ts) explicitly call setGlobalIdleSuppression(false)
+   * or rely on the fact that startIdle() / startIdleAllMail() are called after
+   * the new suite's quiesce+seed cycle is complete.
+   *
+   * NOT intended for production use.
+   */
+  resetIdleStateForTesting(): void {
+    // Step 1: suppress all future reconnect scheduling until the new suite is ready.
+    // Also increment the lifecycle generation to invalidate any in-flight reconnect
+    // tokens — ensuring stale IDLE connects from a previous epoch cannot establish
+    // themselves after suppression is lifted for the new suite.
+    this.globalIdleSuppression = true;
+    this.idleLifecycleGeneration++;
+
+    // Step 2 & 3: cancel all pending reconnect timers (INBOX and All Mail).
+    for (const [accountId, timer] of this.idleReconnectTimers) {
+      clearTimeout(timer);
+      this.idleReconnectTimers.delete(accountId);
+    }
+    for (const [accountId, timer] of this.idleAllMailReconnectTimers) {
+      clearTimeout(timer);
+      this.idleAllMailReconnectTimers.delete(accountId);
+    }
+
+    // Step 4: clear stored callbacks so stale closures cannot reach the next suite.
+    this.idleNewMailCallbacks.clear();
+    this.idleAllMailCallbacks.clear();
+
+    // Step 5: clear account tracking sets.
+    this.idleAccounts.clear();
+    this.idleAllMailAccounts.clear();
+
+    // Step 6: reset reconnect backoff delay maps.
+    this.idleReconnectDelay.clear();
+    this.idleAllMailReconnectDelay.clear();
+
+    // Step 7: clear per-account suppress-reconnect sets.
+    this.idleSuppressReconnect.clear();
+    this.idleAllMailSuppressReconnect.clear();
+
+    // Clear notification batches so timers from the previous suite don't fire.
+    for (const [accountId, batch] of this.notificationBatches) {
+      clearTimeout(batch.timer);
+      this.notificationBatches.delete(accountId);
+    }
+
+    log.debug('[SyncService] resetIdleStateForTesting: IDLE state cleared (globalIdleSuppression=true)');
+  }
+
   // -----------------------------------------------------------------------
   // All Mail IDLE management
   // -----------------------------------------------------------------------
@@ -1277,10 +1449,21 @@ export class SyncService {
    * On expunge, calls the provided onExpunge callback (typically SyncQueueBridge.enqueueAllMailSync).
    * Reconnects with exponential backoff on disconnect.
    *
-   * @param accountId  Account ID as string.
-   * @param onExpunge  Callback invoked when the server signals a message was expunged.
+   * The optional lifecycleToken provides post-connect lifecycle validation: after the IMAP
+   * connect await returns, startIdleAllMail re-checks whether the token is still current and
+   * whether global suppression is active. If the lifecycle state changed while the connection
+   * was in flight (e.g. pause/sleep-stop/reset fired), the newly-opened IDLE connection is
+   * torn down immediately and the method returns without leaving a stale IDLE connection alive.
+   *
+   * @param accountId      Account ID as string.
+   * @param onExpunge      Callback invoked when the server signals a message was expunged.
+   * @param lifecycleToken Optional token for post-connect lifecycle validation.
    */
-  async startIdleAllMail(accountId: string, onExpunge: (accountId: string) => void): Promise<void> {
+  async startIdleAllMail(
+    accountId: string,
+    onExpunge: (accountId: string) => void,
+    lifecycleToken?: IdleLifecycleToken,
+  ): Promise<void> {
     if (this.idleAllMailAccounts.has(accountId)) {
       return;
     }
@@ -1325,7 +1508,28 @@ export class SyncService {
         },
       );
 
-      // Connection established — clear suppress flag so future disconnects trigger reconnect
+      // Post-connect lifecycle check: the IMAP connection attempt above is async and may
+      // take several seconds. If pause(), stopForSleep(), or resetForTesting() ran while
+      // it was in flight, the lifecycle token will have changed (or global suppression will
+      // be active). In that case, tear down the connection we just opened and return without
+      // leaving a stale IDLE connection alive.
+      if (lifecycleToken && !lifecycleToken.isValid()) {
+        log.warn(
+          `[IDLE] startIdleAllMail: lifecycle state changed while All Mail IDLE connect was in flight ` +
+          `for account ${accountId} — tearing down stale connection`,
+        );
+        // Suppress reconnect so the teardown disconnect does not reschedule.
+        this.idleAllMailSuppressReconnect.add(accountId);
+        this.idleAllMailAccounts.delete(accountId);
+        this.idleAllMailCallbacks.delete(accountId);
+        await imapService.disconnectIdle(accountId, ALL_MAIL_PATH).catch((disconnectErr) => {
+          log.warn(`[IDLE] startIdleAllMail: failed to disconnect stale All Mail IDLE for account ${accountId}:`, disconnectErr);
+        });
+        return;
+      }
+
+      // Connection established and lifecycle is still valid — clear suppress flag so
+      // future disconnects trigger reconnect.
       this.idleAllMailSuppressReconnect.delete(accountId);
 
       log.info(`[IDLE] Started on All Mail for account ${accountId}`);
@@ -1360,6 +1564,13 @@ export class SyncService {
     const timer = setTimeout(async () => {
       this.idleAllMailReconnectTimers.delete(accountId);
 
+      // Re-check suppression immediately — pause/sleep-stop/reset may have fired
+      // after the timer was scheduled but before it fired.
+      if (this.globalIdleSuppression || this.idleAllMailSuppressReconnect.has(accountId)) {
+        log.info(`[IDLE] scheduleIdleAllMailReconnect: suppression active at fire time for account ${accountId} — skipping reconnect`);
+        return;
+      }
+
       try {
         // Get a fresh access token (handles refresh automatically)
         const oauthService = OAuthService.getInstance();
@@ -1369,9 +1580,29 @@ export class SyncService {
         return; // Don't retry — account likely needs reauth
       }
 
+      // Re-check suppression again after the async token refresh — a pause/sleep-stop/reset
+      // may have arrived while getAccessToken was awaiting.
+      if (this.globalIdleSuppression || this.idleAllMailSuppressReconnect.has(accountId)) {
+        log.info(`[IDLE] scheduleIdleAllMailReconnect: suppression became active during token refresh for account ${accountId} — skipping reconnect`);
+        return;
+      }
+
+      // Build a lifecycle token so startIdleAllMail can tear down the connection if lifecycle
+      // changes again while the IMAP connect is in flight.
+      // Capture the current generation: if stopIdleAllMail/setGlobalIdleSuppression increments
+      // the generation before the async connect resolves, isValid() will return false,
+      // ensuring the new connection is immediately torn down.
+      const capturedGeneration = this.idleLifecycleGeneration;
+      const lifecycleToken: IdleLifecycleToken = {
+        isValid: () =>
+          this.idleLifecycleGeneration === capturedGeneration &&
+          !this.globalIdleSuppression &&
+          !this.idleAllMailSuppressReconnect.has(accountId),
+      };
+
       // Re-use the stored callback for the new IDLE connection.
       const storedCallback = this.idleAllMailCallbacks.get(accountId) ?? ((_id: string) => {});
-      await this.startIdleAllMail(accountId, storedCallback);
+      await this.startIdleAllMail(accountId, storedCallback, lifecycleToken);
     }, delay);
 
     this.idleAllMailReconnectTimers.set(accountId, timer);
@@ -1388,7 +1619,10 @@ export class SyncService {
     this.idleAllMailAccounts.delete(accountId);
     this.idleAllMailCallbacks.delete(accountId);
 
-    // Suppress reconnect — this is an intentional stop
+    // Suppress reconnect — this is an intentional stop.
+    // Increment the lifecycle generation so any in-flight reconnect tokens from
+    // a previous epoch see isValid()=false even after suppression flags are lifted.
+    this.idleLifecycleGeneration++;
     this.idleAllMailSuppressReconnect.add(accountId);
 
     // Clear reconnect timer

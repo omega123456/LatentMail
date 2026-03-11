@@ -357,7 +357,7 @@ function extractHeader(rfc822: Buffer, headerName: string): string {
   for (const line of headerSection.split(/\r?\n/)) {
     const colonIndex = line.indexOf(': ');
     if (colonIndex > 0 && line.slice(0, colonIndex).toLowerCase() === lowerName) {
-      return line.slice(colonIndex + 2);
+      return line.slice(colonIndex + 2).trim();
     }
   }
   return '';

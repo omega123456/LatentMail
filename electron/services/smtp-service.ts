@@ -5,6 +5,10 @@ import { OAuthService } from './oauth-service';
 const log = LoggerService.getInstance();
 import { DatabaseService } from './database-service';
 
+function isLoopbackSmtpHost(hostname: string): boolean {
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+}
+
 export interface SendMailOptions {
   from?: string;
   to: string;
@@ -62,11 +66,17 @@ export class SmtpService {
     const smtpSecure = smtpSecureOverride !== undefined
       ? smtpSecureOverride === 'true' || smtpSecureOverride === '1'
       : true;
+    const ignoreTlsForLoopbackTestServer = (
+      process.env['OAUTH_TEST_MODE'] === '1' &&
+      !smtpSecure &&
+      isLoopbackSmtpHost(smtpHost)
+    );
 
     const transporter = nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
       secure: smtpSecure,
+      ignoreTLS: ignoreTlsForLoopbackTestServer,
       auth: {
         type: 'OAuth2',
         user: account.email,

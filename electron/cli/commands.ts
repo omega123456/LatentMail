@@ -16,7 +16,7 @@ const registry: Record<string, CommandHandler> = {
     if (bridge.isPaused()) {
       return { ok: true, message: 'Sync is already paused.' };
     }
-    bridge.pause();
+    await bridge.pause();
     return { ok: true, message: 'Background sync paused.' };
   },
 

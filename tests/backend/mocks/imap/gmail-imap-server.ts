@@ -284,7 +284,7 @@ export class GmailImapServer extends EventEmitter {
     // Send the server greeting immediately
     this.send(
       socket,
-      '* OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+] Gmail IMAP ready',
+      '* OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1] Gmail IMAP ready',
     );
 
     // Use binary encoding so we can handle both text commands and APPEND literals
@@ -615,7 +615,7 @@ export class GmailImapServer extends EventEmitter {
   private handleCapability(session: ImapSession, tag: string): void {
     this.send(
       session.socket,
-      '* CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+',
+      '* CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1',
     );
     this.send(session.socket, `${tag} OK CAPABILITY completed`);
   }
@@ -694,7 +694,7 @@ export class GmailImapServer extends EventEmitter {
         session.email = email;
         this.send(
           session.socket,
-          `${tag} OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+] Authenticated`,
+          `${tag} OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1] Authenticated`,
         );
       } else {
         // Send the RFC 7628 JSON failure response, wait for client to send '*'
@@ -1072,26 +1072,46 @@ export class GmailImapServer extends EventEmitter {
       } else if (item === 'X-GM-THRID') {
         parts.push(`X-GM-THRID ${message.xGmThrid}`);
       } else if (item === 'X-GM-LABELS') {
-        const labelStr = message.xGmLabels.map((label) => `"${label}"`).join(' ');
+        // Escape backslashes in label values for IMAP quoted-string format.
+        // Gmail system labels like \Inbox are stored as '\Inbox' (single backslash)
+        // but must be sent as "\\Inbox" in IMAP (double backslash = escaped backslash).
+        const labelStr = message.xGmLabels
+          .map((label) => `"${label.replace(/\\/g, '\\\\')}"`)
+          .join(' ');
         parts.push(`X-GM-LABELS (${labelStr})`);
       } else if (item === 'BODY[]' || item === 'RFC822') {
-        const bodyStr = message.rfc822.toString('binary');
-        parts.push(`BODY[] {${message.rfc822.length}}\r\n${bodyStr}`);
+        // Normalize to CRLF — IMAP RFC requires CRLF line endings for message bodies
+        const normalizedBodyStr = message.rfc822.toString('binary').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+        const normalizedBodyLen = Buffer.byteLength(normalizedBodyStr, 'binary');
+        parts.push(`BODY[] {${normalizedBodyLen}}\r\n${normalizedBodyStr}`);
       } else if (item === 'BODY[HEADER]' || item.startsWith('BODY[HEADER]')) {
-        const headerEnd = message.rfc822.indexOf('\r\n\r\n');
+        // Normalize to CRLF before searching for header/body boundary
+        const normalizedBuf = Buffer.from(
+          message.rfc822.toString('binary').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'),
+          'binary',
+        );
+        const headerEnd = normalizedBuf.indexOf('\r\n\r\n');
         const headers =
-          headerEnd >= 0 ? message.rfc822.slice(0, headerEnd + 4) : message.rfc822;
+          headerEnd >= 0 ? normalizedBuf.slice(0, headerEnd + 4) : normalizedBuf;
         parts.push(`BODY[HEADER] {${headers.length}}\r\n${headers.toString('binary')}`);
       } else if (item === 'BODY[TEXT]') {
-        const headerEnd = message.rfc822.indexOf('\r\n\r\n');
-        const body = headerEnd >= 0 ? message.rfc822.slice(headerEnd + 4) : Buffer.alloc(0);
+        const normalizedBuf = Buffer.from(
+          message.rfc822.toString('binary').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'),
+          'binary',
+        );
+        const headerEnd = normalizedBuf.indexOf('\r\n\r\n');
+        const body = headerEnd >= 0 ? normalizedBuf.slice(headerEnd + 4) : Buffer.alloc(0);
         parts.push(`BODY[TEXT] {${body.length}}\r\n${body.toString('binary')}`);
       } else if (item === 'BODY[HEADER.FIELDS' || item.startsWith('BODY[HEADER.FIELDS')) {
         // Partial match — just return all headers
-        const headerEnd = message.rfc822.indexOf('\r\n\r\n');
-        const headers =
-          headerEnd >= 0 ? message.rfc822.slice(0, headerEnd + 4) : message.rfc822;
-        parts.push(`BODY[HEADER.FIELDS] {${headers.length}}\r\n${headers.toString('binary')}`);
+        const normalizedBuf2 = Buffer.from(
+          message.rfc822.toString('binary').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'),
+          'binary',
+        );
+        const headerEnd2 = normalizedBuf2.indexOf('\r\n\r\n');
+        const headers2 =
+          headerEnd2 >= 0 ? normalizedBuf2.slice(0, headerEnd2 + 4) : normalizedBuf2;
+        parts.push(`BODY[HEADER.FIELDS] {${headers2.length}}\r\n${headers2.toString('binary')}`);
       } else if (item === 'ENVELOPE') {
         parts.push(`ENVELOPE ${this.buildEnvelope(message)}`);
       } else if (item === 'BODYSTRUCTURE') {
@@ -1120,7 +1140,10 @@ export class GmailImapServer extends EventEmitter {
    * The format is: (date subject from sender reply-to to cc bcc in-reply-to message-id)
    */
   private buildEnvelope(message: GmailMessage): string {
-    const headerSection = message.rfc822.toString('utf8').split('\r\n\r\n')[0] ?? '';
+    const text = message.rfc822.toString('utf8');
+    // Normalize to CRLF so header parsing works regardless of how the EML was stored on disk.
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+    const headerSection = normalized.split('\r\n\r\n')[0] ?? '';
     const headers: Record<string, string> = {};
 
     for (const line of headerSection.split('\r\n')) {
@@ -1586,6 +1609,15 @@ export class GmailImapServer extends EventEmitter {
     const subCommand =
       firstSpaceIndex === -1 ? args.toUpperCase() : args.slice(0, firstSpaceIndex).toUpperCase();
     const subArgs = firstSpaceIndex === -1 ? '' : args.slice(firstSpaceIndex + 1);
+
+    // Check if there is an error injection for this UID sub-command.
+    // This allows tests to inject errors on e.g. 'STORE' and have them fire
+    // when imapflow sends 'UID STORE ...' (the top-level command would be 'UID').
+    const subCommandInjectedError = this.errorInjections.get(subCommand);
+    if (subCommandInjectedError) {
+      this.send(session.socket, `${tag} NO ${subCommandInjectedError}`);
+      return;
+    }
 
     switch (subCommand) {
       case 'FETCH': {
