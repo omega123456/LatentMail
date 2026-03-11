@@ -7,10 +7,9 @@ flag="$3"
 null="0000000000000000000000000000000000000000"
 
 # If old == null -> initial checkout (new worktree)
+# Note: post-checkout hook runs with cwd = repo/worktree root, no need to cd
 if [ "$old" = "$null" ]; then
   echo "Detected new worktree; running yarn install..."
-  repo_root="$(git rev-parse --show-toplevel)"
-  cd "$repo_root" || exit 1
   yarn install
   npx @electron/rebuild -f -w better-sqlite3
 fi
