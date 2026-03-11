@@ -11,7 +11,7 @@
  *   - ai:search validation: empty query → AI_INVALID_INPUT
  *   - ai:search validation: invalid accountId → AI_INVALID_INPUT
  *   - ai:search validation: query > 2048 chars → AI_INVALID_INPUT
- *   - mail:search-by-msgids: resolves known Message-IDs to thread rows
+ *   - mail:search-by-msgids: resolves known xGmMsgIds to thread rows
  *   - ai:chat:navigate: resolves a known xGmMsgId and emits ai:search:batch + ai:search:complete
  *
  * Pattern:
@@ -23,13 +23,15 @@ import { expect } from 'chai';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
-  waitForEvent,
+  getDatabase,
   seedTestAccount,
   triggerSyncAndWait,
 } from '../infrastructure/test-helpers';
 import { imapStateInspector, ollamaServer } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { TestEventBus } from '../infrastructure/test-event-bus';
+import { OllamaService } from '../../../electron/services/ollama-service';
+import { VectorDbService } from '../../../electron/services/vector-db-service';
 
 // ---- Type helpers ----
 
@@ -94,6 +96,46 @@ async function collectSearchBatches(
     .filter((payload) => payload != null && payload.searchToken === searchToken);
 
   return { batches, complete };
+}
+
+function getSearchBatchesSince(
+  searchToken: string,
+  priorBatchCount: number,
+): SearchBatchPayload[] {
+  return TestEventBus.getInstance()
+    .getHistory('ai:search:batch')
+    .slice(priorBatchCount)
+    .map((record) => record.args[0] as SearchBatchPayload)
+    .filter((payload) => payload != null && payload.searchToken === searchToken);
+}
+
+async function prepareSemanticPipeline(queryEmbedding: number[] = [1, 0, 0, 0]): Promise<void> {
+  const vectorDbService = VectorDbService.getInstance();
+  expect(vectorDbService.vectorsAvailable).to.equal(true);
+
+  ollamaServer.setError('health', false);
+  ollamaServer.setEmbeddings([queryEmbedding]);
+  ollamaServer.setEmbedDimension(queryEmbedding.length);
+
+  const statusResponse = await callIpc('ai:get-status') as IpcResponse<{ connected: boolean }>;
+  expect(statusResponse.success).to.equal(true);
+  expect(statusResponse.data!.connected).to.equal(true);
+
+  const setModelResponse = await callIpc(
+    'ai:set-model',
+    'llama3.2:latest',
+  ) as IpcResponse<{ currentModel: string }>;
+  expect(setModelResponse.success).to.equal(true);
+  expect(setModelResponse.data!.currentModel).to.equal('llama3.2:latest');
+
+  const setEmbeddingResponse = await callIpc(
+    'ai:set-embedding-model',
+    'nomic-embed-text:latest',
+  ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
+  expect(setEmbeddingResponse.success).to.equal(true);
+  expect(setEmbeddingResponse.data!.embeddingModel).to.equal('nomic-embed-text:latest');
+  expect(setEmbeddingResponse.data!.vectorDimension).to.equal(queryEmbedding.length);
+  expect(vectorDbService.getVectorDimension()).to.equal(queryEmbedding.length);
 }
 
 // =========================================================================
@@ -185,6 +227,21 @@ describe('Search (Keyword and Semantic)', () => {
     await triggerSyncAndWait(suiteAccountId, { timeout: 30_000 });
   });
 
+  afterEach(() => {
+    ollamaServer.reset();
+
+    const ollamaService = OllamaService.getInstance();
+    ollamaService['baseUrl'] = ollamaServer.getBaseUrl();
+    ollamaService.setModel('');
+    ollamaService.setEmbeddingModel('');
+
+    try {
+      VectorDbService.getInstance().deleteByAccountId(suiteAccountId);
+    } catch {
+      // Vector DB may be unavailable in some test environments.
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Input validation
   // -------------------------------------------------------------------------
@@ -254,7 +311,7 @@ describe('Search (Keyword and Semantic)', () => {
       // Wait for the complete event
       const complete = await waitForSearchComplete(searchToken);
       expect(complete.searchToken).to.equal(searchToken);
-      expect(['complete', 'partial', 'error']).to.include(complete.status);
+      expect(['complete', 'partial']).to.include(complete.status);
 
       // Restore server
       ollamaServer.setError('health', false);
@@ -263,17 +320,14 @@ describe('Search (Keyword and Semantic)', () => {
     it('emits ai:search:batch events with local-phase results when messages match', async function () {
       this.timeout(25_000);
 
-      // Use a term from the fixture subjects — plain-text.eml has a known subject
       const plainHeaders = emlFixtures['plain-text'].headers;
-      // Extract words from the subject line to use as query keywords
-      const queryWords = plainHeaders.subject.split(/\s+/).filter((word) => word.length > 3);
-      // Use the first meaningful keyword for the search
-      const searchQuery = queryWords.length > 0 ? queryWords[0] : 'test';
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
 
       const response = await callIpc(
         'ai:search',
         String(suiteAccountId),
-        searchQuery,
+        plainHeaders.subject,
         undefined,
         'keyword',
       ) as IpcResponse<{ searchToken: string }>;
@@ -283,15 +337,22 @@ describe('Search (Keyword and Semantic)', () => {
 
       // Collect all batch events and wait for complete
       const { complete } = await collectSearchBatches(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
+
       expect(complete.searchToken).to.equal(searchToken);
-      // Status is complete or partial depending on IMAP result
-      expect(['complete', 'partial', 'error']).to.include(complete.status);
+      expect(['complete', 'partial']).to.include(complete.status);
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
     });
 
     it('includes known xGmMsgId in local batch when messages are indexed', async function () {
       this.timeout(25_000);
 
       const plainHeaders = emlFixtures['plain-text'].headers;
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
 
       // Search using the full subject — should hit local DB first
       const response = await callIpc(
@@ -305,28 +366,16 @@ describe('Search (Keyword and Semantic)', () => {
       expect(response.success).to.equal(true);
       const searchToken = response.data!.searchToken;
 
-      const bus = TestEventBus.getInstance();
-      const priorBatchCount = bus.getHistory('ai:search:batch').length;
-
       // Wait for complete
-      await waitForSearchComplete(searchToken);
+      const complete = await waitForSearchComplete(searchToken);
+      expect(['complete', 'partial']).to.include(complete.status);
 
-      // Check if any batch contained our message ID
-      const newBatchEvents = bus.getHistory('ai:search:batch').slice(priorBatchCount);
-      const allMsgIds: string[] = [];
-      for (const record of newBatchEvents) {
-        const payload = record.args[0] as SearchBatchPayload | undefined;
-        if (payload && payload.searchToken === searchToken) {
-          allMsgIds.push(...payload.msgIds);
-        }
-      }
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
 
-      // We expect at least one batch (possibly empty if subject doesn't match DB LIKE)
-      // The important thing is no error and the stream completed
-      expect(['complete', 'partial', 'error']).to.include(
-        (await waitForSearchComplete(searchToken).catch(() => ({ status: 'already-complete' }))).status ??
-          'already-complete',
-      );
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
     });
   });
 
@@ -359,6 +408,8 @@ describe('Search (Keyword and Semantic)', () => {
       this.timeout(25_000);
 
       const plainHeaders = emlFixtures['plain-text'].headers;
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
 
       const response = await callIpc(
         'ai:search',
@@ -371,35 +422,82 @@ describe('Search (Keyword and Semantic)', () => {
       expect(response.success).to.equal(true);
       const searchToken = response.data!.searchToken;
 
+      await waitForSearchComplete(searchToken);
+
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const phases = relevantBatches.map((batch) => batch.phase);
+
+      expect(phases.length).to.be.greaterThan(1);
+      expect(phases[0]).to.equal('local');
+      expect(phases).to.include('imap');
+      expect(phases.lastIndexOf('local')).to.be.lessThan(phases.indexOf('imap'));
+    });
+
+    it('emits an imap batch for results that only exist on the server', async function () {
+      this.timeout(25_000);
+
+      const serverOnlyMsgId = '1000000000000099';
+      const serverOnlyThreadId = '2000000000000099';
+      const uniqueSubject = 'Quarterly forecast server only 98231';
+      const serverOnlyRaw = Buffer.from(
+        [
+          'From: server-only@example.com',
+          `To: ${suiteEmail}`,
+          `Subject: ${uniqueSubject}`,
+          'Date: Sat, 06 Jan 2024 12:00:00 +0000',
+          'Message-ID: <server-only-001@example.com>',
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=UTF-8',
+          'Content-Transfer-Encoding: 7bit',
+          `X-GM-MSGID: ${serverOnlyMsgId}`,
+          `X-GM-THRID: ${serverOnlyThreadId}`,
+          'X-GM-LABELS: \\All Mail',
+          '',
+          'This message only exists on IMAP until the keyword search fetches it.',
+        ].join('\n'),
+        'utf8',
+      );
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', serverOnlyRaw, {
+        xGmMsgId: serverOnlyMsgId,
+        xGmThrid: serverOnlyThreadId,
+        xGmLabels: ['\\All Mail'],
+      });
+
       const bus = TestEventBus.getInstance();
       const priorBatchCount = bus.getHistory('ai:search:batch').length;
 
-      await waitForSearchComplete(searchToken);
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        'forecast 98231',
+        undefined,
+        'keyword',
+      ) as IpcResponse<{ searchToken: string }>;
 
-      const relevantBatches = bus
-        .getHistory('ai:search:batch')
-        .slice(priorBatchCount)
-        .map((record) => record.args[0] as SearchBatchPayload)
-        .filter((payload) => payload != null && payload.searchToken === searchToken);
+      expect(response.success).to.equal(true);
+      const searchToken = response.data!.searchToken;
 
-      if (relevantBatches.length >= 2) {
-        // Verify local batch comes before imap batch
-        const phases = relevantBatches.map((batch) => batch.phase);
-        const firstImapIndex = phases.indexOf('imap');
-        const lastLocalIndex = phases.lastIndexOf('local');
-        if (firstImapIndex !== -1 && lastLocalIndex !== -1) {
-          expect(lastLocalIndex).to.be.lessThan(firstImapIndex);
-        }
-      }
-      // Even if only one batch phase was emitted, the test verifies the stream completed
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localBatches = relevantBatches.filter((batch) => batch.phase === 'local');
+      const imapMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'imap')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(localBatches.length).to.be.greaterThan(0);
+      expect(localBatches[0]!.msgIds).to.deep.equal([]);
+      expect(imapMsgIds).to.include(serverOnlyMsgId);
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(1);
     });
   });
 
   // -------------------------------------------------------------------------
-  // mail:search-by-msgids — Message-ID search
+  // mail:search-by-msgids — xGmMsgId search
   // -------------------------------------------------------------------------
 
-  describe('mail:search-by-msgids — resolves Message-IDs to thread rows', () => {
+  describe('mail:search-by-msgids — resolves xGmMsgIds to thread rows', () => {
     it('returns thread rows for known xGmMsgIds', async () => {
       const plainHeaders = emlFixtures['plain-text'].headers;
       const htmlHeaders = emlFixtures['html-email'].headers;
@@ -412,7 +510,13 @@ describe('Search (Keyword and Semantic)', () => {
 
       expect(response.success).to.equal(true);
       expect(response.data).to.be.an('array');
-      expect(response.data!.length).to.be.greaterThan(0);
+      expect(response.data!.length).to.equal(2);
+
+      const returnedThreadIds = response.data!.map((thread) => thread['xGmThrid']);
+      expect(returnedThreadIds).to.deep.equal([
+        plainHeaders.xGmThrid,
+        htmlHeaders.xGmThrid,
+      ]);
 
       // Each result should have the required thread fields
       for (const thread of response.data!) {
@@ -456,6 +560,17 @@ describe('Search (Keyword and Semantic)', () => {
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('MAIL_SEARCH_INVALID_INPUT');
     });
+
+    it('returns error when any supplied ID is not a string', async () => {
+      const response = await callIpc(
+        'mail:search-by-msgids',
+        String(suiteAccountId),
+        [emlFixtures['plain-text'].headers.xGmMsgId, 42],
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_SEARCH_INVALID_INPUT');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -467,6 +582,8 @@ describe('Search (Keyword and Semantic)', () => {
       this.timeout(25_000);
 
       const plainHeaders = emlFixtures['plain-text'].headers;
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
 
       const response = await callIpc(
         'ai:chat:navigate',
@@ -483,8 +600,19 @@ describe('Search (Keyword and Semantic)', () => {
 
       // Wait for the search to complete (may or may not find results depending on IMAP availability)
       const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
+      const imapMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'imap')
+        .flatMap((batch) => batch.msgIds);
+
       expect(complete.searchToken).to.equal(searchToken);
-      expect(['complete', 'partial', 'error']).to.include(complete.status);
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(1);
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
+      expect(imapMsgIds).to.deep.equal([]);
     });
 
     it('returns AI_INVALID_INPUT when accountId is missing', async () => {
@@ -512,13 +640,287 @@ describe('Search (Keyword and Semantic)', () => {
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AI_INVALID_INPUT');
     });
+
+    it('fetches from IMAP when the source email is missing locally but exists on the server', async function () {
+      this.timeout(25_000);
+
+      const serverOnlyMsgId = '1000000000000101';
+      const serverOnlyThreadId = '2000000000000101';
+      const serverOnlyRaw = Buffer.from(
+        [
+          'From: navigate-imap@example.com',
+          `To: ${suiteEmail}`,
+          'Subject: Navigate IMAP fallback message',
+          'Date: Sun, 07 Jan 2024 12:00:00 +0000',
+          'Message-ID: <navigate-imap-fallback-001@example.com>',
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=UTF-8',
+          'Content-Transfer-Encoding: 7bit',
+          `X-GM-MSGID: ${serverOnlyMsgId}`,
+          `X-GM-THRID: ${serverOnlyThreadId}`,
+          'X-GM-LABELS: \\Inbox \\All Mail',
+          '',
+          'This source email should be resolved through IMAP fallback.',
+        ].join('\n'),
+        'utf8',
+      );
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', serverOnlyRaw, {
+        xGmMsgId: serverOnlyMsgId,
+        xGmThrid: serverOnlyThreadId,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+
+      const databaseService = getDatabase();
+      expect(databaseService.getEmailByXGmMsgId(suiteAccountId, serverOnlyMsgId)).to.equal(null);
+
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:chat:navigate',
+        {
+          accountId: suiteAccountId,
+          xGmMsgId: serverOnlyMsgId,
+        },
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localBatches = relevantBatches.filter((batch) => batch.phase === 'local');
+      const imapMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'imap')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(1);
+      expect(localBatches.length).to.be.greaterThan(0);
+      expect(localBatches[0]!.msgIds).to.deep.equal([]);
+      expect(imapMsgIds).to.include(serverOnlyMsgId);
+      expect(databaseService.getEmailByXGmMsgId(suiteAccountId, serverOnlyMsgId)).to.not.equal(null);
+
+      const resolvedResponse = await callIpc(
+        'mail:search-by-msgids',
+        String(suiteAccountId),
+        [serverOnlyMsgId],
+      ) as IpcResponse<Array<Record<string, unknown>>>;
+
+      expect(resolvedResponse.success).to.equal(true);
+      expect(resolvedResponse.data).to.have.length(1);
+      expect(resolvedResponse.data![0]!['xGmThrid']).to.equal(serverOnlyThreadId);
+    });
+
+    it('completes with no results for an unknown xGmMsgId', async function () {
+      this.timeout(25_000);
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:chat:navigate',
+        {
+          accountId: suiteAccountId,
+          xGmMsgId: 'missing-msg-id-999999',
+        },
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localBatches = relevantBatches.filter((batch) => batch.phase === 'local');
+      const imapBatches = relevantBatches.filter((batch) => batch.phase === 'imap');
+
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(0);
+      expect(localBatches.length).to.be.greaterThan(0);
+      expect(localBatches[0]!.msgIds).to.deep.equal([]);
+      expect(imapBatches.length).to.be.greaterThan(0);
+      expect(imapBatches[0]!.msgIds).to.deep.equal([]);
+    });
   });
 
   // -------------------------------------------------------------------------
   // ai:search — semantic mode (when Ollama is connected and configured)
   // -------------------------------------------------------------------------
 
+  describe('ai:search — semantic mode happy path', () => {
+    it('emits a local semantic batch when embeddings and vector results are available', async function () {
+      this.timeout(25_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+      const priorEmbedCount = ollamaServer.getRequestsFor('/api/embed').length;
+
+      VectorDbService.getInstance().insertChunks({
+        accountId: suiteAccountId,
+        xGmMsgId: plainHeaders.xGmMsgId,
+        chunks: [
+          {
+            chunkIndex: 0,
+            chunkText: 'Plain text semantic search target',
+            embedding: [1, 0, 0, 0],
+          },
+        ],
+      });
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        'semantic-vector-only-query-77441',
+        undefined,
+        'semantic',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
+      const imapMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'imap')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(1);
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
+      expect(imapMsgIds).to.deep.equal([]);
+      expect(ollamaServer.getRequestsFor('/api/embed').length).to.be.greaterThan(priorEmbedCount);
+    });
+
+    it('completes with zero results when semantic pipeline is ready but vector search finds nothing', async function () {
+      this.timeout(25_000);
+
+      const isolatedAccount = seedTestAccount({
+        email: 'search-semantic-empty@example.com',
+        displayName: 'Semantic Empty Search User',
+      });
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(isolatedAccount.accountId),
+        'semantic query with no indexed matches',
+        undefined,
+        'semantic',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(0);
+      expect(relevantBatches).to.deep.equal([]);
+
+      try {
+        VectorDbService.getInstance().deleteByAccountId(isolatedAccount.accountId);
+      } catch {
+        // Vector DB may be unavailable in some test environments.
+      }
+    });
+
+    it('falls back to filter-only search when semantic intent contains only filters', async function () {
+      this.timeout(25_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const thread1Headers = emlFixtures['reply-thread-1'].headers;
+      const thread3Headers = emlFixtures['reply-thread-3'].headers;
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          sender: 'alice@example.com',
+        },
+      }));
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        'semantic filter only from alice 2026-03-11',
+        undefined,
+        'semantic',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
+      const imapMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'imap')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(complete.status).to.equal('complete');
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
+      expect(localMsgIds).to.include(thread1Headers.xGmMsgId);
+      expect(localMsgIds).to.include(thread3Headers.xGmMsgId);
+      expect(localMsgIds).to.not.include(emlFixtures['html-email'].headers.xGmMsgId);
+      expect(imapMsgIds).to.deep.equal([]);
+    });
+  });
+
   describe('ai:search — semantic mode falls back to keyword when not ready', () => {
+    it('automatically falls back from semantic mode and still streams keyword results when Ollama is disconnected', async function () {
+      this.timeout(25_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+      ollamaServer.setError('health', true);
+
+      const statusResponse = await callIpc('ai:get-status') as IpcResponse<{ connected: boolean }>;
+      expect(statusResponse.success).to.equal(true);
+      expect(statusResponse.data!.connected).to.equal(false);
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        plainHeaders.subject,
+        undefined,
+        'semantic',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+      const searchToken = response.data!.searchToken;
+
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(complete.searchToken).to.equal(searchToken);
+      expect(['complete', 'partial']).to.include(complete.status);
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
+
+      ollamaServer.setError('health', false);
+    });
+
     it('returns searchToken and completes in semantic mode (no embedding model configured)', async function () {
       this.timeout(25_000);
 
@@ -537,7 +939,7 @@ describe('Search (Keyword and Semantic)', () => {
       // Complete event must arrive regardless of mode fallback
       const complete = await waitForSearchComplete(searchToken);
       expect(complete.searchToken).to.equal(searchToken);
-      expect(['complete', 'partial', 'error']).to.include(complete.status);
+      expect(['complete', 'partial']).to.include(complete.status);
     });
   });
 });
