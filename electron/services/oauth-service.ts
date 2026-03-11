@@ -109,7 +109,7 @@ export class OAuthService {
 
   private constructor() {
     // Prefer secrets, then env override, then built-in Desktop client ID
-    this.clientId = GOOGLE_CLIENT_ID || process.env['GOOGLE_CLIENT_ID'];
+    this.clientId = GOOGLE_CLIENT_ID || process.env['GOOGLE_CLIENT_ID'] || '';
     if (!this.clientId) {
       log.warn('GOOGLE_CLIENT_ID not set — OAuth login will not work');
     }
