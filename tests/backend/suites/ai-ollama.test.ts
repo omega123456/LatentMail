@@ -71,6 +71,84 @@ interface EmbeddingStatusResponse {
   vectorDimension: number | null;
 }
 
+interface SearchBatchPayload {
+  searchToken: string;
+  msgIds: string[];
+  phase: 'local' | 'imap';
+}
+
+interface SearchCompletePayload {
+  searchToken: string;
+  status: string;
+  totalResults: number;
+}
+
+async function waitForSearchComplete(
+  searchToken: string,
+  timeoutMs: number = 20_000,
+): Promise<SearchCompletePayload> {
+  const resultArgs = await TestEventBus.getInstance().waitFor('ai:search:complete', {
+    timeout: timeoutMs,
+    predicate: (args) => {
+      const payload = args[0] as SearchCompletePayload | undefined;
+      return payload != null && payload.searchToken === searchToken;
+    },
+  });
+
+  return resultArgs[0] as SearchCompletePayload;
+}
+
+function getSearchBatchesSince(
+  searchToken: string,
+  priorBatchCount: number,
+): SearchBatchPayload[] {
+  return TestEventBus.getInstance()
+    .getHistory('ai:search:batch')
+    .slice(priorBatchCount)
+    .map((record) => record.args[0] as SearchBatchPayload)
+    .filter((payload) => payload != null && payload.searchToken === searchToken);
+}
+
+async function ensureOllamaKeywordModeReady(): Promise<void> {
+  const urlResponse = await callIpc('ai:set-url', ollamaServer.getBaseUrl()) as IpcResponse<OllamaStatusResponse>;
+  expect(urlResponse.success).to.equal(true);
+  expect(urlResponse.data!.connected).to.equal(true);
+
+  const modelResponse = await callIpc('ai:set-model', 'llama3.2:latest') as IpcResponse<{ currentModel: string }>;
+  expect(modelResponse.success).to.equal(true);
+  expect(modelResponse.data!.currentModel).to.equal('llama3.2:latest');
+}
+
+async function configureEmbeddingModelForSuite(dimension: number, model: string = 'nomic-embed-text:latest'): Promise<void> {
+  ollamaServer.setEmbedDimension(dimension);
+
+  const response = await callIpc('ai:set-embedding-model', model) as IpcResponse<{
+    embeddingModel: string;
+    vectorDimension: number;
+  }>;
+
+  expect(response.success).to.equal(true);
+  expect(response.data!.embeddingModel).to.equal(model);
+  expect(response.data!.vectorDimension).to.equal(dimension);
+}
+
+function insertSemanticChunk(accountId: number, xGmMsgId: string, chunkText: string, embedding: number[]): void {
+  const vectorDbService = VectorDbService.getInstance();
+  expect(vectorDbService.vectorsAvailable).to.equal(true);
+
+  vectorDbService.insertChunks({
+    accountId,
+    xGmMsgId,
+    chunks: [
+      {
+        chunkIndex: 0,
+        chunkText,
+        embedding,
+      },
+    ],
+  });
+}
+
 // ---- Suite-level state ----
 
 let suiteAccountId: number;
@@ -212,6 +290,13 @@ describe('AI / Ollama', () => {
       expect(response.error!.code).to.equal('AI_INVALID_INPUT');
     });
 
+    it('rejects malformed URL strings', async () => {
+      const response = await callIpc('ai:set-url', '://not-a-valid-url') as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('AI_INVALID_INPUT');
+    });
+
     it('rejects localhost URLs that include credentials', async () => {
       const response = await callIpc(
         'ai:set-url',
@@ -237,6 +322,69 @@ describe('AI / Ollama', () => {
 
       expect(response.success).to.equal(true);
       expect(getDatabase().getSetting('ollamaUrl')).to.equal(fakeUrl);
+    });
+
+    it('transitions to disconnected state when pointed at a non-responsive local URL', async () => {
+      const statusBus = TestEventBus.getInstance();
+      const priorStatusCount = statusBus.getHistory('ai:status').length;
+
+      const response = await callIpc(
+        'ai:set-url',
+        'http://127.0.0.1:65534',
+      ) as IpcResponse<OllamaStatusResponse>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.url).to.equal('http://127.0.0.1:65534');
+      expect(response.data!.connected).to.equal(false);
+
+      const statusEvents = statusBus.getHistory('ai:status').slice(priorStatusCount);
+      const disconnectedEvent = statusEvents.find((record) => {
+        const payload = record.args[0] as OllamaStatusResponse | undefined;
+        return payload?.connected === false && payload?.url === 'http://127.0.0.1:65534';
+      });
+
+      expect(disconnectedEvent).to.not.equal(undefined);
+    });
+
+    it('transitions back to connected when reset to the fake server URL', async () => {
+      await callIpc('ai:set-url', 'http://127.0.0.1:65534');
+
+      const statusBus = TestEventBus.getInstance();
+      const priorStatusCount = statusBus.getHistory('ai:status').length;
+      const fakeUrl = ollamaServer.getBaseUrl();
+
+      const response = await callIpc('ai:set-url', fakeUrl) as IpcResponse<OllamaStatusResponse>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.url).to.equal(fakeUrl);
+      expect(response.data!.connected).to.equal(true);
+
+      const statusEvents = statusBus.getHistory('ai:status').slice(priorStatusCount);
+      const connectedEvent = statusEvents.find((record) => {
+        const payload = record.args[0] as OllamaStatusResponse | undefined;
+        return payload?.connected === true && payload?.url === fakeUrl;
+      });
+
+      expect(connectedEvent).to.not.equal(undefined);
+    });
+
+    it('returns AI_SET_URL_FAILED when updating the Ollama URL throws unexpectedly', async () => {
+      const ollamaService = OllamaService.getInstance() as unknown as {
+        setUrl: (url: string) => Promise<void>;
+      };
+      const originalSetUrl = ollamaService.setUrl;
+      ollamaService.setUrl = async (_url: string): Promise<void> => {
+        throw new Error('forced setUrl failure');
+      };
+
+      try {
+        const response = await callIpc('ai:set-url', ollamaServer.getBaseUrl()) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('AI_SET_URL_FAILED');
+      } finally {
+        ollamaService.setUrl = originalSetUrl;
+      }
     });
   });
 
@@ -272,6 +420,25 @@ describe('AI / Ollama', () => {
       expect(statusResponse.success).to.equal(true);
       expect(statusResponse.data!.currentModel).to.equal(model);
       expect(getDatabase().getSetting('ollamaModel')).to.equal(model);
+    });
+
+    it('returns AI_SET_MODEL_FAILED when persisting the model throws unexpectedly', async () => {
+      const ollamaService = OllamaService.getInstance() as unknown as {
+        setModel: (model: string) => void;
+      };
+      const originalSetModel = ollamaService.setModel;
+      ollamaService.setModel = (_model: string): void => {
+        throw new Error('forced setModel failure');
+      };
+
+      try {
+        const response = await callIpc('ai:set-model', 'llama3.2:latest') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('AI_SET_MODEL_FAILED');
+      } finally {
+        ollamaService.setModel = originalSetModel;
+      }
     });
   });
 
@@ -366,6 +533,58 @@ describe('AI / Ollama', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AI_SUMMARIZE_FAILED');
+    });
+
+    it('gracefully returns an empty summary when Ollama responds with empty content', async () => {
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatStreamChunks([]);
+
+      const response = await callIpc(
+        'ai:summarize',
+        `Empty summarize response ${Date.now()}`,
+      ) as IpcResponse<{ summary: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.summary).to.equal('');
+    });
+
+    it('gracefully skips malformed streaming lines and returns parsed summarize content', async () => {
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatStreamChunks(['First ', 'Second']);
+
+      const originalGetReader = ReadableStream.prototype.getReader;
+      ReadableStream.prototype.getReader = function getReaderPatched(this: ReadableStream<Uint8Array>) {
+        const originalReader = originalGetReader.call(this);
+        const originalRead = originalReader.read.bind(originalReader) as () => Promise<{ done: boolean; value?: Uint8Array }>;
+        let didInjectMalformedChunk = false;
+
+        return {
+          ...originalReader,
+          read: async () => {
+            if (!didInjectMalformedChunk) {
+              didInjectMalformedChunk = true;
+              return {
+                done: false,
+                value: new TextEncoder().encode('{bad-json}\n'),
+              };
+            }
+            return originalRead();
+          },
+        };
+      } as typeof ReadableStream.prototype.getReader;
+
+      try {
+        const response = await callIpc(
+          'ai:summarize',
+          `Malformed summarize stream ${Date.now()}`,
+          `summarize-malformed-${Date.now()}`,
+        ) as IpcResponse<{ summary: string }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.summary).to.equal('First Second');
+      } finally {
+        ReadableStream.prototype.getReader = originalGetReader;
+      }
     });
 
     it('streams summarize tokens through ai:stream and returns the concatenated text', async () => {
@@ -476,6 +695,19 @@ describe('AI / Ollama', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AI_COMPOSE_FAILED');
+    });
+
+    it('returns success with empty text when Ollama returns an empty compose response', async () => {
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatStreamChunks([]);
+
+      const response = await callIpc(
+        'ai:compose',
+        `Compose empty response ${Date.now()}`,
+      ) as IpcResponse<{ text: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.text).to.equal('');
     });
 
     it('streams compose output and includes the provided context in the Ollama request', async () => {
@@ -809,6 +1041,26 @@ describe('AI / Ollama', () => {
       expect(response.data!.actions).to.deep.equal([]);
     });
 
+    it('backfills incomplete but valid filter structures', async () => {
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatResponse(JSON.stringify({
+        conditions: [{ field: 'from', operator: 'contains', value: 'boss@example.com' }],
+      }));
+
+      const response = await callIpc(
+        'ai:generate-filter',
+        `Backfill incomplete filter ${Date.now()}`,
+        suiteAccountId,
+      ) as IpcResponse<{ name: string; conditions: unknown[]; actions: unknown[] }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.name).to.equal('AI-generated filter');
+      expect(response.data!.conditions).to.deep.equal([
+        { field: 'from', operator: 'contains', value: 'boss@example.com' },
+      ]);
+      expect(response.data!.actions).to.deep.equal([]);
+    });
+
     it('returns AI_GENERATE_FILTER_FAILED when the model returns invalid JSON', async () => {
       await callIpc('ai:set-model', 'llama3.2:latest');
       ollamaServer.setChatResponse('not valid json');
@@ -883,6 +1135,35 @@ describe('AI / Ollama', () => {
       expect(response.data!.needsFollowUp).to.equal(false);
     });
 
+    it('treats a yes/no-style response as a safe fallback false result', async () => {
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatResponse('yes');
+
+      const yesResponse = await callIpc(
+        'ai:detect-followup',
+        `Yes response follow-up ${Date.now()}`,
+      ) as IpcResponse<{ needsFollowUp: boolean; reason: string }>;
+
+      expect(yesResponse.success).to.equal(true);
+      expect(yesResponse.data!.needsFollowUp).to.equal(false);
+      expect(yesResponse.data!.reason).to.equal('Could not determine follow-up status');
+
+      ollamaServer.reset();
+      const ollamaService = OllamaService.getInstance();
+      ollamaService['baseUrl'] = ollamaServer.getBaseUrl();
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatResponse('no');
+
+      const noResponse = await callIpc(
+        'ai:detect-followup',
+        `No response follow-up ${Date.now()}`,
+      ) as IpcResponse<{ needsFollowUp: boolean; reason: string }>;
+
+      expect(noResponse.success).to.equal(true);
+      expect(noResponse.data!.needsFollowUp).to.equal(false);
+      expect(noResponse.data!.reason).to.equal('Could not determine follow-up status');
+    });
+
     it('returns a safe fallback when the model response is invalid JSON', async () => {
       await callIpc('ai:set-model', 'llama3.2:latest');
       ollamaServer.setChatResponse('not-json');
@@ -908,6 +1189,178 @@ describe('AI / Ollama', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AI_DETECT_FOLLOWUP_FAILED');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ai:search
+  // -------------------------------------------------------------------------
+
+  describe('ai:search', () => {
+    it('falls back to the raw keyword query when intent extraction returns malformed output', async function () {
+      this.timeout(25_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      await ensureOllamaKeywordModeReady();
+      ollamaServer.setChatResponse('not-json');
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        plainHeaders.subject,
+        undefined,
+        'keyword',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'local')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(['complete', 'partial']).to.include(complete.status);
+      expect(localMsgIds).to.include(plainHeaders.xGmMsgId);
+      expect(ollamaServer.getRequestsFor('/api/chat').length).to.be.greaterThan(0);
+    });
+
+    it('processes rich keyword intents with sent direction, dates, constraints, phrases, synonyms, and negations', async function () {
+      this.timeout(25_000);
+
+      await ensureOllamaKeywordModeReady();
+      ollamaServer.setChatResponse(JSON.stringify({
+        keywords: ['budget report', 'budget report'],
+        synonyms: ['forecast', 'projection'],
+        direction: 'sent',
+        folder: 'INBOX',
+        sender: 'alice@example.com',
+        recipient: 'finance@example.com',
+        dateRange: {
+          after: '2024-01-01',
+          before: '2025-12-31',
+          relative: '7d',
+        },
+        flags: {
+          unread: false,
+          starred: true,
+          important: false,
+          hasAttachment: true,
+        },
+        exactPhrases: ['quarterly budget'],
+        negations: ['draft', 'obsolete'],
+      }));
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        'Find sent budget report mail',
+        ['INBOX', 'Projects'],
+        'keyword',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+
+      expect(['complete', 'partial']).to.include(complete.status);
+      expect(relevantBatches.length).to.be.greaterThan(0);
+      expect(relevantBatches[0]!.phase).to.equal('local');
+      expect(ollamaServer.getRequestsFor('/api/chat').length).to.be.greaterThan(0);
+    });
+
+    it('processes keyword intents that exercise the opposite flag branches', async function () {
+      this.timeout(25_000);
+
+      await ensureOllamaKeywordModeReady();
+      ollamaServer.setChatResponse(JSON.stringify({
+        keywords: ['invoice follow up'],
+        synonyms: ['billing reminder'],
+        direction: 'sent',
+        folder: 'Projects',
+        sender: 'finance@example.com',
+        recipient: 'bob@example.com',
+        dateRange: {
+          after: '2023-12-01',
+          before: '2026-01-15',
+          relative: '3m',
+        },
+        flags: {
+          unread: true,
+          starred: false,
+          important: true,
+          hasAttachment: false,
+        },
+        exactPhrases: ['payment reminder'],
+        negations: ['spam'],
+      }));
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        'Find invoice follow-up mail',
+        ['Projects', 'INBOX'],
+        'keyword',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+
+      expect(['complete', 'partial']).to.include(complete.status);
+      expect(relevantBatches.length).to.be.greaterThan(0);
+      expect(relevantBatches[0]!.phase).to.equal('local');
+    });
+
+    it('fails semantic search gracefully when the embedding endpoint errors', async function () {
+      this.timeout(25_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+
+      await ensureOllamaKeywordModeReady();
+      await configureEmbeddingModelForSuite(4);
+      insertSemanticChunk(suiteAccountId, plainHeaders.xGmMsgId, 'semantic target chunk', [1, 0, 0, 0]);
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: 'semantic target chunk',
+        filters: {},
+      }));
+      ollamaServer.setError('embed', true);
+
+      const bus = TestEventBus.getInstance();
+      const priorBatchCount = bus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:search',
+        String(suiteAccountId),
+        'semantic failure case',
+        undefined,
+        'semantic',
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+
+      expect(complete.status).to.equal('error');
+      expect(complete.totalResults).to.equal(0);
+      expect(relevantBatches).to.deep.equal([]);
     });
   });
 
@@ -948,6 +1401,24 @@ describe('AI / Ollama', () => {
       expect(statusResponse.success).to.equal(true);
       expect(statusResponse.data!.embeddingModel).to.equal('nomic-embed-text:latest');
       expect(statusResponse.data!.vectorDimension).to.equal(4);
+    });
+
+    it('returns unavailable status when the vector database is disabled', async () => {
+      const vectorDbService = VectorDbService.getInstance() as VectorDbService & {
+        vectorsAvailable: boolean;
+      };
+      const originalVectorsAvailable = vectorDbService.vectorsAvailable;
+      vectorDbService.vectorsAvailable = false;
+
+      try {
+        const response = await callIpc('ai:get-embedding-status') as IpcResponse<EmbeddingStatusResponse>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.indexStatus).to.equal('unavailable');
+        expect(response.data!.vectorDimension).to.equal(null);
+      } finally {
+        vectorDbService.vectorsAvailable = originalVectorsAvailable;
+      }
     });
   });
 
@@ -997,6 +1468,55 @@ describe('AI / Ollama', () => {
       expect(response.success).to.equal(true);
       expect(response.data!.embeddingModel).to.equal('nomic-embed-text:latest');
       expect(response.data!.vectorDimension).to.equal(8);
+    });
+
+    it('stores the configured embedding model and dimension in the vector database state', async () => {
+      const vectorDbService = VectorDbService.getInstance();
+      expect(vectorDbService.vectorsAvailable).to.equal(true);
+
+      ollamaServer.setEmbedDimension(6);
+
+      const response = await callIpc(
+        'ai:set-embedding-model',
+        'custom-embed-6d:latest',
+      ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.embeddingModel).to.equal('custom-embed-6d:latest');
+      expect(response.data!.vectorDimension).to.equal(6);
+      expect(vectorDbService.getCurrentModel()).to.equal('custom-embed-6d:latest');
+      expect(vectorDbService.getVectorDimension()).to.equal(6);
+      expect(getDatabase().getSetting('ollamaEmbeddingModel')).to.equal('custom-embed-6d:latest');
+    });
+
+    it('reconfigures stored vector dimensions when a new embedding model validates with a different size', async () => {
+      const vectorDbService = VectorDbService.getInstance();
+      expect(vectorDbService.vectorsAvailable).to.equal(true);
+
+      ollamaServer.setEmbedDimension(4);
+      const firstResponse = await callIpc(
+        'ai:set-embedding-model',
+        'custom-embed-4d:latest',
+      ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
+
+      expect(firstResponse.success).to.equal(true);
+      expect(vectorDbService.getVectorDimension()).to.equal(4);
+
+      ollamaServer.reset();
+      const ollamaService = OllamaService.getInstance();
+      ollamaService['baseUrl'] = ollamaServer.getBaseUrl();
+      ollamaServer.setEmbedDimension(9);
+
+      const secondResponse = await callIpc(
+        'ai:set-embedding-model',
+        'custom-embed-9d:latest',
+      ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
+
+      expect(secondResponse.success).to.equal(true);
+      expect(secondResponse.data!.embeddingModel).to.equal('custom-embed-9d:latest');
+      expect(secondResponse.data!.vectorDimension).to.equal(9);
+      expect(vectorDbService.getCurrentModel()).to.equal('custom-embed-9d:latest');
+      expect(vectorDbService.getVectorDimension()).to.equal(9);
     });
 
     it('persists the embedding model setting after successful validation', async () => {
@@ -1107,6 +1627,48 @@ describe('AI / Ollama', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AI_REBUILD_INDEX_FAILED');
+    });
+
+    it('fails when the vector database is unavailable', async () => {
+      await configureEmbeddingModelForSuite(4);
+
+      const vectorDbService = VectorDbService.getInstance() as VectorDbService & {
+        vectorsAvailable: boolean;
+      };
+      const originalVectorsAvailable = vectorDbService.vectorsAvailable;
+      vectorDbService.vectorsAvailable = false;
+
+      try {
+        const response = await callIpc('ai:rebuild-index') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('AI_REBUILD_INDEX_FAILED');
+        expect(response.error!.message).to.include('Vector DB is unavailable');
+      } finally {
+        vectorDbService.vectorsAvailable = originalVectorsAvailable;
+      }
+    });
+
+    it('fails when the vector dimension is not configured', async () => {
+      await configureEmbeddingModelForSuite(4);
+
+      const vectorDbService = VectorDbService.getInstance() as VectorDbService & {
+        getVectorDimension: () => number | null;
+      };
+      const originalGetVectorDimension = vectorDbService.getVectorDimension;
+      vectorDbService.getVectorDimension = (): number | null => {
+        return null;
+      };
+
+      try {
+        const response = await callIpc('ai:rebuild-index') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('AI_REBUILD_INDEX_FAILED');
+        expect(response.error!.message).to.include('Vector dimension not configured');
+      } finally {
+        vectorDbService.getVectorDimension = originalGetVectorDimension;
+      }
     });
   });
 
@@ -1263,66 +1825,100 @@ describe('AI / Ollama', () => {
         displayName: 'AI No Results User',
       });
 
+      try {
+        await callIpc('ai:set-model', 'llama3.2:latest');
+        ollamaServer.setEmbeddings([[0.1, 0.2, 0.3, 0.4]]);
+        ollamaServer.setEmbedDimension(4);
+
+        const setEmbeddingResponse = await callIpc(
+          'ai:set-embedding-model',
+          'nomic-embed-text:latest',
+        ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
+
+        expect(setEmbeddingResponse.success).to.equal(true);
+
+        const db = getDatabase();
+        db.clearAllVectorIndexedEmails();
+        db.clearAllEmbeddingCrawlProgress();
+        VectorDbService.getInstance().clearAllAndReconfigure('nomic-embed-text:latest', 4);
+
+        ollamaServer.setChatResponse('not-json');
+
+        const response = await callIpc('ai:chat', {
+          question: 'Do I have anything about quarterly planning?',
+          conversationHistory: [],
+          accountId: freshAccount.accountId,
+        }) as IpcResponse<{ requestId: string }>;
+
+        expect(response.success).to.equal(true);
+
+        const requestId = response.data!.requestId;
+
+        const streamArgs = await waitForEvent('ai:chat:stream', {
+          timeout: 25_000,
+          predicate: (args) => {
+            const payload = args[0] as Record<string, unknown> | undefined;
+            return payload?.['requestId'] === requestId;
+          },
+        });
+
+        const sourcesArgs = await waitForEvent('ai:chat:sources', {
+          timeout: 25_000,
+          predicate: (args) => {
+            const payload = args[0] as Record<string, unknown> | undefined;
+            return payload?.['requestId'] === requestId;
+          },
+        });
+
+        const doneArgs = await waitForEvent('ai:chat:done', {
+          timeout: 25_000,
+          predicate: (args) => {
+            const payload = args[0] as Record<string, unknown> | undefined;
+            return payload?.['requestId'] === requestId;
+          },
+        });
+
+        const streamPayload = streamArgs[0] as Record<string, unknown>;
+        const sourcesPayload = sourcesArgs[0] as Record<string, unknown>;
+        const donePayload = doneArgs[0] as Record<string, unknown>;
+
+        expect(String(streamPayload['token'])).to.include("I couldn't find any emails");
+        expect(sourcesPayload['sources']).to.deep.equal([]);
+        expect(donePayload['success']).to.equal(true);
+        expect(donePayload['cancelled']).to.equal(false);
+      } finally {
+        await callIpc('auth:logout', String(freshAccount.accountId));
+      }
+    });
+
+    it('fails gracefully when the embedding endpoint errors during chat retrieval', async function () {
+      this.timeout(30_000);
+
       await callIpc('ai:set-model', 'llama3.2:latest');
-      ollamaServer.setEmbeddings([[0.1, 0.2, 0.3, 0.4]]);
-      ollamaServer.setEmbedDimension(4);
-
-      const setEmbeddingResponse = await callIpc(
-        'ai:set-embedding-model',
-        'nomic-embed-text:latest',
-      ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
-
-      expect(setEmbeddingResponse.success).to.equal(true);
-
-      const db = getDatabase();
-      db.clearAllVectorIndexedEmails();
-      db.clearAllEmbeddingCrawlProgress();
-      VectorDbService.getInstance().clearAllAndReconfigure('nomic-embed-text:latest', 4);
-
+      await configureEmbeddingModelForSuite(4);
       ollamaServer.setChatResponse('not-json');
+      ollamaServer.setError('embed', true);
 
       const response = await callIpc('ai:chat', {
-        question: 'Do I have anything about quarterly planning?',
+        question: 'Find emails about roadmap planning',
         conversationHistory: [],
-        accountId: freshAccount.accountId,
+        accountId: suiteAccountId,
       }) as IpcResponse<{ requestId: string }>;
 
       expect(response.success).to.equal(true);
-
-      const requestId = response.data!.requestId;
-
-      const streamArgs = await waitForEvent('ai:chat:stream', {
-        timeout: 25_000,
-        predicate: (args) => {
-          const payload = args[0] as Record<string, unknown> | undefined;
-          return payload?.['requestId'] === requestId;
-        },
-      });
-
-      const sourcesArgs = await waitForEvent('ai:chat:sources', {
-        timeout: 25_000,
-        predicate: (args) => {
-          const payload = args[0] as Record<string, unknown> | undefined;
-          return payload?.['requestId'] === requestId;
-        },
-      });
 
       const doneArgs = await waitForEvent('ai:chat:done', {
         timeout: 25_000,
         predicate: (args) => {
           const payload = args[0] as Record<string, unknown> | undefined;
-          return payload?.['requestId'] === requestId;
+          return payload?.['requestId'] === response.data!.requestId;
         },
       });
 
-      const streamPayload = streamArgs[0] as Record<string, unknown>;
-      const sourcesPayload = sourcesArgs[0] as Record<string, unknown>;
       const donePayload = doneArgs[0] as Record<string, unknown>;
-
-      expect(String(streamPayload['token'])).to.include("I couldn't find any emails");
-      expect(sourcesPayload['sources']).to.deep.equal([]);
-      expect(donePayload['success']).to.equal(true);
       expect(donePayload['cancelled']).to.equal(false);
+      expect(donePayload['success']).to.equal(false);
+      expect(String(donePayload['error'] ?? '')).to.include('Ollama embed failed');
     });
   });
 
@@ -1381,6 +1977,47 @@ describe('AI / Ollama', () => {
         predicate: (args) => {
           const payload = args[0] as Record<string, unknown> | undefined;
           return payload?.['requestId'] === requestId;
+        },
+      });
+
+      const donePayload = doneArgs[0] as Record<string, unknown>;
+      expect(donePayload['cancelled']).to.equal(true);
+      expect(donePayload['success']).to.equal(true);
+    });
+
+    it('cancels an actively streaming chat immediately after start', async function () {
+      this.timeout(30_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      await configureEmbeddingModelForSuite(4);
+      insertSemanticChunk(suiteAccountId, plainHeaders.xGmMsgId, 'Roadmap planning discussion chunk', [1, 0, 0, 0]);
+
+      ollamaServer.setChatResponse(JSON.stringify({ relevant: true }));
+      ollamaServer.setChatStreamChunks(Array.from({ length: 30 }, (_value, index) => `token-${index} `));
+      ollamaServer.setEmbeddings([[1, 0, 0, 0]]);
+
+      const response = await callIpc('ai:chat', {
+        question: 'What did the roadmap email say?',
+        conversationHistory: [],
+        accountId: suiteAccountId,
+      }) as IpcResponse<{ requestId: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const cancelResponse = await callIpc('ai:chat:cancel', {
+        requestId: response.data!.requestId,
+      }) as IpcResponse<{ cancelled: boolean }>;
+
+      expect(cancelResponse.success).to.equal(true);
+      expect(cancelResponse.data!.cancelled).to.equal(true);
+
+      const doneArgs = await waitForEvent('ai:chat:done', {
+        timeout: 25_000,
+        predicate: (args) => {
+          const payload = args[0] as Record<string, unknown> | undefined;
+          return payload?.['requestId'] === response.data!.requestId;
         },
       });
 

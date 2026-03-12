@@ -198,6 +198,45 @@ describe('Compose Drafts and Send', () => {
       );
       expect(match).to.exist;
     });
+
+    it('returns recent contacts when query is an empty string', async () => {
+      const db = DatabaseService.getInstance();
+      db.upsertContact('recent-one@example.com', 'Recent One');
+      db.upsertContact('recent-two@example.com', 'Recent Two');
+
+      const response = await callIpc(
+        'compose:search-contacts',
+        '',
+      ) as IpcResponse<Array<Record<string, unknown>>>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.be.an('array');
+      const returnedEmails = response.data!.map((contact) => String(contact['email']));
+      expect(returnedEmails).to.include('recent-one@example.com');
+      expect(returnedEmails).to.include('recent-two@example.com');
+    });
+
+    it('returns COMPOSE_SEARCH_CONTACTS_FAILED when contact lookup throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        searchContacts: (query: string) => Array<Record<string, unknown>>;
+      };
+      const originalSearchContacts = db.searchContacts;
+      db.searchContacts = (_query: string): Array<Record<string, unknown>> => {
+        throw new Error('forced contact search failure');
+      };
+
+      try {
+        const response = await callIpc(
+          'compose:search-contacts',
+          'alice',
+        ) as IpcResponse<Array<Record<string, unknown>>>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('COMPOSE_SEARCH_CONTACTS_FAILED');
+      } finally {
+        db.searchContacts = originalSearchContacts;
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -210,6 +249,7 @@ describe('Compose Drafts and Send', () => {
 
       expect(response.success).to.equal(true);
       expect(response.data).to.be.an('array');
+      expect(response.data).to.have.lengthOf(0);
     });
 
     it('saves a signature and retrieves it', async () => {
@@ -263,6 +303,48 @@ describe('Compose Drafts and Send', () => {
       const deletedSig = getResponse.data!.find((sig) => sig.id === 'sig-delete');
       expect(deletedSig).to.not.exist;
     });
+
+    it('returns COMPOSE_GET_SIGNATURES_FAILED when stored signatures contain invalid JSON', async () => {
+      const db = DatabaseService.getInstance();
+      db.setSetting('signatures', '{ not valid json');
+
+      const response = await callIpc('compose:get-signatures') as IpcResponse<unknown[]>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('COMPOSE_GET_SIGNATURES_FAILED');
+    });
+
+    it('returns COMPOSE_SAVE_SIGNATURE_FAILED when signature persistence throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        setSetting: (key: string, value: string) => void;
+      };
+      const originalSetSetting = db.setSetting;
+      db.setSetting = (_key: string, _value: string): void => {
+        throw new Error('forced signature save failure');
+      };
+
+      try {
+        const response = await callIpc('compose:save-signature', [
+          { id: 'sig-fail', name: 'Broken', html: '<p>Broken</p>', isDefault: false },
+        ]) as IpcResponse<null>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('COMPOSE_SAVE_SIGNATURE_FAILED');
+      } finally {
+        db.setSetting = originalSetSetting;
+      }
+    });
+
+    it('returns COMPOSE_DELETE_SIGNATURE_FAILED when deleting signatures with invalid stored JSON', async () => {
+      const db = DatabaseService.getInstance();
+      db.setSetting('signatures', '{ still not valid json');
+
+      const response = await callIpc('compose:delete-signature', 'sig-delete') as IpcResponse<null>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('COMPOSE_DELETE_SIGNATURE_FAILED');
+    });
+
   });
 
   // -------------------------------------------------------------------------
@@ -658,6 +740,33 @@ describe('Compose Drafts and Send', () => {
       const lastEmail = smtpServer.getLastEmail();
       expect(lastEmail).to.exist;
       expect(lastEmail!.subject).to.equal('Draft Before Send');
+    });
+
+    it('sends email successfully even when the referenced draft cannot be resolved for cleanup', async function () {
+      this.timeout(30_000);
+
+      smtpServer.clearCaptures();
+
+      const sendResponse = await callIpc('queue:enqueue', {
+        type: 'send',
+        accountId: suiteAccountId,
+        payload: {
+          to: 'cleanup-missing-draft@example.com',
+          subject: 'Cleanup Missing Draft',
+          text: 'Send should still succeed without draft cleanup.',
+          originalQueueId: 'missing-draft-queue-id',
+        },
+        description: 'Send without resolvable draft cleanup',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(sendResponse.success).to.equal(true);
+      const queueId = sendResponse.data!.queueId;
+
+      await waitForQueueUpdate(queueId, 'completed');
+
+      const lastEmail = smtpServer.getLastEmail();
+      expect(lastEmail).to.exist;
+      expect(lastEmail!.subject).to.equal('Cleanup Missing Draft');
     });
   });
 });

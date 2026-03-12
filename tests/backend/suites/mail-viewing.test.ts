@@ -19,10 +19,12 @@
  */
 
 import { expect } from 'chai';
+import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
   waitForEvent,
+  getDatabase,
   seedTestAccount,
   triggerSyncAndWait,
 } from '../infrastructure/test-helpers';
@@ -90,6 +92,55 @@ interface FetchOlderDonePayload {
 
 let suiteAccountId: number;
 let suiteEmail: string;
+
+function createLocalThreadInFolder(
+  accountId: number,
+  folder: string,
+  xGmThrid: string,
+  xGmMsgId: string,
+  subject: string,
+): void {
+  const db = getDatabase();
+  const nowIso = DateTime.now().toUTC().toISO() ?? '2026-01-01T00:00:00.000Z';
+
+  db.upsertEmail({
+    accountId,
+    xGmMsgId,
+    xGmThrid,
+    folder,
+    folderUid: undefined,
+    fromAddress: 'folder-seed@example.com',
+    fromName: 'Folder Seed',
+    toAddresses: 'recipient@example.com',
+    ccAddresses: '',
+    bccAddresses: '',
+    subject,
+    textBody: 'Seeded body',
+    htmlBody: '<p>Seeded body</p>',
+    date: nowIso,
+    isRead: false,
+    isStarred: false,
+    isImportant: false,
+    isDraft: folder === '[Gmail]/Drafts',
+    snippet: 'Seeded snippet',
+    hasAttachments: false,
+    messageId: `<${xGmMsgId}@example.com>`,
+  });
+
+  db.upsertThread({
+    accountId,
+    xGmThrid,
+    subject,
+    lastMessageDate: nowIso,
+    participants: 'Folder Seed <folder-seed@example.com>',
+    messageCount: 1,
+    snippet: 'Seeded snippet',
+    isRead: false,
+    isStarred: false,
+  });
+
+  db.upsertThreadFolder(accountId, xGmThrid, folder);
+}
 
 describe('Mail Viewing', () => {
   before(async function () {
@@ -326,6 +377,77 @@ describe('Mail Viewing', () => {
     expect(response.data).to.have.lengthOf(0);
   });
 
+  it('supports offset/limit pagination without overlapping results', async () => {
+    const pageOne = await callIpc(
+      'mail:fetch-emails',
+      String(suiteAccountId),
+      'INBOX',
+      { limit: 2, offset: 0 },
+    ) as IpcResponse<ThreadRow[]>;
+
+    const pageTwo = await callIpc(
+      'mail:fetch-emails',
+      String(suiteAccountId),
+      'INBOX',
+      { limit: 2, offset: 2 },
+    ) as IpcResponse<ThreadRow[]>;
+
+    expect(pageOne.success).to.equal(true);
+    expect(pageTwo.success).to.equal(true);
+    expect(pageOne.data).to.have.lengthOf(2);
+    expect(pageTwo.data).to.have.lengthOf(1);
+
+    const pageOneIds = new Set(pageOne.data!.map((thread) => thread.xGmThrid));
+    for (const thread of pageTwo.data!) {
+      expect(pageOneIds.has(thread.xGmThrid)).to.equal(false);
+    }
+  });
+
+  it('returns folder-specific email listings for INBOX, Sent Mail, and Drafts', async function () {
+    this.timeout(20_000);
+
+    await createLocalThreadInFolder(
+      suiteAccountId,
+      '[Gmail]/Sent Mail',
+      'folder-sent-thread',
+      'folder-sent-msg',
+      'Sent Folder Seed',
+    );
+    await createLocalThreadInFolder(
+      suiteAccountId,
+      '[Gmail]/Drafts',
+      'folder-draft-thread',
+      'folder-draft-msg',
+      'Draft Folder Seed',
+    );
+
+    const inboxResponse = await callIpc(
+      'mail:fetch-emails',
+      String(suiteAccountId),
+      'INBOX',
+      { limit: 50, offset: 0 },
+    ) as IpcResponse<ThreadRow[]>;
+    const sentResponse = await callIpc(
+      'mail:fetch-emails',
+      String(suiteAccountId),
+      '[Gmail]/Sent Mail',
+      { limit: 50, offset: 0 },
+    ) as IpcResponse<ThreadRow[]>;
+    const draftsResponse = await callIpc(
+      'mail:fetch-emails',
+      String(suiteAccountId),
+      '[Gmail]/Drafts',
+      { limit: 50, offset: 0 },
+    ) as IpcResponse<ThreadRow[]>;
+
+    expect(inboxResponse.success).to.equal(true);
+    expect(sentResponse.success).to.equal(true);
+    expect(draftsResponse.success).to.equal(true);
+    expect(inboxResponse.data!.length).to.be.greaterThan(0);
+    expect(sentResponse.data!.map((thread) => thread.xGmThrid)).to.include('folder-sent-thread');
+    expect(draftsResponse.data!.map((thread) => thread.xGmThrid)).to.include('folder-draft-thread');
+  });
+
   // -------------------------------------------------------------------------
   // mail:fetch-thread
   // -------------------------------------------------------------------------
@@ -431,6 +553,18 @@ describe('Mail Viewing', () => {
       'mail:get-thread-from-db',
       String(suiteAccountId),
       'does-not-exist-anywhere',
+    ) as IpcResponse<ThreadWithMessages>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_THREAD_NOT_FOUND');
+  });
+
+  it('returns MAIL_THREAD_NOT_FOUND from DB for a missing thread even when folderId is supplied', async () => {
+    const response = await callIpc(
+      'mail:get-thread-from-db',
+      String(suiteAccountId),
+      'missing-thread-with-folder',
+      'INBOX',
     ) as IpcResponse<ThreadWithMessages>;
 
     expect(response.success).to.equal(false);

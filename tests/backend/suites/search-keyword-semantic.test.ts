@@ -20,6 +20,7 @@
  */
 
 import { expect } from 'chai';
+import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
@@ -138,6 +139,217 @@ async function prepareSemanticPipeline(queryEmbedding: number[] = [1, 0, 0, 0]):
   expect(vectorDbService.getVectorDimension()).to.equal(queryEmbedding.length);
 }
 
+interface SeedLocalEmailOptions {
+  accountId: number;
+  subject: string;
+  fromAddress?: string;
+  fromName?: string;
+  toAddresses?: string;
+  textBody?: string;
+  htmlBody?: string;
+  dateIso?: string;
+  folders?: string[];
+  isRead?: boolean;
+  isStarred?: boolean;
+  isImportant?: boolean;
+  isDraft?: boolean;
+  hasAttachments?: boolean;
+  labels?: string;
+}
+
+interface SearchRunResult {
+  searchToken: string;
+  complete: SearchCompletePayload;
+  batches: SearchBatchPayload[];
+  localMsgIds: string[];
+  imapMsgIds: string[];
+  allMsgIds: string[];
+}
+
+let syntheticMessageCounter = 0;
+
+function createSyntheticIdentifiers(): { xGmMsgId: string; xGmThrid: string; messageId: string } {
+  syntheticMessageCounter += 1;
+
+  return {
+    xGmMsgId: (BigInt('9900000000000000') + BigInt(syntheticMessageCounter)).toString(),
+    xGmThrid: (BigInt('9800000000000000') + BigInt(syntheticMessageCounter)).toString(),
+    messageId: `<search-synthetic-${syntheticMessageCounter}@example.com>`,
+  };
+}
+
+function seedLocalEmail(options: SeedLocalEmailOptions): { xGmMsgId: string; xGmThrid: string } {
+  const db = getDatabase();
+  const identifiers = createSyntheticIdentifiers();
+  const folders = options.folders ?? ['INBOX'];
+  const primaryFolder = folders[0] ?? 'INBOX';
+  const dateIso = options.dateIso ?? DateTime.utc().toISO()!;
+  const textBody = options.textBody ?? '';
+  const htmlBody = options.htmlBody ?? '';
+  const rawDb = db.getDatabase();
+
+  db.upsertThread({
+    accountId: options.accountId,
+    xGmThrid: identifiers.xGmThrid,
+    subject: options.subject,
+    lastMessageDate: dateIso,
+    participants: options.fromAddress ?? 'local-search@example.com',
+    messageCount: 1,
+    snippet: textBody || htmlBody,
+    isRead: options.isRead ?? false,
+    isStarred: options.isStarred ?? false,
+  });
+
+  db.upsertEmail({
+    accountId: options.accountId,
+    xGmMsgId: identifiers.xGmMsgId,
+    xGmThrid: identifiers.xGmThrid,
+    folder: primaryFolder,
+    fromAddress: options.fromAddress ?? 'local-search@example.com',
+    fromName: options.fromName ?? options.fromAddress ?? 'local-search@example.com',
+    toAddresses: options.toAddresses ?? 'recipient@example.com',
+    ccAddresses: '',
+    bccAddresses: '',
+    subject: options.subject,
+    textBody,
+    htmlBody,
+    date: dateIso,
+    isRead: options.isRead ?? false,
+    isStarred: options.isStarred ?? false,
+    isImportant: options.isImportant ?? false,
+    isDraft: options.isDraft ?? false,
+    snippet: textBody || htmlBody,
+    size: Math.max(textBody.length, htmlBody.length, options.subject.length),
+    hasAttachments: options.hasAttachments ?? false,
+    labels: options.labels ?? folders.join(','),
+    messageId: identifiers.messageId,
+  });
+
+  for (const folder of folders.slice(1)) {
+    rawDb.prepare(
+      `INSERT OR IGNORE INTO email_folders (account_id, x_gm_msgid, folder)
+       VALUES (:accountId, :xGmMsgId, :folder)`
+    ).run({
+      accountId: options.accountId,
+      xGmMsgId: identifiers.xGmMsgId,
+      folder,
+    });
+  }
+
+  return {
+    xGmMsgId: identifiers.xGmMsgId,
+    xGmThrid: identifiers.xGmThrid,
+  };
+}
+
+function seedLabelForAccount(options: {
+  accountId: number;
+  gmailLabelId: string;
+  name: string;
+  type?: string;
+  specialUse?: string;
+}): void {
+  getDatabase().upsertLabel({
+    accountId: options.accountId,
+    gmailLabelId: options.gmailLabelId,
+    name: options.name,
+    type: options.type ?? 'user',
+    unreadCount: 0,
+    totalCount: 0,
+    specialUse: options.specialUse,
+  });
+}
+
+function insertSemanticChunk(accountId: number, xGmMsgId: string, chunkText: string, embedding: number[]): void {
+  const vectorDbService = VectorDbService.getInstance();
+  expect(vectorDbService.vectorsAvailable).to.equal(true);
+
+  vectorDbService.insertChunks({
+    accountId,
+    xGmMsgId,
+    chunks: [
+      {
+        chunkIndex: 0,
+        chunkText,
+        embedding,
+      },
+    ],
+  });
+}
+
+function createServerOnlyRawEmail(options: {
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  xGmMsgId: string;
+  xGmThrid: string;
+  dateIso: string;
+  labels?: string[];
+}): Buffer {
+  const labels = options.labels ?? ['\\All'];
+  const rfc2822Date = DateTime.fromISO(options.dateIso).toRFC2822();
+
+  return Buffer.from(
+    [
+      `From: ${options.from}`,
+      `To: ${options.to}`,
+      `Subject: ${options.subject}`,
+      `Date: ${rfc2822Date}`,
+      `Message-ID: <server-only-${options.xGmMsgId}@example.com>`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: 7bit',
+      `X-GM-MSGID: ${options.xGmMsgId}`,
+      `X-GM-THRID: ${options.xGmThrid}`,
+      `X-GM-LABELS: ${labels.join(' ')}`,
+      '',
+      options.body,
+    ].join('\n'),
+    'utf8',
+  );
+}
+
+async function runAiSearch(
+  accountId: number,
+  naturalQuery: string,
+  mode: 'keyword' | 'semantic',
+  folders?: string[],
+): Promise<SearchRunResult> {
+  const eventBus = TestEventBus.getInstance();
+  const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+  const response = await callIpc(
+    'ai:search',
+    String(accountId),
+    naturalQuery,
+    folders,
+    mode,
+  ) as IpcResponse<{ searchToken: string }>;
+
+  expect(response.success).to.equal(true);
+  expect(response.data!.searchToken).to.be.a('string');
+
+  const searchToken = response.data!.searchToken;
+  const complete = await waitForSearchComplete(searchToken);
+  const batches = getSearchBatchesSince(searchToken, priorBatchCount);
+  const localMsgIds = batches
+    .filter((batch) => batch.phase === 'local')
+    .flatMap((batch) => batch.msgIds);
+  const imapMsgIds = batches
+    .filter((batch) => batch.phase === 'imap')
+    .flatMap((batch) => batch.msgIds);
+
+  return {
+    searchToken,
+    complete,
+    batches,
+    localMsgIds,
+    imapMsgIds,
+    allMsgIds: [...localMsgIds, ...imapMsgIds],
+  };
+}
+
 // =========================================================================
 // Keyword and Semantic Search
 // =========================================================================
@@ -230,10 +442,19 @@ describe('Search (Keyword and Semantic)', () => {
   afterEach(() => {
     ollamaServer.reset();
 
+    imapStateInspector.clearCommandErrors();
+    imapStateInspector.setAllowedAccounts([suiteEmail]);
+
     const ollamaService = OllamaService.getInstance();
     ollamaService['baseUrl'] = ollamaServer.getBaseUrl();
     ollamaService.setModel('');
     ollamaService.setEmbeddingModel('');
+
+    try {
+      getDatabase().getDatabase().prepare('DELETE FROM ai_cache').run();
+    } catch {
+      // AI cache may be unavailable in some test environments.
+    }
 
     try {
       VectorDbService.getInstance().deleteByAccountId(suiteAccountId);
@@ -881,6 +1102,429 @@ describe('Search (Keyword and Semantic)', () => {
       expect(localMsgIds).to.not.include(emlFixtures['html-email'].headers.xGmMsgId);
       expect(imapMsgIds).to.deep.equal([]);
     });
+
+    it('supports semantic filter-only searches with date ranges, sender, recipient, and folder filters', async function () {
+      this.timeout(30_000);
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+
+      const dateAccount = seedTestAccount({
+        email: 'semantic-date-filter@example.com',
+        displayName: 'Semantic Date Filter',
+      });
+      const beforeDateEmail = seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'semantic-date-before-window',
+        dateIso: DateTime.utc(2026, 1, 1, 9, 0, 0).toISO()!,
+        fromAddress: 'date-before@example.com',
+      });
+      const inRangeEmail = seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'semantic-date-in-window',
+        dateIso: DateTime.utc(2026, 1, 3, 9, 0, 0).toISO()!,
+        fromAddress: 'date-match@example.com',
+      });
+      seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'semantic-date-after-window',
+        dateIso: DateTime.utc(2026, 1, 8, 9, 0, 0).toISO()!,
+        fromAddress: 'date-after@example.com',
+      });
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          dateFrom: '2026-01-02',
+          dateTo: '2026-01-05',
+        },
+      }));
+
+      const dateSearch = await runAiSearch(
+        dateAccount.accountId,
+        'semantic-date-filter-query-2026-window',
+        'semantic',
+      );
+
+      expect(dateSearch.complete.status).to.equal('complete');
+      expect(dateSearch.localMsgIds).to.deep.equal([inRangeEmail.xGmMsgId]);
+      expect(dateSearch.imapMsgIds).to.deep.equal([]);
+      expect(dateSearch.allMsgIds).to.not.include(beforeDateEmail.xGmMsgId);
+
+      const senderAccount = seedTestAccount({
+        email: 'semantic-sender-filter@example.com',
+        displayName: 'Semantic Sender Filter',
+      });
+      const senderMatch = seedLocalEmail({
+        accountId: senderAccount.accountId,
+        subject: 'semantic-sender-match',
+        fromAddress: 'semantic-sender-match@example.com',
+        fromName: 'Semantic Sender Match',
+        toAddresses: 'recipient@example.com',
+      });
+      seedLocalEmail({
+        accountId: senderAccount.accountId,
+        subject: 'semantic-sender-other',
+        fromAddress: 'semantic-sender-other@example.com',
+        fromName: 'Semantic Sender Other',
+        toAddresses: 'recipient@example.com',
+      });
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          sender: 'Semantic Sender Match',
+        },
+      }));
+
+      const senderSearch = await runAiSearch(
+        senderAccount.accountId,
+        'semantic-sender-filter-query-match-name',
+        'semantic',
+      );
+
+      expect(senderSearch.complete.status).to.equal('complete');
+      expect(senderSearch.allMsgIds).to.deep.equal([senderMatch.xGmMsgId]);
+
+      const recipientAccount = seedTestAccount({
+        email: 'semantic-recipient-filter@example.com',
+        displayName: 'Semantic Recipient Filter',
+      });
+      const recipientMatch = seedLocalEmail({
+        accountId: recipientAccount.accountId,
+        subject: 'semantic-recipient-match',
+        fromAddress: 'sender@example.com',
+        toAddresses: 'semantic-recipient-match@example.com',
+      });
+      seedLocalEmail({
+        accountId: recipientAccount.accountId,
+        subject: 'semantic-recipient-other',
+        fromAddress: 'sender@example.com',
+        toAddresses: 'semantic-recipient-other@example.com',
+      });
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          recipient: 'semantic-recipient-match@example.com',
+        },
+      }));
+
+      const recipientSearch = await runAiSearch(
+        recipientAccount.accountId,
+        'semantic-recipient-filter-query-match-address',
+        'semantic',
+      );
+
+      expect(recipientSearch.complete.status).to.equal('complete');
+      expect(recipientSearch.allMsgIds).to.deep.equal([recipientMatch.xGmMsgId]);
+
+      const folderAccount = seedTestAccount({
+        email: 'semantic-folder-filter@example.com',
+        displayName: 'Semantic Folder Filter',
+      });
+      const folderMatch = seedLocalEmail({
+        accountId: folderAccount.accountId,
+        subject: 'semantic-folder-match',
+        fromAddress: 'folder-match@example.com',
+        folders: ['Projects Alpha'],
+      });
+      seedLocalEmail({
+        accountId: folderAccount.accountId,
+        subject: 'semantic-folder-other',
+        fromAddress: 'folder-other@example.com',
+        folders: ['INBOX'],
+      });
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          folder: 'Projects Alpha',
+        },
+      }));
+
+      const folderSearch = await runAiSearch(
+        folderAccount.accountId,
+        'semantic-folder-filter-query-projects-alpha',
+        'semantic',
+      );
+
+      expect(folderSearch.complete.status).to.equal('complete');
+      expect(folderSearch.allMsgIds).to.deep.equal([folderMatch.xGmMsgId]);
+    });
+
+    it('supports all boolean semantic filter combinations and combined filter-only searches', async function () {
+      this.timeout(35_000);
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+
+      const boolAccount = seedTestAccount({
+        email: 'semantic-boolean-filters@example.com',
+        displayName: 'Semantic Boolean Filters',
+      });
+      const uniqueSender = 'semantic-bool-sender@example.com';
+      const comboExpectations = new Map<string, string>();
+
+      for (const hasAttachment of [true, false]) {
+        for (const isRead of [true, false]) {
+          for (const isStarred of [true, false]) {
+            const comboKey = `${hasAttachment}-${isRead}-${isStarred}`;
+            const comboEmail = seedLocalEmail({
+              accountId: boolAccount.accountId,
+              subject: `semantic-bool-${comboKey}`,
+              fromAddress: uniqueSender,
+              toAddresses: 'semantic-bool@example.com',
+              hasAttachments: hasAttachment,
+              isRead,
+              isStarred,
+              dateIso: DateTime.utc(2026, 2, 1, 9, 0, 0).plus({ minutes: comboExpectations.size }).toISO()!,
+            });
+            comboExpectations.set(comboKey, comboEmail.xGmMsgId);
+          }
+        }
+      }
+
+      for (const [comboKey, expectedMsgId] of comboExpectations.entries()) {
+        const [hasAttachmentRaw, isReadRaw, isStarredRaw] = comboKey.split('-');
+
+        ollamaServer.setChatResponse(JSON.stringify({
+          semanticQuery: '',
+          filters: {
+            sender: uniqueSender,
+            hasAttachment: hasAttachmentRaw === 'true',
+            isRead: isReadRaw === 'true',
+            isStarred: isStarredRaw === 'true',
+          },
+        }));
+
+        const searchResult = await runAiSearch(
+          boolAccount.accountId,
+          `semantic-boolean-combo-${comboKey}-${expectedMsgId}`,
+          'semantic',
+        );
+
+        expect(searchResult.complete.status).to.equal('complete');
+        expect(searchResult.allMsgIds).to.deep.equal([expectedMsgId]);
+      }
+
+      const combinedAccount = seedTestAccount({
+        email: 'semantic-combined-filters@example.com',
+        displayName: 'Semantic Combined Filters',
+      });
+      const combinedTarget = seedLocalEmail({
+        accountId: combinedAccount.accountId,
+        subject: 'semantic-combined-target',
+        fromAddress: 'combined-match@example.com',
+        toAddresses: 'combined-recipient@example.com',
+        folders: ['Finance Archive'],
+        dateIso: DateTime.utc(2026, 3, 15, 12, 0, 0).toISO()!,
+        hasAttachments: true,
+        isRead: false,
+        isStarred: true,
+      });
+      seedLocalEmail({
+        accountId: combinedAccount.accountId,
+        subject: 'semantic-combined-near-miss',
+        fromAddress: 'combined-match@example.com',
+        toAddresses: 'combined-recipient@example.com',
+        folders: ['Finance Archive'],
+        dateIso: DateTime.utc(2026, 3, 16, 12, 0, 0).toISO()!,
+        hasAttachments: true,
+        isRead: true,
+        isStarred: true,
+      });
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          dateFrom: '2026-03-10',
+          dateTo: '2026-03-20',
+          folder: 'Finance Archive',
+          sender: 'combined-match@example.com',
+          recipient: 'combined-recipient@example.com',
+          hasAttachment: true,
+          isRead: false,
+          isStarred: true,
+        },
+      }));
+
+      const combinedSearch = await runAiSearch(
+        combinedAccount.accountId,
+        'semantic-combined-filter-query-all-constraints',
+        'semantic',
+      );
+
+      expect(combinedSearch.complete.status).to.equal('complete');
+      expect(combinedSearch.allMsgIds).to.deep.equal([combinedTarget.xGmMsgId]);
+    });
+
+    it('returns error when semantic embedding fails, excludes Trash/Spam/Drafts, resolves mixed local and IMAP candidates, and marks IMAP connect failures as partial', async function () {
+      this.timeout(35_000);
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+
+      const embedFailureAccount = seedTestAccount({
+        email: 'semantic-embed-failure@example.com',
+        displayName: 'Semantic Embed Failure',
+      });
+      const embedFailureEmail = seedLocalEmail({
+        accountId: embedFailureAccount.accountId,
+        subject: 'semantic embed failure target',
+        fromAddress: 'embed-failure@example.com',
+        textBody: 'semantic embed failure body',
+      });
+      insertSemanticChunk(embedFailureAccount.accountId, embedFailureEmail.xGmMsgId, 'semantic embed failure chunk', [1, 0, 0, 0]);
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: 'semantic embed failure chunk',
+        filters: {},
+      }));
+      ollamaServer.setError('embed', true);
+
+      const embedFailureSearch = await runAiSearch(
+        embedFailureAccount.accountId,
+        'semantic-embed-failure-query',
+        'semantic',
+      );
+
+      expect(embedFailureSearch.complete.status).to.equal('error');
+      expect(embedFailureSearch.batches).to.deep.equal([]);
+
+      ollamaServer.setError('embed', false);
+
+      const excludedFoldersAccount = seedTestAccount({
+        email: 'semantic-excluded-folders@example.com',
+        displayName: 'Semantic Excluded Folders',
+      });
+      const includedInboxEmail = seedLocalEmail({
+        accountId: excludedFoldersAccount.accountId,
+        subject: 'semantic inbox include',
+        fromAddress: 'included@example.com',
+        folders: ['INBOX'],
+      });
+      const trashOnlyEmail = seedLocalEmail({
+        accountId: excludedFoldersAccount.accountId,
+        subject: 'semantic trash exclude',
+        fromAddress: 'trash@example.com',
+        folders: ['[Gmail]/Trash'],
+      });
+      const spamOnlyEmail = seedLocalEmail({
+        accountId: excludedFoldersAccount.accountId,
+        subject: 'semantic spam exclude',
+        fromAddress: 'spam@example.com',
+        folders: ['[Gmail]/Spam'],
+      });
+      const draftsOnlyEmail = seedLocalEmail({
+        accountId: excludedFoldersAccount.accountId,
+        subject: 'semantic drafts exclude',
+        fromAddress: 'drafts@example.com',
+        folders: ['[Gmail]/Drafts'],
+        isDraft: true,
+      });
+
+      for (const msgId of [
+        includedInboxEmail.xGmMsgId,
+        trashOnlyEmail.xGmMsgId,
+        spamOnlyEmail.xGmMsgId,
+        draftsOnlyEmail.xGmMsgId,
+      ]) {
+        insertSemanticChunk(excludedFoldersAccount.accountId, msgId, 'semantic excluded folders chunk', [1, 0, 0, 0]);
+      }
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: 'semantic excluded folders chunk',
+        filters: {},
+      }));
+
+      const excludedFoldersSearch = await runAiSearch(
+        excludedFoldersAccount.accountId,
+        'semantic-excluded-folders-query',
+        'semantic',
+      );
+
+      expect(excludedFoldersSearch.complete.status).to.equal('complete');
+      expect(excludedFoldersSearch.localMsgIds).to.deep.equal([includedInboxEmail.xGmMsgId]);
+      expect(excludedFoldersSearch.allMsgIds).to.not.include(trashOnlyEmail.xGmMsgId);
+      expect(excludedFoldersSearch.allMsgIds).to.not.include(spamOnlyEmail.xGmMsgId);
+      expect(excludedFoldersSearch.allMsgIds).to.not.include(draftsOnlyEmail.xGmMsgId);
+
+      const mixedResolutionAccount = seedTestAccount({
+        email: 'semantic-mixed-resolution@example.com',
+        displayName: 'Semantic Mixed Resolution',
+      });
+      const localSemanticEmail = seedLocalEmail({
+        accountId: mixedResolutionAccount.accountId,
+        subject: 'semantic mixed local',
+        fromAddress: 'semantic-local@example.com',
+        textBody: 'local semantic mixed body',
+      });
+      const missingIdentifiers = createSyntheticIdentifiers();
+      const missingDateIso = DateTime.utc(2026, 4, 5, 14, 0, 0).toISO()!;
+
+      insertSemanticChunk(mixedResolutionAccount.accountId, localSemanticEmail.xGmMsgId, 'semantic mixed result chunk', [1, 0, 0, 0]);
+      insertSemanticChunk(mixedResolutionAccount.accountId, missingIdentifiers.xGmMsgId, 'semantic mixed result chunk', [0.92, 0, 0, 0]);
+
+      const serverOnlyRaw = createServerOnlyRawEmail({
+        from: 'semantic-server-only@example.com',
+        to: mixedResolutionAccount.email,
+        subject: 'semantic mixed server only',
+        body: 'This server-only semantic result should resolve through IMAP.',
+        xGmMsgId: missingIdentifiers.xGmMsgId,
+        xGmThrid: missingIdentifiers.xGmThrid,
+        dateIso: missingDateIso,
+      });
+      imapStateInspector.injectMessage('[Gmail]/All Mail', serverOnlyRaw, {
+        xGmMsgId: missingIdentifiers.xGmMsgId,
+        xGmThrid: missingIdentifiers.xGmThrid,
+        xGmLabels: ['\\All'],
+      });
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: 'semantic mixed result chunk',
+        filters: {},
+      }));
+
+      const mixedResolutionSearch = await runAiSearch(
+        mixedResolutionAccount.accountId,
+        'semantic-mixed-local-and-missing-query',
+        'semantic',
+      );
+
+      expect(mixedResolutionSearch.complete.status).to.equal('complete');
+      expect(mixedResolutionSearch.localMsgIds).to.include(localSemanticEmail.xGmMsgId);
+      expect(mixedResolutionSearch.imapMsgIds).to.include(missingIdentifiers.xGmMsgId);
+      expect(getDatabase().getEmailByXGmMsgId(mixedResolutionAccount.accountId, missingIdentifiers.xGmMsgId)).to.not.equal(null);
+
+      const partialAccount = seedTestAccount({
+        email: 'semantic-imap-partial@example.com',
+        displayName: 'Semantic Partial Result',
+      });
+      const partialLocalEmail = seedLocalEmail({
+        accountId: partialAccount.accountId,
+        subject: 'semantic partial local',
+        fromAddress: 'semantic-partial@example.com',
+      });
+      const partialMissingIdentifiers = createSyntheticIdentifiers();
+
+      insertSemanticChunk(partialAccount.accountId, partialLocalEmail.xGmMsgId, 'semantic partial resolution chunk', [1, 0, 0, 0]);
+      insertSemanticChunk(partialAccount.accountId, partialMissingIdentifiers.xGmMsgId, 'semantic partial resolution chunk', [0.91, 0, 0, 0]);
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: 'semantic partial resolution chunk',
+        filters: {},
+      }));
+      imapStateInspector.setAllowedAccounts([suiteEmail]);
+
+      const partialSearch = await runAiSearch(
+        partialAccount.accountId,
+        'semantic-partial-imap-connect-failure-query',
+        'semantic',
+      );
+
+      expect(partialSearch.complete.status).to.equal('partial');
+      expect(partialSearch.localMsgIds).to.deep.equal([partialLocalEmail.xGmMsgId]);
+      expect(partialSearch.imapMsgIds).to.deep.equal([]);
+      expect(partialSearch.complete.totalResults).to.equal(1);
+    });
   });
 
   describe('ai:search — semantic mode falls back to keyword when not ready', () => {
@@ -940,6 +1584,354 @@ describe('Search (Keyword and Semantic)', () => {
       const complete = await waitForSearchComplete(searchToken);
       expect(complete.searchToken).to.equal(searchToken);
       expect(['complete', 'partial']).to.include(complete.status);
+    });
+  });
+
+  describe('ai:search — keyword operator coverage', () => {
+    it('supports from:, to:, subject:, and body: keyword operators', async function () {
+      this.timeout(30_000);
+
+      const operatorAccount = seedTestAccount({
+        email: 'keyword-operators@example.com',
+        displayName: 'Keyword Operators',
+      });
+      const uniqueSuffix = String(DateTime.utc().toMillis());
+
+      const fromEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: `from-operator-${uniqueSuffix}`,
+        fromAddress: 'keyword-from@example.com',
+        textBody: `from operator body ${uniqueSuffix}`,
+      });
+      const toEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: `to-operator-${uniqueSuffix}`,
+        fromAddress: 'keyword-to-sender@example.com',
+        toAddresses: 'keyword-to@example.com',
+        textBody: `to operator body ${uniqueSuffix}`,
+      });
+      const subjectEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: `subject-marker-${uniqueSuffix}`,
+        fromAddress: 'keyword-subject@example.com',
+        textBody: 'subject operator body',
+      });
+      const bodyEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: `body-operator-${uniqueSuffix}`,
+        fromAddress: 'keyword-body@example.com',
+        textBody: '',
+        htmlBody: `<p>html-body-marker-${uniqueSuffix}</p>`,
+      });
+
+      const fromSearch = await runAiSearch(
+        operatorAccount.accountId,
+        `from:keyword-from@example.com from-operator-${uniqueSuffix}`,
+        'keyword',
+      );
+      const toSearch = await runAiSearch(
+        operatorAccount.accountId,
+        `to:keyword-to@example.com to-operator-${uniqueSuffix}`,
+        'keyword',
+      );
+      const subjectSearch = await runAiSearch(
+        operatorAccount.accountId,
+        `subject:subject-marker-${uniqueSuffix}`,
+        'keyword',
+      );
+      const bodySearch = await runAiSearch(
+        operatorAccount.accountId,
+        `body:html-body-marker-${uniqueSuffix} body-operator-${uniqueSuffix}`,
+        'keyword',
+      );
+
+      expect(fromSearch.complete.status).to.equal('complete');
+      expect(fromSearch.allMsgIds).to.deep.equal([fromEmail.xGmMsgId]);
+      expect(toSearch.allMsgIds).to.deep.equal([toEmail.xGmMsgId]);
+      expect(subjectSearch.allMsgIds).to.deep.equal([subjectEmail.xGmMsgId]);
+      expect(bodySearch.allMsgIds).to.deep.equal([bodyEmail.xGmMsgId]);
+    });
+
+    it('supports folder aliases including inbox and sent, and safely handles trash aliases with default and resolved trash folders', async function () {
+      this.timeout(30_000);
+
+      const aliasAccount = seedTestAccount({
+        email: 'keyword-folder-aliases@example.com',
+        displayName: 'Keyword Folder Aliases',
+      });
+      const inboxEmail = seedLocalEmail({
+        accountId: aliasAccount.accountId,
+        subject: 'keyword-inbox-alias-marker',
+        fromAddress: 'keyword-inbox@example.com',
+        folders: ['INBOX'],
+      });
+      const sentEmail = seedLocalEmail({
+        accountId: aliasAccount.accountId,
+        subject: 'keyword-sent-alias-marker',
+        fromAddress: 'keyword-sent@example.com',
+        folders: ['[Gmail]/Sent Mail'],
+      });
+      const fallbackTrashAccount = seedTestAccount({
+        email: 'keyword-trash-fallback@example.com',
+        displayName: 'Keyword Trash Fallback',
+      });
+      const trashFallbackEmail = seedLocalEmail({
+        accountId: fallbackTrashAccount.accountId,
+        subject: 'keyword-trash-fallback-marker',
+        fromAddress: 'keyword-trash-fallback@example.com',
+        folders: ['[Gmail]/Trash'],
+      });
+
+      const resolvedTrashAccount = seedTestAccount({
+        email: 'keyword-trash-resolved@example.com',
+        displayName: 'Keyword Trash Resolved',
+      });
+      seedLabelForAccount({
+        accountId: resolvedTrashAccount.accountId,
+        gmailLabelId: '[Gmail]/Bin',
+        name: 'Trash',
+        type: 'system',
+        specialUse: '\\Trash',
+      });
+      const trashResolvedEmail = seedLocalEmail({
+        accountId: resolvedTrashAccount.accountId,
+        subject: 'keyword-trash-resolved-marker',
+        fromAddress: 'keyword-trash-resolved@example.com',
+        folders: ['[Gmail]/Bin'],
+      });
+
+      const inboxSearch = await runAiSearch(aliasAccount.accountId, 'in:inbox keyword-inbox-alias-marker', 'keyword');
+      const sentSearch = await runAiSearch(aliasAccount.accountId, 'in:sent keyword-sent-alias-marker', 'keyword');
+      const trashFallbackSearch = await runAiSearch(
+        fallbackTrashAccount.accountId,
+        'in:trash keyword-trash-fallback-marker',
+        'keyword',
+      );
+      const trashResolvedSearch = await runAiSearch(
+        resolvedTrashAccount.accountId,
+        'in:trash keyword-trash-resolved-marker',
+        'keyword',
+      );
+
+      expect(inboxSearch.allMsgIds).to.deep.equal([inboxEmail.xGmMsgId]);
+      expect(sentSearch.allMsgIds).to.deep.equal([sentEmail.xGmMsgId]);
+      expect(trashFallbackSearch.complete.status).to.equal('complete');
+      expect(trashResolvedSearch.complete.status).to.equal('complete');
+      expect(trashFallbackSearch.allMsgIds).to.deep.equal([]);
+      expect(trashResolvedSearch.allMsgIds).to.deep.equal([]);
+      expect(trashFallbackSearch.complete.totalResults).to.equal(0);
+      expect(trashResolvedSearch.complete.totalResults).to.equal(0);
+    });
+
+    it('supports label:, is:unread, is:starred, is:important, and has:attachment keyword operators', async function () {
+      this.timeout(30_000);
+
+      const operatorAccount = seedTestAccount({
+        email: 'keyword-label-and-flags@example.com',
+        displayName: 'Keyword Label And Flags',
+      });
+      seedLabelForAccount({
+        accountId: operatorAccount.accountId,
+        gmailLabelId: 'Projects/Alpha',
+        name: 'Project Alpha',
+      });
+
+      const labelEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: 'keyword-label-marker',
+        fromAddress: 'keyword-label@example.com',
+        folders: ['Projects/Alpha'],
+      });
+      const unreadEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: 'keyword-unread-marker',
+        fromAddress: 'keyword-unread@example.com',
+        isRead: false,
+      });
+      const starredEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: 'keyword-starred-marker',
+        fromAddress: 'keyword-starred@example.com',
+        isStarred: true,
+      });
+      const importantEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: 'keyword-important-marker',
+        fromAddress: 'keyword-important@example.com',
+        isImportant: true,
+      });
+      const attachmentEmail = seedLocalEmail({
+        accountId: operatorAccount.accountId,
+        subject: 'keyword-attachment-marker',
+        fromAddress: 'keyword-attachment@example.com',
+        hasAttachments: true,
+      });
+
+      const labelSearch = await runAiSearch(
+        operatorAccount.accountId,
+        'label:"Project Alpha" keyword-label-marker',
+        'keyword',
+      );
+      const unreadSearch = await runAiSearch(operatorAccount.accountId, 'is:unread keyword-unread-marker', 'keyword');
+      const starredSearch = await runAiSearch(operatorAccount.accountId, 'is:starred keyword-starred-marker', 'keyword');
+      const importantSearch = await runAiSearch(operatorAccount.accountId, 'is:important keyword-important-marker', 'keyword');
+      const attachmentSearch = await runAiSearch(operatorAccount.accountId, 'has:attachment keyword-attachment-marker', 'keyword');
+
+      expect(labelSearch.allMsgIds).to.deep.equal([labelEmail.xGmMsgId]);
+      expect(unreadSearch.allMsgIds).to.deep.equal([unreadEmail.xGmMsgId]);
+      expect(starredSearch.allMsgIds).to.deep.equal([starredEmail.xGmMsgId]);
+      expect(importantSearch.allMsgIds).to.deep.equal([importantEmail.xGmMsgId]);
+      expect(attachmentSearch.allMsgIds).to.deep.equal([attachmentEmail.xGmMsgId]);
+    });
+
+    it('supports after:, before:, newer_than:, and older_than: keyword date operators', async function () {
+      this.timeout(30_000);
+
+      const dateAccount = seedTestAccount({
+        email: 'keyword-date-operators@example.com',
+        displayName: 'Keyword Date Operators',
+      });
+      const afterEmail = seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'after-date-marker',
+        fromAddress: 'after-date@example.com',
+        dateIso: DateTime.utc(2026, 2, 10, 8, 0, 0).toISO()!,
+      });
+      const beforeEmail = seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'before-date-marker',
+        fromAddress: 'before-date@example.com',
+        dateIso: DateTime.utc(2026, 1, 5, 8, 0, 0).toISO()!,
+      });
+      const recentRelativeEmail = seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'relative-recent-marker',
+        fromAddress: 'relative-recent@example.com',
+        dateIso: DateTime.utc().minus({ days: 2 }).toISO()!,
+      });
+      const olderRelativeEmail = seedLocalEmail({
+        accountId: dateAccount.accountId,
+        subject: 'relative-old-marker',
+        fromAddress: 'relative-old@example.com',
+        dateIso: DateTime.utc().minus({ months: 4 }).toISO()!,
+      });
+
+      const afterSearch = await runAiSearch(dateAccount.accountId, 'after:2026/02/01 after-date-marker', 'keyword');
+      const beforeSearch = await runAiSearch(dateAccount.accountId, 'before:2026/01/10 before-date-marker', 'keyword');
+      const newerThanSearch = await runAiSearch(dateAccount.accountId, 'newer_than:7d relative-recent-marker', 'keyword');
+      const olderThanSearch = await runAiSearch(dateAccount.accountId, 'older_than:3m relative-old-marker', 'keyword');
+      const recentRelativeStoredDate = DateTime.fromISO(
+        getDatabase().getEmailByXGmMsgId(dateAccount.accountId, recentRelativeEmail.xGmMsgId)!['date'] as string,
+      );
+      const olderRelativeStoredDate = DateTime.fromISO(
+        getDatabase().getEmailByXGmMsgId(dateAccount.accountId, olderRelativeEmail.xGmMsgId)!['date'] as string,
+      );
+
+      expect(afterSearch.allMsgIds).to.deep.equal([afterEmail.xGmMsgId]);
+      expect(beforeSearch.allMsgIds).to.deep.equal([beforeEmail.xGmMsgId]);
+      expect(newerThanSearch.allMsgIds).to.deep.equal([recentRelativeEmail.xGmMsgId]);
+      expect(olderThanSearch.allMsgIds).to.deep.equal([olderRelativeEmail.xGmMsgId]);
+      expect(recentRelativeStoredDate.toMillis()).to.be.greaterThan(DateTime.utc().minus({ days: 7 }).toMillis());
+      expect(recentRelativeStoredDate.toMillis()).to.be.lessThan(DateTime.utc().toMillis());
+      expect(olderRelativeStoredDate.toMillis()).to.be.lessThan(DateTime.utc().minus({ months: 3 }).toMillis());
+    });
+
+    it('supports negated operators, quoted phrases, unknown operators, explicit keyword empty-query validation, and SQL wildcard escaping', async function () {
+      this.timeout(35_000);
+
+      const negationAccount = seedTestAccount({
+        email: 'keyword-negations@example.com',
+        displayName: 'Keyword Negations',
+      });
+      seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'negated-from-marker',
+        fromAddress: 'blocked-sender@example.com',
+        textBody: 'negated-from-marker',
+      });
+      const negatedFromAllowedEmail = seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'negated-from-marker',
+        fromAddress: 'allowed-sender@example.com',
+        textBody: 'negated-from-marker',
+      });
+      seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'negated-read-marker',
+        fromAddress: 'read-email@example.com',
+        isRead: true,
+      });
+      const negatedUnreadEmail = seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'negated-read-marker',
+        fromAddress: 'unread-email@example.com',
+        isRead: false,
+      });
+      const phraseEmail = seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'phrase-search-marker',
+        fromAddress: 'phrase@example.com',
+        textBody: 'This message contains the exact phrase quarterly planning review for testing.',
+      });
+      const unknownOperatorEmail = seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'unknown-operator-marker',
+        fromAddress: 'unknown-operator@example.com',
+        textBody: 'This body includes mystery:literal unknown-operator-marker.',
+      });
+      const wildcardLiteralEmail = seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'wildcard-escape-marker 100%_complete',
+        fromAddress: 'wildcard-literal@example.com',
+      });
+      seedLocalEmail({
+        accountId: negationAccount.accountId,
+        subject: 'wildcard-escape-marker 100Xacomplete',
+        fromAddress: 'wildcard-near-match@example.com',
+      });
+
+      const negatedFromSearch = await runAiSearch(
+        negationAccount.accountId,
+        '-from:blocked-sender@example.com negated-from-marker',
+        'keyword',
+      );
+      const negatedReadSearch = await runAiSearch(
+        negationAccount.accountId,
+        '-is:read negated-read-marker',
+        'keyword',
+      );
+      const phraseSearch = await runAiSearch(
+        negationAccount.accountId,
+        '"quarterly planning review" phrase-search-marker',
+        'keyword',
+      );
+      const unknownOperatorSearch = await runAiSearch(
+        negationAccount.accountId,
+        'mystery:literal unknown-operator-marker',
+        'keyword',
+      );
+      const wildcardSearch = await runAiSearch(
+        negationAccount.accountId,
+        'subject:100%_complete wildcard-escape-marker',
+        'keyword',
+      );
+
+      expect(negatedFromSearch.allMsgIds).to.deep.equal([negatedFromAllowedEmail.xGmMsgId]);
+      expect(negatedReadSearch.allMsgIds).to.deep.equal([negatedUnreadEmail.xGmMsgId]);
+      expect(phraseSearch.allMsgIds).to.deep.equal([phraseEmail.xGmMsgId]);
+      expect(unknownOperatorSearch.allMsgIds).to.deep.equal([unknownOperatorEmail.xGmMsgId]);
+      expect(wildcardSearch.allMsgIds).to.deep.equal([wildcardLiteralEmail.xGmMsgId]);
+
+      const emptyKeywordResponse = await callIpc(
+        'ai:search',
+        String(negationAccount.accountId),
+        '',
+        undefined,
+        'keyword',
+      ) as IpcResponse<unknown>;
+
+      expect(emptyKeywordResponse.success).to.equal(false);
+      expect(emptyKeywordResponse.error!.code).to.equal('AI_INVALID_INPUT');
     });
   });
 });

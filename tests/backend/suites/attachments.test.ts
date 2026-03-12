@@ -288,6 +288,89 @@ describe('Attachments', () => {
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('ATTACHMENT_NOT_FOUND');
     });
+
+    it('returns ATTACHMENT_EMAIL_NOT_FOUND when attachment metadata exists without a matching email', async () => {
+      const db = DatabaseService.getInstance();
+      const rawDb = db.getDatabase();
+      let orphanAttachmentId: number | null = null;
+
+      rawDb.pragma('foreign_keys = OFF');
+      try {
+        const insertResult = rawDb.prepare(
+          `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+           VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+        ).run({
+          emailId: 999999,
+          filename: 'orphan.txt',
+          mimeType: 'text/plain',
+          size: 12,
+          contentId: null,
+          localPath: null,
+        });
+        orphanAttachmentId = Number(insertResult.lastInsertRowid);
+      } finally {
+        rawDb.pragma('foreign_keys = ON');
+      }
+
+      try {
+        const response = await callIpc(
+          'attachment:get-content',
+          orphanAttachmentId,
+        ) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_EMAIL_NOT_FOUND');
+      } finally {
+        if (orphanAttachmentId !== null) {
+          rawDb.prepare('DELETE FROM attachments WHERE id = :id').run({ id: orphanAttachmentId });
+        }
+      }
+    });
+
+    it('falls back to IMAP fetch when reading a cached attachment file throws', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        multipartHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
+
+      await callIpc('attachment:get-content', notesAttachment!.id);
+
+      const databaseService = DatabaseService.getInstance();
+      const cachedAttachment = databaseService.getAttachmentById(notesAttachment!.id);
+      expect(cachedAttachment).to.not.be.null;
+      expect(cachedAttachment!.localPath).to.be.a('string');
+
+      const fsModule = require('fs') as typeof import('fs');
+      const originalReadFileSync = fsModule.readFileSync;
+      const cachedPath = cachedAttachment!.localPath!;
+      fsModule.readFileSync = ((filePath: fs.PathOrFileDescriptor, options?: unknown) => {
+        if (filePath === cachedPath) {
+          throw new Error('forced cached attachment read failure');
+        }
+        return originalReadFileSync(filePath, options as never);
+      }) as typeof fs.readFileSync;
+
+      try {
+        const response = await callIpc('attachment:get-content', notesAttachment!.id) as IpcResponse<{
+          filename: string;
+          content: string;
+        }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.filename).to.equal('notes.txt');
+        expect(response.data!.content.length).to.be.greaterThan(0);
+      } finally {
+        fsModule.readFileSync = originalReadFileSync;
+      }
+    });
   });
 
   // =========================================================================
@@ -335,6 +418,76 @@ describe('Attachments', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('ATTACHMENT_NOT_FOUND');
+    });
+
+    it('returns a lossy text preview for binary attachments without failing', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        multipartHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      const pngAttachment = metaResponse.data!.find((att) => att.filename === 'small.png');
+      expect(pngAttachment).to.not.be.undefined;
+
+      const textResponse = await callIpc(
+        'attachment:get-content-as-text',
+        pngAttachment!.id,
+      ) as IpcResponse<{ filename: string; mimeType: string; text: string }>;
+
+      expect(textResponse.success).to.equal(true);
+      expect(textResponse.data!.filename).to.equal('small.png');
+      expect(textResponse.data!.mimeType).to.equal('image/png');
+      expect(textResponse.data!.text).to.be.a('string');
+      expect(textResponse.data!.text.length).to.be.greaterThan(0);
+    });
+
+    it('falls back to IMAP when reading cached text content throws', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        multipartHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
+
+      await callIpc('attachment:get-content', notesAttachment!.id);
+      const cachedAttachment = DatabaseService.getInstance().getAttachmentById(notesAttachment!.id);
+      expect(cachedAttachment).to.not.be.null;
+      expect(cachedAttachment!.localPath).to.be.a('string');
+
+      const fsModule = require('fs') as typeof import('fs');
+      const originalReadFileSync = fsModule.readFileSync;
+      const cachedPath = cachedAttachment!.localPath!;
+      fsModule.readFileSync = ((filePath: fs.PathOrFileDescriptor, options?: unknown) => {
+        if (filePath === cachedPath) {
+          throw new Error('forced cached text read failure');
+        }
+        return originalReadFileSync(filePath, options as never);
+      }) as typeof fs.readFileSync;
+
+      try {
+        const response = await callIpc('attachment:get-content-as-text', notesAttachment!.id) as IpcResponse<{
+          filename: string;
+          text: string;
+        }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.filename).to.equal('notes.txt');
+        expect(response.data!.text).to.include('Hello');
+      } finally {
+        fsModule.readFileSync = originalReadFileSync;
+      }
     });
   });
 
@@ -456,6 +609,47 @@ describe('Attachments', () => {
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('ATTACHMENT_NOT_FOUND');
     });
+
+    it('returns ATTACHMENT_DOWNLOAD_FAILED when the selected save path cannot be written', async function () {
+      this.timeout(25_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const unwritableTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'attach-dl-fail-'));
+
+      (dialog as { showSaveDialog: unknown }).showSaveDialog = async () => ({
+        canceled: false,
+        filePath: unwritableTarget,
+      });
+
+      try {
+        const metaResponse = await callIpc(
+          'attachment:get-for-email',
+          String(suiteAccountId),
+          multipartHeaders.xGmMsgId,
+        ) as IpcResponse<AttachmentMetadata[]>;
+
+        expect(metaResponse.success).to.equal(true);
+        const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+        expect(notesTxtAtt).to.not.be.undefined;
+
+        const downloadResponse = await callIpc(
+          'attachment:download',
+          notesTxtAtt!.id,
+        ) as IpcResponse<unknown>;
+
+        expect(downloadResponse.success).to.equal(false);
+        expect(downloadResponse.error!.code).to.equal('ATTACHMENT_DOWNLOAD_FAILED');
+      } finally {
+        (dialog as { showSaveDialog: unknown }).showSaveDialog = async () => ({
+          canceled: false,
+          filePath: tempDownloadPath,
+        });
+
+        if (fs.existsSync(unwritableTarget)) {
+          fs.rmdirSync(unwritableTarget);
+        }
+      }
+    });
   });
 
   // =========================================================================
@@ -494,6 +688,61 @@ describe('Attachments', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('INVALID_ACCOUNT');
+    });
+
+    it('returns DRAFT_NOT_FOUND for a non-existent draft message ID', async () => {
+      const response = await callIpc(
+        'attachment:fetch-draft-attachments',
+        String(suiteAccountId),
+        'missing-draft-xgmmsgid',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DRAFT_NOT_FOUND');
+    });
+
+    it('returns ATTACHMENT_DRAFT_FETCH_FAILED when fetching the draft source throws', async function () {
+      this.timeout(25_000);
+
+      const createDraftResponse = await callIpc('queue:enqueue', {
+        type: 'draft-create',
+        accountId: suiteAccountId,
+        payload: {
+          subject: 'Draft attachment fetch failure',
+          to: 'draft-fetch-failure@example.com',
+          textBody: 'Draft source fetch failure test',
+        },
+        description: 'Create draft for attachment failure path',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(createDraftResponse.success).to.equal(true);
+      const draftQueueId = createDraftResponse.data!.queueId;
+      await waitForEvent('queue:update', {
+        timeout: 20_000,
+        predicate: (args) => {
+          const payload = args[0] as Record<string, unknown> | undefined;
+          return payload != null && payload['queueId'] === draftQueueId && payload['status'] === 'completed';
+        },
+      });
+
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const serverIds = queueService.MailQueueService.getInstance().getServerIds(draftQueueId);
+      expect(serverIds).to.not.equal(undefined);
+
+      imapStateInspector.injectCommandError('FETCH', 'forced draft fetch failure');
+
+      try {
+        const response = await callIpc(
+          'attachment:fetch-draft-attachments',
+          String(suiteAccountId),
+          serverIds!.xGmMsgId,
+        ) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_DRAFT_FETCH_FAILED');
+      } finally {
+        imapStateInspector.clearCommandErrors();
+      }
     });
   });
 

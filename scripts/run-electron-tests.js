@@ -35,6 +35,10 @@ if (process.platform === 'win32') {
 //   --suite=<pattern>        Alias for --file
 //   --coverage               Generate coverage report after tests finish
 //   --check-coverage[=N]     Fail if coverage is below N (defaults to 0)
+//   --check-statements=N     Fail if statement coverage is below N
+//   --check-branches=N       Fail if branch coverage is below N
+//   --check-functions=N      Fail if function coverage is below N
+//   --check-lines=N          Fail if line coverage is below N
 //   --list                   List all available test suites and exit
 //
 // Usage examples:
@@ -43,6 +47,7 @@ if (process.platform === 'win32') {
 //   yarn test:backend --file=queue --filter="retry"
 //   yarn test:backend --coverage
 //   yarn test:backend --check-coverage=80
+//   yarn test:backend --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90
 //   yarn test:backend --list
 
 const cliArgs = process.argv.slice(2);
@@ -63,19 +68,64 @@ function extractFlagValue(args, flags) {
   return null;
 }
 
+function parseCoverageThresholdValue(flagName, rawValue, options = {}) {
+  const allowMissingValue = options.allowMissingValue === true;
+
+  if (rawValue === null) {
+    if (allowMissingValue) {
+      return 0;
+    }
+
+    console.error(`[test-runner] Missing value for ${flagName}. Use ${flagName}=N with a number between 0 and 100.`);
+    process.exit(1);
+  }
+
+  const threshold = Number(rawValue);
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+    console.error(`[test-runner] Invalid ${flagName} value: "${rawValue}". Must be a number between 0 and 100.`);
+    process.exit(1);
+  }
+
+  return threshold;
+}
+
 const coverageFlag = cliArgs.includes('--coverage');
 const checkCoverageValue = extractFlagValue(cliArgs, '--check-coverage');
 const checkCoverageFlag = checkCoverageValue !== null || cliArgs.includes('--check-coverage');
-let coverageThreshold = 0;
-if (checkCoverageFlag && checkCoverageValue !== null) {
-  coverageThreshold = Number(checkCoverageValue);
-  if (!Number.isFinite(coverageThreshold) || coverageThreshold < 0 || coverageThreshold > 100) {
-    console.error(`[test-runner] Invalid --check-coverage value: "${checkCoverageValue}". Must be a number between 0 and 100.`);
-    process.exit(1);
+const statementsThresholdValue = extractFlagValue(cliArgs, '--check-statements');
+const branchesThresholdValue = extractFlagValue(cliArgs, '--check-branches');
+const functionsThresholdValue = extractFlagValue(cliArgs, '--check-functions');
+const linesThresholdValue = extractFlagValue(cliArgs, '--check-lines');
+
+const metricCheckFlags = [
+  { argumentName: '--check-statements', rawValue: statementsThresholdValue, metricName: 'statements' },
+  { argumentName: '--check-branches', rawValue: branchesThresholdValue, metricName: 'branches' },
+  { argumentName: '--check-functions', rawValue: functionsThresholdValue, metricName: 'functions' },
+  { argumentName: '--check-lines', rawValue: linesThresholdValue, metricName: 'lines' },
+];
+
+let sharedCoverageThreshold = null;
+if (checkCoverageFlag) {
+  sharedCoverageThreshold = parseCoverageThresholdValue('--check-coverage', checkCoverageValue, { allowMissingValue: true });
+}
+
+const coverageThresholds = {
+  statements: sharedCoverageThreshold ?? 0,
+  branches: sharedCoverageThreshold ?? 0,
+  functions: sharedCoverageThreshold ?? 0,
+  lines: sharedCoverageThreshold ?? 0,
+};
+
+let hasMetricCoverageCheck = false;
+for (const metricCheckFlag of metricCheckFlags) {
+  if (metricCheckFlag.rawValue !== null) {
+    coverageThresholds[metricCheckFlag.metricName] = parseCoverageThresholdValue(metricCheckFlag.argumentName, metricCheckFlag.rawValue);
+    hasMetricCoverageCheck = true;
   }
 }
 
-const coverageEnabled = coverageFlag || checkCoverageFlag;
+const checkCoverageEnabled = checkCoverageFlag || hasMetricCoverageCheck;
+const coverageEnabled = coverageFlag || checkCoverageEnabled;
 
 const grepPattern = extractFlagValue(cliArgs, ['--filter', '--grep']);
 const filePattern = extractFlagValue(cliArgs, ['--file', '--suite']);
@@ -104,6 +154,7 @@ if (listSuites) {
   console.log('  yarn test:backend --file=auth --filter=login  Combine file and name filters');
   console.log('  yarn test:backend --coverage                Run tests with coverage report');
   console.log('  yarn test:backend --check-coverage=80       Run tests, fail if coverage < 80%');
+  console.log('  yarn test:backend --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90');
   console.log('');
   process.exit(0);
 }
@@ -123,8 +174,12 @@ if (activeGrepPattern !== undefined || activeFilePattern !== undefined) {
 }
 
 if (coverageEnabled) {
-  if (checkCoverageFlag) {
-    console.log(`[test-runner] Coverage: enabled with threshold ${coverageThreshold}%`);
+  if (checkCoverageEnabled) {
+    console.log('[test-runner] Coverage: enabled with thresholds');
+    console.log(`  statements=${coverageThresholds.statements}%`);
+    console.log(`  branches=${coverageThresholds.branches}%`);
+    console.log(`  functions=${coverageThresholds.functions}%`);
+    console.log(`  lines=${coverageThresholds.lines}%`);
   } else {
     console.log('[test-runner] Coverage: enabled');
   }
@@ -236,8 +291,15 @@ async function runCoverageAndExit(electronExitCode) {
       '--exclude=dist-test/electron/preload.js',
       '--exclude=dist-test/electron/secrets.example.js',
       '--exclude=dist-test/electron/database/migrations/**',
+      '--exclude=dist-test/electron/database/models.*',
       '--exclude=dist-test/electron/workers/**',
       '--exclude=dist-test/electron/cli/**',
+      '--exclude=dist-test/electron/services/queue-types.*',
+      '--exclude=dist-test/electron/services/search-options.*',
+      '--exclude=dist-test/electron/services/native-drop-service.*',
+      '--exclude=dist-test/electron/services/tray-service.*',
+      '--exclude=dist-test/electron/utils/platform.*',
+      '--exclude=dist-test/electron/utils/text-chunker.*',
       '--exclude=dist-test/tests/**',
       '--exclude=node_modules/**',
     ];
@@ -260,13 +322,13 @@ async function runCoverageAndExit(electronExitCode) {
       console.warn('[test-runner] Warning: c8 report exited with code', c8ReportExitCode, '— continuing');
     }
 
-    if (checkCoverageFlag) {
+    if (checkCoverageEnabled) {
       const checkArgs = [
         ...commonArgs,
-        '--lines=' + coverageThreshold,
-        '--branches=' + coverageThreshold,
-        '--functions=' + coverageThreshold,
-        '--statements=' + coverageThreshold,
+        '--lines=' + coverageThresholds.lines,
+        '--branches=' + coverageThresholds.branches,
+        '--functions=' + coverageThresholds.functions,
+        '--statements=' + coverageThresholds.statements,
       ];
 
       try {

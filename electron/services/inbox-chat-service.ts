@@ -74,6 +74,17 @@ interface StreamResult {
   accumulatedResponse: string;
 }
 
+interface VariantExecutionState {
+  processedVariantKeys: Set<string>;
+  cachedContext: VariantContext | null;
+  lastVariantIndex: number;
+}
+
+interface VariantExecutionResult {
+  completed: boolean;
+  cachedContext: VariantContext | null;
+}
+
 export class InboxChatService {
   private activeControllers = new Map<string, AbortController>();
 
@@ -97,121 +108,49 @@ export class InboxChatService {
     try {
       // ── Phase 1: Rewrite question into multiple search variants ───────────────
       const variants = await this.rewriteVariantsWithFallback(question, conversationHistory, controller.signal);
-      if (controller.signal.aborted) { callbacks.onDone(true); return; }
+      if (this.handleAbort(controller.signal, callbacks)) {
+        return;
+      }
 
       // ── Phase 2: Batch-embed all unique query strings ─────────────────────────
       const embeddingMap = await this.buildEmbeddingMap(variants, controller.signal);
-      if (controller.signal.aborted) { callbacks.onDone(true); return; }
+      if (this.handleAbort(controller.signal, callbacks)) {
+        return;
+      }
 
       // ── Phase 3: Build the system prompt (static for this entire request) ─────
       const systemPrompt = this.buildSystemPrompt(accountEmail);
 
       // ── Phase 4: Iterate variants, stopping at the first successful synthesis ─
-      const processedVariantKeys = new Set<string>();
-      let cachedContext: VariantContext | null = null;
-      const lastVariantIndex = variants.length - 1;
+      const executionState: VariantExecutionState = {
+        processedVariantKeys: new Set<string>(),
+        cachedContext: null,
+        lastVariantIndex: variants.length - 1,
+      };
 
       for (let index = 0; index < variants.length; index++) {
-        const variant = variants[index];
+        const variantResult = await this.executeVariant(
+          variants[index],
+          index,
+          executionState,
+          embeddingMap,
+          accountId,
+          question,
+          conversationHistory,
+          systemPrompt,
+          controller,
+          requestId,
+          callbacks,
+        );
 
-        if (controller.signal.aborted) { callbacks.onDone(true); return; }
-
-        // Skip exact duplicates (query + filters), but never skip the final variant
-        const variantKey = JSON.stringify({ query: variant.query, filters: variant.filters });
-        if (index < lastVariantIndex && processedVariantKeys.has(variantKey)) {
-          log.debug(`[chat] Variant ${index} is duplicate, skipping`, { query: variant.query });
-          continue;
-        }
-        processedVariantKeys.add(variantKey);
-
-        const embedding = embeddingMap.get(variant.query);
-        if (!embedding) {
-          // Shouldn't happen — every variant.query was in uniqueQueryStrings
-          log.warn(`[chat] Variant ${index} has no embedding, skipping`, { query: variant.query });
-          continue;
-        }
-
-        log.debug(`[chat] Processing variant ${index}:`, {
-          query: variant.query,
-          filters: variant.filters,
-          dateOrder: variant.dateOrder,
-        });
-
-        // Vector search + DB/similarity filtering for this variant
-        const filteredChunks = this.filterVariantChunks(variant, embedding, accountId, index);
-
-        // Handle zero-chunk result
-        if (filteredChunks.length === 0) {
-          if (index < lastVariantIndex) {
-            log.debug(`[chat] Variant ${index} produced 0 chunks after filtering, skipping`);
-            continue;
-          }
-          if (cachedContext !== null) {
-            log.debug(`[chat] Variant ${index} (last) produced 0 chunks, falling back to cached context`);
-          } else {
-            break; // No context from any variant — all exhausted
-          }
-        }
-
-        // Build context — use the cached fallback if the last variant has zero chunks
-        const usingCachedContext = (index === lastVariantIndex && filteredChunks.length === 0);
-        const variantContext: VariantContext = usingCachedContext
-          ? cachedContext!
-          : this.prepareVariantContext(filteredChunks, variant, accountId, index);
-
-        if (controller.signal.aborted) { callbacks.onDone(true); return; }
-
-        // Relevance pre-check for all variants except the last
-        // (checkRelevance handles its own non-abort errors by returning true)
-        if (index < lastVariantIndex) {
-          let isRelevant: boolean;
-          try {
-            isRelevant = await this.checkRelevance(
-              question, conversationHistory, variantContext.contextString, controller.signal
-            );
-          } catch (relevanceError) {
-            if (controller.signal.aborted) {
-              throw relevanceError;
-            }
-            // Unexpected non-abort exception — conservatively treat context as relevant
-            log.warn(`[chat] Variant ${index} relevance check threw unexpectedly, treating as relevant:`, relevanceError);
-            isRelevant = true;
-          }
-          if (!isRelevant) {
-            log.debug(`[chat] Variant ${index} failed relevance check, skipping`, { query: variant.query });
-            continue;
-          }
-          log.info(`[chat] Variant ${index} passed relevance check, proceeding to synthesis`, { query: variant.query });
-
-          // Cache the first relevance-passing context for use as fallback on the last variant
-          if (cachedContext === null) {
-            cachedContext = variantContext;
-            log.debug(`[chat] Cached context from variant ${index} (first relevance-passing result)`);
-          }
-        } else {
-          log.info(`[chat] Variant ${index} (last): skipping relevance check, proceeding directly to synthesis`);
-          if (!usingCachedContext && cachedContext === null) {
-            cachedContext = variantContext;
-            log.debug(`[chat] Cached context from variant ${index} (proceeding to synthesis)`);
-          }
-        }
-
-        // Stream the synthesized answer
-        log.debug(`[chat] Variant ${index}: beginning synthesis`);
-        const messages = this.buildMessages(systemPrompt, variantContext.contextString, conversationHistory, question);
-        const streamResult = await this.streamVariantAnswer(messages, controller, requestId, index, callbacks);
-
-        if (streamResult.aborted || streamResult.error !== undefined) {
-          callbacks.onSources([]);
-          callbacks.onDone(streamResult.aborted, streamResult.error);
+        executionState.cachedContext = variantResult.cachedContext;
+        if (variantResult.completed) {
           return;
         }
 
-        const citedSources = this.parseCitedSources(streamResult.accumulatedResponse, variantContext.enrichedChunks);
-        callbacks.onSources(citedSources);
-        callbacks.onDone(false);
-        log.debug(`[chat] Variant ${index} answer streamed successfully`);
-        return;
+        if (this.handleAbort(controller.signal, callbacks)) {
+          return;
+        }
       }
 
       // ── All variants exhausted — no relevant emails found ─────────────────────
@@ -244,6 +183,219 @@ export class InboxChatService {
   }
 
   // ── Private helpers for chat() ─────────────────────────────────────────────
+
+  private handleAbort(signal: AbortSignal, callbacks: ChatStreamCallbacks): boolean {
+    if (signal.aborted) {
+      callbacks.onDone(true);
+      return true;
+    }
+
+    return false;
+  }
+
+  private async executeVariant(
+    variant: RewriteResult,
+    variantIndex: number,
+    state: VariantExecutionState,
+    embeddingMap: Map<string, number[]>,
+    accountId: number,
+    question: string,
+    conversationHistory: ConversationTurn[],
+    systemPrompt: string,
+    controller: AbortController,
+    requestId: string,
+    callbacks: ChatStreamCallbacks,
+  ): Promise<VariantExecutionResult> {
+    if (this.handleAbort(controller.signal, callbacks)) {
+      return { completed: true, cachedContext: state.cachedContext };
+    }
+
+    if (this.shouldSkipDuplicateVariant(variant, variantIndex, state)) {
+      return { completed: false, cachedContext: state.cachedContext };
+    }
+
+    const embedding = embeddingMap.get(variant.query);
+    if (!embedding) {
+      log.warn(`[chat] Variant ${variantIndex} has no embedding, skipping`, { query: variant.query });
+      return { completed: false, cachedContext: state.cachedContext };
+    }
+
+    log.debug(`[chat] Processing variant ${variantIndex}:`, {
+      query: variant.query,
+      filters: variant.filters,
+      dateOrder: variant.dateOrder,
+    });
+
+    const filteredChunks = this.filterVariantChunks(variant, embedding, accountId, variantIndex);
+    const variantContext = this.buildVariantContextForExecution(filteredChunks, variant, accountId, variantIndex, state.cachedContext, state.lastVariantIndex);
+
+    if (variantContext === null) {
+      return { completed: false, cachedContext: state.cachedContext };
+    }
+
+    if (this.handleAbort(controller.signal, callbacks)) {
+      return { completed: true, cachedContext: state.cachedContext };
+    }
+
+    const cacheOutcome = await this.evaluateVariantForSynthesis(
+      variant,
+      variantIndex,
+      variantContext,
+      question,
+      conversationHistory,
+      controller.signal,
+      state.cachedContext,
+      state.lastVariantIndex,
+    );
+
+    if (!cacheOutcome.shouldProceed) {
+      return { completed: false, cachedContext: cacheOutcome.cachedContext };
+    }
+
+    const streamCompleted = await this.streamVariantSynthesis(
+      variantContext,
+      variantIndex,
+      systemPrompt,
+      conversationHistory,
+      question,
+      controller,
+      requestId,
+      callbacks,
+    );
+
+    return { completed: streamCompleted, cachedContext: cacheOutcome.cachedContext };
+  }
+
+  private shouldSkipDuplicateVariant(
+    variant: RewriteResult,
+    variantIndex: number,
+    state: VariantExecutionState,
+  ): boolean {
+    const variantKey = JSON.stringify({ query: variant.query, filters: variant.filters });
+    if (variantIndex < state.lastVariantIndex && state.processedVariantKeys.has(variantKey)) {
+      log.debug(`[chat] Variant ${variantIndex} is duplicate, skipping`, { query: variant.query });
+      return true;
+    }
+
+    state.processedVariantKeys.add(variantKey);
+    return false;
+  }
+
+  private buildVariantContextForExecution(
+    filteredChunks: VectorSearchResult[],
+    variant: RewriteResult,
+    accountId: number,
+    variantIndex: number,
+    cachedContext: VariantContext | null,
+    lastVariantIndex: number,
+  ): VariantContext | null {
+    if (filteredChunks.length === 0) {
+      if (variantIndex < lastVariantIndex) {
+        log.debug(`[chat] Variant ${variantIndex} produced 0 chunks after filtering, skipping`);
+        return null;
+      }
+
+      if (cachedContext !== null) {
+        log.debug(`[chat] Variant ${variantIndex} (last) produced 0 chunks, falling back to cached context`);
+        return cachedContext;
+      }
+
+      return null;
+    }
+
+    return this.prepareVariantContext(filteredChunks, variant, accountId, variantIndex);
+  }
+
+  private async evaluateVariantForSynthesis(
+    variant: RewriteResult,
+    variantIndex: number,
+    variantContext: VariantContext,
+    question: string,
+    conversationHistory: ConversationTurn[],
+    signal: AbortSignal,
+    cachedContext: VariantContext | null,
+    lastVariantIndex: number,
+  ): Promise<{ shouldProceed: boolean; cachedContext: VariantContext | null }> {
+    if (variantIndex < lastVariantIndex) {
+      const isRelevant = await this.isVariantRelevant(
+        variantIndex,
+        variant,
+        question,
+        conversationHistory,
+        variantContext.contextString,
+        signal,
+      );
+
+      if (!isRelevant) {
+        log.debug(`[chat] Variant ${variantIndex} failed relevance check, skipping`, { query: variant.query });
+        return { shouldProceed: false, cachedContext };
+      }
+
+      log.info(`[chat] Variant ${variantIndex} passed relevance check, proceeding to synthesis`, { query: variant.query });
+
+      if (cachedContext === null) {
+        cachedContext = variantContext;
+        log.debug(`[chat] Cached context from variant ${variantIndex} (first relevance-passing result)`);
+      }
+
+      return { shouldProceed: true, cachedContext };
+    }
+
+    log.info(`[chat] Variant ${variantIndex} (last): skipping relevance check, proceeding directly to synthesis`);
+    if (cachedContext === null) {
+      cachedContext = variantContext;
+      log.debug(`[chat] Cached context from variant ${variantIndex} (proceeding to synthesis)`);
+    }
+
+    return { shouldProceed: true, cachedContext };
+  }
+
+  private async isVariantRelevant(
+    variantIndex: number,
+    variant: RewriteResult,
+    question: string,
+    conversationHistory: ConversationTurn[],
+    contextString: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      return await this.checkRelevance(question, conversationHistory, contextString, signal);
+    } catch (relevanceError) {
+      if (signal.aborted) {
+        throw relevanceError;
+      }
+
+      log.warn(`[chat] Variant ${variantIndex} relevance check threw unexpectedly, treating as relevant:`, relevanceError);
+      return true;
+    }
+  }
+
+  private async streamVariantSynthesis(
+    variantContext: VariantContext,
+    variantIndex: number,
+    systemPrompt: string,
+    conversationHistory: ConversationTurn[],
+    question: string,
+    controller: AbortController,
+    requestId: string,
+    callbacks: ChatStreamCallbacks,
+  ): Promise<boolean> {
+    log.debug(`[chat] Variant ${variantIndex}: beginning synthesis`);
+    const messages = this.buildMessages(systemPrompt, variantContext.contextString, conversationHistory, question);
+    const streamResult = await this.streamVariantAnswer(messages, controller, requestId, variantIndex, callbacks);
+
+    if (streamResult.aborted || streamResult.error !== undefined) {
+      callbacks.onSources([]);
+      callbacks.onDone(streamResult.aborted, streamResult.error);
+      return true;
+    }
+
+    const citedSources = this.parseCitedSources(streamResult.accumulatedResponse, variantContext.enrichedChunks);
+    callbacks.onSources(citedSources);
+    callbacks.onDone(false);
+    log.debug(`[chat] Variant ${variantIndex} answer streamed successfully`);
+    return true;
+  }
 
   /**
    * Calls the multi-query rewriter and returns 5 ranked variants.
@@ -331,8 +483,8 @@ export class InboxChatService {
     });
     const rawSystemPrompt = this.loadPrompt('inbox-chat-system.md');
     return rawSystemPrompt
-      .replaceAll('{{CURRENT_DATETIME}}', currentDateTimeFormatted)
-      .replaceAll('{{USER_EMAIL}}', accountEmail);
+      .split('{{CURRENT_DATETIME}}').join(currentDateTimeFormatted)
+      .split('{{USER_EMAIL}}').join(accountEmail);
   }
 
   /**
@@ -771,49 +923,62 @@ export class InboxChatService {
   }
 
   /**
-   * Parses `[N]` citation markers from the LLM's completed response text and
-   * returns a deduplicated list of `SourceEmail` objects — one per unique email
-   * — in the order they were first cited.
+   * Parses citation markers from the LLM's completed response text and returns
+   * a deduplicated list of `SourceEmail` objects — one per unique email — in
+   * the order they were first cited.
+   *
+   * Supported formats:
+   * - `[N]`
+   * - `[N,M]`
+   * - `[N, M, P]`
    *
    * Algorithm:
-   * 1. Extract every `[N]` match from the response (global regex).
-   * 2. Parse each N as an integer and bounds-check against enrichedChunks.
-   * 3. Deduplicate: keep only the first citation number encountered for each
-   *    unique `xGmMsgId` (multiple chunks can come from the same email).
-   * 4. Build `SourceEmail` objects in citation order with `citationIndex` set
-   *    to the `[N]` number.
-   * 5. If no valid citations are found, return an empty array.
+   * 1. Extract every bracketed numeric citation group from the response.
+   * 2. Split each group on commas and parse each citation number in order.
+   * 3. Bounds-check each citation against enrichedChunks.
+   * 4. Deduplicate: keep only the first citation encountered for each unique
+   *    `xGmMsgId` (multiple chunks can come from the same email).
+   * 5. Build `SourceEmail` objects in citation order with `citationIndex` set
+   *    to the citation number that first referenced that email.
+   * 6. If no valid citations are found, return an empty array.
    */
   private parseCitedSources(responseText: string, enrichedChunks: EnrichedChunk[]): SourceEmail[] {
-    const citationPattern = /\[(\d+)\]/g;
+    const citationPattern = /\[([\d\s,]+)\]/g;
     const seenMsgIds = new Set<string>();
     const citedSources: SourceEmail[] = [];
 
     let match: RegExpExecArray | null;
     while ((match = citationPattern.exec(responseText)) !== null) {
-      const citationNumber = parseInt(match[1], 10);
+      const citationNumbers = match[1]
+        .split(',')
+        .map((rawCitation) => rawCitation.trim())
+        .filter((rawCitation) => rawCitation.length > 0)
+        .map((rawCitation) => parseInt(rawCitation, 10))
+        .filter((citationNumber) => Number.isInteger(citationNumber));
 
-      // Bounds-check: [N] must map to a real chunk (1-based index)
-      if (citationNumber < 1 || citationNumber > enrichedChunks.length) {
-        continue;
+      for (const citationNumber of citationNumbers) {
+        // Bounds-check: [N] must map to a real chunk (1-based index)
+        if (citationNumber < 1 || citationNumber > enrichedChunks.length) {
+          continue;
+        }
+
+        const chunk = enrichedChunks[citationNumber - 1];
+
+        // Deduplicate by email: only the first citation of each email is kept
+        if (seenMsgIds.has(chunk.xGmMsgId)) {
+          continue;
+        }
+
+        seenMsgIds.add(chunk.xGmMsgId);
+        citedSources.push({
+          xGmMsgId: chunk.xGmMsgId,
+          fromName: chunk.fromName,
+          fromAddress: chunk.fromAddress,
+          subject: chunk.subject,
+          date: chunk.date,
+          citationIndex: citationNumber,
+        });
       }
-
-      const chunk = enrichedChunks[citationNumber - 1];
-
-      // Deduplicate by email: only the first citation of each email is kept
-      if (seenMsgIds.has(chunk.xGmMsgId)) {
-        continue;
-      }
-
-      seenMsgIds.add(chunk.xGmMsgId);
-      citedSources.push({
-        xGmMsgId: chunk.xGmMsgId,
-        fromName: chunk.fromName,
-        fromAddress: chunk.fromAddress,
-        subject: chunk.subject,
-        date: chunk.date,
-        citationIndex: citationNumber,
-      });
     }
 
     log.info('[InboxChatService] Citation parsing complete:', {

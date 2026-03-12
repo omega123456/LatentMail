@@ -386,6 +386,50 @@ describe('BIMI & Avatars', () => {
       expect(response.data!.logoUrl).to.not.be.null;
       expect(response.data!.logoUrl!.startsWith('bimi-logo://')).to.equal(true);
     });
+
+    it('gracefully falls back to null when both DNS and DoH lookup time out or fail', async function () {
+      this.timeout(10_000);
+
+      stubDnsResolve({
+        'default._bimi.timeout.example': null,
+      });
+
+      const mockAgent = new MockAgent();
+      mockAgent.disableNetConnect();
+      setGlobalDispatcher(mockAgent);
+
+      const cloudflarePool = mockAgent.get('https://cloudflare-dns.com');
+      cloudflarePool
+        .intercept({ path: /\/dns-query/, method: 'GET' })
+        .replyWithError(new Error('simulated DoH timeout'));
+
+      const response = await callIpc('bimi:get-logo', 'sender@timeout.example') as IpcResponse<BimiLogoResult>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.logoUrl).to.be.null;
+    });
+
+    it('returns null when the BIMI logo response body is invalid SVG content', async function () {
+      this.timeout(10_000);
+
+      stubDnsResolve({
+        'default._bimi.invalid-svg.example': [['v=BIMI1; l=https://bimi.invalid-svg.example/logo.svg; a=']],
+      });
+
+      const mockAgent = new MockAgent();
+      mockAgent.disableNetConnect();
+      setGlobalDispatcher(mockAgent);
+
+      const logoPool = mockAgent.get('https://bimi.invalid-svg.example');
+      logoPool
+        .intercept({ path: '/logo.svg', method: 'GET' })
+        .replyWithError(new Error('invalid SVG response'));
+
+      const response = await callIpc('bimi:get-logo', 'sender@invalid-svg.example') as IpcResponse<BimiLogoResult>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.logoUrl).to.be.null;
+    });
   });
 
   // =========================================================================
@@ -393,6 +437,15 @@ describe('BIMI & Avatars', () => {
   // =========================================================================
 
   describe('Avatar caching via auth:get-accounts', () => {
+    beforeEach(async () => {
+      await quiesceAndRestore();
+      const seeded = seedTestAccount({
+        email: 'bimi-test@example.com',
+        displayName: 'BIMI Test User',
+      });
+      suiteAccountId = seeded.accountId;
+    });
+
     it('fetches remote avatar URL and caches to disk', async function () {
       this.timeout(10_000);
 
@@ -499,6 +552,25 @@ describe('BIMI & Avatars', () => {
 
       // The avatar file should be removed
       expect(fs.existsSync(avatarFile)).to.equal(false);
+    });
+
+    it('returns null avatarUrl when the account has no Google profile image configured', async () => {
+      const db = DatabaseService.getInstance();
+      const rawDb = db.getDatabase();
+      rawDb.prepare(
+        'UPDATE accounts SET avatar_url = NULL WHERE id = :accountId',
+      ).run({ accountId: suiteAccountId });
+
+      const accountsResponse = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        email: string;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(accountsResponse.success).to.equal(true);
+      const testAccount = accountsResponse.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.be.undefined;
+      expect(testAccount!.avatarUrl).to.equal(null);
     });
   });
 });

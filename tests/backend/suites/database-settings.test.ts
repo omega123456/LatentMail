@@ -16,9 +16,11 @@
  *     because each describe block (or test) calls quiesceAndRestore().
  */
 
+import { app } from 'electron';
 import { expect } from 'chai';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import { getDatabase, callIpc } from '../infrastructure/test-helpers';
+import { LoggerService } from '../../../electron/services/logger-service';
 
 // ---------------------------------------------------------------------------
 // Type helpers
@@ -125,6 +127,26 @@ describe('Database Settings', () => {
       expect(result.data).to.include({ 'ipc.all.x': 'valX' });
     });
 
+    it('returns a fully populated settings object when multiple keys exist', async () => {
+      const db = getDatabase();
+      db.setSetting('theme', 'light');
+      db.setSetting('openAtLogin', 'false');
+      db.setSetting('windowState', '{"width":1200}');
+      db.setSetting('signatures', '[{"id":"sig-1"}]');
+      db.setSetting('logLevel', 'warn');
+
+      const result = await callIpc('db:get-settings') as IpcResponse<Record<string, string>>;
+
+      expect(result.success).to.be.true;
+      expect(result.data).to.include({
+        theme: 'light',
+        openAtLogin: 'false',
+        windowState: '{"width":1200}',
+        signatures: '[{"id":"sig-1"}]',
+        logLevel: 'warn',
+      });
+    });
+
     it('returns only the requested keys when an array is provided', async () => {
       const db = getDatabase();
       db.setSetting('ipc.partial.a', 'valA');
@@ -152,6 +174,42 @@ describe('Database Settings', () => {
       expect(result.success).to.be.true;
       expect(result.data!['does.not.exist.at.all']).to.be.null;
     });
+
+    it('returns DB_READ_FAILED when reading all settings throws', async () => {
+      const db = getDatabase() as unknown as {
+        getAllSettings: () => Record<string, string>;
+      };
+      const originalGetAllSettings = db.getAllSettings;
+      db.getAllSettings = (): Record<string, string> => {
+        throw new Error('forced getAllSettings failure');
+      };
+
+      try {
+        const result = await callIpc('db:get-settings') as IpcResponse<Record<string, string>>;
+        expect(result.success).to.equal(false);
+        expect(result.error!.code).to.equal('DB_READ_FAILED');
+      } finally {
+        db.getAllSettings = originalGetAllSettings;
+      }
+    });
+
+    it('returns DB_READ_FAILED when partial setting lookup throws', async () => {
+      const db = getDatabase() as unknown as {
+        getSetting: (key: string) => string | null;
+      };
+      const originalGetSetting = db.getSetting;
+      db.getSetting = (_key: string): string | null => {
+        throw new Error('forced getSetting failure');
+      };
+
+      try {
+        const result = await callIpc('db:get-settings', ['theme']) as IpcResponse<Record<string, string | null>>;
+        expect(result.success).to.equal(false);
+        expect(result.error!.code).to.equal('DB_READ_FAILED');
+      } finally {
+        db.getSetting = originalGetSetting;
+      }
+    });
   });
 
   // ---- IPC db:set-settings ----
@@ -177,6 +235,83 @@ describe('Database Settings', () => {
       await callIpc('db:set-settings', { 'ipc.overwrite.key': 'updated' });
 
       expect(db.getSetting('ipc.overwrite.key')).to.equal('updated');
+    });
+
+    it('persists mixed settings and applies openAtLogin through the OS helper branch', async () => {
+      const originalSetLoginItemSettings = app.setLoginItemSettings.bind(app);
+      let appliedOpenAtLogin: boolean | null = null;
+
+      const setLoginItemSettingsStub = ((settings: unknown) => {
+        const typedSettings = settings as { openAtLogin?: boolean };
+        appliedOpenAtLogin = typedSettings.openAtLogin ?? null;
+      }) as typeof app.setLoginItemSettings;
+
+      app.setLoginItemSettings = setLoginItemSettingsStub;
+
+      try {
+        const result = await callIpc('db:set-settings', {
+          theme: 'dark',
+          logLevel: 'debug',
+          windowState: '{"x":1,"y":2}',
+          signatures: '[]',
+          openAtLogin: 'true',
+        }) as IpcResponse<null>;
+
+        expect(result.success).to.be.true;
+
+        const db = getDatabase();
+        expect(db.getSetting('theme')).to.equal('dark');
+        expect(db.getSetting('logLevel')).to.equal('debug');
+        expect(db.getSetting('windowState')).to.equal('{"x":1,"y":2}');
+        expect(db.getSetting('signatures')).to.equal('[]');
+        expect(db.getSetting('openAtLogin')).to.equal('true');
+        expect(appliedOpenAtLogin).to.equal(true);
+      } finally {
+        app.setLoginItemSettings = originalSetLoginItemSettings;
+      }
+    });
+
+    it('still succeeds when applying openAtLogin to the OS throws', async () => {
+      const originalSetLoginItemSettings = app.setLoginItemSettings.bind(app);
+      app.setLoginItemSettings = (() => {
+        throw new Error('forced OS login item failure');
+      }) as typeof app.setLoginItemSettings;
+
+      try {
+        const result = await callIpc('db:set-settings', {
+          openAtLogin: 'true',
+          theme: 'light',
+        }) as IpcResponse<null>;
+
+        expect(result.success).to.equal(true);
+
+        const db = getDatabase();
+        expect(db.getSetting('openAtLogin')).to.equal('true');
+        expect(db.getSetting('theme')).to.equal('light');
+      } finally {
+        app.setLoginItemSettings = originalSetLoginItemSettings;
+      }
+    });
+
+    it('returns DB_WRITE_FAILED when persisting settings throws', async () => {
+      const db = getDatabase() as unknown as {
+        setSetting: (key: string, value: string) => void;
+      };
+      const originalSetSetting = db.setSetting;
+      db.setSetting = (_key: string, _value: string): void => {
+        throw new Error('forced setSetting failure');
+      };
+
+      try {
+        const result = await callIpc('db:set-settings', {
+          theme: 'dark',
+        }) as IpcResponse<null>;
+
+        expect(result.success).to.equal(false);
+        expect(result.error!.code).to.equal('DB_WRITE_FAILED');
+      } finally {
+        db.setSetting = originalSetSetting;
+      }
     });
   });
 
@@ -226,6 +361,30 @@ describe('Database Settings', () => {
       const result = await callIpc('db:set-log-level', null) as IpcResponse<never>;
       expect(result.success).to.be.false;
       expect(result.error!.code).to.equal('INVALID_LOG_LEVEL');
+    });
+
+    it('rejects an uppercase log level string with success=false', async () => {
+      const result = await callIpc('db:set-log-level', 'DEBUG') as IpcResponse<never>;
+      expect(result.success).to.be.false;
+      expect(result.error!.code).to.equal('INVALID_LOG_LEVEL');
+    });
+
+    it('returns DB_WRITE_FAILED when applying a valid log level throws', async () => {
+      const logger = LoggerService.getInstance() as unknown as {
+        setLevel: (level: 'debug' | 'info' | 'warn' | 'error') => void;
+      };
+      const originalSetLevel = logger.setLevel;
+      logger.setLevel = (_level: 'debug' | 'info' | 'warn' | 'error'): void => {
+        throw new Error('forced logger level failure');
+      };
+
+      try {
+        const result = await callIpc('db:set-log-level', 'debug') as IpcResponse<null>;
+        expect(result.success).to.equal(false);
+        expect(result.error!.code).to.equal('DB_WRITE_FAILED');
+      } finally {
+        logger.setLevel = originalSetLevel;
+      }
     });
   });
 

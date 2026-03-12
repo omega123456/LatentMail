@@ -310,6 +310,103 @@ describe('Body Prefetch', () => {
       expect(summary.fetched).to.equal(0);
     });
 
+    it('fetchAndStoreBodies skips messages when fetchMessageByUid returns null', async function () {
+      this.timeout(15_000);
+
+      const prefetchService = BodyPrefetchService.getInstance();
+      const imapService = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const serviceInstance = imapService.ImapService.getInstance() as unknown as {
+        fetchMessageByUid: (accountId: string, folder: string, uid: number) => Promise<null | {
+          textBody?: string;
+          htmlBody?: string;
+          attachments?: unknown[];
+        }>;
+      };
+      const originalFetchMessageByUid = serviceInstance.fetchMessageByUid;
+      serviceInstance.fetchMessageByUid = async (_accountId: string, _folder: string, _uid: number) => {
+        return null;
+      };
+
+      try {
+        const summary = await prefetchService.fetchAndStoreBodies(
+          suiteAccountId,
+          [{
+            xGmMsgId: emlFixtures['plain-text'].headers.xGmMsgId,
+            xGmThrid: emlFixtures['plain-text'].headers.xGmThrid,
+          }],
+        );
+
+        expect(summary.fetched).to.equal(0);
+        expect(summary.skipped).to.equal(1);
+        expect(summary.failed).to.equal(0);
+      } finally {
+        serviceInstance.fetchMessageByUid = originalFetchMessageByUid;
+      }
+    });
+
+    it('fetchAndStoreBodies counts failures when fetchMessageByUid throws', async function () {
+      this.timeout(15_000);
+
+      const prefetchService = BodyPrefetchService.getInstance();
+      const imapService = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const serviceInstance = imapService.ImapService.getInstance() as unknown as {
+        fetchMessageByUid: (accountId: string, folder: string, uid: number) => Promise<null | {
+          textBody?: string;
+          htmlBody?: string;
+          attachments?: unknown[];
+        }>;
+      };
+      const originalFetchMessageByUid = serviceInstance.fetchMessageByUid;
+      serviceInstance.fetchMessageByUid = async (_accountId: string, _folder: string, _uid: number) => {
+        throw new Error('forced fetch body failure');
+      };
+
+      try {
+        const summary = await prefetchService.fetchAndStoreBodies(
+          suiteAccountId,
+          [{
+            xGmMsgId: emlFixtures['plain-text'].headers.xGmMsgId,
+            xGmThrid: emlFixtures['plain-text'].headers.xGmThrid,
+          }],
+        );
+
+        expect(summary.fetched).to.equal(0);
+        expect(summary.skipped).to.equal(0);
+        expect(summary.failed).to.equal(1);
+      } finally {
+        serviceInstance.fetchMessageByUid = originalFetchMessageByUid;
+      }
+    });
+
+    it('fetchAndStoreBodies continues when attachment metadata persistence throws', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const prefetchService = BodyPrefetchService.getInstance();
+      const database = DatabaseService.getInstance() as unknown as {
+        upsertAttachmentsForEmail: (accountId: number, xGmMsgId: string, attachments: unknown[]) => void;
+        getEmailByXGmMsgId: (accountId: number, xGmMsgId: string) => Record<string, unknown> | null;
+      };
+      const originalUpsertAttachmentsForEmail = database.upsertAttachmentsForEmail;
+      database.upsertAttachmentsForEmail = (_accountId: number, _xGmMsgId: string, _attachments: unknown[]): void => {
+        throw new Error('forced attachment persistence failure');
+      };
+
+      try {
+        const summary = await prefetchService.fetchAndStoreBodies(
+          suiteAccountId,
+          [{ xGmMsgId: multipartHeaders.xGmMsgId, xGmThrid: multipartHeaders.xGmThrid }],
+        );
+
+        expect(summary.fetched).to.equal(1);
+        const storedEmail = database.getEmailByXGmMsgId(suiteAccountId, multipartHeaders.xGmMsgId);
+        expect(storedEmail).to.not.be.null;
+        expect(Boolean(storedEmail!['textBody'] || storedEmail!['htmlBody'])).to.equal(true);
+      } finally {
+        database.upsertAttachmentsForEmail = originalUpsertAttachmentsForEmail;
+      }
+    });
+
     it('fetchAndStoreBodies returns empty summary for an empty emails array', async function () {
       this.timeout(5_000);
 

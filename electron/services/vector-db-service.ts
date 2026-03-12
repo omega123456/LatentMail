@@ -686,10 +686,26 @@ export class VectorDbService {
   }
 
   /**
-   * Close the database connection. Called on app shutdown.
+   * Close the database connection. Called on app shutdown and by test infrastructure.
+   *
+   * Before closing, runs PRAGMA wal_checkpoint(TRUNCATE) to fold all WAL frames back
+   * into the main database file and truncate the WAL file to zero bytes. This prevents
+   * EPERM errors on Windows when the test harness subsequently tries to delete the
+   * WAL sidecar file — a closed but un-truncated WAL can stay locked on Windows until
+   * the process fully releases the file handle.
    */
   close(): void {
     if (this.db) {
+      try {
+        // Checkpoint and truncate the WAL before closing so the -wal sidecar file is
+        // empty (or absent) by the time the OS fully releases the handle. Without this,
+        // Windows may hold a SHARE lock on the WAL file for a brief window after close(),
+        // causing EPERM when the test harness tries to delete the file.
+        this.db.pragma('wal_checkpoint(TRUNCATE)');
+      } catch (checkpointError) {
+        log.debug('[VectorDbService] WAL checkpoint before close failed (non-fatal):', checkpointError);
+      }
+
       try {
         this.db.close();
         log.info('[VectorDbService] Database connection closed');
@@ -757,6 +773,7 @@ export class VectorDbService {
       log.warn('[VectorDbService] Reopen failed:', error);
       this.vectorsAvailable = false;
       this.db = null;
+      throw error;
     }
   }
 }

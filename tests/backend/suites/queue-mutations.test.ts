@@ -106,6 +106,12 @@ interface SeedAndSyncResult {
   email: string;
 }
 
+interface RawQueueItemRecord {
+  queueId: string;
+  status: string;
+  payload: Record<string, unknown>;
+}
+
 async function setupSuiteWithMessages(emailAddress: string, displayName: string): Promise<SeedAndSyncResult> {
   await quiesceAndRestore();
 
@@ -138,11 +144,363 @@ async function setupSuiteWithMessages(emailAddress: string, displayName: string)
   return { accountId: seeded.accountId, email: seeded.email };
 }
 
+function getRawQueueItem(queueId: string): RawQueueItemRecord | null {
+  const { MailQueueService } = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+  const queueService = MailQueueService.getInstance() as unknown as {
+    items: Map<string, RawQueueItemRecord>;
+  };
+
+  return queueService.items.get(queueId) ?? null;
+}
+
+async function triggerFolderSyncAndWait(
+  accountId: number,
+  folder: string,
+  timeoutMs: number = 15_000,
+): Promise<void> {
+  const bus = TestEventBus.getInstance();
+  const priorFolderUpdatedCount = bus.getHistory('mail:folder-updated').filter((record) => {
+    const payload = record.args[0] as Record<string, unknown> | undefined;
+    if (payload == null) {
+      return false;
+    }
+
+    const folders = Array.isArray(payload['folders']) ? payload['folders'] as unknown[] : [];
+    return (
+      Number(payload['accountId']) === accountId &&
+      payload['reason'] === 'sync' &&
+      folders.some((folderValue) => folderValue === folder)
+    );
+  }).length;
+
+  const response = await callIpc('mail:sync-folder', {
+    accountId: String(accountId),
+    folder,
+  }) as IpcResponse<void>;
+
+  expect(response.success).to.equal(true);
+
+  await waitForEvent('mail:folder-updated', {
+    timeout: timeoutMs,
+    predicate: (args) => {
+      const payload = args[0] as Record<string, unknown> | undefined;
+      if (payload == null) {
+        return false;
+      }
+      if (Number(payload['accountId']) !== accountId) {
+        return false;
+      }
+      if (payload['reason'] !== 'sync') {
+        return false;
+      }
+
+      const folders = Array.isArray(payload['folders']) ? payload['folders'] as unknown[] : [];
+      if (!folders.some((folderValue) => folderValue === folder)) {
+        return false;
+      }
+
+      const currentCount = bus.getHistory('mail:folder-updated').filter((record) => {
+        const recordPayload = record.args[0] as Record<string, unknown> | undefined;
+        if (recordPayload == null) {
+          return false;
+        }
+
+        const recordFolders = Array.isArray(recordPayload['folders']) ? recordPayload['folders'] as unknown[] : [];
+        return (
+          Number(recordPayload['accountId']) === accountId &&
+          recordPayload['reason'] === 'sync' &&
+          recordFolders.some((folderValue) => folderValue === folder)
+        );
+      }).length;
+
+      return currentCount > priorFolderUpdatedCount;
+    },
+  });
+}
+
 // =========================================================================
 // Move operations
 // =========================================================================
 
 describe('Queue Mutations', () => {
+  describe('queue:enqueue — validation', () => {
+    before(async () => {
+      await quiesceAndRestore();
+    });
+
+    it('returns an error response for null and undefined operations', async () => {
+      const nullResponse = await callIpc('queue:enqueue', null) as IpcResponse<unknown>;
+      const undefinedResponse = await callIpc('queue:enqueue', undefined) as IpcResponse<unknown>;
+
+      expect(nullResponse.success).to.equal(false);
+      expect(nullResponse.error).to.deep.equal({
+        code: 'QUEUE_INVALID_OPERATION',
+        message: 'Operation must be an object',
+      });
+
+      expect(undefinedResponse.success).to.equal(false);
+      expect(undefinedResponse.error).to.deep.equal({
+        code: 'QUEUE_INVALID_OPERATION',
+        message: 'Operation must be an object',
+      });
+    });
+
+    it('returns QUEUE_INVALID_OPERATION when type is missing', async () => {
+      const response = await callIpc('queue:enqueue', {
+        accountId: 1,
+        payload: {},
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.deep.equal({
+        code: 'QUEUE_INVALID_OPERATION',
+        message: 'Missing required fields: type, accountId, payload',
+      });
+    });
+
+    it('returns an error response when accountId is missing', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'move',
+        payload: {
+          xGmMsgIds: ['message-1'],
+          targetFolder: '[Gmail]/Sent Mail',
+        },
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.deep.equal({
+        code: 'QUEUE_INVALID_OPERATION',
+        message: 'Missing required fields: type, accountId, payload',
+      });
+    });
+
+    it('returns an error response when payload is missing', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'move',
+        accountId: 1,
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.deep.equal({
+        code: 'QUEUE_INVALID_OPERATION',
+        message: 'Missing required fields: type, accountId, payload',
+      });
+    });
+
+    it('returns QUEUE_INVALID_TYPE for an invalid operation type', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'bogus',
+        accountId: 1,
+        payload: {},
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.deep.equal({
+        code: 'QUEUE_INVALID_TYPE',
+        message: 'Invalid operation type: bogus',
+      });
+    });
+
+    it('returns QUEUE_INVALID_ACCOUNT for non-positive accountId values', async () => {
+      for (const accountId of [0, -1]) {
+        const response = await callIpc('queue:enqueue', {
+          type: 'move',
+          accountId,
+          payload: {
+            xGmMsgIds: ['message-1'],
+            targetFolder: '[Gmail]/Sent Mail',
+          },
+        }) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error).to.deep.equal({
+          code: 'QUEUE_INVALID_ACCOUNT',
+          message: 'accountId must be a positive number',
+        });
+      }
+    });
+
+    it('returns QUEUE_INVALID_PAYLOAD for draft-update without originalQueueId or serverDraftXGmMsgId', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'draft-update',
+        accountId: 1,
+        payload: {
+          subject: 'Updated draft',
+          to: 'recipient@example.com',
+        },
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.deep.equal({
+        code: 'QUEUE_INVALID_PAYLOAD',
+        message: 'draft-update requires originalQueueId or serverDraftXGmMsgId in payload',
+      });
+    });
+
+    it('validates move payload shape', async () => {
+      const missingIdsResponse = await callIpc('queue:enqueue', {
+        type: 'move',
+        accountId: 1,
+        payload: { targetFolder: '[Gmail]/Sent Mail' },
+      }) as IpcResponse<unknown>;
+      const missingTargetResponse = await callIpc('queue:enqueue', {
+        type: 'move',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'] },
+      }) as IpcResponse<unknown>;
+
+      expect(missingIdsResponse.success).to.equal(false);
+      expect(missingIdsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingTargetResponse.success).to.equal(false);
+      expect(missingTargetResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('validates flag payload shape', async () => {
+      const missingIdsResponse = await callIpc('queue:enqueue', {
+        type: 'flag',
+        accountId: 1,
+        payload: { flag: 'read', value: true },
+      }) as IpcResponse<unknown>;
+      const missingFlagResponse = await callIpc('queue:enqueue', {
+        type: 'flag',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'], value: true },
+      }) as IpcResponse<unknown>;
+      const missingValueResponse = await callIpc('queue:enqueue', {
+        type: 'flag',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'], flag: 'read' },
+      }) as IpcResponse<unknown>;
+
+      expect(missingIdsResponse.success).to.equal(false);
+      expect(missingIdsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingFlagResponse.success).to.equal(false);
+      expect(missingFlagResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingValueResponse.success).to.equal(false);
+      expect(missingValueResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('validates send payload subject type', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'send',
+        accountId: 1,
+        payload: {
+          to: 'person@example.com',
+          subject: 42,
+        },
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('validates delete payload shape', async () => {
+      const missingIdsResponse = await callIpc('queue:enqueue', {
+        type: 'delete',
+        accountId: 1,
+        payload: { folder: 'INBOX' },
+      }) as IpcResponse<unknown>;
+      const missingFolderResponse = await callIpc('queue:enqueue', {
+        type: 'delete',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'] },
+      }) as IpcResponse<unknown>;
+
+      expect(missingIdsResponse.success).to.equal(false);
+      expect(missingIdsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingFolderResponse.success).to.equal(false);
+      expect(missingFolderResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('validates delete-label payload shape', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'delete-label',
+        accountId: 1,
+        payload: { gmailLabelId: '   ' },
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('validates add-labels payload shape', async () => {
+      const missingIdsResponse = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: 1,
+        payload: { targetLabels: ['Label'], threadId: 'thread-1' },
+      }) as IpcResponse<unknown>;
+      const missingLabelsResponse = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'], threadId: 'thread-1' },
+      }) as IpcResponse<unknown>;
+      const missingThreadResponse = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'], targetLabels: ['Label'] },
+      }) as IpcResponse<unknown>;
+
+      expect(missingIdsResponse.success).to.equal(false);
+      expect(missingIdsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingLabelsResponse.success).to.equal(false);
+      expect(missingLabelsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingThreadResponse.success).to.equal(false);
+      expect(missingThreadResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('validates remove-labels payload shape', async () => {
+      const missingIdsResponse = await callIpc('queue:enqueue', {
+        type: 'remove-labels',
+        accountId: 1,
+        payload: { targetLabels: ['Label'], threadId: 'thread-1' },
+      }) as IpcResponse<unknown>;
+      const missingLabelsResponse = await callIpc('queue:enqueue', {
+        type: 'remove-labels',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'], threadId: 'thread-1' },
+      }) as IpcResponse<unknown>;
+      const missingThreadResponse = await callIpc('queue:enqueue', {
+        type: 'remove-labels',
+        accountId: 1,
+        payload: { xGmMsgIds: ['msg-1'], targetLabels: ['Label'] },
+      }) as IpcResponse<unknown>;
+
+      expect(missingIdsResponse.success).to.equal(false);
+      expect(missingIdsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingLabelsResponse.success).to.equal(false);
+      expect(missingLabelsResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+      expect(missingThreadResponse.success).to.equal(false);
+      expect(missingThreadResponse.error!.code).to.equal('QUEUE_INVALID_PAYLOAD');
+    });
+
+    it('returns QUEUE_ENQUEUE_FAILED when queue enqueue throws unexpectedly', async () => {
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const mailQueueService = queueService.MailQueueService.getInstance() as unknown as {
+        enqueue: (...args: unknown[]) => string;
+      };
+      const originalEnqueue = mailQueueService.enqueue;
+      mailQueueService.enqueue = (..._args: unknown[]): string => {
+        throw new Error('forced queue enqueue failure');
+      };
+
+      try {
+        const response = await callIpc('queue:enqueue', {
+          type: 'send',
+          accountId: 1,
+          payload: {
+            to: 'valid@example.com',
+            subject: 'Trigger catch path',
+          },
+        }) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('QUEUE_ENQUEUE_FAILED');
+      } finally {
+        mailQueueService.enqueue = originalEnqueue;
+      }
+    });
+  });
+
   describe('mail:move — move to Sent Mail', () => {
     before(async function () {
       this.timeout(35_000);
@@ -848,6 +1206,201 @@ describe('Queue Mutations', () => {
   // Label add/remove via queue:enqueue (no higher-level IPC for these)
   // =========================================================================
 
+  describe('queue:enqueue — label UID resolution', () => {
+    before(async function () {
+      this.timeout(40_000);
+      await setupSuiteWithMessages('queue-label-resolution@example.com', 'Queue Label Resolution Test');
+    });
+
+    it('resolves add-labels UIDs at enqueue time and returns a queueId', async function () {
+      this.timeout(20_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const targetLabelName = 'QueueResolutionAddLabel';
+      const databaseService = DatabaseService.getInstance();
+
+      await callIpc(
+        'label:create',
+        String(suiteAccountId),
+        targetLabelName,
+        '#4A90E2',
+      );
+
+      const allMailUid = databaseService
+        .getFolderUidsForEmail(suiteAccountId, plainHeaders.xGmMsgId)
+        .find((folderUid) => folderUid.folder === '[Gmail]/All Mail');
+
+      expect(allMailUid).to.exist;
+
+      const response = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: [plainHeaders.xGmMsgId],
+          targetLabels: [targetLabelName],
+          threadId: plainHeaders.xGmThrid,
+        },
+        description: 'Resolve add-labels UIDs at enqueue time',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.exist;
+      expect(response.data!.queueId).to.be.a('string');
+      expect(response.data!.queueId).to.not.equal('skipped');
+
+      const queueId = response.data!.queueId;
+      const queueItem = getRawQueueItem(queueId);
+
+      expect(queueItem).to.not.be.null;
+
+      const payload = queueItem!.payload as {
+        resolvedEmails?: Array<{ xGmMsgId: string; sourceFolder: string; uid: number }>;
+      };
+
+      expect(payload.resolvedEmails).to.deep.equal([
+        {
+          xGmMsgId: plainHeaders.xGmMsgId,
+          sourceFolder: '[Gmail]/All Mail',
+          uid: allMailUid!.uid,
+        },
+      ]);
+
+      await waitForQueueUpdate(queueId, 'completed', 15_000);
+    });
+
+    it('returns queueId "skipped" for add-labels when no email UIDs resolve', async () => {
+      const response = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: ['missing-x-gm-msgid'],
+          targetLabels: ['QueueResolutionSkippedLabel'],
+          threadId: 'missing-thread',
+        },
+        description: 'Skip add-labels when no UIDs resolve',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.deep.equal({ queueId: 'skipped' });
+    });
+
+    it('resolves remove-labels UIDs at enqueue time after label-folder sync', async function () {
+      this.timeout(30_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const targetLabelName = 'QueueResolutionRemoveLabel';
+      const databaseService = DatabaseService.getInstance();
+
+      await callIpc(
+        'label:create',
+        String(suiteAccountId),
+        targetLabelName,
+        '#7ED321',
+      );
+
+      const addResponse = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: [plainHeaders.xGmMsgId],
+          targetLabels: [targetLabelName],
+          threadId: plainHeaders.xGmThrid,
+        },
+        description: 'Prepare label folder before remove-labels test',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(addResponse.success).to.equal(true);
+      expect(addResponse.data).to.exist;
+
+      await waitForQueueUpdate(addResponse.data!.queueId, 'completed', 15_000);
+      await triggerFolderSyncAndWait(suiteAccountId, targetLabelName, 20_000);
+
+      const labelFolderUid = databaseService
+        .getFolderUidsForEmail(suiteAccountId, plainHeaders.xGmMsgId)
+        .find((folderUid) => folderUid.folder === targetLabelName);
+
+      expect(labelFolderUid).to.exist;
+
+      const response = await callIpc('queue:enqueue', {
+        type: 'remove-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: [plainHeaders.xGmMsgId],
+          targetLabels: [targetLabelName],
+          threadId: plainHeaders.xGmThrid,
+        },
+        description: 'Resolve remove-labels UIDs at enqueue time',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.exist;
+      expect(response.data!.queueId).to.be.a('string');
+      expect(response.data!.queueId).to.not.equal('skipped');
+
+      const queueId = response.data!.queueId;
+      const queueItem = getRawQueueItem(queueId);
+
+      expect(queueItem).to.not.be.null;
+
+      const payload = queueItem!.payload as {
+        resolvedEmails?: Array<{ xGmMsgId: string; labelFolder: string; uid: number }>;
+      };
+
+      expect(payload.resolvedEmails).to.deep.equal([
+        {
+          xGmMsgId: plainHeaders.xGmMsgId,
+          labelFolder: targetLabelName,
+          uid: labelFolderUid!.uid,
+        },
+      ]);
+
+      await waitForQueueUpdate(queueId, 'completed', 15_000);
+    });
+
+    it('does not skip remove-labels when no label-folder UIDs resolve', async function () {
+      this.timeout(20_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const targetLabelName = 'QueueResolutionNoUidLabel';
+
+      await callIpc(
+        'label:create',
+        String(suiteAccountId),
+        targetLabelName,
+        '#F5A623',
+      );
+
+      const response = await callIpc('queue:enqueue', {
+        type: 'remove-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: [plainHeaders.xGmMsgId],
+          targetLabels: [targetLabelName],
+          threadId: plainHeaders.xGmThrid,
+        },
+        description: 'Do not skip remove-labels when no UIDs resolve',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.exist;
+      expect(response.data!.queueId).to.be.a('string');
+      expect(response.data!.queueId).to.not.equal('skipped');
+
+      const queueId = response.data!.queueId;
+      const queueItem = getRawQueueItem(queueId);
+
+      expect(queueItem).to.not.be.null;
+
+      const payload = queueItem!.payload as {
+        resolvedEmails?: Array<{ xGmMsgId: string; labelFolder: string; uid: number }>;
+      };
+
+      expect(payload.resolvedEmails).to.deep.equal([]);
+
+      await waitForQueueUpdate(queueId, 'completed', 15_000);
+    });
+  });
+
   describe('queue:enqueue — add-labels and remove-labels', () => {
     let targetLabelName: string;
 
@@ -1032,6 +1585,100 @@ describe('Queue Mutations', () => {
           return currentCount > priorCount;
         },
       });
+    });
+
+    it('marks add-labels as failed when every IMAP copy operation fails', async function () {
+      this.timeout(20_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const imapService = imapServiceModule.ImapService.getInstance() as unknown as {
+        copyMessages: (accountId: string, sourceFolder: string, uids: number[], targetFolder: string) => Promise<void>;
+      };
+      const originalCopyMessages = imapService.copyMessages;
+      imapService.copyMessages = async (): Promise<void> => {
+        throw new Error('forced copyMessages failure');
+      };
+
+      try {
+        const response = await callIpc('queue:enqueue', {
+          type: 'add-labels',
+          accountId: suiteAccountId,
+          payload: {
+            xGmMsgIds: [plainHeaders.xGmMsgId],
+            targetLabels: [targetLabelName],
+            threadId: plainHeaders.xGmThrid,
+          },
+          description: 'Force add-labels failure',
+        }) as IpcResponse<{ queueId: string }>;
+
+        expect(response.success).to.equal(true);
+        const queueId = response.data!.queueId;
+
+        const terminalUpdate = await waitForQueueUpdate(queueId, 'failed', 15_000);
+        expect(terminalUpdate.status).to.equal('failed');
+      } finally {
+        imapService.copyMessages = originalCopyMessages;
+      }
+    });
+
+    it('marks remove-labels as failed when IMAP label removal fails for all messages', async function () {
+      this.timeout(20_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const failingLabelName = 'RemoveLabelsFailureLabel';
+
+      await callIpc(
+        'label:create',
+        String(suiteAccountId),
+        failingLabelName,
+        '#AA55CC',
+      );
+
+      const addResponse = await callIpc('queue:enqueue', {
+        type: 'add-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: [plainHeaders.xGmMsgId],
+          targetLabels: [failingLabelName],
+          threadId: plainHeaders.xGmThrid,
+        },
+        description: 'Prepare failing remove-labels operation',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(addResponse.success).to.equal(true);
+      await waitForQueueUpdate(addResponse.data!.queueId, 'completed', 15_000);
+      await triggerFolderSyncAndWait(suiteAccountId, failingLabelName, 20_000);
+
+      const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const imapService = imapServiceModule.ImapService.getInstance() as unknown as {
+        removeFromLabel: (accountId: string, labelFolder: string, uids: number[]) => Promise<void>;
+      };
+      const originalRemoveFromLabel = imapService.removeFromLabel;
+      imapService.removeFromLabel = async (): Promise<void> => {
+        throw new Error('forced removeFromLabel failure');
+      };
+
+      try {
+        const response = await callIpc('queue:enqueue', {
+          type: 'remove-labels',
+          accountId: suiteAccountId,
+          payload: {
+            xGmMsgIds: [plainHeaders.xGmMsgId],
+            targetLabels: [failingLabelName],
+            threadId: plainHeaders.xGmThrid,
+          },
+          description: 'Force remove-labels failure',
+        }) as IpcResponse<{ queueId: string }>;
+
+        expect(response.success).to.equal(true);
+        const queueId = response.data!.queueId;
+
+        const terminalUpdate = await waitForQueueUpdate(queueId, 'failed', 15_000);
+        expect(terminalUpdate.status).to.equal('failed');
+      } finally {
+        imapService.removeFromLabel = originalRemoveFromLabel;
+      }
     });
   });
 

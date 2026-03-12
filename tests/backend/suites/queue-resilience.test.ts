@@ -168,6 +168,24 @@ async function waitForQueueUpdateByType(
   return resultArgs[0] as QueueUpdateSnapshot;
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs: number = 5_000,
+  intervalMs: number = 25,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, intervalMs);
+    });
+  }
+
+  throw new Error(`Condition not met within ${timeoutMs}ms`);
+}
+
 // -------------------------------------------------------------------------
 // Helper: seed account + inject messages + sync
 // -------------------------------------------------------------------------
@@ -1455,6 +1473,221 @@ describe('Queue Resilience', () => {
       // Resume account 1
       queueService.resumeAccount(account1Id);
       expect(queueService.isAccountPaused(account1Id)).to.equal(false);
+    });
+  });
+
+  // =========================================================================
+  // Folder lock contention — queue operation versus on-demand sync
+  // =========================================================================
+
+  describe('Folder lock contention — queue operation versus folder sync', () => {
+    beforeEach(async function () {
+      this.timeout(35_000);
+      await setupWithMessages('resilience-folder-lock@example.com');
+    });
+
+    afterEach(async () => {
+      try {
+        const { SyncService } = require('../../../electron/services/sync-service') as typeof import('../../../electron/services/sync-service');
+        await SyncService.getInstance().stopAllIdle();
+      } catch {
+        // Non-fatal cleanup
+      }
+    });
+
+    it('grants the folder lock to a waiting sync after a queued move releases it', async function () {
+      this.timeout(30_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const { FolderLockManager } = require('../../../electron/services/folder-lock-manager') as typeof import('../../../electron/services/folder-lock-manager');
+      const { ImapService } = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const { SyncService } = require('../../../electron/services/sync-service') as typeof import('../../../electron/services/sync-service');
+
+      const lockManager = FolderLockManager.getInstance() as unknown as {
+        isLocked: (folder: string, accountId?: number | string) => boolean;
+        getWaiterCount: (folder: string, accountId?: number | string) => number;
+      };
+      const imapService = ImapService.getInstance() as unknown as {
+        moveMessages: (accountId: string, sourceFolder: string, uids: number[], targetFolder: string) => Promise<void>;
+      };
+      const syncService = SyncService.getInstance() as unknown as {
+        syncFolderWithReconciliation: (accountId: string, folder: string) => Promise<void>;
+      };
+
+      const originalMoveMessages = imapService.moveMessages.bind(imapService);
+      const originalSyncFolderWithReconciliation = syncService.syncFolderWithReconciliation.bind(syncService);
+
+      let moveStarted = false;
+      let releaseMove: (() => void) | null = null;
+      let capturedSyncPromise: Promise<void> | null = null;
+      const moveBlocked = new Promise<void>((resolve) => {
+        releaseMove = resolve;
+      });
+
+      imapService.moveMessages = async (
+        accountId: string,
+        sourceFolder: string,
+        uids: number[],
+        targetFolder: string,
+      ): Promise<void> => {
+        moveStarted = true;
+        await moveBlocked;
+        await originalMoveMessages(accountId, sourceFolder, uids, targetFolder);
+      };
+
+      syncService.syncFolderWithReconciliation = (accountId: string, folder: string): Promise<void> => {
+        const syncPromise = originalSyncFolderWithReconciliation(accountId, folder);
+        capturedSyncPromise = syncPromise;
+        return syncPromise;
+      };
+
+      try {
+        const moveResponse = await callIpc(
+          'mail:move',
+          String(suiteAccountId),
+          [plainHeaders.xGmMsgId],
+          '[Gmail]/Sent Mail',
+          'INBOX',
+        ) as IpcResponse<{ queueId: string }>;
+
+        expect(moveResponse.success).to.equal(true);
+
+        await waitForCondition(() => {
+          return moveStarted && lockManager.isLocked('INBOX', suiteAccountId);
+        }, 10_000, 25);
+
+        expect(lockManager.isLocked('INBOX')).to.equal(false);
+        expect(lockManager.getWaiterCount('INBOX', suiteAccountId)).to.equal(0);
+
+        const syncResponse = await callIpc('mail:sync-folder', {
+          accountId: String(suiteAccountId),
+          folder: 'INBOX',
+        }) as IpcResponse<void>;
+
+        expect(syncResponse.success).to.equal(true);
+
+        await waitForCondition(() => {
+          return capturedSyncPromise !== null && lockManager.getWaiterCount('INBOX', suiteAccountId) === 1;
+        }, 10_000, 25);
+
+        expect(lockManager.getWaiterCount('INBOX')).to.equal(0);
+        expect(lockManager.isLocked('INBOX', suiteAccountId)).to.equal(true);
+
+        releaseMove!();
+
+        await capturedSyncPromise!;
+
+        const moveSnapshot = await waitForQueueUpdate(moveResponse.data!.queueId, 'completed', 15_000);
+        expect(moveSnapshot.status).to.equal('completed');
+
+        await waitForCondition(() => {
+          return !lockManager.isLocked('INBOX', suiteAccountId) && lockManager.getWaiterCount('INBOX', suiteAccountId) === 0;
+        }, 10_000, 25);
+      } finally {
+        const releaseMoveFn = releaseMove as unknown as (() => void) | null;
+        if (typeof releaseMoveFn === 'function') {
+          releaseMoveFn();
+        }
+        imapService.moveMessages = originalMoveMessages;
+        syncService.syncFolderWithReconciliation = originalSyncFolderWithReconciliation;
+      }
+    });
+
+    it('rejects a waiting folder sync when lock acquisition times out', async function () {
+      this.timeout(30_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const { FolderLockManager } = require('../../../electron/services/folder-lock-manager') as typeof import('../../../electron/services/folder-lock-manager');
+      const { ImapService } = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const { SyncService } = require('../../../electron/services/sync-service') as typeof import('../../../electron/services/sync-service');
+
+      const lockManager = FolderLockManager.getInstance() as unknown as {
+        lockTimeoutMs: number;
+        isLocked: (folder: string, accountId?: number | string) => boolean;
+        getWaiterCount: (folder: string, accountId?: number | string) => number;
+      };
+      const imapService = ImapService.getInstance() as unknown as {
+        moveMessages: (accountId: string, sourceFolder: string, uids: number[], targetFolder: string) => Promise<void>;
+      };
+      const syncService = SyncService.getInstance() as unknown as {
+        syncFolderWithReconciliation: (accountId: string, folder: string) => Promise<void>;
+      };
+
+      const originalLockTimeoutMs = lockManager.lockTimeoutMs;
+      const originalMoveMessages = imapService.moveMessages.bind(imapService);
+      const originalSyncFolderWithReconciliation = syncService.syncFolderWithReconciliation.bind(syncService);
+
+      let moveStarted = false;
+      let capturedSyncPromise: Promise<void> | null = null;
+
+      lockManager.lockTimeoutMs = 75;
+
+      imapService.moveMessages = async (
+        accountId: string,
+        sourceFolder: string,
+        uids: number[],
+        targetFolder: string,
+      ): Promise<void> => {
+        moveStarted = true;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        await originalMoveMessages(accountId, sourceFolder, uids, targetFolder);
+      };
+
+      syncService.syncFolderWithReconciliation = (accountId: string, folder: string): Promise<void> => {
+        const syncPromise = originalSyncFolderWithReconciliation(accountId, folder);
+        capturedSyncPromise = syncPromise;
+        return syncPromise;
+      };
+
+      try {
+        const moveResponse = await callIpc(
+          'mail:move',
+          String(suiteAccountId),
+          [plainHeaders.xGmMsgId],
+          '[Gmail]/Sent Mail',
+          'INBOX',
+        ) as IpcResponse<{ queueId: string }>;
+
+        expect(moveResponse.success).to.equal(true);
+
+        await waitForCondition(() => {
+          return moveStarted && lockManager.isLocked('INBOX', suiteAccountId);
+        }, 10_000, 25);
+
+        const syncResponse = await callIpc('mail:sync-folder', {
+          accountId: String(suiteAccountId),
+          folder: 'INBOX',
+        }) as IpcResponse<void>;
+
+        expect(syncResponse.success).to.equal(true);
+
+        await waitForCondition(() => {
+          return capturedSyncPromise !== null && lockManager.getWaiterCount('INBOX', suiteAccountId) === 1;
+        }, 10_000, 25);
+
+        let caughtError: Error | null = null;
+        try {
+          await capturedSyncPromise!;
+        } catch (error) {
+          caughtError = error as Error;
+        }
+
+        expect(caughtError).to.not.equal(null);
+        expect(caughtError!.message).to.include(`FolderLockManager: timeout acquiring lock on "${suiteAccountId}:INBOX" after 75ms`);
+
+        await waitForCondition(() => {
+          return lockManager.getWaiterCount('INBOX', suiteAccountId) === 0;
+        }, 10_000, 25);
+
+        const moveSnapshot = await waitForQueueUpdate(moveResponse.data!.queueId, 'completed', 15_000);
+        expect(moveSnapshot.status).to.equal('completed');
+      } finally {
+        lockManager.lockTimeoutMs = originalLockTimeoutMs;
+        imapService.moveMessages = originalMoveMessages;
+        syncService.syncFolderWithReconciliation = originalSyncFolderWithReconciliation;
+      }
     });
   });
 });

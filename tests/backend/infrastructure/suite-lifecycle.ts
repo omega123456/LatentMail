@@ -113,6 +113,9 @@ export async function quiesceAndRestore(): Promise<void> {
   //     resetIdleStateForTesting() sets globalIdleSuppression=true and cancels any
   //     already-queued reconnect timers and clears stored callbacks, so the onClose
   //     callbacks that fire during step 3b become harmless no-ops.
+  //
+  //     resetIdleStateForTesting() also sets the notificationsDisabled flag so that
+  //     IDLE-triggered syncs never pop real OS toast notifications during test runs.
   try {
     const { SyncService } = require('../../../electron/services/sync-service') as typeof import('../../../electron/services/sync-service');
     SyncService.getInstance().resetIdleStateForTesting();
@@ -173,15 +176,69 @@ export async function quiesceAndRestore(): Promise<void> {
   }
 
   // 5. Close vector DB, overwrite with template, reopen
+  //
+  //    IMPORTANT (Windows): The EmbeddingService may have a live worker thread that
+  //    opened its own better-sqlite3 connection to the vector DB.  On Windows, even
+  //    after the main-thread connection is closed, an open worker-thread file handle
+  //    keeps the WAL sidecar file locked, causing EPERM when we try to delete it.
+  //    So we must:
+  //      a) resetForTesting() the EmbeddingService (awaited — terminates the worker
+  //         thread synchronously so the OS handle is released before we continue),
+  //      b) close the main-thread vector DB connection (with WAL checkpoint first),
+  //      c) delete the WAL/SHM sidecars with a short retry loop to tolerate the
+  //         brief window where Windows releases the last handle asynchronously.
   try {
+    // 5a. Terminate the embedding worker thread first so it releases its vector DB
+    //     file handle before we attempt to delete the WAL sidecar.
+    try {
+      const { EmbeddingService } = require('../../../electron/services/embedding-service') as typeof import('../../../electron/services/embedding-service');
+      await EmbeddingService.getInstance().resetForTesting();
+    } catch (embeddingError) {
+      console.warn('[quiesceAndRestore] Failed to reset EmbeddingService (non-fatal):', embeddingError);
+    }
+
     const { VectorDbService } = require('../../../electron/services/vector-db-service') as typeof import('../../../electron/services/vector-db-service');
     const vectorDbService = VectorDbService.getInstance();
+    // 5b. Close the main-thread vector DB connection (runs PRAGMA wal_checkpoint(TRUNCATE) inside).
     vectorDbService.close();
 
     if (fs.existsSync(vectorTemplatePath)) {
-      // Always delete stale WAL/SHM files first before copying the template.
-      fs.rmSync(vectorDbPath + '-wal', { force: true });
-      fs.rmSync(vectorDbPath + '-shm', { force: true });
+      // 5c. Delete stale WAL/SHM sidecars with a retry loop.
+      //     On Windows the OS can hold an exclusive lock on a WAL file for a brief
+      //     window after the last SQLite connection closes.  Retry up to ~500 ms
+      //     before giving up so this does not spuriously fail suites.
+      //     EPERM, EBUSY, and EACCES are all Windows-style locked-file errors and
+      //     are treated as retryable; other errors are rethrown immediately.
+      //     rmSync with force:true tolerates already-absent files, so we skip the
+      //     pre-existence check.
+      const walPath = vectorDbPath + '-wal';
+      const shmPath = vectorDbPath + '-shm';
+      const retryableCodes = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+      for (const sidecarPath of [walPath, shmPath]) {
+        let deleted = false;
+        const maxAttempts = 10;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          try {
+            fs.rmSync(sidecarPath, { force: true });
+            deleted = true;
+            break;
+          } catch (deleteError) {
+            const errorCode = (deleteError as NodeJS.ErrnoException).code;
+            if (!retryableCodes.has(errorCode ?? '')) {
+              throw deleteError;
+            }
+            // Retryable lock error: Windows file handle not yet released — wait 50 ms and retry.
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 50);
+            });
+          }
+        }
+
+        if (!deleted) {
+          throw new Error(`[quiesceAndRestore] Cannot delete ${sidecarPath} after ${maxAttempts} attempts — file locked`);
+        }
+      }
 
       fs.copyFileSync(vectorTemplatePath, vectorDbPath);
 
@@ -198,7 +255,7 @@ export async function quiesceAndRestore(): Promise<void> {
     vectorDbService.reopen(vectorDbPath);
   } catch (error) {
     console.warn('[quiesceAndRestore] Failed to restore vector database:', error);
-    // Non-fatal — vector DB may not be available in all environments
+    throw error;
   }
 
   // 6. Clear credential file

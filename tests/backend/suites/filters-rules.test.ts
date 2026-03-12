@@ -33,6 +33,7 @@ import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { DatabaseService } from '../../../electron/services/database-service';
 import { TestEventBus } from '../infrastructure/test-event-bus';
+import { FilterService } from '../../../electron/services/filter-service';
 
 // ---- Type helpers ----
 
@@ -357,6 +358,184 @@ describe('Filters & Rules', () => {
       expect(updateResponse.success).to.equal(false);
       expect(updateResponse.error!.code).to.equal('DB_INVALID_INPUT');
     });
+
+    it('db:get-filters rejects a missing accountId', async () => {
+      const response = await callIpc('db:get-filters', 0) as IpcResponse<{ filters: FilterRow[] }>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:save-filter rejects incomplete filter data', async () => {
+      const response = await callIpc('db:save-filter', {
+        accountId: suiteAccountId,
+        name: '',
+        conditions: JSON.stringify([]),
+        actions: JSON.stringify([]),
+        isEnabled: true,
+        isAiGenerated: false,
+      }) as IpcResponse<{ id: number }>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:save-filter rejects non-string conditions and actions', async () => {
+      const response = await callIpc('db:save-filter', {
+        accountId: suiteAccountId,
+        name: 'Non String Payloads',
+        conditions: [{ field: 'subject', operator: 'contains', value: 'hello' }],
+        actions: [{ type: 'star' }],
+        isEnabled: true,
+        isAiGenerated: false,
+      }) as IpcResponse<{ id: number }>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:update-filter rejects incomplete filter data', async () => {
+      const response = await callIpc('db:update-filter', {
+        id: 0,
+        name: '',
+        conditions: JSON.stringify([]),
+        actions: JSON.stringify([]),
+        isEnabled: true,
+      }) as IpcResponse<null>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:update-filter rejects non-string conditions and actions', async () => {
+      const response = await callIpc('db:update-filter', {
+        id: 123,
+        name: 'Bad Types',
+        conditions: [{ field: 'from', operator: 'contains', value: 'bad' }],
+        actions: [{ type: 'delete' }],
+        isEnabled: true,
+      }) as IpcResponse<null>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:delete-filter rejects an invalid filter id', async () => {
+      const response = await callIpc('db:delete-filter', 0) as IpcResponse<null>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:toggle-filter rejects an invalid filter id', async () => {
+      const response = await callIpc('db:toggle-filter', 0, true) as IpcResponse<null>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('DB_INVALID_INPUT');
+    });
+
+    it('db:get-filters returns DB_READ_FAILED when filter lookup throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        getFilters: (accountId: number) => FilterRow[];
+      };
+      const originalGetFilters = db.getFilters;
+      db.getFilters = (_accountId: number): FilterRow[] => {
+        throw new Error('forced getFilters failure');
+      };
+
+      try {
+        const response = await callIpc('db:get-filters', suiteAccountId) as IpcResponse<{ filters: FilterRow[] }>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('DB_READ_FAILED');
+      } finally {
+        db.getFilters = originalGetFilters;
+      }
+    });
+
+    it('db:save-filter returns DB_WRITE_FAILED when persistence throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        saveFilter: (filter: Record<string, unknown>) => number;
+      };
+      const originalSaveFilter = db.saveFilter;
+      db.saveFilter = (_filter: Record<string, unknown>): number => {
+        throw new Error('forced saveFilter failure');
+      };
+
+      try {
+        const response = await callIpc('db:save-filter', {
+          accountId: suiteAccountId,
+          name: 'Write Failure Filter',
+          conditions: JSON.stringify([]),
+          actions: JSON.stringify([]),
+          isEnabled: true,
+          isAiGenerated: false,
+        }) as IpcResponse<{ id: number }>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('DB_WRITE_FAILED');
+      } finally {
+        db.saveFilter = originalSaveFilter;
+      }
+    });
+
+    it('db:update-filter returns DB_WRITE_FAILED when persistence throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        updateFilter: (filter: Record<string, unknown>) => void;
+      };
+      const originalUpdateFilter = db.updateFilter;
+      db.updateFilter = (_filter: Record<string, unknown>): void => {
+        throw new Error('forced updateFilter failure');
+      };
+
+      try {
+        const response = await callIpc('db:update-filter', {
+          id: 123,
+          name: 'Broken Update',
+          conditions: JSON.stringify([]),
+          actions: JSON.stringify([]),
+          isEnabled: true,
+        }) as IpcResponse<null>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('DB_WRITE_FAILED');
+      } finally {
+        db.updateFilter = originalUpdateFilter;
+      }
+    });
+
+    it('db:delete-filter returns DB_WRITE_FAILED when deletion throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        deleteFilter: (filterId: number) => void;
+      };
+      const originalDeleteFilter = db.deleteFilter;
+      db.deleteFilter = (_filterId: number): void => {
+        throw new Error('forced deleteFilter failure');
+      };
+
+      try {
+        const response = await callIpc('db:delete-filter', 123) as IpcResponse<null>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('DB_WRITE_FAILED');
+      } finally {
+        db.deleteFilter = originalDeleteFilter;
+      }
+    });
+
+    it('db:toggle-filter returns DB_WRITE_FAILED when toggle throws', async () => {
+      const db = DatabaseService.getInstance() as unknown as {
+        toggleFilter: (filterId: number, isEnabled: boolean) => void;
+      };
+      const originalToggleFilter = db.toggleFilter;
+      db.toggleFilter = (_filterId: number, _isEnabled: boolean): void => {
+        throw new Error('forced toggleFilter failure');
+      };
+
+      try {
+        const response = await callIpc('db:toggle-filter', 123, true) as IpcResponse<null>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('DB_WRITE_FAILED');
+      } finally {
+        db.toggleFilter = originalToggleFilter;
+      }
+    });
   });
 
   // =========================================================================
@@ -389,6 +568,35 @@ describe('Filters & Rules', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('FILTER_INVALID_INPUT');
+    });
+
+    it('filter:apply-all returns FILTER_APPLY_FAILED when filter processing throws', async () => {
+      const filterService = FilterService.getInstance() as unknown as {
+        processNewEmails: (accountId: number) => Promise<{
+          emailsProcessed: number;
+          emailsMatched: number;
+          actionsDispatched: number;
+          errors: number;
+        }>;
+      };
+      const originalProcessNewEmails = filterService.processNewEmails;
+      filterService.processNewEmails = async (_accountId: number) => {
+        throw new Error('forced filter apply failure');
+      };
+
+      try {
+        const response = await callIpc('filter:apply-all', suiteAccountId) as IpcResponse<{
+          emailsProcessed: number;
+          emailsMatched: number;
+          actionsDispatched: number;
+          errors: number;
+        }>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('FILTER_APPLY_FAILED');
+      } finally {
+        filterService.processNewEmails = originalProcessNewEmails;
+      }
     });
 
     it('filter:apply-all marks-read emails matching a mark-read filter', async function () {
@@ -722,6 +930,127 @@ describe('Filters & Rules', () => {
       // Only the plain-text.eml should match (from:alice AND subject:plain)
       // html-email.eml has a different sender and subject
       expect(applyResponse.data!.emailsMatched).to.be.at.least(1);
+    });
+
+    it('body field matches text_body directly and falls back to stripped html_body', async function () {
+      this.timeout(25_000);
+
+      await setupWithMessages('filter-body-field@example.com', 'Filter Body Field Test');
+      const seeded = {
+        accountId: suiteAccountId,
+        email: suiteEmail,
+      };
+
+      const textBodyMessage = Buffer.from([
+        'From: body-text@example.com',
+        `To: ${suiteEmail}`,
+        'Subject: Body text filter match',
+        'Date: Wed, 03 Jan 2024 12:00:00 +0000',
+        'Message-ID: <body-text-filter-match@example.com>',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        'X-GM-MSGID: 8110000000000001',
+        'X-GM-THRID: 8110000000000101',
+        'X-GM-LABELS: \\Inbox \\All',
+        '',
+        'This plain body contains text-body-token for filter matching.',
+      ].join('\r\n'), 'utf8');
+      const htmlBodyMessage = Buffer.from([
+        'From: body-html@example.com',
+        `To: ${suiteEmail}`,
+        'Subject: Body html filter match',
+        'Date: Thu, 04 Jan 2024 12:00:00 +0000',
+        'Message-ID: <body-html-filter-match@example.com>',
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        'X-GM-MSGID: 8110000000000002',
+        'X-GM-THRID: 8110000000000102',
+        'X-GM-LABELS: \\Inbox \\All',
+        '',
+        '<html><body><p>HTML body includes html-body-token in rendered text.</p></body></html>',
+      ].join('\r\n'), 'utf8');
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', textBodyMessage, {
+        xGmMsgId: '8110000000000001',
+        xGmThrid: '8110000000000101',
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', textBodyMessage, {
+        xGmMsgId: '8110000000000001',
+        xGmThrid: '8110000000000101',
+        xGmLabels: ['\\Inbox'],
+      });
+      imapStateInspector.injectMessage('[Gmail]/All Mail', htmlBodyMessage, {
+        xGmMsgId: '8110000000000002',
+        xGmThrid: '8110000000000102',
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', htmlBodyMessage, {
+        xGmMsgId: '8110000000000002',
+        xGmThrid: '8110000000000102',
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(seeded.accountId, { timeout: 20_000 });
+
+      const db = DatabaseService.getInstance();
+      const rawDb = db.getDatabase();
+      rawDb.prepare(
+        'UPDATE emails SET text_body = :textBody WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      ).run({
+        accountId: seeded.accountId,
+        xGmMsgId: '8110000000000001',
+        textBody: 'This plain body contains text-body-token for filter matching.',
+      });
+      rawDb.prepare(
+        'UPDATE emails SET text_body = :textBody, html_body = :htmlBody WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      ).run({
+        accountId: seeded.accountId,
+        xGmMsgId: '8110000000000002',
+        textBody: '',
+        htmlBody: '<html><body><p>HTML body includes html-body-token in rendered text.</p></body></html>',
+      });
+      rawDb.prepare('UPDATE emails SET is_filtered = 0 WHERE account_id = :accountId').run({ accountId: seeded.accountId });
+
+      await callIpc('db:save-filter', {
+        accountId: seeded.accountId,
+        name: 'Body Text Filter',
+        conditions: JSON.stringify([{ field: 'body', operator: 'contains', value: 'text-body-token' }]),
+        actions: JSON.stringify([{ type: 'star' }]),
+        isEnabled: true,
+        isAiGenerated: false,
+        sortOrder: 1,
+      });
+      await callIpc('db:save-filter', {
+        accountId: seeded.accountId,
+        name: 'Body Html Filter',
+        conditions: JSON.stringify([{ field: 'body', operator: 'contains', value: 'html-body-token' }]),
+        actions: JSON.stringify([{ type: 'mark-read' }]),
+        isEnabled: true,
+        isAiGenerated: false,
+        sortOrder: 2,
+      });
+
+      const applyResponse = await callIpc('filter:apply-all', seeded.accountId) as IpcResponse<{
+        emailsMatched: number;
+        actionsDispatched: number;
+      }>;
+
+      expect(applyResponse.success).to.equal(true);
+      expect(applyResponse.data!.emailsMatched).to.equal(2);
+      expect(applyResponse.data!.actionsDispatched).to.equal(2);
+
+      const textBodyRow = rawDb.prepare(
+        'SELECT is_starred FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      ).get({ accountId: seeded.accountId, xGmMsgId: '8110000000000001' }) as Record<string, unknown>;
+      const htmlBodyRow = rawDb.prepare(
+        'SELECT is_read FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      ).get({ accountId: seeded.accountId, xGmMsgId: '8110000000000002' }) as Record<string, unknown>;
+
+      expect(textBodyRow['is_starred']).to.equal(1);
+      expect(htmlBodyRow['is_read']).to.equal(1);
     });
   });
 
@@ -1155,6 +1484,80 @@ describe('Filters & Rules', () => {
       expect(emailRow).to.not.be.undefined;
       expect(emailRow!['is_filtered']).to.equal(1);
       // The star filter should have applied
+      expect(emailRow!['is_starred']).to.equal(1);
+    });
+
+    it('applies multiple enabled post-sync filters to the same newly synced email', async function () {
+      this.timeout(25_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'filter-postsync-multi@example.com',
+        displayName: 'Post-Sync Multi Filter Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      await callIpc('db:save-filter', {
+        accountId: suiteAccountId,
+        name: 'Post Sync Mark Read',
+        conditions: JSON.stringify([{ field: 'from', operator: 'contains', value: 'multifilter@example.com' }]),
+        actions: JSON.stringify([{ type: 'mark-read' }]),
+        isEnabled: true,
+        isAiGenerated: false,
+        sortOrder: 1,
+      });
+      await callIpc('db:save-filter', {
+        accountId: suiteAccountId,
+        name: 'Post Sync Star',
+        conditions: JSON.stringify([{ field: 'subject', operator: 'contains', value: 'multi filter sync' }]),
+        actions: JSON.stringify([{ type: 'star' }]),
+        isEnabled: true,
+        isAiGenerated: false,
+        sortOrder: 2,
+      });
+
+      const multiFilterRaw = Buffer.from([
+        'From: Multi Filter Sender <multifilter@example.com>',
+        `To: ${suiteEmail}`,
+        'Subject: multi filter sync message',
+        'Date: Fri, 05 Jan 2024 12:00:00 +0000',
+        'Message-ID: <multi-filter-postsync@example.com>',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        'X-GM-MSGID: 8220000000000001',
+        'X-GM-THRID: 8220000000000101',
+        'X-GM-LABELS: \\Inbox \\All',
+        '',
+        'This message should trigger two post-sync filters.',
+      ].join('\r\n'), 'utf8');
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', multiFilterRaw, {
+        xGmMsgId: '8220000000000001',
+        xGmThrid: '8220000000000101',
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', multiFilterRaw, {
+        xGmMsgId: '8220000000000001',
+        xGmThrid: '8220000000000101',
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const rawDb = DatabaseService.getInstance().getDatabase();
+      const emailRow = rawDb.prepare(
+        'SELECT is_filtered, is_read, is_starred FROM emails WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      ).get({ accountId: suiteAccountId, xGmMsgId: '8220000000000001' }) as Record<string, unknown> | undefined;
+
+      expect(emailRow).to.not.be.undefined;
+      expect(emailRow!['is_filtered']).to.equal(1);
+      expect(emailRow!['is_read']).to.equal(1);
       expect(emailRow!['is_starred']).to.equal(1);
     });
   });

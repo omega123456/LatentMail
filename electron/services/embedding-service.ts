@@ -83,6 +83,12 @@ export class EmbeddingService {
   private buildState: BuildState = 'idle';
   private incrementalScheduled: boolean = false;
 
+  /**
+   * Workers handed to the 500ms-deferred terminateWorker() path.
+   * Tracked here so resetForTesting() can await them even after this.worker is nulled.
+   */
+  private pendingTerminations: Set<Worker> = new Set();
+
   /** Total emails to index in the current full build (IMAP-based UID count minus indexed). */
   private currentBuildTotal: number = 0;
 
@@ -205,6 +211,56 @@ export class EmbeddingService {
     } catch (err) {
       log.warn('[EmbeddingService] Failed to clear build_interrupted on cancel:', err);
     }
+  }
+
+  /**
+   * Immediately terminate the embedding worker and reset all build state.
+   *
+   * Waits for the worker thread to fully exit before returning, so callers can
+   * safely close the vector database file after this call completes.  This is
+   * necessary on Windows, where the worker thread holds an open file handle on
+   * the vector DB's WAL sidecar even after the main-thread connection is closed;
+   * deleting the WAL file while the worker's file handle is still open causes
+   * an EPERM error.
+   *
+   * Also waits for any workers handed to the deferred terminateWorker() path
+   * (where this.worker was already nulled but the Worker thread is still alive
+   * in its 500 ms grace window) to finish terminating.
+   *
+   * NOT intended for production use.
+   */
+  async resetForTesting(): Promise<void> {
+    this.buildState = 'idle';
+    this.currentBuildTotal = 0;
+    this.currentBuildIndexed = 0;
+    this.incrementalScheduled = false;
+
+    // Collect all workers that need to be awaited:
+    //   1. The currently-active worker (this.worker), if any.
+    //   2. Any workers already handed to the deferred terminateWorker() path
+    //      (they live in pendingTerminations while the 500 ms timer counts down).
+    const workersToAwait: Worker[] = [];
+
+    if (this.worker) {
+      workersToAwait.push(this.worker);
+      this.worker = null;
+    }
+
+    for (const pendingWorker of this.pendingTerminations) {
+      workersToAwait.push(pendingWorker);
+    }
+    this.pendingTerminations.clear();
+
+    // Terminate all of them and await exit so OS file handles are released.
+    await Promise.all(
+      workersToAwait.map(async (workerToTerminate) => {
+        try {
+          await workerToTerminate.terminate();
+        } catch (terminateError) {
+          log.debug('[EmbeddingService] resetForTesting: worker terminate error (non-fatal):', terminateError);
+        }
+      }),
+    );
   }
 
   /**
@@ -998,14 +1054,23 @@ export class EmbeddingService {
 
   /**
    * Terminate the worker thread, if one is running.
+   * The worker receives a 'cancel' message first (graceful shutdown), then is
+   * force-terminated after 500 ms.  The Worker reference is added to
+   * pendingTerminations so resetForTesting() can await full exit even if it
+   * runs during the 500 ms window.
    */
   private terminateWorker(): void {
     if (this.worker) {
       this.worker.postMessage({ type: 'cancel' });
       const workerRef = this.worker;
+      this.pendingTerminations.add(workerRef);
       this.worker = null;
       setTimeout(() => {
-        workerRef.terminate().catch(() => {});
+        workerRef.terminate()
+          .catch(() => {})
+          .finally(() => {
+            this.pendingTerminations.delete(workerRef);
+          });
       }, 500);
     }
   }

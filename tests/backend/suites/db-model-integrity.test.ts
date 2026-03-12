@@ -27,9 +27,29 @@
  */
 
 import { expect } from 'chai';
+import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
-import { getDatabase } from '../infrastructure/test-helpers';
+import { callIpc, getDatabase, seedTestAccount, waitForEvent } from '../infrastructure/test-helpers';
+import { TestEventBus } from '../infrastructure/test-event-bus';
 import type { UpsertEmailInput, UpsertThreadInput } from '../../../electron/database/models';
+
+interface IpcResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: { code: string; message: string };
+}
+
+interface SearchBatchPayload {
+  searchToken: string;
+  phase: string;
+  msgIds: string[];
+}
+
+interface SearchCompletePayload {
+  searchToken: string;
+  status: string;
+  totalResults: number;
+}
 
 // ---------------------------------------------------------------------------
 // Suite-level before hook
@@ -96,6 +116,44 @@ describe('DB Model Integrity', () => {
       isRead: false,
       isStarred: false,
       ...overrides,
+    };
+  }
+
+  async function runKeywordSearch(accountId: number, query: string): Promise<{
+    complete: SearchCompletePayload;
+    allMsgIds: string[];
+  }> {
+    const eventBus = TestEventBus.getInstance();
+    const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+    const response = await callIpc(
+      'ai:search',
+      String(accountId),
+      query,
+      undefined,
+      'keyword',
+    ) as IpcResponse<{ searchToken: string }>;
+
+    expect(response.success).to.equal(true);
+    const searchToken = response.data!.searchToken;
+
+    const completeArgs = await waitForEvent('ai:search:complete', {
+      timeout: 20_000,
+      predicate: (args) => {
+        const payload = args[0] as SearchCompletePayload | undefined;
+        return payload != null && payload.searchToken === searchToken;
+      },
+    });
+
+    const complete = completeArgs[0] as SearchCompletePayload;
+    const batches = eventBus.getHistory('ai:search:batch')
+      .slice(priorBatchCount)
+      .map((record) => record.args[0] as SearchBatchPayload)
+      .filter((payload) => payload != null && payload.searchToken === searchToken);
+
+    return {
+      complete,
+      allMsgIds: batches.flatMap((payload) => payload.msgIds),
     };
   }
 
@@ -458,6 +516,22 @@ describe('DB Model Integrity', () => {
 
       // special_use path wins
       expect(db.getTrashFolder(accountId)).to.equal('[Gmail]/Trash');
+    });
+
+    it('falls back to [Gmail]/Trash for a seeded account before any labels sync', () => {
+      const seeded = seedTestAccount({
+        email: 'trash-fallback-seeded@example.com',
+        displayName: 'Trash Fallback Seeded',
+      });
+
+      const db = getDatabase();
+      const rawDb = db.getDatabase();
+      const labelCount = rawDb.prepare(
+        'SELECT COUNT(*) AS count FROM labels WHERE account_id = :accountId',
+      ).get({ accountId: seeded.accountId }) as { count: number };
+
+      expect(labelCount.count).to.equal(0);
+      expect(db.getTrashFolder(seeded.accountId)).to.equal('[Gmail]/Trash');
     });
   });
 
@@ -953,6 +1027,51 @@ describe('DB Model Integrity', () => {
       const thread = db.getThreadById(accountId, thrid);
       expect(thread!['snippet']).to.equal('Newer snippet');
     });
+
+    it('formats mixed participant names with null and email-equals-name values', () => {
+      const db = getDatabase();
+      const accountId = createTestAccount('thread-meta-participants');
+      const thrid = 'thread-meta-participants-001';
+
+      db.upsertThread(makeThreadInput(accountId, thrid, { participants: 'stale participants' }));
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: 'msg-meta-participants-001',
+        xGmThrid: thrid,
+        folder: 'INBOX',
+        date: DateTime.utc(2026, 3, 12, 12, 0, 0).toISO()!,
+        fromAddress: 'same@example.com',
+        fromName: 'same@example.com',
+      }));
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: 'msg-meta-participants-002',
+        xGmThrid: thrid,
+        folder: 'INBOX',
+        date: DateTime.utc(2026, 3, 12, 11, 0, 0).toISO()!,
+        fromAddress: 'named@example.com',
+        fromName: 'Named Person',
+      }));
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: 'msg-meta-participants-003',
+        xGmThrid: thrid,
+        folder: 'INBOX',
+        date: DateTime.utc(2026, 3, 12, 10, 0, 0).toISO()!,
+        fromAddress: 'nullname@example.com',
+      }));
+      db.getDatabase().prepare(
+        'UPDATE emails SET from_name = NULL WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId',
+      ).run({
+        accountId,
+        xGmMsgId: 'msg-meta-participants-003',
+      });
+
+      db.recomputeThreadMetadata(accountId, thrid);
+
+      const thread = db.getThreadById(accountId, thrid);
+      expect(thread).to.not.be.null;
+      expect(thread!['participants']).to.equal(
+        'same@example.com, Named Person <named@example.com>, nullname@example.com',
+      );
+    });
   });
 
   // =========================================================================
@@ -1005,6 +1124,173 @@ describe('DB Model Integrity', () => {
       const db = getDatabase();
       const results = db.searchContacts('nomatchwhatsoever12345');
       expect(results).to.be.an('array').with.length(0);
+    });
+
+    it('increments frequency when the same address is upserted with duplicate entries', () => {
+      const db = getDatabase();
+      const duplicateEmail = `duplicate-contact-${DateTime.utc().toMillis()}@example.com`;
+
+      db.upsertContact(duplicateEmail, 'Duplicate Contact');
+      db.upsertContact(duplicateEmail, 'Duplicate Contact');
+      db.upsertContact(duplicateEmail, undefined);
+
+      const results = db.searchContacts(duplicateEmail) as Array<{
+        email: string;
+        frequency: number;
+        displayName: string;
+      }>;
+
+      expect(results[0]!.email).to.equal(duplicateEmail);
+      expect(results[0]!.frequency).to.equal(3);
+      expect(results[0]!.displayName).to.equal('Duplicate Contact');
+    });
+  });
+
+  // =========================================================================
+  // 17. Search query coverage through ai:search keyword mode
+  // =========================================================================
+
+  describe('Search query coverage through ai:search keyword mode', () => {
+    it('routes keyword queries through DatabaseService search paths for direct operators', async function () {
+      this.timeout(25_000);
+
+      const seeded = seedTestAccount({
+        email: 'db-keyword-operators@example.com',
+        displayName: 'DB Keyword Operators',
+      });
+      const db = getDatabase();
+
+      db.upsertLabel({
+        accountId: seeded.accountId,
+        gmailLabelId: 'Projects/Database',
+        name: 'Database Project',
+        type: 'user',
+        unreadCount: 0,
+        totalCount: 0,
+      });
+
+      db.upsertThread(makeThreadInput(seeded.accountId, 'thread-db-keyword-001', {
+        subject: 'Database operator subject',
+        lastMessageDate: DateTime.utc(2026, 3, 1, 10, 0, 0).toISO()!,
+        participants: 'Operator Sender <operator-sender@example.com>',
+      }));
+      db.upsertEmail(makeEmailInput(seeded.accountId, {
+        xGmMsgId: 'db-keyword-msg-001',
+        xGmThrid: 'thread-db-keyword-001',
+        folder: 'Projects/Database',
+        fromAddress: 'operator-sender@example.com',
+        fromName: 'Operator Sender',
+        toAddresses: 'operator-recipient@example.com',
+        subject: 'Database operator subject',
+        textBody: 'contains unique-body-marker and parser coverage',
+        date: DateTime.utc(2026, 3, 1, 10, 0, 0).toISO()!,
+        isRead: false,
+        isStarred: true,
+        isImportant: true,
+        hasAttachments: true,
+      }));
+
+      const fromSearch = await runKeywordSearch(seeded.accountId, 'from:operator-sender@example.com Database operator subject');
+      const toSearch = await runKeywordSearch(seeded.accountId, 'to:operator-recipient@example.com Database operator subject');
+      const subjectSearch = await runKeywordSearch(seeded.accountId, 'subject:"Database operator subject"');
+      const bodySearch = await runKeywordSearch(seeded.accountId, 'body:unique-body-marker');
+      const labelSearch = await runKeywordSearch(seeded.accountId, 'label:"Database Project"');
+      const unreadSearch = await runKeywordSearch(seeded.accountId, 'is:unread Database operator subject');
+      const starredSearch = await runKeywordSearch(seeded.accountId, 'is:starred Database operator subject');
+      const importantSearch = await runKeywordSearch(seeded.accountId, 'is:important Database operator subject');
+      const attachmentSearch = await runKeywordSearch(seeded.accountId, 'has:attachment Database operator subject');
+
+      for (const searchResult of [
+        fromSearch,
+        toSearch,
+        subjectSearch,
+        bodySearch,
+        labelSearch,
+        unreadSearch,
+        starredSearch,
+        importantSearch,
+        attachmentSearch,
+      ]) {
+        expect(searchResult.complete.status).to.equal('complete');
+        expect(searchResult.allMsgIds).to.include('db-keyword-msg-001');
+      }
+    });
+
+    it('handles date, negation, folder alias, unknown operator, phrase, and wildcard keyword queries', async function () {
+      this.timeout(25_000);
+
+      const seeded = seedTestAccount({
+        email: 'db-keyword-advanced@example.com',
+        displayName: 'DB Keyword Advanced',
+      });
+      const db = getDatabase();
+
+      db.upsertThread(makeThreadInput(seeded.accountId, 'thread-db-keyword-002', {
+        subject: 'advanced wildcard 100%_done',
+        lastMessageDate: DateTime.utc(2026, 2, 10, 8, 0, 0).toISO()!,
+        participants: 'Allowed Sender <allowed@example.com>',
+      }));
+      db.upsertEmail(makeEmailInput(seeded.accountId, {
+        xGmMsgId: 'db-keyword-msg-002',
+        xGmThrid: 'thread-db-keyword-002',
+        folder: 'INBOX',
+        fromAddress: 'allowed@example.com',
+        fromName: 'Allowed Sender',
+        subject: 'advanced wildcard 100%_done',
+        textBody: 'exact quarterly planning review and mystery:literal token',
+        date: DateTime.utc(2026, 2, 10, 8, 0, 0).toISO()!,
+        isRead: false,
+      }));
+
+      db.upsertLabel({
+        accountId: seeded.accountId,
+        gmailLabelId: '[Gmail]/Bin',
+        name: 'Trash',
+        type: 'system',
+        unreadCount: 0,
+        totalCount: 0,
+        specialUse: '\\Trash',
+      });
+      db.upsertThread(makeThreadInput(seeded.accountId, 'thread-db-keyword-003', {
+        subject: 'advanced wildcard 100X_done',
+        lastMessageDate: DateTime.utc(2026, 1, 1, 8, 0, 0).toISO()!,
+        participants: 'Blocked Sender <blocked@example.com>',
+      }));
+      db.upsertEmail(makeEmailInput(seeded.accountId, {
+        xGmMsgId: 'db-keyword-msg-003',
+        xGmThrid: 'thread-db-keyword-003',
+        folder: '[Gmail]/Bin',
+        fromAddress: 'blocked@example.com',
+        fromName: 'Blocked Sender',
+        subject: 'advanced wildcard 100X_done',
+        textBody: 'blocked mystery:literal content',
+        date: DateTime.utc(2026, 1, 1, 8, 0, 0).toISO()!,
+        isRead: true,
+      }));
+
+      const afterSearch = await runKeywordSearch(seeded.accountId, 'after:2026/02/01 advanced');
+      const beforeSearch = await runKeywordSearch(seeded.accountId, 'before:2026/03/01 advanced');
+      const negatedFromSearch = await runKeywordSearch(seeded.accountId, '-from:blocked@example.com advanced');
+      const negatedReadSearch = await runKeywordSearch(seeded.accountId, '-is:read advanced');
+      const inboxAliasSearch = await runKeywordSearch(seeded.accountId, 'in:inbox advanced');
+      const trashAliasSearch = await runKeywordSearch(seeded.accountId, 'in:trash 100X_done');
+      const unknownOperatorSearch = await runKeywordSearch(seeded.accountId, 'mystery:literal advanced');
+      const phraseSearch = await runKeywordSearch(seeded.accountId, '"quarterly planning review" advanced');
+      const wildcardSearch = await runKeywordSearch(seeded.accountId, 'subject:100%_done advanced');
+
+      expect(afterSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(beforeSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(beforeSearch.allMsgIds).to.not.include('db-keyword-msg-003');
+      expect(negatedFromSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(negatedFromSearch.allMsgIds).to.not.include('db-keyword-msg-003');
+      expect(negatedReadSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(inboxAliasSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(trashAliasSearch.complete.status).to.equal('complete');
+      expect(trashAliasSearch.allMsgIds).to.deep.equal([]);
+      expect(unknownOperatorSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(phraseSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(wildcardSearch.allMsgIds).to.include('db-keyword-msg-002');
+      expect(wildcardSearch.allMsgIds).to.not.include('db-keyword-msg-003');
     });
   });
 

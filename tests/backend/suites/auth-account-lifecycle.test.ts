@@ -13,6 +13,7 @@ import { DatabaseService } from '../../../electron/services/database-service';
 import { OAuthService } from '../../../electron/services/oauth-service';
 import { OAuthLoopbackServer } from '../../../electron/services/oauth-loopback';
 import { ImapService } from '../../../electron/services/imap-service';
+import { MailQueueService } from '../../../electron/services/mail-queue-service';
 
 interface IpcResponse<T = unknown> {
   success: boolean;
@@ -53,6 +54,20 @@ describe('Auth & Account Lifecycle', () => {
     oauthServer.reset();
   });
 
+  afterEach(() => {
+    try {
+      const oauthService = OAuthService.getInstance() as unknown as {
+        refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
+      };
+      for (const timer of oauthService.refreshTimers.values()) {
+        clearTimeout(timer);
+      }
+      oauthService.refreshTimers.clear();
+    } catch {
+      // Non-fatal cleanup for tests only
+    }
+  });
+
   async function startLoginFlow(): Promise<{
     loginPromise: Promise<IpcResponse<AuthAccount>>;
     authEvent: AuthEventPayload;
@@ -85,6 +100,27 @@ describe('Auth & Account Lifecycle', () => {
         reject(error);
       });
     });
+  }
+
+  async function waitForStoredAccessToken(
+    accountId: number,
+    expectedAccessToken: string,
+    timeoutMilliseconds: number = 5_000,
+  ): Promise<void> {
+    const startedAt = DateTime.utc().toMillis();
+
+    while (DateTime.utc().toMillis() - startedAt < timeoutMilliseconds) {
+      const storedTokens = CredentialService.getInstance().getTokens(String(accountId));
+      if (storedTokens?.accessToken === expectedAccessToken) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
+    }
+
+    throw new Error(`Timed out waiting for refreshed access token for account ${accountId}`);
   }
 
   it('completes a fresh login flow, creates an account, stores tokens, and schedules refresh', async () => {
@@ -224,6 +260,32 @@ describe('Auth & Account Lifecycle', () => {
     expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
   });
 
+   it('returns AUTH_LOGIN_FAILED when user info lookup fails after token exchange', async () => {
+    oauthServer.setUserInfo({ email: 'userinfo-fail@example.com', name: 'UserInfo Failure' });
+    oauthServer.setErrorConfig({ userInfoError: 'invalid_token' });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
+    expect(response.error!.message.toLowerCase()).to.include('user info');
+  });
+
+  it('returns AUTH_LOGIN_FAILED when the OAuth callback uses an invalid authorization code', async () => {
+    oauthServer.setUserInfo({ email: 'invalid-code@example.com', name: 'Invalid Code User' });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state, { code: 'invalid-code' });
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
+    expect(response.error!.message).to.include('Token exchange failed');
+    expect(response.error!.message).to.include('invalid_grant');
+  });
+
   it('refreshes an expired token and stores the updated tokens', async () => {
     const seededAccount = seedTestAccount({
       email: 'refresh-success@example.com',
@@ -249,6 +311,61 @@ describe('Auth & Account Lifecycle', () => {
     const tokenRequest = oauthServer.getCapturedRequests().find((request) => request.endpoint === '/o/oauth2/token');
     expect(tokenRequest).to.exist;
     expect(tokenRequest!.body).to.include('grant_type=refresh_token');
+  });
+
+  it('automatically refreshes a token when the scheduled refresh timer fires', async function () {
+    this.timeout(10_000);
+
+    const seededAccount = seedTestAccount({
+      email: 'scheduled-refresh@example.com',
+      accessToken: 'scheduled-stale-access-token',
+      refreshToken: 'scheduled-refresh-token',
+      expiresAt: DateTime.now().plus({ minutes: 6 }).toMillis(),
+    });
+
+    oauthServer.setTokenConfig({
+      accessToken: 'scheduled-refreshed-access-token',
+      refreshToken: 'scheduled-refreshed-refresh-token',
+      expiresIn: 3_600,
+    });
+
+    const oauthService = OAuthService.getInstance() as unknown as {
+      initializeRefreshTimers: () => void;
+      refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
+    };
+
+    const originalSetTimeout = global.setTimeout;
+    let acceleratedTimeoutCount = 0;
+    const oneShotFastSetTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      acceleratedTimeoutCount += 1;
+      if (acceleratedTimeoutCount === 1) {
+        return originalSetTimeout(callback, 0, ...args);
+      }
+
+      return originalSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout;
+
+    global.setTimeout = oneShotFastSetTimeout;
+
+    try {
+      oauthService.initializeRefreshTimers();
+    } finally {
+      global.setTimeout = originalSetTimeout;
+    }
+
+    expect(oauthService.refreshTimers.has(String(seededAccount.accountId))).to.equal(true);
+
+    await waitForStoredAccessToken(seededAccount.accountId, 'scheduled-refreshed-access-token');
+
+    const storedTokens = CredentialService.getInstance().getTokens(String(seededAccount.accountId));
+    expect(storedTokens).to.not.be.null;
+    expect(storedTokens!.accessToken).to.equal('scheduled-refreshed-access-token');
+    expect(storedTokens!.refreshToken).to.equal('scheduled-refreshed-refresh-token');
+
+    const refreshRequests = oauthServer.getCapturedRequests().filter((request) => {
+      return request.endpoint === '/o/oauth2/token' && request.body.includes('grant_type=refresh_token');
+    });
+    expect(refreshRequests.length).to.equal(1);
   });
 
   it('marks an account as needsReauth after repeated invalid_grant refresh failures', async function () {
@@ -353,6 +470,59 @@ describe('Auth & Account Lifecycle', () => {
     }
   });
 
+  it('removes credentials and clears pending queue items during account deletion', async () => {
+    const seededAccount = seedTestAccount({
+      email: 'logout-cleanup@example.com',
+      accessToken: 'logout-cleanup-access-token',
+      refreshToken: 'logout-cleanup-refresh-token',
+    });
+
+    const queueService = MailQueueService.getInstance() as unknown as {
+      pausedAccounts: Set<number>;
+    };
+    queueService.pausedAccounts.add(seededAccount.accountId);
+
+    try {
+      const queueResponse = await callIpc('queue:enqueue', {
+        type: 'send',
+        accountId: seededAccount.accountId,
+        payload: {
+          to: 'cleanup-target@example.com',
+          subject: 'Cleanup queue item',
+          text: 'Pending queue item should be cancelled on logout.',
+        },
+        description: 'Queue item for logout cleanup',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(queueResponse.success).to.equal(true);
+
+      const queueBeforeLogout = await callIpc('queue:get-status') as IpcResponse<{
+        items: Array<{ queueId: string; accountId: number; status: string }>;
+      }>;
+      expect(queueBeforeLogout.success).to.equal(true);
+      const queuedItem = queueBeforeLogout.data!.items.find((item) => item.queueId === queueResponse.data!.queueId);
+      expect(queuedItem).to.exist;
+      expect(['pending', 'processing']).to.include(queuedItem!.status);
+
+      const logoutResponse = await callIpc('auth:logout', String(seededAccount.accountId)) as IpcResponse<null>;
+      expect(logoutResponse.success).to.equal(true);
+
+      expect(DatabaseService.getInstance().getAccountById(seededAccount.accountId)).to.be.null;
+      expect(CredentialService.getInstance().hasTokens(String(seededAccount.accountId))).to.equal(false);
+
+      const queueAfterLogout = await callIpc('queue:get-status') as IpcResponse<{
+        items: Array<{ queueId: string; accountId: number; status: string }>;
+      }>;
+      expect(queueAfterLogout.success).to.equal(true);
+      const cancelledItem = queueAfterLogout.data!.items.find((item) => item.queueId === queueResponse.data!.queueId);
+      expect(cancelledItem).to.exist;
+      expect(cancelledItem!.accountId).to.equal(seededAccount.accountId);
+      expect(cancelledItem!.status).to.equal('cancelled');
+    } finally {
+      queueService.pausedAccounts.delete(seededAccount.accountId);
+    }
+  });
+
   it('continues logout cleanup even if revoke and IMAP disconnect fail', async () => {
     const seededAccount = seedTestAccount({
       email: 'logout-failure-tolerance@example.com',
@@ -406,5 +576,146 @@ describe('Auth & Account Lifecycle', () => {
     expect(remainingAccounts.success).to.equal(true);
     expect(remainingAccounts.data).to.have.lengthOf(1);
     expect(remainingAccounts.data![0].email).to.equal('multi-two@example.com');
+  });
+
+  it('clears needsReauth after a successful re-auth login for the same account', async () => {
+    const seededAccount = seedTestAccount({
+      email: 'reauth-flow@example.com',
+      displayName: 'Needs Reauth User',
+      accessToken: 'reauth-old-access-token',
+      refreshToken: 'reauth-old-refresh-token',
+      expiresAt: DateTime.now().minus({ hours: 1 }).toMillis(),
+    });
+
+    DatabaseService.getInstance().setAccountNeedsReauth(seededAccount.accountId);
+
+    oauthServer.setTokenConfig({
+      accessToken: 'reauth-new-access-token',
+      refreshToken: 'reauth-new-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'reauth-flow@example.com',
+      name: 'Reauthenticated User',
+    });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const loginResponse = await loginPromise;
+
+    expect(loginResponse.success).to.equal(true);
+    expect(loginResponse.data!.id).to.equal(seededAccount.accountId);
+    expect(loginResponse.data!.displayName).to.equal('Reauthenticated User');
+
+    const account = DatabaseService.getInstance().getAccountById(seededAccount.accountId);
+    expect(account).to.not.be.null;
+    expect(account!.needsReauth).to.equal(false);
+    expect(account!.displayName).to.equal('Reauthenticated User');
+
+    const storedTokens = CredentialService.getInstance().getTokens(String(seededAccount.accountId));
+    expect(storedTokens).to.not.be.null;
+    expect(storedTokens!.accessToken).to.equal('reauth-new-access-token');
+    expect(storedTokens!.refreshToken).to.equal('reauth-new-refresh-token');
+  });
+
+  it('stores credentials independently for multiple seeded accounts', () => {
+    const firstAccount = seedTestAccount({
+      email: 'independent-one@example.com',
+      accessToken: 'independent-one-access',
+      refreshToken: 'independent-one-refresh',
+    });
+    const secondAccount = seedTestAccount({
+      email: 'independent-two@example.com',
+      accessToken: 'independent-two-access',
+      refreshToken: 'independent-two-refresh',
+    });
+
+    const credentialService = CredentialService.getInstance();
+    const firstTokens = credentialService.getTokens(String(firstAccount.accountId));
+    const secondTokens = credentialService.getTokens(String(secondAccount.accountId));
+
+    expect(firstTokens).to.not.be.null;
+    expect(secondTokens).to.not.be.null;
+    expect(firstTokens!.accessToken).to.equal('independent-one-access');
+    expect(firstTokens!.refreshToken).to.equal('independent-one-refresh');
+    expect(secondTokens!.accessToken).to.equal('independent-two-access');
+    expect(secondTokens!.refreshToken).to.equal('independent-two-refresh');
+    expect(firstTokens).to.not.deep.equal(secondTokens);
+  });
+
+  it('exposes OAuth loopback port and redirect URI after start', async function () {
+    this.timeout(10_000);
+
+    const server = new OAuthLoopbackServer();
+    const { port, callbackPromise } = await server.start('loopback-state', 5_000);
+
+    expect(server.getPort()).to.equal(port);
+    expect(server.getRedirectUri()).to.equal(`http://127.0.0.1:${port}/callback`);
+
+    await oauthServer.triggerCallback(port, 'loopback-state');
+    const callbackResult = await callbackPromise;
+    expect(callbackResult.code).to.equal('test_code');
+    expect(callbackResult.state).to.equal('loopback-state');
+  });
+
+  it('rejects the loopback callback when the authorization code is missing', async function () {
+    this.timeout(10_000);
+
+    const server = new OAuthLoopbackServer();
+    const { port, callbackPromise } = await server.start('missing-code-state', 5_000);
+
+    const callbackUrl = `http://127.0.0.1:${port}/callback?state=missing-code-state`;
+    await new Promise<void>((resolve, reject) => {
+      const request = http.get(callbackUrl, (response) => {
+        response.resume();
+        response.on('end', () => {
+          resolve();
+        });
+      });
+      request.on('error', (error: Error) => {
+        reject(error);
+      });
+    });
+
+    let caughtError: Error | null = null;
+    try {
+      await callbackPromise;
+    } catch (error) {
+      caughtError = error as Error;
+    }
+
+    expect(caughtError).to.not.be.null;
+    expect(caughtError!.message).to.include('missing authorization code');
+  });
+
+  it('rejects the loopback callback when the request path is invalid until timeout', async function () {
+    this.timeout(10_000);
+
+    const server = new OAuthLoopbackServer();
+    const { port, callbackPromise } = await server.start('wrong-path-state', 50);
+
+    const invalidPathUrl = `http://127.0.0.1:${port}/wrong-path?code=test_code&state=wrong-path-state`;
+    await new Promise<void>((resolve, reject) => {
+      const request = http.get(invalidPathUrl, (response) => {
+        expect(response.statusCode).to.equal(404);
+        response.resume();
+        response.on('end', () => {
+          resolve();
+        });
+      });
+      request.on('error', (error: Error) => {
+        reject(error);
+      });
+    });
+
+    let caughtError: Error | null = null;
+    try {
+      await callbackPromise;
+    } catch (error) {
+      caughtError = error as Error;
+    }
+
+    expect(caughtError).to.not.be.null;
+    expect(caughtError!.message).to.include('timed out');
   });
 });

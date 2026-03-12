@@ -192,6 +192,13 @@ export class SyncService {
   private globalIdleSuppression = false;
 
   /**
+   * When true, showDesktopNotification() is a no-op.
+   * Set by disableNotificationsForTesting() in the test infrastructure so that
+   * IDLE-triggered syncs during tests do not emit real OS notifications.
+   */
+  private notificationsDisabled = false;
+
+  /**
    * Monotonically-increasing lifecycle generation counter for reconnect tokens.
    *
    * Incremented every time the IDLE state is intentionally reset (pause, stop, or test reset).
@@ -1436,7 +1443,25 @@ export class SyncService {
       this.notificationBatches.delete(accountId);
     }
 
+    // Suppress all future desktop notifications for the remainder of this test process.
+    // This is a one-way latch — once set, notifications stay disabled until the process exits.
+    // It is safe to call this every time quiesceAndRestore() runs because the flag is idempotent.
+    this.notificationsDisabled = true;
+
     log.debug('[SyncService] resetIdleStateForTesting: IDLE state cleared (globalIdleSuppression=true)');
+  }
+
+  /**
+   * Disable OS-level desktop notifications for the lifetime of the test process.
+   *
+   * Calling resetIdleStateForTesting() already sets this flag, so callers that use
+   * the full reset do not need to call this separately. Kept as a standalone method
+   * for cases where only notification suppression is needed without a full IDLE reset.
+   *
+   * NOT intended for production use.
+   */
+  disableNotificationsForTesting(): void {
+    this.notificationsDisabled = true;
   }
 
   // -----------------------------------------------------------------------
@@ -1720,6 +1745,10 @@ export class SyncService {
    */
   private showDesktopNotification(accountId: number, folder: string, emails: NewEmailInfo[]): void {
     try {
+      if (this.notificationsDisabled) {
+        return;
+      }
+
       if (!Notification.isSupported()) {
         return;
       }
