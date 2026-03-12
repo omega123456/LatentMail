@@ -284,7 +284,7 @@ export class GmailImapServer extends EventEmitter {
     // Send the server greeting immediately
     this.send(
       socket,
-      '* OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1] Gmail IMAP ready',
+      '* OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS ENABLE CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1] Gmail IMAP ready',
     );
 
     // Use binary encoding so we can handle both text commands and APPEND literals
@@ -615,7 +615,7 @@ export class GmailImapServer extends EventEmitter {
   private handleCapability(session: ImapSession, tag: string): void {
     this.send(
       session.socket,
-      '* CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1',
+      '* CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS ENABLE CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1',
     );
     this.send(session.socket, `${tag} OK CAPABILITY completed`);
   }
@@ -694,7 +694,7 @@ export class GmailImapServer extends EventEmitter {
         session.email = email;
         this.send(
           session.socket,
-          `${tag} OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1] Authenticated`,
+          `${tag} OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=XOAUTH2 UIDPLUS ENABLE CONDSTORE QRESYNC IDLE NAMESPACE ID CHILDREN LITERAL+ X-GM-EXT-1] Authenticated`,
         );
       } else {
         // Send the RFC 7628 JSON failure response, wait for client to send '*'

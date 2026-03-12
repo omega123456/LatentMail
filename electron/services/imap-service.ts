@@ -1414,6 +1414,7 @@ export class ImapService {
         uid: true,
         envelope: true,
         flags: true,
+        modseq: true,
         bodyStructure: true,
         headers: true,
         source: false,

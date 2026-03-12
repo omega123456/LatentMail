@@ -6,6 +6,10 @@
  *   - Mailbox discovery excludes [Gmail] parent container and hidden system labels
  *   - Folder sync: new messages ingested, existing messages updated
  *   - Incremental sync via CONDSTORE (only changed messages fetched)
+ *   - Remote flag changes via CONDSTORE (read/starred/important)
+ *   - Remote label/folder changes via All Mail label reconciliation
+ *   - Differential sync verification (highestModseq persistence, unchanged rows not re-fetched)
+ *   - Mixed incremental changes (flag changes + new mail in one cycle)
  *   - UIDVALIDITY reset: local folder data wiped and rebuilt
  *   - Stale UID reconciliation: messages deleted on server removed locally
  *   - All Mail sync: Gmail labels mapped to folder associations
@@ -19,6 +23,7 @@
  */
 
 import { expect } from 'chai';
+import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
@@ -29,7 +34,7 @@ import {
 import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { DatabaseService } from '../../../electron/services/database-service';
-import { SyncService } from '../../../electron/services/sync-service';
+import { ALL_MAIL_PATH, SyncService } from '../../../electron/services/sync-service';
 import { SyncQueueBridge } from '../../../electron/services/sync-queue-bridge';
 import { TestEventBus } from '../infrastructure/test-event-bus';
 
@@ -66,6 +71,116 @@ interface QueueUpdateSnapshot {
   type: string;
   status: string;
   error?: string;
+}
+
+interface EmailStatusSnapshot {
+  isRead: number;
+  isStarred: number;
+  isImportant: number;
+  updatedAt: string;
+}
+
+interface FolderStateSnapshot {
+  highestModseq: string | null;
+  uidValidity: string;
+  condstoreSupported: number;
+}
+
+function getEmailStatusSnapshot(accountId: number, xGmMsgId: string): EmailStatusSnapshot | undefined {
+  const rawDb = DatabaseService.getInstance().getDatabase();
+  return rawDb.prepare(
+    `SELECT is_read AS isRead, is_starred AS isStarred, is_important AS isImportant, updated_at AS updatedAt
+     FROM emails
+     WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
+  ).get({ accountId, xGmMsgId }) as EmailStatusSnapshot | undefined;
+}
+
+function getFolderStateSnapshot(accountId: number, folder: string): FolderStateSnapshot | undefined {
+  const rawDb = DatabaseService.getInstance().getDatabase();
+  return rawDb.prepare(
+    `SELECT highest_modseq AS highestModseq, uid_validity AS uidValidity, condstore_supported AS condstoreSupported
+     FROM folder_state
+     WHERE account_id = :accountId AND folder = :folder`,
+  ).get({ accountId, folder }) as FolderStateSnapshot | undefined;
+}
+
+function getCompletedSyncEventCount(accountId: number): number {
+  return TestEventBus.getInstance().getHistory('queue:update').filter((record) => {
+    const snapshot = record.args[0] as QueueUpdateSnapshot | undefined;
+    if (!snapshot) {
+      return false;
+    }
+    if (snapshot.accountId !== accountId) {
+      return false;
+    }
+    if (snapshot.type !== 'sync-allmail' && snapshot.type !== 'sync-folder') {
+      return false;
+    }
+    return snapshot.status === 'completed';
+  }).length;
+}
+
+async function waitForCompletedSyncEvent(
+  accountId: number,
+  priorCount: number,
+  timeout: number = 15_000,
+): Promise<QueueUpdateSnapshot> {
+  const args = await waitForEvent('queue:update', {
+    timeout,
+    predicate: (eventArgs) => {
+      const snapshot = eventArgs[0] as QueueUpdateSnapshot | undefined;
+      if (!snapshot) {
+        return false;
+      }
+      if (snapshot.accountId !== accountId) {
+        return false;
+      }
+      if (snapshot.type !== 'sync-allmail' && snapshot.type !== 'sync-folder') {
+        return false;
+      }
+      if (snapshot.status !== 'completed') {
+        return false;
+      }
+      return getCompletedSyncEventCount(accountId) > priorCount;
+    },
+  });
+
+  return args[0] as QueueUpdateSnapshot;
+}
+
+async function waitForMilliseconds(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs: number = 5_000,
+  intervalMs: number = 25,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await waitForMilliseconds(intervalMs);
+  }
+
+  throw new Error(`Condition not met within ${timeoutMs}ms`);
+}
+
+async function runDirectAllMailSync(accountId: number, isInitial: boolean): Promise<Set<string>> {
+  const syncService = SyncService.getInstance();
+  const mailboxes = await syncService.getMailboxesForSync(String(accountId));
+  const knownMailboxPaths = new Set(mailboxes.map((mailbox) => mailbox.path));
+
+  return syncService.syncAllMail(
+    String(accountId),
+    isInitial,
+    DateTime.utc().minus({ days: 30 }).toJSDate(),
+    knownMailboxPaths,
+  );
 }
 
 // ---- Suite-level state ----
@@ -270,6 +385,362 @@ describe('Mail Sync & IDLE', () => {
       ).length;
 
       expect(newCount).to.be.greaterThan(priorCount);
+    });
+  });
+
+  // =========================================================================
+  // Remote flag changes and differential CONDSTORE sync
+  // =========================================================================
+
+  describe('Remote flag changes and differential sync', () => {
+    let firstMessageId: string;
+    let secondMessageId: string;
+    let firstAllMailUid: number;
+    let secondAllMailUid: number;
+
+    before(async function () {
+      this.timeout(35_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-remote-flags@example.com',
+        displayName: 'Remote Flag Sync Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const plainMsg = emlFixtures['plain-text'];
+      const htmlMsg = emlFixtures['html-email'];
+
+      firstMessageId = plainMsg.headers.xGmMsgId;
+      secondMessageId = htmlMsg.headers.xGmMsgId;
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', plainMsg.raw, {
+        xGmMsgId: plainMsg.headers.xGmMsgId,
+        xGmThrid: plainMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All'],
+      });
+      firstAllMailUid = imapStateInspector.getStore().findByMsgId('[Gmail]/All Mail', plainMsg.headers.xGmMsgId)!.uid;
+      imapStateInspector.injectMessage('INBOX', plainMsg.raw, {
+        xGmMsgId: plainMsg.headers.xGmMsgId,
+        xGmThrid: plainMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', htmlMsg.raw, {
+        xGmMsgId: htmlMsg.headers.xGmMsgId,
+        xGmThrid: htmlMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All'],
+      });
+      secondAllMailUid = imapStateInspector.getStore().findByMsgId('[Gmail]/All Mail', htmlMsg.headers.xGmMsgId)!.uid;
+      imapStateInspector.injectMessage('INBOX', htmlMsg.raw, {
+        xGmMsgId: htmlMsg.headers.xGmMsgId,
+        xGmThrid: htmlMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 25_000 });
+    });
+
+    it('detects remote read/starred/important changes via CHANGEDSINCE and advances highestModseq', async function () {
+      this.timeout(20_000);
+
+      const initialFirst = getEmailStatusSnapshot(suiteAccountId, firstMessageId);
+      const initialSecond = getEmailStatusSnapshot(suiteAccountId, secondMessageId);
+      const initialFolderState = getFolderStateSnapshot(suiteAccountId, ALL_MAIL_PATH);
+      const secondInitialRead = initialSecond?.isRead;
+      const secondInitialStarred = initialSecond?.isStarred;
+      const secondInitialImportant = initialSecond?.isImportant;
+
+      expect(initialFirst).to.not.be.undefined;
+      expect(initialSecond).to.not.be.undefined;
+      expect(initialFolderState).to.not.be.undefined;
+      expect(initialFolderState!.condstoreSupported).to.equal(1);
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setFlags(ALL_MAIL_PATH, firstAllMailUid, ['\\Seen', '\\Flagged'], 'add');
+      imapStateInspector.setLabels(ALL_MAIL_PATH, firstAllMailUid, ['\\Inbox', '\\Important', '\\All']);
+
+      const affectedFolders = await runDirectAllMailSync(suiteAccountId, false);
+
+      const updatedFirst = getEmailStatusSnapshot(suiteAccountId, firstMessageId);
+      const updatedSecond = getEmailStatusSnapshot(suiteAccountId, secondMessageId);
+      const updatedFolderState = getFolderStateSnapshot(suiteAccountId, ALL_MAIL_PATH);
+
+      expect(Array.from(affectedFolders)).to.include('INBOX');
+      expect(updatedFirst).to.not.be.undefined;
+      expect(updatedFirst!.isRead).to.equal(1);
+      expect(updatedFirst!.isStarred).to.equal(1);
+      expect(updatedFirst!.isImportant).to.equal(1);
+
+      expect(updatedSecond).to.not.be.undefined;
+      expect(updatedSecond!.isRead).to.equal(secondInitialRead);
+      expect(updatedSecond!.isStarred).to.equal(secondInitialStarred);
+      expect(updatedSecond!.isImportant).to.equal(secondInitialImportant);
+
+      expect(updatedFolderState).to.not.be.undefined;
+      expect(
+        BigInt(updatedFolderState!.highestModseq ?? '0') > BigInt(initialFolderState!.highestModseq ?? '0'),
+      ).to.equal(true);
+    });
+
+    it('applies remote unstar and important removal on the next incremental sync', async function () {
+      this.timeout(20_000);
+
+      const initialFolderState = getFolderStateSnapshot(suiteAccountId, ALL_MAIL_PATH);
+      expect(initialFolderState).to.not.be.undefined;
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setFlags(ALL_MAIL_PATH, firstAllMailUid, ['\\Seen', '\\Flagged'], 'remove');
+      imapStateInspector.setLabels(ALL_MAIL_PATH, firstAllMailUid, ['\\Inbox', '\\All']);
+
+      await runDirectAllMailSync(suiteAccountId, false);
+
+      const updatedFirst = getEmailStatusSnapshot(suiteAccountId, firstMessageId);
+      const updatedFolderState = getFolderStateSnapshot(suiteAccountId, ALL_MAIL_PATH);
+
+      expect(updatedFirst).to.not.be.undefined;
+      expect(updatedFirst!.isRead).to.equal(0);
+      expect(updatedFirst!.isStarred).to.equal(0);
+      expect(updatedFirst!.isImportant).to.equal(0);
+
+      expect(updatedFolderState).to.not.be.undefined;
+      expect(
+        BigInt(updatedFolderState!.highestModseq ?? '0') > BigInt(initialFolderState!.highestModseq ?? '0'),
+      ).to.equal(true);
+    });
+
+    it('does not re-fetch unchanged messages when no remote changes occurred', async function () {
+      this.timeout(20_000);
+
+      const initialFirst = getEmailStatusSnapshot(suiteAccountId, firstMessageId);
+      const initialSecond = getEmailStatusSnapshot(suiteAccountId, secondMessageId);
+      const initialFolderState = getFolderStateSnapshot(suiteAccountId, ALL_MAIL_PATH);
+      const initialFirstRead = initialFirst?.isRead;
+      const initialFirstStarred = initialFirst?.isStarred;
+      const initialFirstImportant = initialFirst?.isImportant;
+      const initialFirstUpdatedAt = initialFirst?.updatedAt;
+      const initialSecondRead = initialSecond?.isRead;
+      const initialSecondStarred = initialSecond?.isStarred;
+      const initialSecondImportant = initialSecond?.isImportant;
+      const initialSecondUpdatedAt = initialSecond?.updatedAt;
+
+      expect(initialFirst).to.not.be.undefined;
+      expect(initialSecond).to.not.be.undefined;
+      expect(initialFolderState).to.not.be.undefined;
+
+      await waitForMilliseconds(1_100);
+
+      const affectedFolders = await runDirectAllMailSync(suiteAccountId, false);
+
+      const updatedFirst = getEmailStatusSnapshot(suiteAccountId, firstMessageId);
+      const updatedSecond = getEmailStatusSnapshot(suiteAccountId, secondMessageId);
+      const updatedFolderState = getFolderStateSnapshot(suiteAccountId, ALL_MAIL_PATH);
+
+      expect(updatedFirst).to.not.be.undefined;
+      expect(updatedSecond).to.not.be.undefined;
+      expect(updatedFirst!.isRead).to.equal(initialFirstRead);
+      expect(updatedFirst!.isStarred).to.equal(initialFirstStarred);
+      expect(updatedFirst!.isImportant).to.equal(initialFirstImportant);
+      expect(updatedFirst!.updatedAt).to.equal(initialFirstUpdatedAt);
+      expect(updatedSecond!.isRead).to.equal(initialSecondRead);
+      expect(updatedSecond!.isStarred).to.equal(initialSecondStarred);
+      expect(updatedSecond!.isImportant).to.equal(initialSecondImportant);
+      expect(updatedSecond!.updatedAt).to.equal(initialSecondUpdatedAt);
+      expect(updatedFolderState).to.not.be.undefined;
+      expect(updatedFolderState!.highestModseq).to.equal(initialFolderState!.highestModseq);
+    });
+
+    it('treats flag changes plus a new message in one INBOX sync as a mixed change set', async function () {
+      this.timeout(20_000);
+
+      const thread1 = emlFixtures['reply-thread-1'];
+      const priorFolderUpdatedCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
+        (record) => {
+          const payload = record.args[0] as FolderUpdatedPayload | undefined;
+          return payload?.accountId === suiteAccountId && payload.reason === 'sync';
+        },
+      ).length;
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setFlags(ALL_MAIL_PATH, secondAllMailUid, ['\\Seen'], 'add');
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', thread1.raw, {
+        xGmMsgId: thread1.headers.xGmMsgId,
+        xGmThrid: thread1.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All'],
+      });
+      imapStateInspector.injectMessage('INBOX', thread1.raw, {
+        xGmMsgId: thread1.headers.xGmMsgId,
+        xGmThrid: thread1.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const updatedSecond = getEmailStatusSnapshot(suiteAccountId, secondMessageId);
+      const newEmail = DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, thread1.headers.xGmMsgId);
+      const mixedSyncEvent = TestEventBus.getInstance().getHistory('mail:folder-updated')
+        .filter((record) => {
+          const payload = record.args[0] as FolderUpdatedPayload | undefined;
+          return payload?.accountId === suiteAccountId && payload.reason === 'sync';
+        })
+        .slice(priorFolderUpdatedCount)
+        .find((record) => {
+          const payload = record.args[0] as FolderUpdatedPayload | undefined;
+          return payload?.changeType === 'mixed';
+        });
+
+      expect(updatedSecond).to.not.be.undefined;
+      expect(updatedSecond!.isRead).to.equal(1);
+      expect(newEmail).to.not.be.null;
+      expect(mixedSyncEvent).to.not.be.undefined;
+    });
+  });
+
+  // =========================================================================
+  // Remote label / folder changes from All Mail sync
+  // =========================================================================
+
+  describe('Remote label and folder changes', () => {
+    let movableMessageId: string;
+    let labelMessageId: string;
+    let movableAllMailUid: number;
+    let labelAllMailUid: number;
+
+    before(async function () {
+      this.timeout(35_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-remote-labels@example.com',
+        displayName: 'Remote Label Sync Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+      imapStateInspector.getStore().createMailbox('Projects');
+
+      const plainMsg = emlFixtures['plain-text'];
+      const htmlMsg = emlFixtures['html-email'];
+
+      movableMessageId = plainMsg.headers.xGmMsgId;
+      labelMessageId = htmlMsg.headers.xGmMsgId;
+
+      movableAllMailUid = imapStateInspector.injectMessage('[Gmail]/All Mail', plainMsg.raw, {
+        xGmMsgId: plainMsg.headers.xGmMsgId,
+        xGmThrid: plainMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All'],
+      }).uid;
+      imapStateInspector.injectMessage('INBOX', plainMsg.raw, {
+        xGmMsgId: plainMsg.headers.xGmMsgId,
+        xGmThrid: plainMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      labelAllMailUid = imapStateInspector.injectMessage('[Gmail]/All Mail', htmlMsg.raw, {
+        xGmMsgId: htmlMsg.headers.xGmMsgId,
+        xGmThrid: htmlMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All'],
+      }).uid;
+      imapStateInspector.injectMessage('INBOX', htmlMsg.raw, {
+        xGmMsgId: htmlMsg.headers.xGmMsgId,
+        xGmThrid: htmlMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 25_000 });
+    });
+
+    it('updates local folder associations when a message is moved remotely', async function () {
+      this.timeout(20_000);
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setLabels('[Gmail]/All Mail', movableAllMailUid, ['\\Sent', '\\All']);
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const folders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, movableMessageId);
+      expect(folders).to.include('[Gmail]/Sent Mail');
+      expect(folders).to.not.include('INBOX');
+    });
+
+    it('adds and removes remote custom labels in local folder associations', async function () {
+      this.timeout(25_000);
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setLabels('[Gmail]/All Mail', labelAllMailUid, ['\\Inbox', 'Projects', '\\All']);
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const foldersWithLabel = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, labelMessageId);
+      expect(foldersWithLabel).to.include('INBOX');
+      expect(foldersWithLabel).to.include('Projects');
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setLabels('[Gmail]/All Mail', labelAllMailUid, ['\\Inbox', '\\All']);
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const foldersWithoutLabel = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, labelMessageId);
+      expect(foldersWithoutLabel).to.include('INBOX');
+      expect(foldersWithoutLabel).to.not.include('Projects');
+    });
+
+    it('reconciles multiple remote change types across multiple messages in one sync cycle', async function () {
+      this.timeout(25_000);
+
+      const multipartMsg = emlFixtures['multipart-attachment'];
+
+      await waitForMilliseconds(1_100);
+
+      imapStateInspector.setLabels('[Gmail]/All Mail', movableAllMailUid, ['\\Inbox', 'Projects', '\\All']);
+      imapStateInspector.setFlags('[Gmail]/All Mail', movableAllMailUid, ['\\Flagged'], 'add');
+      imapStateInspector.setLabels('[Gmail]/All Mail', labelAllMailUid, ['\\Sent', '\\All']);
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', multipartMsg.raw, {
+        xGmMsgId: multipartMsg.headers.xGmMsgId,
+        xGmThrid: multipartMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', 'Projects', '\\Important', '\\All'],
+        flags: ['\\Flagged'],
+      });
+      imapStateInspector.injectMessage('INBOX', multipartMsg.raw, {
+        xGmMsgId: multipartMsg.headers.xGmMsgId,
+        xGmThrid: multipartMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', 'Projects', '\\Important'],
+        flags: ['\\Flagged'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const movedFolders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, movableMessageId);
+      const relabeledFolders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, labelMessageId);
+      const newFolders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, multipartMsg.headers.xGmMsgId);
+      const movedEmail = getEmailStatusSnapshot(suiteAccountId, movableMessageId);
+      const newEmail = getEmailStatusSnapshot(suiteAccountId, multipartMsg.headers.xGmMsgId);
+
+      expect(movedFolders).to.include('INBOX');
+      expect(movedFolders).to.include('Projects');
+      expect(relabeledFolders).to.include('[Gmail]/Sent Mail');
+      expect(relabeledFolders).to.not.include('INBOX');
+      expect(newFolders).to.include('INBOX');
+      expect(newFolders).to.include('Projects');
+      expect(movedEmail).to.not.be.undefined;
+      expect(movedEmail!.isStarred).to.equal(1);
+      expect(newEmail).to.not.be.undefined;
+      expect(newEmail!.isImportant).to.equal(1);
+      expect(newEmail!.isStarred).to.equal(1);
     });
   });
 
@@ -600,6 +1071,110 @@ describe('Mail Sync & IDLE', () => {
           return currentCount > priorFolderUpdatedCount;
         },
       });
+    });
+  });
+
+  // =========================================================================
+  // Background sync timer
+  // =========================================================================
+
+  describe('Background sync timer', () => {
+    before(async function () {
+      this.timeout(25_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-timer@example.com',
+        displayName: 'Sync Timer Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      DatabaseService.getInstance().setSetting('syncInterval', '300000');
+    });
+
+    afterEach(async () => {
+      SyncQueueBridge.getInstance().stop();
+      try {
+        await SyncService.getInstance().stopAllIdle();
+      } catch {
+        // Non-fatal cleanup in case IDLE never started
+      }
+    });
+
+    it('uses the configured 5-minute interval when background sync starts without an override', async function () {
+      this.timeout(20_000);
+
+      const bridge = SyncQueueBridge.getInstance();
+      const globalContext = global as typeof globalThis;
+      const originalSetInterval = globalContext.setInterval;
+      const originalStartIdleForAllAccounts = (
+        bridge as unknown as { startIdleForAllAccounts: (capturedGeneration: number) => void }
+      ).startIdleForAllAccounts;
+      let capturedIntervalMs: number | null = null;
+
+      try {
+        (bridge as unknown as { startIdleForAllAccounts: (capturedGeneration: number) => void }).startIdleForAllAccounts = () => {};
+        globalContext.setInterval = ((...argumentsList: Parameters<typeof setInterval>): ReturnType<typeof setInterval> => {
+          const [handler, timeout, ...remainingArguments] = argumentsList;
+          capturedIntervalMs = Number(timeout ?? 0);
+          return originalSetInterval(handler, 24 * 60 * 60 * 1000, ...remainingArguments);
+        }) as typeof setInterval;
+
+        const priorCompletedCount = getCompletedSyncEventCount(suiteAccountId);
+        bridge.start();
+        expect(capturedIntervalMs).to.equal(300_000);
+
+        await waitForCompletedSyncEvent(suiteAccountId, priorCompletedCount, 20_000);
+      } finally {
+        globalContext.setInterval = originalSetInterval;
+        (bridge as unknown as { startIdleForAllAccounts: (capturedGeneration: number) => void }).startIdleForAllAccounts = originalStartIdleForAllAccounts;
+      }
+    });
+
+    it('fires follow-up sync ticks on the configured interval', async function () {
+      this.timeout(20_000);
+
+      const bridge = SyncQueueBridge.getInstance();
+      const originalOnSyncTick = (bridge as unknown as { onSyncTick: () => Promise<void> }).onSyncTick;
+      const originalStartIdleForAllAccounts = (
+        bridge as unknown as { startIdleForAllAccounts: (capturedGeneration: number) => void }
+      ).startIdleForAllAccounts;
+      const originalSetInterval = global.setInterval;
+      const scheduledCallbacks: Array<() => void> = [];
+      let tickCount = 0;
+
+      (bridge as unknown as { onSyncTick: () => Promise<void> }).onSyncTick = async () => {
+        tickCount += 1;
+      };
+      (bridge as unknown as { startIdleForAllAccounts: (capturedGeneration: number) => void }).startIdleForAllAccounts = () => {};
+      global.setInterval = ((callback: (...callbackArgs: unknown[]) => void, _timeout?: number, ...argumentsList: unknown[]): ReturnType<typeof setInterval> => {
+        if (typeof callback === 'function') {
+          scheduledCallbacks.push(() => {
+            callback(...argumentsList);
+          });
+        }
+
+        return originalSetInterval(() => {}, 24 * 60 * 60 * 1000);
+      }) as typeof setInterval;
+
+      try {
+        bridge.start(75);
+        expect(scheduledCallbacks.length).to.equal(1);
+        scheduledCallbacks[0]!();
+        scheduledCallbacks[0]!();
+        await waitForCondition(() => tickCount > 2, 5_000, 25);
+        expect(tickCount).to.be.greaterThan(1);
+      } finally {
+        bridge.stop();
+        (bridge as unknown as { onSyncTick: () => Promise<void> }).onSyncTick = originalOnSyncTick;
+        (bridge as unknown as { startIdleForAllAccounts: (capturedGeneration: number) => void }).startIdleForAllAccounts = originalStartIdleForAllAccounts;
+        global.setInterval = originalSetInterval;
+      }
     });
   });
 

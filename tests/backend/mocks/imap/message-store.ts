@@ -36,6 +36,24 @@ export function mailboxToLabel(mailboxName: string): string | null {
   return labelMap[mailboxName] ?? null;
 }
 
+function setsEqual(firstSet: Set<string>, secondSet: Set<string>): boolean {
+  if (firstSet.size !== secondSet.size) {
+    return false;
+  }
+
+  for (const value of firstSet) {
+    if (!secondSet.has(value)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function arraysEqualAsSets(firstValues: string[], secondValues: string[]): boolean {
+  return setsEqual(new Set(firstValues), new Set(secondValues));
+}
+
 /**
  * A single Gmail message as stored in the fake server.
  * Mirrors the real Gmail IMAP metadata that imapflow fetches.
@@ -325,6 +343,8 @@ export class MessageStore {
       return;
     }
 
+    const originalFlags = new Set(message.flags);
+
     if (operation === 'set') {
       message.flags = new Set(flags);
     } else if (operation === 'add') {
@@ -337,6 +357,31 @@ export class MessageStore {
       }
     }
 
+    if (setsEqual(originalFlags, message.flags)) {
+      return;
+    }
+
+    message.modseq = ++this.globalModseq;
+    mailbox.highestModseq = this.globalModseq;
+  }
+
+  /**
+   * Replace the full Gmail label set on a message and bump its MODSEQ.
+   * Used by tests to simulate remote label / folder changes that should be
+   * detected by CONDSTORE incremental sync.
+   */
+  setLabels(mailboxName: string, uid: number, labels: string[]): void {
+    const mailbox = this.mailboxes.get(mailboxName);
+    const message = mailbox?.messages.get(uid);
+    if (!message || !mailbox) {
+      return;
+    }
+
+    if (arraysEqualAsSets(message.xGmLabels, labels)) {
+      return;
+    }
+
+    message.xGmLabels = [...labels];
     message.modseq = ++this.globalModseq;
     mailbox.highestModseq = this.globalModseq;
   }

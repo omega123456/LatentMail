@@ -157,6 +157,27 @@ export class StateInspector {
     return message ? new Set(message.flags) : new Set();
   }
 
+  /**
+   * Update flags on an existing message without going through IMAP commands.
+   * Simulates server-side changes made by another client.
+   */
+  setFlags(
+    mailboxName: string,
+    uid: number,
+    flags: string[],
+    operation: 'add' | 'remove' | 'set',
+  ): void {
+    this.store.setFlags(mailboxName, uid, flags, operation);
+  }
+
+  /**
+   * Replace the Gmail labels on an existing message and bump MODSEQ.
+   * Simulates remote folder / label changes visible via X-GM-LABELS.
+   */
+  setLabels(mailboxName: string, uid: number, labels: string[]): void {
+    this.store.setLabels(mailboxName, uid, labels);
+  }
+
   // ---------------------------------------------------------------------------
   // Error injection
   // ---------------------------------------------------------------------------
