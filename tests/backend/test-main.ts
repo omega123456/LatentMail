@@ -58,6 +58,30 @@ process.on('warning', (warning) => {
   }
 });
 
+// ---- Cleanup stale temp directories from previous interrupted runs ----
+// Safety net: delete latentmail-test-* dirs older than 1 hour.
+// This handles cases where signal handlers couldn't run (hard kill, crash, etc.)
+const STALE_DIR_AGE_MS = 60 * 60 * 1000; // 1 hour
+try {
+  const tmpParent = os.tmpdir();
+  for (const entry of fs.readdirSync(tmpParent)) {
+    if (entry.startsWith('latentmail-test-')) {
+      const fullPath = path.join(tmpParent, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory() && Date.now() - stat.mtimeMs > STALE_DIR_AGE_MS) {
+          fs.rmSync(fullPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+          console.log(`[test-main] Cleaned up stale temp dir: ${entry}`);
+        }
+      } catch {
+        // Ignore errors for individual dirs (may be in use by another process)
+      }
+    }
+  }
+} catch {
+  // Non-fatal: if we can't read tmpdir, just proceed
+}
+
 // ---- Create isolated temp directory for this test run ----
 const tempDir = process.env['LATENTMAIL_TEST_TEMP_DIR'] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-test-'));
 fs.mkdirSync(tempDir, { recursive: true });
@@ -170,6 +194,67 @@ export const imapStateInspector = new StateInspector(imapServer, imapStore);
 export const smtpServer = new SmtpCaptureServer();
 export const oauthServer = new FakeOAuthServer();
 export const ollamaServer = new FakeOllamaServer();
+
+// ---- Signal handlers for graceful cleanup on interrupt (Ctrl+C, SIGTERM) ----
+let isCleaningUp = false;
+
+async function cleanupAndExit(exitCode: number): Promise<void> {
+  if (isCleaningUp) {
+    return;
+  }
+  isCleaningUp = true;
+
+  console.log('\n[test-main] Signal received, cleaning up...');
+
+  // Destroy hidden window
+  try {
+    await destroyHiddenWindow();
+  } catch {
+    // Best effort
+  }
+
+  // Stop all mock servers
+  try {
+    await Promise.allSettled([
+      imapServer.stop(),
+      smtpServer.stop(),
+      oauthServer.stop(),
+      ollamaServer.stop(),
+    ]);
+    console.log('[test-main] Mock servers stopped');
+  } catch {
+    // Best effort
+  }
+
+  // Flush V8 coverage if enabled
+  if (process.env['NODE_V8_COVERAGE']) {
+    try {
+      v8.takeCoverage();
+    } catch {
+      // Best effort
+    }
+  }
+
+  // Delete temp directory
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    console.log('[test-main] Temp directory cleaned up');
+  } catch {
+    // Best effort — may fail if files are locked
+  }
+
+  app.exit(exitCode);
+}
+
+// Register signal handlers
+// SIGINT = Ctrl+C, SIGTERM = kill signal (e.g., from process manager)
+process.on('SIGINT', () => {
+  cleanupAndExit(130); // 128 + 2 (SIGINT)
+});
+
+process.on('SIGTERM', () => {
+  cleanupAndExit(143); // 128 + 15 (SIGTERM)
+});
 
 // ---- App startup ----
 app.whenReady().then(async () => {
