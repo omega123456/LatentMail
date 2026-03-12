@@ -235,6 +235,7 @@ async function runCoverageAndExit(electronExitCode) {
       '--exclude=dist-test/electron/main.js',
       '--exclude=dist-test/electron/preload.js',
       '--exclude=dist-test/electron/secrets.example.js',
+      '--exclude=dist-test/electron/database/migrations/**',
       '--exclude=dist-test/electron/workers/**',
       '--exclude=dist-test/electron/cli/**',
       '--exclude=dist-test/tests/**',
