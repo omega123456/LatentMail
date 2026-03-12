@@ -25,6 +25,7 @@ import { app, protocol, BrowserWindow, ipcMain } from 'electron';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as v8 from 'v8';
 
 // Static imports for test infrastructure only — these do NOT import production services
 import { TestEventBus } from './infrastructure/test-event-bus';
@@ -515,6 +516,11 @@ app.whenReady().then(async () => {
     console.log('[test-main] All mock servers stopped');
   } catch (error) {
     console.warn('[test-main] Error stopping mock servers (non-fatal):', error);
+  }
+
+  if (process.env['NODE_V8_COVERAGE']) {
+    v8.takeCoverage();
+    console.log('[test-main] V8 coverage data flushed');
   }
 
   // Step 16: Cleanup temp directory
