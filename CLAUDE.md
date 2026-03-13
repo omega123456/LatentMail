@@ -289,6 +289,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 - **Use full words for variable and parameter names** — no single letters (e.g. use `deltaX` not `dx`, `width` not `w`) and no abbreviations (e.g. use `element` not `el`, `bounds` not `rect`, `index` not `i` where readability benefits). Exception: very short loop variables in tiny scope (e.g. `index` in a 2-line loop) may use a full word like `index`; avoid `i`, `j`, `n`, `x`, etc.
 - **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:backend` before finishing and ensure all tests pass. Do not leave a session with failing tests. If tests fail, fix them before completing the task.
 - **New code requires test coverage** — Any new functionality, service, IPC handler, or non-trivial logic must have corresponding tests in `tests/backend/`. Do not add features without tests. Tests live in `tests/backend/suites/` and follow the existing patterns (Mocha + Chai). See "Backend Testing" section below for details.
+- **Only end-to-end tests** — Write **only** end-to-end (E2E) or functional tests. **Never** write unit tests. **Never** test by calling application functions, classes, or services directly; always exercise behavior through the public IPC interface (e.g. `callIpc()`). Tests must verify real workflows and real system state, not isolated units.
 
 ### Dates and Time
 
@@ -361,19 +362,20 @@ Use `sqlite3` CLI or DB Browser for SQLite to inspect.
 
 ## Backend Testing
 
-### Philosophy: Functional/E2E Tests Only
+### Philosophy: Functional/E2E Tests Only (Mandatory)
 
-This project uses **functional and end-to-end tests**, NOT unit tests. Tests exercise the real application code paths — real services, real database operations, real IPC handlers. The goal is to verify actual behavior, not isolated functions.
+This project uses **only functional and end-to-end tests**. Unit tests and direct function/service calls in tests are **not allowed**.
 
 **DO NOT**:
-- Write unit tests that test functions in isolation
+- Write unit tests or test functions in isolation
+- Call application code directly (no direct imports of services, handlers, or internal functions for the purpose of testing them)
 - Mock internal services, classes, or functions
 - Use dependency injection to swap internal implementations
 - Test private methods or internal state directly
 
 **DO**:
-- Test through the public IPC interface (`callIpc()`)
-- Use real service instances (DatabaseService, ImapService, etc.)
+- Test **only** through the public IPC interface (e.g. `callIpc()`)
+- Use real service instances only as exercised via IPC (e.g. assertions via `getDatabase()` after IPC calls)
 - Exercise complete workflows (e.g., sync → store → retrieve)
 - Verify end-to-end behavior from API input to database state
 
