@@ -9,7 +9,7 @@ null="0000000000000000000000000000000000000000"
 # If old == null -> initial checkout (new worktree)
 # Delegate to standalone script (install deps + copy context/agent files from other worktree)
 if [ "$old" = "$null" ]; then
-  repo_root="$(git rev-parse --show-toplevel)"
+  repo_root="$(pwd)"
   if [ -f "$repo_root/scripts/setup-worktree.sh" ]; then
     "$repo_root/scripts/setup-worktree.sh"
   else

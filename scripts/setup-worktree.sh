@@ -3,10 +3,10 @@
 # optionally sync context/agent files (CONTEXT.md, .claude, .opencode, opencode.json, .agent).
 # Usage:
 #   ./scripts/setup-worktree.sh [SOURCE_DIR]
-#   SOURCE_DIR = directory to copy context files from (default: auto-detect another worktree)
+#   SOURCE_DIR = directory to copy from (arg, or env WORKTREE_SOURCE_DIR, or auto via git worktree list)
 set -e
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(pwd)"
 cd "$REPO_ROOT"
 
 copy_context_files() {
@@ -30,8 +30,9 @@ copy_context_files() {
 }
 
 
-# Resolve source directory: explicit arg, or another worktree
-SOURCE_DIR="${1:-}"
+# Resolve source directory: explicit arg, then env var, then try git worktree list
+# (git can fail in some worktree environments e.g. opencode/WSL, so env is reliable)
+SOURCE_DIR="${1:-${WORKTREE_SOURCE_DIR:-}}"
 if [ -z "$SOURCE_DIR" ]; then
   current_canon="$(cd "$REPO_ROOT" && pwd -P 2>/dev/null || cd "$REPO_ROOT" && pwd)"
   while IFS= read -r line; do
