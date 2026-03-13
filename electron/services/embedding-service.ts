@@ -26,7 +26,7 @@
  *   5. Disconnect ImapCrawlService
  *   6. Broadcast complete
  *
- * On IMAP error: reconnect-and-resume (up to 3 attempts, exponential backoff).
+ * On IMAP error: reconnect-and-resume using the configured retry backoff schedule.
  * vector_indexed_emails is the checkpoint — re-runs skip already-indexed emails.
  */
 
@@ -63,8 +63,15 @@ const DRAFTS_PATH = '[Gmail]/Drafts';
 const SENT_PATH = '[Gmail]/Sent Mail';
 
 /** Reconnect-and-resume configuration. */
-const MAX_RECONNECT_ATTEMPTS = 3;
-const RECONNECT_DELAYS_MS = [5_000, 15_000, 45_000];
+const RECONNECT_DELAYS_MS = readDelayListFromEnv(
+  'EMBEDDING_IMAP_RECONNECT_DELAYS_MS',
+  [5_000, 15_000, 45_000],
+);
+const MAX_RECONNECT_ATTEMPTS = RECONNECT_DELAYS_MS.length;
+
+/** Configurable test/runtime pacing knobs. */
+const INTER_BATCH_DELAY_MS = readDelayMsFromEnv('EMBEDDING_INTER_BATCH_DELAY_MS', 1_000);
+const WORKER_TERMINATE_DELAY_MS = readDelayMsFromEnv('EMBEDDING_WORKER_TERMINATE_DELAY_MS', 500);
 
 /** Build state machine states. */
 type BuildState = 'idle' | 'building' | 'error';
@@ -82,9 +89,10 @@ export class EmbeddingService {
   private worker: Worker | null = null;
   private buildState: BuildState = 'idle';
   private incrementalScheduled: boolean = false;
+  private activeBuildPromise: Promise<void> | null = null;
 
   /**
-   * Workers handed to the 500ms-deferred terminateWorker() path.
+   * Workers handed to the deferred terminateWorker() path.
    * Tracked here so resetForTesting() can await them even after this.worker is nulled.
    */
   private pendingTerminations: Set<Worker> = new Set();
@@ -175,11 +183,23 @@ export class EmbeddingService {
     this.currentBuildIndexed = 0;
     log.info('[EmbeddingService] Starting full index build (IMAP crawl pipeline)');
 
-    this.runBuildLoop(embeddingModel, vectorDimension).catch((err) => {
-      log.error('[EmbeddingService] Build loop failed unexpectedly:', err);
-      this.buildState = 'error';
-      this.broadcastError(err instanceof Error ? err.message : String(err));
-    });
+    const buildPromise = this.runBuildLoop(embeddingModel, vectorDimension)
+      .catch((err) => {
+        if (this.buildState !== 'building') {
+          return;
+        }
+
+        log.error('[EmbeddingService] Build loop failed unexpectedly:', err);
+        this.buildState = 'error';
+        this.broadcastError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (this.activeBuildPromise === buildPromise) {
+          this.activeBuildPromise = null;
+        }
+      });
+
+    this.activeBuildPromise = buildPromise;
   }
 
   /**
@@ -225,11 +245,17 @@ export class EmbeddingService {
    *
    * Also waits for any workers handed to the deferred terminateWorker() path
    * (where this.worker was already nulled but the Worker thread is still alive
-   * in its 500 ms grace window) to finish terminating.
+   * in its grace window) to finish terminating.
    *
    * NOT intended for production use.
    */
   async resetForTesting(): Promise<void> {
+    const buildPromise = this.activeBuildPromise;
+
+    if (this.buildState === 'building') {
+      this.cancelBuild();
+    }
+
     this.buildState = 'idle';
     this.currentBuildTotal = 0;
     this.currentBuildIndexed = 0;
@@ -238,7 +264,7 @@ export class EmbeddingService {
     // Collect all workers that need to be awaited:
     //   1. The currently-active worker (this.worker), if any.
     //   2. Any workers already handed to the deferred terminateWorker() path
-    //      (they live in pendingTerminations while the 500 ms timer counts down).
+    //      (they live in pendingTerminations while the termination timer counts down).
     const workersToAwait: Worker[] = [];
 
     if (this.worker) {
@@ -261,6 +287,10 @@ export class EmbeddingService {
         }
       }),
     );
+
+    if (buildPromise) {
+      await buildPromise.catch(() => {});
+    }
   }
 
   /**
@@ -317,8 +347,8 @@ export class EmbeddingService {
    * If prerequisites are not met, the method returns silently — the build_interrupted flag
    * remains set and auto-resume will be attempted on the next app start.
    *
-   * Delay strategy: this method waits 15 seconds internally (plus the 5-second setTimeout
-   * in main.ts) for ~20 seconds total before startBuild() fires, giving IMAP connections,
+   * Delay strategy: this method waits 15 seconds internally (plus the startup setTimeout
+   * in main.ts) before startBuild() fires, giving IMAP connections,
    * OAuth token refreshes, and the SyncQueueBridge's first cycle time to settle.
    */
   async autoResumeInterruptedBuilds(): Promise<void> {
@@ -410,7 +440,7 @@ export class EmbeddingService {
    * un-indexed emails, and writes completion records to vector_indexed_emails.
    *
    * Processes accounts sequentially. Within each account, processes UID batches
-   * sequentially with a 1-second inter-batch delay.
+   * sequentially with a configurable inter-batch delay.
    *
    * Resume behaviour:
    * - At account start: sets build_interrupted = 1 so crashes are detectable
@@ -678,6 +708,10 @@ export class EmbeddingService {
                 isFirstBatch = false;
               } catch (err) {
                 const errorMessage = err instanceof Error ? err.message : String(err);
+                if (this.buildState !== 'building') {
+                  log.debug('[EmbeddingService] Batch interrupted during shutdown:', errorMessage);
+                  break;
+                }
                 log.error('[EmbeddingService] Batch worker error:', errorMessage);
                 accountWorkerError = errorMessage;
                 break;
@@ -721,7 +755,9 @@ export class EmbeddingService {
             }
 
             // Inter-batch delay (reduce Gmail rate limiting pressure)
-            await sleep(1_000);
+            if (INTER_BATCH_DELAY_MS > 0) {
+              await sleep(INTER_BATCH_DELAY_MS);
+            }
           }
 
           // Success — exit the reconnect loop
@@ -890,6 +926,9 @@ export class EmbeddingService {
           );
           isFirstBatch = false;
         } catch (err) {
+          if (this.buildState !== 'building') {
+            break;
+          }
           workerError = err instanceof Error ? err.message : String(err);
           log.error('[EmbeddingService] Incremental batch error:', workerError);
           break;
@@ -1004,9 +1043,15 @@ export class EmbeddingService {
 
       // Timeout safety: reject after 10 minutes if no response
       const timeoutHandle = setTimeout(() => {
-        this.worker?.removeListener('message', onMessage);
+        detachListeners();
         reject(new Error('Batch processing timed out after 10 minutes'));
       }, 10 * 60 * 1000);
+
+      const detachListeners = (): void => {
+        clearTimeout(timeoutHandle);
+        workerRef.removeListener('message', onMessage);
+        workerRef.removeListener('exit', onExit);
+      };
 
       const onMessage = (message: {
         type: string;
@@ -1027,23 +1072,28 @@ export class EmbeddingService {
         }
 
         if (message.type === 'batch-done') {
-          clearTimeout(timeoutHandle);
-          this.worker?.removeListener('message', onMessage);
+          detachListeners();
           resolve(message.results ?? []);
           return;
         }
 
         if (message.type === 'error') {
-          clearTimeout(timeoutHandle);
-          this.worker?.removeListener('message', onMessage);
+          detachListeners();
           reject(new Error(message.message ?? 'Worker error'));
           return;
         }
         // 'log' messages are handled by the permanent listener set up in spawnWorker(); ignore here.
       };
 
-      this.worker.on('message', onMessage);
-      this.worker.postMessage({
+      const onExit = (exitCode: number) => {
+        detachListeners();
+        reject(new Error(`Worker exited before completing batch (code ${exitCode})`));
+      };
+
+      const workerRef = this.worker;
+      workerRef.on('message', onMessage);
+      workerRef.once('exit', onExit);
+      workerRef.postMessage({
         type: 'batch',
         emails: batchItems,
         total: totalInRun,
@@ -1055,9 +1105,9 @@ export class EmbeddingService {
   /**
    * Terminate the worker thread, if one is running.
    * The worker receives a 'cancel' message first (graceful shutdown), then is
-   * force-terminated after 500 ms.  The Worker reference is added to
+   * force-terminated after a short configurable grace period. The Worker reference is added to
    * pendingTerminations so resetForTesting() can await full exit even if it
-   * runs during the 500 ms window.
+   * runs during the worker termination grace window.
    */
   private terminateWorker(): void {
     if (this.worker) {
@@ -1071,7 +1121,7 @@ export class EmbeddingService {
           .finally(() => {
             this.pendingTerminations.delete(workerRef);
           });
-      }, 500);
+      }, WORKER_TERMINATE_DELAY_MS);
     }
   }
 
@@ -1143,8 +1193,17 @@ export class EmbeddingService {
     log.info('[EmbeddingService] Starting incremental index (idle mode)');
     this.buildState = 'building';
 
+    const buildPromise = this.runIncrementalLoop(embeddingModel, vectorDimension)
+      .finally(() => {
+        if (this.activeBuildPromise === buildPromise) {
+          this.activeBuildPromise = null;
+        }
+      });
+
+    this.activeBuildPromise = buildPromise;
+
     try {
-      await this.runIncrementalLoop(embeddingModel, vectorDimension);
+      await buildPromise;
     } finally {
       this.incrementalScheduled = false;
     }
@@ -1189,4 +1248,32 @@ export class EmbeddingService {
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function readDelayMsFromEnv(envName: string, fallback: number): number {
+  const rawValue = process.env[envName];
+  if (rawValue === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function readDelayListFromEnv(envName: string, fallback: number[]): number[] {
+  const rawValue = process.env[envName];
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const parsed = rawValue
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  return parsed.length > 0 ? parsed : fallback;
 }

@@ -66,6 +66,9 @@ const config = workerData as EmbeddingWorkerData;
 let isCancelled = false;
 let isPaused = false;
 let db: BetterSqlite3.Database | null = null;
+const PAUSE_POLL_INTERVAL_MS = readDelayMsFromEnv('EMBEDDING_WORKER_PAUSE_POLL_MS', 500);
+const OLLAMA_RETRY_DELAYS_MS = readDelayListFromEnv('EMBEDDING_OLLAMA_RETRY_DELAYS_MS', [5_000, 15_000, 45_000]);
+const OLLAMA_REQUEST_TIMEOUT_MS = readDelayMsFromEnv('EMBEDDING_OLLAMA_TIMEOUT_MS', 60_000);
 
 // ---- Helpers ----
 
@@ -90,10 +93,10 @@ function initVectorDb(): void {
   }
 }
 
-/** Wait until unpaused (polls every 500ms). */
+/** Wait until unpaused (polls using the configured pause interval). */
 async function waitWhilePaused(): Promise<void> {
   while (isPaused && !isCancelled) {
-    await sleep(500);
+    await sleep(PAUSE_POLL_INTERVAL_MS);
   }
 }
 
@@ -103,17 +106,16 @@ function sleep(milliseconds: number): Promise<void> {
 
 /**
  * Call Ollama /api/embed for a batch of text strings.
- * Retries up to 3 times on connection failure with exponential backoff (5s / 15s / 45s).
+ * Retries using the configured backoff schedule on connection failure.
  * Returns a 2D array (one vector per input string).
  */
 async function callOllamaEmbed(texts: string[]): Promise<number[][]> {
-  const retryDelaysMs = [5_000, 15_000, 45_000];
   const payload = { model: config.embeddingModel, input: texts };
 
-  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+  for (let attempt = 0; attempt <= OLLAMA_RETRY_DELAYS_MS.length; attempt++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60_000);
+      const timeout = setTimeout(() => controller.abort(), OLLAMA_REQUEST_TIMEOUT_MS);
 
       const response = await fetch(`${config.ollamaBaseUrl}/api/embed`, {
         method: 'POST',
@@ -145,12 +147,12 @@ async function callOllamaEmbed(texts: string[]): Promise<number[][]> {
         throw err;
       }
 
-      const isLastAttempt = attempt >= retryDelaysMs.length;
+       const isLastAttempt = attempt >= OLLAMA_RETRY_DELAYS_MS.length;
       if (isLastAttempt) {
-        throw new Error(`Ollama embed failed after ${retryDelaysMs.length + 1} attempts: ${errorMessage}`);
+        throw new Error(`Ollama embed failed after ${OLLAMA_RETRY_DELAYS_MS.length + 1} attempts: ${errorMessage}`);
       }
 
-      const delayMs = retryDelaysMs[attempt];
+      const delayMs = OLLAMA_RETRY_DELAYS_MS[attempt];
       postLog('warn', `Ollama embed attempt ${attempt + 1} failed, retrying in ${delayMs / 1000}s: ${errorMessage}`);
       await sleep(delayMs);
 
@@ -379,5 +381,33 @@ try {
   const errorMessage = err instanceof Error ? err.message : String(err);
   postLog('error', `[EmbeddingWorker] Failed to initialize vector DB: ${errorMessage}`);
   parentPort?.postMessage({ type: 'error', message: `Worker init failed: ${errorMessage}` });
+}
+
+function readDelayMsFromEnv(envName: string, fallback: number): number {
+  const rawValue = process.env[envName];
+  if (rawValue === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function readDelayListFromEnv(envName: string, fallback: number[]): number[] {
+  const rawValue = process.env[envName];
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const parsed = rawValue
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  return parsed.length > 0 ? parsed : fallback;
 }
 

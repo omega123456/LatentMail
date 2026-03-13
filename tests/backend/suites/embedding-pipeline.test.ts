@@ -81,7 +81,6 @@ describe('Embedding Pipeline', () => {
     this.timeout(15_000);
 
     await ensureBuildStopped();
-    await sleep(1_000);
   });
 
   it('returns not_started status when no build has started', async () => {
@@ -217,7 +216,7 @@ describe('Embedding Pipeline', () => {
   it('returns an error when a build is already in progress', async function () {
     this.timeout(35_000);
 
-    ollamaServer.setResponseDelay(1_500);
+    ollamaServer.setResponseDelay(200);
     injectAllMailFixture('plain-text');
     injectAllMailFixture('html-email');
     injectAllMailFixture('multipart-attachment');
@@ -264,7 +263,7 @@ describe('Embedding Pipeline', () => {
   it('cancels an active build and resets status back to idle', async function () {
     this.timeout(20_000);
 
-    ollamaServer.setResponseDelay(2_500);
+    ollamaServer.setResponseDelay(300);
     injectAllMailFixture('plain-text');
     injectAllMailFixture('html-email');
     injectAllMailFixture('multipart-attachment');
@@ -274,7 +273,7 @@ describe('Embedding Pipeline', () => {
     const buildResponse = await callIpc('ai:build-index') as IpcResponse<{ started: boolean }>;
     expect(buildResponse.success).to.equal(true);
 
-    await sleep(100);
+    await waitForCondition(() => ollamaServer.getRequestsFor('/api/embed').length > 0, 5_000);
 
     const cancelResponse = await callIpc('ai:cancel-index') as IpcResponse<{ cancelled: boolean }>;
     expect(cancelResponse.success).to.equal(true);
@@ -401,7 +400,7 @@ describe('Embedding Pipeline', () => {
   it('reports building status with live progress during an active build', async function () {
     this.timeout(35_000);
 
-    ollamaServer.setResponseDelay(1_500);
+    ollamaServer.setResponseDelay(200);
     injectAllMailFixture('plain-text');
     injectAllMailFixture('html-email');
     injectAllMailFixture('multipart-attachment');
@@ -776,8 +775,9 @@ async function ensureBuildStopped(): Promise<void> {
   const embeddingService = EmbeddingService.getInstance();
   if (embeddingService.getBuildState() === 'building') {
     embeddingService.cancelBuild();
-    await waitForNonBuildingStatus();
   }
+
+  await embeddingService.resetForTesting();
 }
 
 async function configureEmbeddingModel(dimension: number): Promise<void> {
@@ -849,6 +849,24 @@ async function waitForNonBuildingStatus(timeoutMilliseconds: number = 15_000): P
   }
 
   throw new Error(`Timed out after ${timeoutMilliseconds}ms waiting for embedding build to stop`);
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMilliseconds: number = 5_000,
+  pollIntervalMilliseconds: number = 25,
+): Promise<void> {
+  const startMillis = DateTime.utc().toMillis();
+
+  while (DateTime.utc().toMillis() - startMillis < timeoutMilliseconds) {
+    if (predicate()) {
+      return;
+    }
+
+    await sleep(pollIntervalMilliseconds);
+  }
+
+  throw new Error(`Timed out after ${timeoutMilliseconds}ms waiting for condition`);
 }
 
 async function reseedSuiteAccount(): Promise<void> {

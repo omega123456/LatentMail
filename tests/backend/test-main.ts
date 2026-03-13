@@ -100,6 +100,11 @@ process.env['QUEUE_RETRY_BASE_MS'] = '50';
 process.env['QUEUE_RETRY_MAX_MS'] = '500';
 // Enable OAuth test mode so login() doesn't open a system browser
 process.env['OAUTH_TEST_MODE'] = '1';
+// Speed up embedding-specific retries and teardown pacing for backend tests.
+process.env['EMBEDDING_INTER_BATCH_DELAY_MS'] = process.env['EMBEDDING_INTER_BATCH_DELAY_MS'] ?? '200';
+process.env['EMBEDDING_IMAP_RECONNECT_DELAYS_MS'] = process.env['EMBEDDING_IMAP_RECONNECT_DELAYS_MS'] ?? '50,100,200';
+process.env['EMBEDDING_OLLAMA_RETRY_DELAYS_MS'] = process.env['EMBEDDING_OLLAMA_RETRY_DELAYS_MS'] ?? '25,50,100';
+process.env['EMBEDDING_WORKER_TERMINATE_DELAY_MS'] = process.env['EMBEDDING_WORKER_TERMINATE_DELAY_MS'] ?? '25';
 
 // ---- IPC handler map (exported for test helpers) ----
 // Populated by the ipcMain.handle shim below.
