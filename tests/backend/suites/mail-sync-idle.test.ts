@@ -13,10 +13,12 @@
  *   - UIDVALIDITY reset: local folder data wiped and rebuilt
  *   - Stale UID reconciliation: messages deleted on server removed locally
  *   - All Mail sync: Gmail labels mapped to folder associations
+ *   - Post-sync non–All Mail folder sync writes All Mail UID associations for reconciliation
+ *   - All Mail UID-diff reconciliation purges stale associations, orphaned emails, and thread metadata
  *   - Thread metadata recomputed after sync
  *   - Contact extraction from synced mail
  *   - INBOX IDLE: new message via EXISTS notification → sync → mail:folder-updated
- *   - All Mail IDLE: EXPUNGE notification → reconcile sync → mail:folder-updated
+ *   - All Mail IDLE: EXPUNGE notification → reconcile sync → mail:folder-updated + DB cleanup
  *   - Sync pause/resume via sync:pause / sync:resume / sync:get-paused IPC
  *   - Manual sync trigger via mail:sync-account
  *   - Post-sync automatic filter processing on new INBOX emails
@@ -36,6 +38,7 @@ import {
 import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { DatabaseService } from '../../../electron/services/database-service';
+import { BodyFetchQueueService } from '../../../electron/services/body-fetch-queue-service';
 import { FetchedEmail, ImapService } from '../../../electron/services/imap-service';
 import { ALL_MAIL_PATH, SyncService } from '../../../electron/services/sync-service';
 import { SyncQueueBridge } from '../../../electron/services/sync-queue-bridge';
@@ -131,6 +134,36 @@ function getFolderStateSnapshot(accountId: number, folder: string): FolderStateS
      FROM folder_state
      WHERE account_id = :accountId AND folder = :folder`,
   ).get({ accountId, folder }) as FolderStateSnapshot | undefined;
+}
+
+function ageEmailForOrphanCleanup(accountId: number, xGmMsgId: string, hoursAgo: number = 2): void {
+  const rawDb = DatabaseService.getInstance().getDatabase();
+  const agedTimestamp = DateTime.utc().minus({ hours: hoursAgo }).toFormat('yyyy-LL-dd HH:mm:ss');
+
+  rawDb.prepare(
+    `UPDATE emails
+     SET updated_at = :agedTimestamp
+     WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`,
+  ).run({ accountId, xGmMsgId, agedTimestamp });
+}
+
+function pauseBodyFetchQueueForDeterministicCleanup(): void {
+  BodyFetchQueueService.getInstance().resetForTesting();
+}
+
+async function triggerFolderSyncAndWait(accountId: number, folder: string, timeout: number = 15_000): Promise<{ accountId: number; folders?: string[]; reason?: string; changeType?: string; count?: number }> {
+  const syncResponse = await callIpc('mail:sync-folder', {
+    accountId: String(accountId),
+    folder,
+  }) as IpcResponse<void>;
+
+  expect(syncResponse.success).to.equal(true);
+
+  return waitForNextFolderUpdated(accountId, {
+    folder,
+    reason: 'sync',
+    timeout,
+  });
 }
 
 function getCompletedSyncEventCount(accountId: number): number {
@@ -655,6 +688,73 @@ describe('Mail Sync & IDLE', () => {
       ).length;
 
       expect(newCount).to.be.greaterThan(priorCount);
+    });
+  });
+
+  // =========================================================================
+  // Post-sync All Mail UID resolution from non-All Mail folder sync
+  // =========================================================================
+
+  describe('Post-sync All Mail UID resolution', () => {
+    const inboxOnlyMsgId = '8555000000000001';
+    const inboxOnlyThreadId = '8555000000000101';
+    let allMailUid: number;
+
+    before(async function () {
+      this.timeout(30_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-allmail-uid-resolution@example.com',
+        displayName: 'All Mail UID Resolution Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const inboxOnlyRaw = buildSyntheticEmail({
+        fromHeader: 'allmail-resolution@example.com',
+        toHeader: suiteEmail,
+        subject: 'All Mail UID resolution target',
+        body: 'This message verifies post-sync All Mail UID writes.',
+        dateIso: DateTime.utc().minus({ minutes: 2 }).toISO()!,
+        xGmMsgId: inboxOnlyMsgId,
+        xGmThrid: inboxOnlyThreadId,
+        messageId: '<allmail-uid-resolution@example.com>',
+        labels: ['\\Inbox', '\\All'],
+      });
+
+      allMailUid = imapStateInspector.injectMessage('[Gmail]/All Mail', inboxOnlyRaw, {
+        xGmMsgId: inboxOnlyMsgId,
+        xGmThrid: inboxOnlyThreadId,
+        xGmLabels: ['\\Inbox', '\\All'],
+      }).uid;
+      imapStateInspector.injectMessage('INBOX', inboxOnlyRaw, {
+        xGmMsgId: inboxOnlyMsgId,
+        xGmThrid: inboxOnlyThreadId,
+        xGmLabels: ['\\Inbox'],
+      });
+    });
+
+    it('writes an All Mail email_folders UID row after syncing INBOX only', async function () {
+      this.timeout(20_000);
+
+      await triggerFolderSyncAndWait(suiteAccountId, 'INBOX');
+
+      const db = DatabaseService.getInstance();
+      const email = db.getEmailByXGmMsgId(suiteAccountId, inboxOnlyMsgId);
+      const folders = db.getFoldersForEmail(suiteAccountId, inboxOnlyMsgId);
+      const folderUids = db.getFolderUidsForEmail(suiteAccountId, inboxOnlyMsgId);
+      const allMailFolderUid = folderUids.find((entry) => entry.folder === ALL_MAIL_PATH);
+
+      expect(email).to.not.be.null;
+      expect(folders).to.include('INBOX');
+      expect(folders).to.include(ALL_MAIL_PATH);
+      expect(allMailFolderUid).to.not.equal(undefined);
+      expect(allMailFolderUid!.uid).to.equal(allMailUid);
     });
   });
 
@@ -1350,6 +1450,8 @@ describe('Mail Sync & IDLE', () => {
 
   describe('IDLE expunge flow', () => {
     let injectedUid: number;
+    let expungedMsgId: string;
+    let survivingMsgId: string;
 
     before(async function () {
       this.timeout(35_000);
@@ -1369,6 +1471,8 @@ describe('Mail Sync & IDLE', () => {
       // Inject two messages and do an initial sync
       const plainMsg = emlFixtures['plain-text'];
       const htmlMsg = emlFixtures['html-email'];
+      expungedMsgId = plainMsg.headers.xGmMsgId;
+      survivingMsgId = htmlMsg.headers.xGmMsgId;
 
       const plainResult = imapStateInspector.injectMessage('[Gmail]/All Mail', plainMsg.raw, {
         xGmMsgId: plainMsg.headers.xGmMsgId,
@@ -1395,6 +1499,8 @@ describe('Mail Sync & IDLE', () => {
       injectedUid = plainResult.uid;
 
       await triggerSyncAndWait(suiteAccountId, { timeout: 25_000 });
+      pauseBodyFetchQueueForDeterministicCleanup();
+      ageEmailForOrphanCleanup(suiteAccountId, expungedMsgId);
 
       // Start All Mail IDLE
       const syncService = SyncService.getInstance();
@@ -1415,11 +1521,152 @@ describe('Mail Sync & IDLE', () => {
     it('triggers reconcile sync and emits mail:folder-updated when expunge occurs via IDLE', async function () {
       this.timeout(25_000);
 
+       const priorSyncEventCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter((record) => {
+        const payload = record.args[0] as FolderUpdatedPayload | undefined;
+        return payload?.accountId === suiteAccountId && payload?.reason === 'sync' && (payload.folders ?? []).includes(ALL_MAIL_PATH);
+      }).length;
+
       // Remove the first message from All Mail on the server and send EXPUNGE notification
       imapStateInspector.expungeAndNotify('[Gmail]/All Mail', injectedUid);
 
       // Wait for the reconcile sync triggered by the EXPUNGE IDLE event
-      await waitForNextFolderUpdated(suiteAccountId, { timeout: 20_000 });
+      const payload = await waitForNextFolderUpdated(suiteAccountId, {
+        timeout: 20_000,
+        reason: 'sync',
+        folder: ALL_MAIL_PATH,
+        priorCount: priorSyncEventCount,
+      });
+
+      expect(payload.folders ?? []).to.include(ALL_MAIL_PATH);
+      expect(payload.reason).to.equal('sync');
+    });
+
+    it('removes stale All Mail associations and orphaned emails after IDLE expunge reconciliation', async function () {
+      this.timeout(25_000);
+
+      const staleEmail = DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, expungedMsgId);
+      const staleFolders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, expungedMsgId);
+      const survivingEmail = DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, survivingMsgId);
+      const survivingFolders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, survivingMsgId);
+
+      expect(staleEmail).to.be.null;
+      expect(staleFolders).to.deep.equal([]);
+      expect(survivingEmail).to.not.be.null;
+      expect(survivingFolders).to.include('INBOX');
+    });
+  });
+
+  // =========================================================================
+  // All Mail UID-diff reconciliation cleanup
+  // =========================================================================
+
+  describe('All Mail UID-diff reconciliation cleanup', () => {
+    const stalePrimaryMsgId = '8661000000000001';
+    const stalePrimaryThreadId = '8661000000000101';
+    const survivorMsgId = '8661000000000002';
+    const survivorThreadId = '8661000000000102';
+    let staleAllMailUid: number;
+
+    before(async function () {
+      this.timeout(35_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-allmail-reconcile@example.com',
+        displayName: 'All Mail Reconcile Cleanup Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+      imapStateInspector.getStore().createMailbox('Projects');
+
+      const staleRaw = buildSyntheticEmail({
+        fromHeader: 'stale-allmail@example.com',
+        toHeader: suiteEmail,
+        subject: 'Stale All Mail message',
+        body: 'This message should be removed after All Mail UID diff reconciliation.',
+        dateIso: DateTime.utc().minus({ minutes: 4 }).toISO()!,
+        xGmMsgId: stalePrimaryMsgId,
+        xGmThrid: stalePrimaryThreadId,
+        messageId: '<stale-allmail-message@example.com>',
+        labels: ['\\Inbox', 'Projects', '\\All'],
+      });
+
+      staleAllMailUid = imapStateInspector.injectMessage('[Gmail]/All Mail', staleRaw, {
+        xGmMsgId: stalePrimaryMsgId,
+        xGmThrid: stalePrimaryThreadId,
+        xGmLabels: ['\\Inbox', 'Projects', '\\All'],
+      }).uid;
+      imapStateInspector.injectMessage('INBOX', staleRaw, {
+        xGmMsgId: stalePrimaryMsgId,
+        xGmThrid: stalePrimaryThreadId,
+        xGmLabels: ['\\Inbox'],
+      });
+      imapStateInspector.injectMessage('Projects', staleRaw, {
+        xGmMsgId: stalePrimaryMsgId,
+        xGmThrid: stalePrimaryThreadId,
+        xGmLabels: ['Projects'],
+      });
+
+      const survivorRaw = buildSyntheticEmail({
+        fromHeader: 'survivor-allmail@example.com',
+        toHeader: suiteEmail,
+        subject: 'Surviving All Mail message',
+        body: 'This message should remain after reconciliation.',
+        dateIso: DateTime.utc().minus({ minutes: 3 }).toISO()!,
+        xGmMsgId: survivorMsgId,
+        xGmThrid: survivorThreadId,
+        messageId: '<survivor-allmail-message@example.com>',
+        labels: ['\\Inbox', '\\All'],
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: survivorRaw,
+        xGmMsgId: survivorMsgId,
+        xGmThrid: survivorThreadId,
+        internalDate: DateTime.utc().minus({ minutes: 3 }).toISO()!,
+        allMailLabels: ['\\Inbox', '\\All'],
+        inboxLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 25_000 });
+    });
+
+    it('purges stale All Mail cascaded folder links and orphaned thread state after direct All Mail sync', async function () {
+      this.timeout(25_000);
+
+      const db = DatabaseService.getInstance();
+
+      expect(db.getEmailByXGmMsgId(suiteAccountId, stalePrimaryMsgId)).to.not.be.null;
+      expect(db.getFoldersForEmail(suiteAccountId, stalePrimaryMsgId)).to.include('INBOX');
+      expect(db.getFoldersForEmail(suiteAccountId, stalePrimaryMsgId)).to.include('Projects');
+      expect(db.getFoldersForEmail(suiteAccountId, stalePrimaryMsgId)).to.include(ALL_MAIL_PATH);
+      expect(db.getThreadById(suiteAccountId, stalePrimaryThreadId)).to.not.be.null;
+
+      pauseBodyFetchQueueForDeterministicCleanup();
+      ageEmailForOrphanCleanup(suiteAccountId, stalePrimaryMsgId);
+      imapStateInspector.getStore().expungeUids('[Gmail]/All Mail', [staleAllMailUid]);
+
+      const affectedFolders = await runDirectAllMailSync(suiteAccountId, false);
+
+      const staleFoldersAfter = db.getFoldersForEmail(suiteAccountId, stalePrimaryMsgId);
+      const staleEmailAfter = db.getEmailByXGmMsgId(suiteAccountId, stalePrimaryMsgId);
+      const staleThreadAfter = db.getThreadById(suiteAccountId, stalePrimaryThreadId);
+      const survivorEmailAfter = db.getEmailByXGmMsgId(suiteAccountId, survivorMsgId);
+      const survivorFoldersAfter = db.getFoldersForEmail(suiteAccountId, survivorMsgId);
+
+      expect(Array.from(affectedFolders)).to.include(ALL_MAIL_PATH);
+      expect(Array.from(affectedFolders)).to.include('INBOX');
+      expect(Array.from(affectedFolders)).to.include('Projects');
+      expect(staleFoldersAfter).to.deep.equal([]);
+      expect(staleEmailAfter).to.be.null;
+      expect(staleThreadAfter).to.be.null;
+      expect(survivorEmailAfter).to.not.be.null;
+      expect(survivorFoldersAfter).to.include('INBOX');
+      expect(survivorFoldersAfter).to.include(ALL_MAIL_PATH);
     });
   });
 
