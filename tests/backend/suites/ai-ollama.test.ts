@@ -34,6 +34,8 @@
  */
 
 import { expect } from 'chai';
+import * as crypto from 'crypto';
+import { BrowserWindow } from 'electron';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
@@ -42,7 +44,7 @@ import {
   seedTestAccount,
   triggerSyncAndWait,
 } from '../infrastructure/test-helpers';
-import { imapStateInspector, ollamaServer } from '../test-main';
+import { hiddenWindow, imapStateInspector, ollamaServer } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { TestEventBus } from '../infrastructure/test-event-bus';
 import { OllamaService } from '../../../electron/services/ollama-service';
@@ -81,6 +83,27 @@ interface SearchCompletePayload {
   searchToken: string;
   status: string;
   totalResults: number;
+}
+
+interface SearchRunResult {
+  searchToken: string;
+  batches: SearchBatchPayload[];
+  complete: SearchCompletePayload;
+  localMsgIds: string[];
+  imapMsgIds: string[];
+  allMsgIds: string[];
+}
+
+interface MalformedSemanticIntentCase {
+  description: string;
+  queryKey: string;
+  buildChatResponse: (queryText: string) => string;
+}
+
+interface MalformedKeywordIntentCase {
+  description: string;
+  queryKey: string;
+  response: Record<string, unknown>;
 }
 
 async function waitForSearchComplete(
@@ -147,6 +170,65 @@ function insertSemanticChunk(accountId: number, xGmMsgId: string, chunkText: str
       },
     ],
   });
+}
+
+async function runAiSearch(
+  accountId: number,
+  naturalQuery: string,
+  mode: 'keyword' | 'semantic',
+  folders?: string[],
+): Promise<SearchRunResult> {
+  const eventBus = TestEventBus.getInstance();
+  const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+  const response = await callIpc(
+    'ai:search',
+    String(accountId),
+    naturalQuery,
+    folders,
+    mode,
+  ) as IpcResponse<{ searchToken: string }>;
+
+  expect(response.success).to.equal(true);
+
+  const searchToken = response.data!.searchToken;
+  const complete = await waitForSearchComplete(searchToken);
+  const batches = getSearchBatchesSince(searchToken, priorBatchCount);
+  const localMsgIds = batches
+    .filter((batch) => batch.phase === 'local')
+    .flatMap((batch) => batch.msgIds);
+  const imapMsgIds = batches
+    .filter((batch) => batch.phase === 'imap')
+    .flatMap((batch) => batch.msgIds);
+
+  return {
+    searchToken,
+    batches,
+    complete,
+    localMsgIds,
+    imapMsgIds,
+    allMsgIds: [...localMsgIds, ...imapMsgIds],
+  };
+}
+
+async function prepareSemanticIntentValidationSearch(
+  queryEmbedding: number[],
+  chunkText: string,
+): Promise<void> {
+  await ensureOllamaKeywordModeReady();
+  ollamaServer.setEmbeddings([queryEmbedding]);
+  ollamaServer.setEmbedDimension(queryEmbedding.length);
+  await configureEmbeddingModelForSuite(queryEmbedding.length);
+
+  const vectorDbService = VectorDbService.getInstance();
+  vectorDbService.deleteByAccountId(suiteAccountId);
+
+  insertSemanticChunk(
+    suiteAccountId,
+    emlFixtures['plain-text'].headers.xGmMsgId,
+    chunkText,
+    queryEmbedding,
+  );
 }
 
 // ---- Suite-level state ----
@@ -1190,6 +1272,58 @@ describe('AI / Ollama', () => {
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AI_DETECT_FOLLOWUP_FAILED');
     });
+
+    it('regenerates the result when the cached follow-up entry is corrupted JSON', async () => {
+      await callIpc('ai:set-model', 'llama3.2:latest');
+
+      const emailContent = 'unique-content-corrupt';
+      ollamaServer.setChatResponse(JSON.stringify({
+        needsFollowUp: true,
+        reason: 'Initial cached response.',
+      }));
+
+      const firstResponse = await callIpc(
+        'ai:detect-followup',
+        emailContent,
+      ) as IpcResponse<{ needsFollowUp: boolean; reason: string }>;
+
+      expect(firstResponse.success).to.equal(true);
+      expect(firstResponse.data!.needsFollowUp).to.equal(true);
+
+      const database = getDatabase().getDatabase();
+      const inputHash = crypto.createHash('sha256').update(emailContent).digest('hex');
+      database.prepare(
+        `UPDATE ai_cache
+         SET result = :result
+         WHERE operation_type = :operationType AND input_hash = :inputHash AND model = :model`,
+      ).run({
+        result: '{invalid-json',
+        operationType: 'followup',
+        inputHash,
+        model: 'llama3.2:latest',
+      });
+
+      ollamaServer.reset();
+      const ollamaService = OllamaService.getInstance();
+      ollamaService['baseUrl'] = ollamaServer.getBaseUrl();
+      await callIpc('ai:set-model', 'llama3.2:latest');
+      ollamaServer.setChatResponse(JSON.stringify({
+        needsFollowUp: false,
+        reason: 'Regenerated after cache corruption.',
+      }));
+
+      const priorChatCount = ollamaServer.getRequestsFor('/api/chat').length;
+
+      const secondResponse = await callIpc(
+        'ai:detect-followup',
+        emailContent,
+      ) as IpcResponse<{ needsFollowUp: boolean; reason: string }>;
+
+      expect(secondResponse.success).to.equal(true);
+      expect(secondResponse.data!.needsFollowUp).to.equal(false);
+      expect(secondResponse.data!.reason).to.equal('Regenerated after cache corruption.');
+      expect(ollamaServer.getRequestsFor('/api/chat').length).to.be.greaterThan(priorChatCount);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1362,6 +1496,152 @@ describe('AI / Ollama', () => {
       expect(complete.totalResults).to.equal(0);
       expect(relevantBatches).to.deep.equal([]);
     });
+
+    const malformedSemanticIntentCases: MalformedSemanticIntentCase[] = [
+      {
+        description: 'silently drops a numeric folder filter and still completes semantic search',
+        queryKey: 'folder-number',
+        buildChatResponse: (queryText) => JSON.stringify({
+          type: 'semantic',
+          semanticQuery: queryText,
+          filters: {
+            folder: 123,
+          },
+        }),
+      },
+      {
+        description: 'silently drops an array sender filter and still completes semantic search',
+        queryKey: 'sender-array',
+        buildChatResponse: (queryText) => JSON.stringify({
+          type: 'semantic',
+          semanticQuery: queryText,
+          filters: {
+            sender: ['alice@example.com'],
+          },
+        }),
+      },
+      {
+        description: 'silently drops a string isStarred filter and still completes semantic search',
+        queryKey: 'starred-string',
+        buildChatResponse: (queryText) => JSON.stringify({
+          type: 'semantic',
+          semanticQuery: queryText,
+          filters: {
+            isStarred: 'true',
+          },
+        }),
+      },
+      {
+        description: 'falls back to the original query when the semantic intent response is null',
+        queryKey: 'null-response',
+        buildChatResponse: () => 'null',
+      },
+      {
+        description: 'falls back to the original query when semanticQuery is missing',
+        queryKey: 'missing-semantic-query',
+        buildChatResponse: () => JSON.stringify({
+          type: 'semantic',
+          filters: {},
+        }),
+      },
+      {
+        description: 'falls back to an empty filter object when filters is a string',
+        queryKey: 'filters-string',
+        buildChatResponse: (queryText) => JSON.stringify({
+          type: 'semantic',
+          semanticQuery: queryText,
+          filters: 'not-an-object',
+        }),
+      },
+    ];
+
+    for (const [index, testCase] of malformedSemanticIntentCases.entries()) {
+      it(testCase.description, async function () {
+        this.timeout(25_000);
+
+        const queryText = `semantic-malformed-${index + 1}-${testCase.queryKey}`;
+
+        await prepareSemanticIntentValidationSearch([1, 0, 0, 0], queryText);
+        ollamaServer.setChatResponse(testCase.buildChatResponse(queryText));
+
+        const searchResult = await runAiSearch(suiteAccountId, queryText, 'semantic');
+
+        expect(searchResult.complete.status).to.equal('complete');
+        expect(searchResult.allMsgIds).to.include(emlFixtures['plain-text'].headers.xGmMsgId);
+      });
+    }
+
+    const malformedKeywordIntentCases: MalformedKeywordIntentCase[] = [
+      {
+        description: 'drops a numeric folder field from keyword intent and still completes search',
+        queryKey: 'folder-number',
+        response: {
+          keywords: [],
+          synonyms: [],
+          direction: 'any',
+          folder: 123,
+          sender: null,
+          recipient: null,
+          dateRange: null,
+          flags: {},
+          exactPhrases: [],
+          negations: [],
+        },
+      },
+      {
+        description: 'drops an array sender field from keyword intent and still completes search',
+        queryKey: 'sender-array',
+        response: {
+          keywords: [],
+          synonyms: [],
+          direction: 'any',
+          folder: null,
+          sender: ['bad'],
+          recipient: null,
+          dateRange: null,
+          flags: {},
+          exactPhrases: [],
+          negations: [],
+        },
+      },
+      {
+        description: 'drops a string starred flag from keyword intent and still completes search',
+        queryKey: 'starred-string',
+        response: {
+          keywords: [],
+          synonyms: [],
+          direction: 'any',
+          folder: null,
+          sender: null,
+          recipient: null,
+          dateRange: null,
+          flags: {
+            starred: 'yes',
+          },
+          exactPhrases: [],
+          negations: [],
+        },
+      },
+    ];
+
+    for (const [index, testCase] of malformedKeywordIntentCases.entries()) {
+      it(testCase.description, async function () {
+        this.timeout(25_000);
+
+        const plainHeaders = emlFixtures['plain-text'].headers;
+        const queryText = Array.from({ length: index + 1 }, () => plainHeaders.subject).join(' ');
+
+        await ensureOllamaKeywordModeReady();
+        const priorChatCount = ollamaServer.getRequestsFor('/api/chat').length;
+        ollamaServer.setChatResponse(JSON.stringify(testCase.response));
+
+        const searchResult = await runAiSearch(suiteAccountId, queryText, 'keyword');
+
+        expect(['complete', 'partial']).to.include(searchResult.complete.status);
+        expect(searchResult.allMsgIds).to.include(plainHeaders.xGmMsgId);
+        expect(ollamaServer.getRequestsFor('/api/chat').length).to.be.greaterThan(priorChatCount);
+      });
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -2024,6 +2304,73 @@ describe('AI / Ollama', () => {
       const donePayload = doneArgs[0] as Record<string, unknown>;
       expect(donePayload['cancelled']).to.equal(true);
       expect(donePayload['success']).to.equal(true);
+    });
+  });
+
+  describe('ai:chat:navigate validation', () => {
+    it('returns AI_INVALID_INPUT when accountId is a non-numeric string', async () => {
+      const response = await callIpc('ai:chat:navigate', {
+        accountId: 'abc',
+        xGmMsgId: 'some-msgid@example.com',
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('AI_INVALID_INPUT');
+      expect(response.error!.message).to.include('valid positive number');
+    });
+
+    it('returns AI_CHAT_NAVIGATE_NO_WINDOW when no browser window is available', async () => {
+      const originalFromWebContents = BrowserWindow.fromWebContents;
+      const originalGetAllWindows = BrowserWindow.getAllWindows;
+
+      BrowserWindow.fromWebContents = ((_webContents: Electron.WebContents) => {
+        return null;
+      }) as typeof BrowserWindow.fromWebContents;
+      BrowserWindow.getAllWindows = (() => {
+        return [];
+      }) as typeof BrowserWindow.getAllWindows;
+
+      try {
+        const response = await callIpc('ai:chat:navigate', {
+          accountId: suiteAccountId,
+          xGmMsgId: 'some-msgid@example.com',
+        }) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('AI_CHAT_NAVIGATE_NO_WINDOW');
+      } finally {
+        BrowserWindow.fromWebContents = originalFromWebContents;
+        BrowserWindow.getAllWindows = originalGetAllWindows;
+      }
+    });
+
+    it('swallows background navigate search errors and still returns a search token', async () => {
+      if (hiddenWindow === null) {
+        throw new Error('Expected hidden test window to exist');
+      }
+
+      const originalSend = hiddenWindow.webContents.send.bind(hiddenWindow.webContents);
+      hiddenWindow.webContents.send = ((channel: string, ...args: unknown[]) => {
+        if (channel === 'ai:search:batch' || channel === 'ai:search:complete') {
+          throw new Error('forced navigate streaming failure');
+        }
+
+        return originalSend(channel, ...args);
+      }) as typeof hiddenWindow.webContents.send;
+
+      try {
+        const response = await callIpc('ai:chat:navigate', {
+          accountId: suiteAccountId,
+          xGmMsgId: emlFixtures['plain-text'].headers.xGmMsgId,
+        }) as IpcResponse<{ searchToken: string }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.searchToken).to.be.a('string');
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      } finally {
+        hiddenWindow.webContents.send = originalSend;
+      }
     });
   });
 });

@@ -17,10 +17,18 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { dialog } from 'electron';
+import { app, dialog } from 'electron';
 import { expect } from 'chai';
+import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
-import { callIpc, waitForEvent, seedTestAccount, triggerSyncAndWait } from '../infrastructure/test-helpers';
+import {
+  callIpc,
+  waitForEvent,
+  seedTestAccount,
+  triggerSyncAndWait,
+  getDatabase,
+  waitForQueueTerminalState,
+} from '../infrastructure/test-helpers';
 import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { DatabaseService } from '../../../electron/services/database-service';
@@ -42,6 +50,32 @@ interface AttachmentMetadata {
   size: number | null;
   contentId: string | null;
   localPath: string | null;
+}
+
+interface OrphanEmailRecord {
+  emailId: number;
+  attachmentId: number;
+  xGmMsgId: string;
+}
+
+interface CreateOrphanEmailOptions {
+  suffix: string;
+  subject: string;
+  filename: string;
+  mimeType: string | null;
+  size: number;
+}
+
+interface CreateDraftAndGetMsgIdOptions {
+  subject: string;
+  to: string;
+  textBody: string;
+  description: string;
+  attachments?: Array<{
+    filename: string;
+    mimeType: string;
+    data: string;
+  }>;
 }
 
 // ---- Suite-level state ----
@@ -100,11 +134,142 @@ async function setupWithAttachmentMessage(
   }
 }
 
+function createOrphanEmail(
+  db: DatabaseService,
+  accountId: number,
+  options: CreateOrphanEmailOptions,
+): OrphanEmailRecord {
+  const rawDb = db.getDatabase();
+  const nowIso = DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z';
+  const xGmThrid = `orphan-${options.suffix}-thread`;
+  const xGmMsgId = `orphan-${options.suffix}-msg`;
+
+  rawDb.prepare(
+    `INSERT INTO threads (account_id, x_gm_thrid, subject, last_message_date, participants, message_count, snippet, is_read, is_starred)
+     VALUES (:accountId, :xGmThrid, :subject, :lastMessageDate, :participants, :messageCount, :snippet, :isRead, :isStarred)`
+  ).run({
+    accountId,
+    xGmThrid,
+    subject: options.subject,
+    lastMessageDate: nowIso,
+    participants: 'Orphan Sender <orphan@example.com>',
+    messageCount: 1,
+    snippet: `orphan ${options.suffix} snippet`,
+    isRead: 1,
+    isStarred: 0,
+  });
+
+  const emailInsert = rawDb.prepare(
+    `INSERT INTO emails (
+       account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
+       to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date,
+       is_read, is_starred, is_important, is_draft, snippet, size, has_attachments, labels
+     ) VALUES (
+       :accountId, :xGmMsgId, :xGmThrid, :messageId, :fromAddress, :fromName,
+       :toAddresses, :ccAddresses, :bccAddresses, :subject, :textBody, :htmlBody, :date,
+       :isRead, :isStarred, :isImportant, :isDraft, :snippet, :size, :hasAttachments, :labels
+     )`
+  ).run({
+    accountId,
+    xGmMsgId,
+    xGmThrid,
+    messageId: `<${xGmMsgId}@example.com>`,
+    fromAddress: 'orphan@example.com',
+    fromName: 'Orphan Sender',
+    toAddresses: 'recipient@example.com',
+    ccAddresses: '',
+    bccAddresses: '',
+    subject: options.subject,
+    textBody: 'Body exists but no email_folders rows exist.',
+    htmlBody: null,
+    date: nowIso,
+    isRead: 1,
+    isStarred: 0,
+    isImportant: 0,
+    isDraft: 0,
+    snippet: `orphan ${options.suffix} snippet`,
+    size: 128,
+    hasAttachments: 1,
+    labels: '',
+  });
+
+  const emailId = Number(emailInsert.lastInsertRowid);
+  const attachmentInsert = rawDb.prepare(
+    `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+     VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+  ).run({
+    emailId,
+    filename: options.filename,
+    mimeType: options.mimeType,
+    size: options.size,
+    contentId: null,
+    localPath: null,
+  });
+
+  return {
+    emailId,
+    attachmentId: Number(attachmentInsert.lastInsertRowid),
+    xGmMsgId,
+  };
+}
+
+async function createDraftAndGetMsgId(
+  accountId: number,
+  options: CreateDraftAndGetMsgIdOptions,
+): Promise<string> {
+  const createDraftResponse = await callIpc('queue:enqueue', {
+    type: 'draft-create',
+    accountId,
+    payload: {
+      subject: options.subject,
+      to: options.to,
+      textBody: options.textBody,
+      attachments: options.attachments,
+    },
+    description: options.description,
+  }) as IpcResponse<{ queueId: string }>;
+
+  expect(createDraftResponse.success).to.equal(true);
+  const queueId = createDraftResponse.data!.queueId;
+  await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 25_000 });
+
+  const queueServiceModule = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+  const serverIds = queueServiceModule.MailQueueService.getInstance().getServerIds(queueId);
+  expect(serverIds).to.not.equal(undefined);
+
+  return serverIds!.xGmMsgId;
+}
+
 // =========================================================================
 // Attachment metadata
 // =========================================================================
 
 describe('Attachments', () => {
+  after(async function () {
+    this.timeout(20_000);
+
+    try {
+      const bodyFetchQueueModule = require('../../../electron/services/body-fetch-queue-service') as typeof import('../../../electron/services/body-fetch-queue-service');
+      await bodyFetchQueueModule.BodyFetchQueueService.getInstance().disconnectAll();
+    } catch {
+      // Best effort only for test-process shutdown stability.
+    }
+
+    try {
+      const syncServiceModule = require('../../../electron/services/sync-service') as typeof import('../../../electron/services/sync-service');
+      await syncServiceModule.SyncService.getInstance().stopAllIdle();
+    } catch {
+      // Best effort only for test-process shutdown stability.
+    }
+
+    try {
+      const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      await imapServiceModule.ImapService.getInstance().disconnectAllAndClearPending();
+    } catch {
+      // Best effort only for test-process shutdown stability.
+    }
+  });
+
   describe('attachment:get-for-email — metadata listing', () => {
     before(async function () {
       this.timeout(35_000);
@@ -167,6 +332,38 @@ describe('Attachments', () => {
 
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('INVALID_PARAMS');
+    });
+
+    it('returns INVALID_ACCOUNT for a non-numeric accountId', async () => {
+      const response = await callIpc(
+        'attachment:get-for-email',
+        'not-a-number',
+        '12345',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('INVALID_ACCOUNT');
+    });
+
+    it('returns ATTACHMENT_FETCH_FAILED when attachment metadata lookup throws unexpectedly', async () => {
+      const databaseService = DatabaseService.getInstance();
+      const originalGetAttachmentsForEmail = databaseService.getAttachmentsForEmail.bind(databaseService);
+      databaseService.getAttachmentsForEmail = (() => {
+        throw new Error('forced metadata lookup failure');
+      }) as typeof databaseService.getAttachmentsForEmail;
+
+      try {
+        const response = await callIpc(
+          'attachment:get-for-email',
+          String(suiteAccountId),
+          emlFixtures['multipart-attachment'].headers.xGmMsgId,
+        ) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_FETCH_FAILED');
+      } finally {
+        databaseService.getAttachmentsForEmail = originalGetAttachmentsForEmail;
+      }
     });
   });
 
@@ -239,9 +436,9 @@ describe('Attachments', () => {
       const db = DatabaseService.getInstance();
       const updatedAtt = db.getAttachmentById(pngAtt!.id);
       expect(updatedAtt).to.not.be.null;
-      if (updatedAtt!.localPath) {
-        expect(fs.existsSync(updatedAtt!.localPath)).to.equal(true);
-      }
+      expect(updatedAtt!.localPath, 'attachment cache path should be persisted after fetch').to.be.a('string');
+      expect(fs.existsSync(updatedAtt!.localPath!)).to.equal(true);
+      expect(fs.readFileSync(updatedAtt!.localPath!).toString('base64')).to.equal(contentResponse.data!.content);
     });
 
     it('second request returns cached content without IMAP call', async function () {
@@ -260,13 +457,24 @@ describe('Attachments', () => {
       expect(notesTxtAtt).to.not.be.undefined;
 
       // First call populates cache
-      await callIpc('attachment:get-content', notesTxtAtt!.id);
+      const firstResponse = await callIpc(
+        'attachment:get-content',
+        notesTxtAtt!.id,
+      ) as IpcResponse<{ filename: string; content: string }>;
+
+      expect(firstResponse.success).to.equal(true);
 
       // Verify the cache file exists
       const db = DatabaseService.getInstance();
       const cachedAtt = db.getAttachmentById(notesTxtAtt!.id);
 
-      if (cachedAtt?.localPath && fs.existsSync(cachedAtt.localPath)) {
+      expect(cachedAtt).to.not.be.null;
+      expect(cachedAtt!.localPath, 'attachment cache path must exist before cache-hit assertion').to.be.a('string');
+      expect(fs.existsSync(cachedAtt!.localPath!)).to.equal(true);
+
+      imapStateInspector.injectCommandError('FETCH', 'cache-hit test should not refetch from IMAP');
+
+      try {
         // Second request should read from cache file
         const secondResponse = await callIpc(
           'attachment:get-content',
@@ -275,8 +483,10 @@ describe('Attachments', () => {
 
         expect(secondResponse.success).to.equal(true);
         expect(secondResponse.data!.filename).to.equal('notes.txt');
+        expect(secondResponse.data!.content).to.equal(firstResponse.data!.content);
+      } finally {
+        imapStateInspector.clearCommandErrors();
       }
-      // If caching not available in this env, just pass (non-fatal)
     });
 
     it('returns ATTACHMENT_NOT_FOUND for a non-existent attachment ID', async () => {
@@ -324,6 +534,313 @@ describe('Attachments', () => {
         if (orphanAttachmentId !== null) {
           rawDb.prepare('DELETE FROM attachments WHERE id = :id').run({ id: orphanAttachmentId });
         }
+      }
+    });
+
+    it('returns ATTACHMENT_CONTENT_NOT_FOUND when the attachment email has no resolvable folder UIDs', async () => {
+      const db = getDatabase();
+      const orphanRecord = createOrphanEmail(db, suiteAccountId, {
+        suffix: 'attachment',
+        subject: 'Orphan attachment subject',
+        filename: 'unreachable.txt',
+        mimeType: 'text/plain',
+        size: 20,
+      });
+      const response = await callIpc('attachment:get-content', orphanRecord.attachmentId) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_NOT_FOUND');
+    });
+
+    it('returns ATTACHMENT_CONTENT_FAILED when IMAP FETCH throws while loading attachment content', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        multipartHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
+
+      const existingAttachment = DatabaseService.getInstance().getAttachmentById(notesAttachment!.id);
+      if (existingAttachment?.localPath && fs.existsSync(existingAttachment.localPath)) {
+        fs.unlinkSync(existingAttachment.localPath);
+      }
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE attachments SET local_path = NULL WHERE id = :id'
+      ).run({ id: notesAttachment!.id });
+
+      imapStateInspector.injectCommandError('FETCH', 'forced attachment content fetch failure');
+
+      try {
+        const response = await callIpc('attachment:get-content', notesAttachment!.id) as IpcResponse<unknown>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_FAILED');
+      } finally {
+        imapStateInspector.clearCommandErrors();
+      }
+    });
+
+    it('fetches CID-based inline attachment content by matching contentId', async function () {
+      this.timeout(30_000);
+
+      const inlineHeaders = emlFixtures['inline-images'].headers;
+      imapStateInspector.injectMessage('[Gmail]/All Mail', emlFixtures['inline-images'].raw, {
+        xGmMsgId: inlineHeaders.xGmMsgId,
+        xGmThrid: inlineHeaders.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', emlFixtures['inline-images'].raw, {
+        xGmMsgId: inlineHeaders.xGmMsgId,
+        xGmThrid: inlineHeaders.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 25_000 });
+
+      const databaseService = DatabaseService.getInstance();
+      const emailsNeedingBodies = databaseService.getEmailsNeedingBodies(suiteAccountId, 20);
+      if (emailsNeedingBodies.length > 0) {
+        await BodyPrefetchService.getInstance().fetchAndStoreBodies(suiteAccountId, emailsNeedingBodies);
+      }
+
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        inlineHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      expect(metaResponse.data).to.be.an('array');
+      expect(metaResponse.data!.length).to.equal(0);
+
+      const inlineEmail = databaseService.getEmailByXGmMsgId(suiteAccountId, inlineHeaders.xGmMsgId);
+      expect(inlineEmail).to.not.be.null;
+
+      const rawDb = databaseService.getDatabase();
+      const insertResult = rawDb.prepare(
+        `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+         VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+      ).run({
+        emailId: Number(inlineEmail!['id']),
+        filename: 'inline-logo.png',
+        mimeType: 'image/png',
+        size: 70,
+        contentId: 'logo@example.com',
+        localPath: null,
+      });
+
+      const inlineAttachmentId = Number(insertResult.lastInsertRowid);
+      const insertedMetaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        inlineHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(insertedMetaResponse.success).to.equal(true);
+      expect(insertedMetaResponse.data).to.be.an('array');
+      expect(insertedMetaResponse.data!.length).to.equal(1);
+
+      const inlineAttachment = insertedMetaResponse.data![0];
+      expect(inlineAttachment.id).to.equal(inlineAttachmentId);
+      expect(inlineAttachment.contentId).to.equal('logo@example.com');
+
+      const contentResponse = await callIpc(
+        'attachment:get-content',
+        inlineAttachment.id,
+      ) as IpcResponse<{ filename: string; mimeType: string; content: string }>;
+
+      expect(contentResponse.success).to.equal(true);
+      expect(contentResponse.data!.filename).to.equal('inline-logo.png');
+      expect(contentResponse.data!.mimeType).to.equal('image/png');
+      expect(contentResponse.data!.content.length).to.be.greaterThan(0);
+    });
+
+    it('returns ATTACHMENT_CONTENT_NOT_FOUND when attachment metadata does not match parsed message attachments', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const emailRecord = DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, multipartHeaders.xGmMsgId);
+      expect(emailRecord).to.not.be.null;
+
+      const rawDb = DatabaseService.getInstance().getDatabase();
+      const insertResult = rawDb.prepare(
+        `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+         VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+      ).run({
+        emailId: Number(emailRecord!['id']),
+        filename: 'missing-from-message.bin',
+        mimeType: 'application/octet-stream',
+        size: 99,
+        contentId: null,
+        localPath: null,
+      });
+
+      const missingAttachmentId = Number(insertResult.lastInsertRowid);
+      const response = await callIpc('attachment:get-content', missingAttachmentId) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_NOT_FOUND');
+    });
+
+    it('returns ATTACHMENT_CONTENT_NOT_FOUND when IMAP fetch succeeds but returns no source body', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        multipartHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      const pngAttachment = metaResponse.data!.find((att) => att.filename === 'small.png');
+      expect(pngAttachment).to.not.be.undefined;
+
+      const databaseService = DatabaseService.getInstance();
+      const cachedAttachment = databaseService.getAttachmentById(pngAttachment!.id);
+      if (cachedAttachment?.localPath && fs.existsSync(cachedAttachment.localPath)) {
+        fs.unlinkSync(cachedAttachment.localPath);
+      }
+      databaseService.getDatabase().prepare(
+        'UPDATE attachments SET local_path = NULL WHERE id = :id'
+      ).run({ id: pngAttachment!.id });
+
+      const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+      const imapService = imapServiceModule.ImapService.getInstance() as unknown as {
+        connect: (accountId: string) => Promise<unknown>;
+      };
+      const originalConnect = imapService.connect;
+      imapService.connect = (async () => {
+        return {
+          getMailboxLock: async () => ({
+            release: (): void => {
+              // no-op test lock
+            },
+          }),
+          fetchOne: async (): Promise<Record<string, unknown>> => ({ source: null }),
+        };
+      }) as typeof imapService.connect;
+
+      try {
+        const response = await callIpc('attachment:get-content', pngAttachment!.id) as IpcResponse<unknown>;
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_NOT_FOUND');
+      } finally {
+        imapService.connect = originalConnect;
+      }
+    });
+
+    it('returns application/octet-stream when cached attachment metadata has no mimeType', async () => {
+      const databaseService = DatabaseService.getInstance();
+      const emailRecord = databaseService.getEmailByXGmMsgId(
+        suiteAccountId,
+        emlFixtures['multipart-attachment'].headers.xGmMsgId,
+      );
+      expect(emailRecord).to.not.be.null;
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'attach-cache-hit-'));
+      const tempFilePath = path.join(tempDir, 'cached-attachment.bin');
+      fs.writeFileSync(tempFilePath, Buffer.from('cached binary data', 'utf8'));
+
+      const insertResult = databaseService.getDatabase().prepare(
+        `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+         VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+      ).run({
+        emailId: Number(emailRecord!['id']),
+        filename: 'cached-no-mime.bin',
+        mimeType: null,
+        size: 18,
+        contentId: null,
+        localPath: tempFilePath,
+      });
+
+      const attachmentId = Number(insertResult.lastInsertRowid);
+
+      try {
+        const response = await callIpc('attachment:get-content', attachmentId) as IpcResponse<{
+          mimeType: string;
+          content: string;
+        }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.mimeType).to.equal('application/octet-stream');
+        expect(Buffer.from(response.data!.content, 'base64').toString('utf8')).to.equal('cached binary data');
+      } finally {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+        if (fs.existsSync(tempDir)) {
+          fs.rmdirSync(tempDir);
+        }
+      }
+    });
+
+    it('returns success when caching attachment content to disk fails after IMAP fetch', async function () {
+      this.timeout(20_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const metaResponse = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        multipartHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(metaResponse.success).to.equal(true);
+      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
+
+      const databaseService = DatabaseService.getInstance();
+      const cachedAttachment = databaseService.getAttachmentById(notesAttachment!.id);
+      if (cachedAttachment?.localPath && fs.existsSync(cachedAttachment.localPath)) {
+        fs.unlinkSync(cachedAttachment.localPath);
+      }
+      databaseService.getDatabase().prepare(
+        'UPDATE attachments SET local_path = NULL WHERE id = :id'
+      ).run({ id: notesAttachment!.id });
+
+      const fsModule = require('fs') as typeof import('fs');
+      const originalWriteFileSync = fsModule.writeFileSync;
+      fsModule.writeFileSync = ((filePath: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: unknown) => {
+        if (typeof filePath === 'string' && filePath.includes(`${path.sep}attachments${path.sep}`)) {
+          throw new Error('forced attachment cache write failure');
+        }
+        return originalWriteFileSync(filePath, data, options as never);
+      }) as typeof fs.writeFileSync;
+
+      try {
+        const response = await callIpc('attachment:get-content', notesAttachment!.id) as IpcResponse<{
+          filename: string;
+          content: string;
+        }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.filename).to.equal('notes.txt');
+        expect(response.data!.content.length).to.be.greaterThan(0);
+      } finally {
+        fsModule.writeFileSync = originalWriteFileSync;
+      }
+    });
+
+    it('returns ATTACHMENT_CONTENT_FAILED with the fallback message when a non-Error value is thrown', async () => {
+      const databaseService = DatabaseService.getInstance();
+      const originalGetAttachmentById = databaseService.getAttachmentById.bind(databaseService);
+      databaseService.getAttachmentById = (() => {
+        throw 'non-error-attachment-content-failure';
+      }) as typeof databaseService.getAttachmentById;
+
+      try {
+        const response = await callIpc('attachment:get-content', 1) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_FAILED');
+        expect(response.error!.message).to.equal('Failed to get attachment content');
+      } finally {
+        databaseService.getAttachmentById = originalGetAttachmentById;
       }
     });
 
@@ -489,6 +1006,119 @@ describe('Attachments', () => {
         fsModule.readFileSync = originalReadFileSync;
       }
     });
+
+    it('returns ATTACHMENT_EMAIL_NOT_FOUND when text content is requested for orphaned attachment metadata', async () => {
+      const db = DatabaseService.getInstance();
+      const rawDb = db.getDatabase();
+      let orphanAttachmentId: number | null = null;
+
+      rawDb.pragma('foreign_keys = OFF');
+      try {
+        const insertResult = rawDb.prepare(
+          `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+           VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+        ).run({
+          emailId: 999999,
+          filename: 'orphan-text.txt',
+          mimeType: 'text/plain',
+          size: 10,
+          contentId: null,
+          localPath: null,
+        });
+        orphanAttachmentId = Number(insertResult.lastInsertRowid);
+      } finally {
+        rawDb.pragma('foreign_keys = ON');
+      }
+
+      try {
+        const response = await callIpc('attachment:get-content-as-text', orphanAttachmentId) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_EMAIL_NOT_FOUND');
+      } finally {
+        if (orphanAttachmentId !== null) {
+          rawDb.prepare('DELETE FROM attachments WHERE id = :id').run({ id: orphanAttachmentId });
+        }
+      }
+    });
+
+    it('returns ATTACHMENT_CONTENT_NOT_FOUND when text content is requested for an attachment with no resolvable folder UIDs', async () => {
+      const db = getDatabase();
+      const orphanRecord = createOrphanEmail(db, suiteAccountId, {
+        suffix: 'text',
+        subject: 'Orphan text subject',
+        filename: 'unreachable-text.txt',
+        mimeType: null,
+        size: 20,
+      });
+      const response = await callIpc('attachment:get-content-as-text', orphanRecord.attachmentId) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_NOT_FOUND');
+    });
+
+    it('returns application/octet-stream when text attachment metadata has no mimeType', async () => {
+      const databaseService = DatabaseService.getInstance();
+      const emailRecord = databaseService.getEmailByXGmMsgId(
+        suiteAccountId,
+        emlFixtures['multipart-attachment'].headers.xGmMsgId,
+      );
+      expect(emailRecord).to.not.be.null;
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'attach-text-cache-hit-'));
+      const tempFilePath = path.join(tempDir, 'cached-text.txt');
+      fs.writeFileSync(tempFilePath, Buffer.from('plain text cache', 'utf8'));
+
+      const insertResult = databaseService.getDatabase().prepare(
+        `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+         VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+      ).run({
+        emailId: Number(emailRecord!['id']),
+        filename: 'cached-no-mime-text.txt',
+        mimeType: null,
+        size: 16,
+        contentId: null,
+        localPath: tempFilePath,
+      });
+
+      const attachmentId = Number(insertResult.lastInsertRowid);
+
+      try {
+        const response = await callIpc('attachment:get-content-as-text', attachmentId) as IpcResponse<{
+          mimeType: string;
+          text: string;
+        }>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data!.mimeType).to.equal('application/octet-stream');
+        expect(response.data!.text).to.equal('plain text cache');
+      } finally {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+        if (fs.existsSync(tempDir)) {
+          fs.rmdirSync(tempDir);
+        }
+      }
+    });
+
+    it('returns ATTACHMENT_CONTENT_FAILED for text content when a non-Error value is thrown', async () => {
+      const databaseService = DatabaseService.getInstance();
+      const originalGetAttachmentById = databaseService.getAttachmentById.bind(databaseService);
+      databaseService.getAttachmentById = (() => {
+        throw 'non-error-attachment-text-failure';
+      }) as typeof databaseService.getAttachmentById;
+
+      try {
+        const response = await callIpc('attachment:get-content-as-text', 1) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_FAILED');
+        expect(response.error!.message).to.equal('Failed to get attachment text');
+      } finally {
+        databaseService.getAttachmentById = originalGetAttachmentById;
+      }
+    });
   });
 
   // =========================================================================
@@ -650,6 +1280,56 @@ describe('Attachments', () => {
         }
       }
     });
+
+    it('returns ATTACHMENT_EMAIL_NOT_FOUND when download metadata exists without a matching email', async () => {
+      const db = DatabaseService.getInstance();
+      const rawDb = db.getDatabase();
+      let orphanAttachmentId: number | null = null;
+
+      rawDb.pragma('foreign_keys = OFF');
+      try {
+        const insertResult = rawDb.prepare(
+          `INSERT INTO attachments (email_id, filename, mime_type, size, content_id, local_path)
+           VALUES (:emailId, :filename, :mimeType, :size, :contentId, :localPath)`
+        ).run({
+          emailId: 999999,
+          filename: 'orphan-download.txt',
+          mimeType: 'text/plain',
+          size: 10,
+          contentId: null,
+          localPath: null,
+        });
+        orphanAttachmentId = Number(insertResult.lastInsertRowid);
+      } finally {
+        rawDb.pragma('foreign_keys = ON');
+      }
+
+      try {
+        const response = await callIpc('attachment:download', orphanAttachmentId) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('ATTACHMENT_EMAIL_NOT_FOUND');
+      } finally {
+        if (orphanAttachmentId !== null) {
+          rawDb.prepare('DELETE FROM attachments WHERE id = :id').run({ id: orphanAttachmentId });
+        }
+      }
+    });
+
+    it('returns ATTACHMENT_CONTENT_NOT_FOUND when download cannot resolve attachment content from IMAP', async () => {
+      const db = getDatabase();
+      const orphanRecord = createOrphanEmail(db, suiteAccountId, {
+        suffix: 'download',
+        subject: 'Orphan download subject',
+        filename: 'unreachable-download.txt',
+        mimeType: 'text/plain',
+        size: 20,
+      });
+      const response = await callIpc('attachment:download', orphanRecord.attachmentId) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_NOT_FOUND');
+    });
   });
 
   // =========================================================================
@@ -701,33 +1381,101 @@ describe('Attachments', () => {
       expect(response.error!.code).to.equal('DRAFT_NOT_FOUND');
     });
 
+    it('returns restored attachment objects for a real draft created with attachments', async function () {
+      this.timeout(30_000);
+
+      const draftXGmMsgId = await createDraftAndGetMsgId(suiteAccountId, {
+        subject: 'Draft with attachment restore',
+        to: 'draft-attachment-restore@example.com',
+        textBody: 'Draft attachment restore body',
+        description: 'Create draft with attachment for restoration',
+        attachments: [
+          {
+            filename: 'restore.txt',
+            mimeType: 'text/plain',
+            data: Buffer.from('draft attachment contents', 'utf8').toString('base64'),
+          },
+        ],
+      });
+
+      const response = await callIpc(
+        'attachment:fetch-draft-attachments',
+        String(suiteAccountId),
+        draftXGmMsgId,
+      ) as IpcResponse<Array<{ filename: string; mimeType: string; size: number; data: string }>>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.be.an('array');
+      expect(response.data!.length).to.equal(1);
+      expect(response.data![0].filename).to.equal('restore.txt');
+      expect(response.data![0].mimeType).to.equal('text/plain');
+      expect(Buffer.from(response.data![0].data, 'base64').toString('utf8')).to.equal('draft attachment contents');
+    });
+
+    it('omits CID-only inline parts when restoring draft attachments', async function () {
+      this.timeout(30_000);
+
+      const draftXGmMsgId = await createDraftAndGetMsgId(suiteAccountId, {
+        subject: 'Draft with filtered inline restore',
+        to: 'draft-inline-restore@example.com',
+        textBody: 'Inline restore body',
+        description: 'Create draft with inline and file attachment',
+        attachments: [
+          {
+            filename: 'visible.txt',
+            mimeType: 'text/plain',
+            data: Buffer.from('visible draft attachment', 'utf8').toString('base64'),
+          },
+        ],
+      });
+
+      const mailparserModule = require('mailparser') as typeof import('mailparser');
+      const originalSimpleParser = mailparserModule.simpleParser;
+      mailparserModule.simpleParser = ((async () => ({
+        attachments: [
+          {
+            filename: 'inline-logo.png',
+            contentType: 'image/png',
+            size: 3,
+            contentId: '<inline-logo@example.com>',
+            contentDisposition: 'inline',
+            content: Buffer.from('abc', 'utf8'),
+          },
+          {
+            filename: 'visible.txt',
+            contentType: 'text/plain',
+            size: 23,
+            contentDisposition: 'attachment',
+            content: Buffer.from('visible draft attachment', 'utf8'),
+          },
+        ],
+      })) as unknown) as typeof mailparserModule.simpleParser;
+
+      try {
+        const response = await callIpc(
+          'attachment:fetch-draft-attachments',
+          String(suiteAccountId),
+          draftXGmMsgId,
+        ) as IpcResponse<Array<{ filename: string; mimeType: string; size: number; data: string }>>;
+
+        expect(response.success).to.equal(true);
+        expect(response.data).to.be.an('array');
+        expect(response.data!.map((attachment) => attachment.filename)).to.include('visible.txt');
+        expect(response.data!.map((attachment) => attachment.filename)).to.not.include('inline-logo.png');
+      } finally {
+        mailparserModule.simpleParser = originalSimpleParser;
+      }
+    });
+
     it('returns ATTACHMENT_DRAFT_FETCH_FAILED when fetching the draft source throws', async function () {
       this.timeout(25_000);
 
-      const createDraftResponse = await callIpc('queue:enqueue', {
-        type: 'draft-create',
-        accountId: suiteAccountId,
-        payload: {
-          subject: 'Draft attachment fetch failure',
-          to: 'draft-fetch-failure@example.com',
-          textBody: 'Draft source fetch failure test',
-        },
+      const draftXGmMsgId = await createDraftAndGetMsgId(suiteAccountId, {
+        subject: 'Draft attachment fetch failure',
+        to: 'draft-fetch-failure@example.com',
+        textBody: 'Draft source fetch failure test',
         description: 'Create draft for attachment failure path',
-      }) as IpcResponse<{ queueId: string }>;
-
-      expect(createDraftResponse.success).to.equal(true);
-      const draftQueueId = createDraftResponse.data!.queueId;
-      await waitForEvent('queue:update', {
-        timeout: 20_000,
-        predicate: (args) => {
-          const payload = args[0] as Record<string, unknown> | undefined;
-          return payload != null && payload['queueId'] === draftQueueId && payload['status'] === 'completed';
-        },
       });
-
-      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
-      const serverIds = queueService.MailQueueService.getInstance().getServerIds(draftQueueId);
-      expect(serverIds).to.not.equal(undefined);
 
       imapStateInspector.injectCommandError('FETCH', 'forced draft fetch failure');
 
@@ -735,7 +1483,7 @@ describe('Attachments', () => {
         const response = await callIpc(
           'attachment:fetch-draft-attachments',
           String(suiteAccountId),
-          serverIds!.xGmMsgId,
+          draftXGmMsgId,
         ) as IpcResponse<unknown>;
 
         expect(response.success).to.equal(false);
@@ -804,17 +1552,51 @@ describe('Attachments', () => {
 
       await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
 
-      // Get the attachment metadata — filename should be sanitized in the cache path
+      const databaseService = DatabaseService.getInstance();
+      const emailsNeedingBodies = databaseService.getEmailsNeedingBodies(suiteAccountId, 20);
+      if (emailsNeedingBodies.length > 0) {
+        await BodyPrefetchService.getInstance().fetchAndStoreBodies(suiteAccountId, emailsNeedingBodies);
+      }
+
+      // Get the attachment metadata, then fetch content so the cache path is exercised.
       const metaResponse = await callIpc(
         'attachment:get-for-email',
         String(suiteAccountId),
         '7770000000000001',
       ) as IpcResponse<AttachmentMetadata[]>;
 
-      // The attachment list may be empty if body wasn't fetched, which is acceptable
-      // The important thing is that the IPC does not crash and the response is valid
       expect(metaResponse.success).to.equal(true);
       expect(metaResponse.data).to.be.an('array');
+      expect(metaResponse.data!.length).to.equal(1);
+
+      const dangerousAttachment = metaResponse.data![0];
+      const contentResponse = await callIpc(
+        'attachment:get-content',
+        dangerousAttachment.id,
+      ) as IpcResponse<{ filename: string; content: string }>;
+
+      expect(contentResponse.success).to.equal(true);
+      expect(contentResponse.data!.filename).to.equal('../../../etc/passwd');
+      expect(contentResponse.data!.content.length).to.be.greaterThan(0);
+
+      const cachedAttachment = databaseService.getAttachmentById(dangerousAttachment.id);
+      expect(cachedAttachment).to.not.be.null;
+      expect(cachedAttachment!.localPath).to.be.a('string');
+      expect(fs.existsSync(cachedAttachment!.localPath!)).to.equal(true);
+
+      const expectedCacheDir = path.join(
+        app.getPath('userData'),
+        'attachments',
+        String(suiteAccountId),
+        String(dangerousAttachment.emailId),
+      );
+      const resolvedLocalPath = path.resolve(cachedAttachment!.localPath!);
+      const resolvedCacheDir = path.resolve(expectedCacheDir);
+      const cachedFilename = path.basename(cachedAttachment!.localPath!);
+
+      expect(resolvedLocalPath.startsWith(`${resolvedCacheDir}${path.sep}`)).to.equal(true);
+      expect(cachedFilename).to.not.equal(`${dangerousAttachment.id}_../../../etc/passwd`);
+      expect(cachedFilename).to.include('etc_passwd');
     });
   });
 });

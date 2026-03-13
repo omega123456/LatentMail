@@ -59,6 +59,124 @@ export function waitForEvent(
   return TestEventBus.getInstance().waitFor(channel, options);
 }
 
+export interface QueueUpdateEventSnapshot {
+  queueId: string;
+  accountId: number;
+  type: string;
+  status: string;
+  error?: string;
+}
+
+export interface WaitForQueueTerminalStateOptions {
+  timeout?: number;
+  expectedStatus?: 'completed' | 'failed';
+}
+
+function isTerminalQueueStatus(status: unknown): status is 'completed' | 'failed' {
+  return status === 'completed' || status === 'failed';
+}
+
+export async function waitForQueueTerminalState(
+  queueId: string,
+  options: WaitForQueueTerminalStateOptions = {},
+): Promise<QueueUpdateEventSnapshot> {
+  const timeoutMs = options.timeout ?? 15_000;
+  const resultArgs = await waitForEvent('queue:update', {
+    timeout: timeoutMs,
+    predicate: (args) => {
+      const snapshot = args[0] as QueueUpdateEventSnapshot | undefined;
+      return (
+        snapshot != null &&
+        snapshot.queueId === queueId &&
+        isTerminalQueueStatus(snapshot.status)
+      );
+    },
+  });
+
+  const snapshot = resultArgs[0] as QueueUpdateEventSnapshot;
+  if (options.expectedStatus !== undefined && snapshot.status !== options.expectedStatus) {
+    const errorSuffix = typeof snapshot.error === 'string' ? `: ${snapshot.error}` : '';
+    throw new Error(
+      `waitForQueueTerminalState: operation ${queueId} reached status '${snapshot.status}' ` +
+      `(expected '${options.expectedStatus}')${errorSuffix}`,
+    );
+  }
+
+  return snapshot;
+}
+
+export interface FolderUpdatedEventPayload extends Record<string, unknown> {
+  accountId: number;
+  folders?: string[];
+  reason?: string;
+  changeType?: string;
+  count?: number;
+}
+
+export interface WaitForNextFolderUpdatedOptions {
+  timeout?: number;
+  reason?: string;
+  folder?: string;
+  priorCount?: number;
+}
+
+function matchesFolderUpdatedEvent(
+  payload: FolderUpdatedEventPayload | undefined,
+  accountId: number,
+  options: WaitForNextFolderUpdatedOptions,
+): boolean {
+  if (payload == null) {
+    return false;
+  }
+  if (Number(payload.accountId) !== accountId) {
+    return false;
+  }
+  if (options.reason !== undefined && payload.reason !== options.reason) {
+    return false;
+  }
+  if (options.folder !== undefined) {
+    if (!Array.isArray(payload.folders)) {
+      return false;
+    }
+    if (!payload.folders.includes(options.folder)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export async function waitForNextFolderUpdated(
+  accountId: number,
+  options: WaitForNextFolderUpdatedOptions = {},
+): Promise<FolderUpdatedEventPayload> {
+  const timeoutMs = options.timeout ?? 15_000;
+  const eventBus = TestEventBus.getInstance();
+  const priorCount = options.priorCount ?? eventBus.getHistory('mail:folder-updated').filter((record) => {
+    const payload = record.args[0] as FolderUpdatedEventPayload | undefined;
+    return matchesFolderUpdatedEvent(payload, accountId, options);
+  }).length;
+
+  const resultArgs = await waitForEvent('mail:folder-updated', {
+    timeout: timeoutMs,
+    predicate: (args) => {
+      const payload = args[0] as FolderUpdatedEventPayload | undefined;
+      if (!matchesFolderUpdatedEvent(payload, accountId, options)) {
+        return false;
+      }
+
+      const currentCount = eventBus.getHistory('mail:folder-updated').filter((record) => {
+        const recordPayload = record.args[0] as FolderUpdatedEventPayload | undefined;
+        return matchesFolderUpdatedEvent(recordPayload, accountId, options);
+      }).length;
+
+      return currentCount > priorCount;
+    },
+  });
+
+  return resultArgs[0] as FolderUpdatedEventPayload;
+}
+
 /**
  * Options for seedTestAccount().
  */

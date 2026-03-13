@@ -418,6 +418,20 @@ describe('Database Settings', () => {
       const db = getDatabase();
       expect(db.getSetting('openAtLogin')).to.equal('false');
     });
+
+    it('reflects the current launch-at-login setting through the Electron helper', () => {
+      const originalGetLoginItemSettings = app.getLoginItemSettings.bind(app);
+      app.getLoginItemSettings = (() => {
+        return { openAtLogin: true } as Electron.Settings;
+      }) as typeof app.getLoginItemSettings;
+
+      try {
+        const { getLaunchAtLogin } = require('../../../electron/utils/launch-at-login') as typeof import('../../../electron/utils/launch-at-login');
+        expect(getLaunchAtLogin()).to.equal(true);
+      } finally {
+        app.getLoginItemSettings = originalGetLoginItemSettings;
+      }
+    });
   });
 
   // ---- Suite isolation (verify quiesce/restore cleans state) ----

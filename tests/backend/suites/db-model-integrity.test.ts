@@ -19,6 +19,7 @@
  *  14.  Label CRUD + color + cascade (createLabel / deleteLabel / updateLabelColor)
  *  15.  Unread thread counts after flag changes
  *  16.  Embedding bookkeeping (vector_indexed_emails / embedding_crawl_progress)
+ *  17.  Search helper edge cases (getEmailDatesByMsgIds / filterEmailsByMsgIds batching)
  *
  * Protocol:
  *   - before() hook calls quiesceAndRestore() once for the whole suite.
@@ -31,7 +32,9 @@ import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import { callIpc, getDatabase, seedTestAccount, waitForEvent } from '../infrastructure/test-helpers';
 import { TestEventBus } from '../infrastructure/test-event-bus';
+import { ollamaServer } from '../test-main';
 import type { UpsertEmailInput, UpsertThreadInput } from '../../../electron/database/models';
+import { VectorDbService } from '../../../electron/services/vector-db-service';
 
 interface IpcResponse<T = unknown> {
   success: boolean;
@@ -49,6 +52,13 @@ interface SearchCompletePayload {
   searchToken: string;
   status: string;
   totalResults: number;
+}
+
+interface ChatDonePayload {
+  requestId: string;
+  success: boolean;
+  cancelled: boolean;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +165,35 @@ describe('DB Model Integrity', () => {
       complete,
       allMsgIds: batches.flatMap((payload) => payload.msgIds),
     };
+  }
+
+  async function configureInboxChatModels(): Promise<void> {
+    const setUrlResponse = await callIpc('ai:set-url', ollamaServer.getBaseUrl()) as IpcResponse<{
+      connected: boolean;
+    }>;
+    expect(setUrlResponse.success).to.equal(true);
+    expect(setUrlResponse.data!.connected).to.equal(true);
+
+    const setModelResponse = await callIpc(
+      'ai:set-model',
+      'llama3.2:latest',
+    ) as IpcResponse<{ currentModel: string }>;
+    expect(setModelResponse.success).to.equal(true);
+    expect(setModelResponse.data!.currentModel).to.equal('llama3.2:latest');
+
+    ollamaServer.setEmbedDimension(4);
+    const setEmbeddingModelResponse = await callIpc(
+      'ai:set-embedding-model',
+      'nomic-embed-text:latest',
+    ) as IpcResponse<{ embeddingModel: string; vectorDimension: number }>;
+    expect(setEmbeddingModelResponse.success).to.equal(true);
+    expect(setEmbeddingModelResponse.data!.embeddingModel).to.equal('nomic-embed-text:latest');
+    expect(setEmbeddingModelResponse.data!.vectorDimension).to.equal(4);
+
+    VectorDbService.getInstance().clearAllAndReconfigure(
+      setEmbeddingModelResponse.data!.embeddingModel,
+      setEmbeddingModelResponse.data!.vectorDimension,
+    );
   }
 
   // =========================================================================
@@ -1589,6 +1628,266 @@ describe('DB Model Integrity', () => {
 
       expect(db.getEmbeddingCrawlCursor(accountId)).to.equal(77777);
       expect(db.getIndexedMsgIds(accountId).has('emb-atomic-001')).to.be.true;
+    });
+  });
+
+  // =========================================================================
+  // 17. Search helper edge cases
+  // =========================================================================
+
+  describe('Search helper edge cases', () => {
+    it('filterEmailsByMsgIds returns an empty set for an empty candidate list', () => {
+      const db = getDatabase();
+      const accountId = createTestAccount('filter-empty');
+
+      const matchingIds = db.filterEmailsByMsgIds(accountId, [], {});
+
+      expect(matchingIds).to.be.instanceOf(Set);
+      expect(matchingIds.size).to.equal(0);
+    });
+
+    it('getEmailDatesByMsgIds returns an empty map for an empty input array', () => {
+      const db = getDatabase();
+      const accountId = createTestAccount('email-dates-empty');
+
+      const dateMap = db.getEmailDatesByMsgIds(accountId, []);
+
+      expect(dateMap).to.be.instanceOf(Map);
+      expect(dateMap.size).to.equal(0);
+    });
+
+    it('filterEmailsByMsgIds applies folder joins, structured filters, and always excludes drafts', () => {
+      const db = getDatabase();
+      const accountId = createTestAccount('filter-structured');
+
+      const matchingEmailId = 'filter-structured-match';
+      const draftsOnlyEmailId = 'filter-structured-draft';
+      const wrongFolderEmailId = 'filter-structured-folder';
+      const wrongRecipientEmailId = 'filter-structured-recipient';
+      const wrongAttachmentEmailId = 'filter-structured-attachment';
+      const wrongReadStateEmailId = 'filter-structured-read';
+      const wrongStarStateEmailId = 'filter-structured-star';
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: matchingEmailId,
+        xGmThrid: 'thread-filter-structured-match',
+        folder: 'Projects/Alpha',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'structured-recipient@example.com',
+        hasAttachments: false,
+        isRead: false,
+        isStarred: false,
+        date: '2026-03-12T10:00:00.000Z',
+      }));
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: draftsOnlyEmailId,
+        xGmThrid: 'thread-filter-structured-draft',
+        folder: '[Gmail]/Drafts',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'structured-recipient@example.com',
+        hasAttachments: false,
+        isRead: false,
+        isStarred: false,
+        date: '2026-03-12T10:05:00.000Z',
+      }));
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: wrongFolderEmailId,
+        xGmThrid: 'thread-filter-structured-folder',
+        folder: 'Projects/Beta',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'structured-recipient@example.com',
+        hasAttachments: false,
+        isRead: false,
+        isStarred: false,
+        date: '2026-03-12T10:10:00.000Z',
+      }));
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: wrongRecipientEmailId,
+        xGmThrid: 'thread-filter-structured-recipient',
+        folder: 'Projects/Alpha',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'different-recipient@example.com',
+        hasAttachments: false,
+        isRead: false,
+        isStarred: false,
+        date: '2026-03-12T10:15:00.000Z',
+      }));
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: wrongAttachmentEmailId,
+        xGmThrid: 'thread-filter-structured-attachment',
+        folder: 'Projects/Alpha',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'structured-recipient@example.com',
+        hasAttachments: true,
+        isRead: false,
+        isStarred: false,
+        date: '2026-03-12T10:20:00.000Z',
+      }));
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: wrongReadStateEmailId,
+        xGmThrid: 'thread-filter-structured-read',
+        folder: 'Projects/Alpha',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'structured-recipient@example.com',
+        hasAttachments: false,
+        isRead: true,
+        isStarred: false,
+        date: '2026-03-12T10:25:00.000Z',
+      }));
+
+      db.upsertEmail(makeEmailInput(accountId, {
+        xGmMsgId: wrongStarStateEmailId,
+        xGmThrid: 'thread-filter-structured-star',
+        folder: 'Projects/Alpha',
+        fromAddress: 'structured-sender@example.com',
+        fromName: 'Structured Sender',
+        toAddresses: 'structured-recipient@example.com',
+        hasAttachments: false,
+        isRead: false,
+        isStarred: true,
+        date: '2026-03-12T10:30:00.000Z',
+      }));
+
+      const matchingIds = db.filterEmailsByMsgIds(
+        accountId,
+        [
+          matchingEmailId,
+          draftsOnlyEmailId,
+          wrongFolderEmailId,
+          wrongRecipientEmailId,
+          wrongAttachmentEmailId,
+          wrongReadStateEmailId,
+          wrongStarStateEmailId,
+        ],
+        {
+          dateFrom: '2026-03-12T00:00:00.000Z',
+          dateTo: '2026-03-13T00:00:00.000Z',
+          folder: 'Projects/Alpha',
+          sender: 'structured-sender',
+          recipient: 'structured-recipient',
+          hasAttachment: false,
+          isRead: false,
+          isStarred: false,
+        },
+      );
+
+      expect(Array.from(matchingIds)).to.deep.equal([matchingEmailId]);
+    });
+
+    it('getEmailDatesByMsgIds batches more than 500 ids and returns all stored dates', () => {
+      const db = getDatabase();
+      const accountId = createTestAccount('email-dates-batched');
+      const xGmMsgIds: string[] = [];
+
+      for (let index = 0; index < 505; index += 1) {
+        const xGmMsgId = `email-dates-batch-${index}`;
+        xGmMsgIds.push(xGmMsgId);
+
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId,
+          xGmThrid: `email-dates-thread-${index}`,
+          date: DateTime.utc(2026, 3, 12, 0, 0, 0).plus({ minutes: index }).toISO()!,
+        }));
+      }
+
+      const dateMap = db.getEmailDatesByMsgIds(accountId, xGmMsgIds);
+
+      expect(dateMap.size).to.equal(505);
+      expect(dateMap.get('email-dates-batch-0')).to.equal('2026-03-12T00:00:00.000Z');
+      expect(dateMap.get('email-dates-batch-504')).to.equal('2026-03-12T08:24:00.000Z');
+    });
+
+    it('handles more than 500 semantic chat candidates without error', async function () {
+      this.timeout(45_000);
+
+      const seededAccount = seedTestAccount({
+        email: 'db-filter-batching@example.com',
+        displayName: 'DB Filter Batching',
+      });
+      const db = getDatabase();
+      const vectorDbService = VectorDbService.getInstance();
+
+      expect(vectorDbService.vectorsAvailable).to.equal(true);
+
+      await configureInboxChatModels();
+
+      const candidateCount = 505;
+      const sharedSender = 'batch-filter-sender@example.com';
+
+      for (let index = 0; index < candidateCount; index += 1) {
+        const xGmMsgId = `db-batch-msg-${index}`;
+        const xGmThrid = `db-batch-thread-${index}`;
+
+        db.upsertEmail(makeEmailInput(seededAccount.accountId, {
+          xGmMsgId,
+          xGmThrid,
+          folder: 'INBOX',
+          fromAddress: sharedSender,
+          fromName: 'Batch Filter Sender',
+          subject: `Batching candidate ${index}`,
+          textBody: `Vector candidate body ${index}`,
+          date: DateTime.utc(2026, 3, 12, 12, 0, 0).minus({ minutes: index }).toISO()!,
+        }));
+
+        vectorDbService.insertChunks({
+          accountId: seededAccount.accountId,
+          xGmMsgId,
+          chunks: [
+            {
+              chunkIndex: 0,
+              chunkText: `Batching vector chunk ${index}`,
+              embedding: [1, 0, 0, 0],
+            },
+          ],
+        });
+      }
+
+      ollamaServer.setChatResponse(JSON.stringify([
+        { query: 'batching unrelated alpha', dateOrder: 'desc' },
+        { query: 'batching unrelated beta', dateOrder: 'desc' },
+        { query: 'batching unrelated gamma', dateOrder: 'desc' },
+        { query: 'batching unrelated delta', dateOrder: 'desc' },
+        { query: 'batching relevant variant', sender: sharedSender, dateOrder: 'desc' },
+      ]));
+      ollamaServer.setEmbeddings([
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+        [-1, 0, 0, 0],
+        [1, 0, 0, 0],
+      ]);
+      ollamaServer.setChatStreamChunks(['Batched candidate search completed [1].']);
+
+      const chatResponse = await callIpc('ai:chat', {
+        question: 'Find the batched semantic candidates from this sender.',
+        conversationHistory: [],
+        accountId: seededAccount.accountId,
+      }) as IpcResponse<{ requestId: string }>;
+
+      expect(chatResponse.success).to.equal(true);
+
+      const doneArgs = await waitForEvent('ai:chat:done', {
+        timeout: 30_000,
+        predicate: (args) => {
+          const payload = args[0] as ChatDonePayload | undefined;
+          return payload != null && payload.requestId === chatResponse.data!.requestId;
+        },
+      });
+      const donePayload = doneArgs[0] as ChatDonePayload;
+
+      expect(donePayload.success).to.equal(true);
+      expect(donePayload.cancelled).to.equal(false);
     });
   });
 });

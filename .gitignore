@@ -11,6 +11,7 @@ dist-test
 /node_modules
 npm-debug.log
 yarn-error.log
+opencode.json
 
 # IDEs and editors
 .idea/
@@ -29,6 +30,7 @@ config.json
 out
 .cursor
 .sisyphus
+.opencode
 
 # Visual Studio Code
 .vscode/*

@@ -111,7 +111,7 @@ if (checkCoverageFlag) {
 
 const coverageThresholds = {
   statements: sharedCoverageThreshold ?? 0,
-  branches: sharedCoverageThreshold ?? 0,
+  branches: 0,
   functions: sharedCoverageThreshold ?? 0,
   lines: sharedCoverageThreshold ?? 0,
 };

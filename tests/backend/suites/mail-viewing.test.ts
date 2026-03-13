@@ -27,6 +27,7 @@ import {
   getDatabase,
   seedTestAccount,
   triggerSyncAndWait,
+  waitForQueueTerminalState,
 } from '../infrastructure/test-helpers';
 import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
@@ -548,6 +549,24 @@ describe('Mail Viewing', () => {
     expect(response.data!.messages.length).to.be.greaterThan(0);
   });
 
+  it('returns an enriched thread from DB when a valid folderId is supplied', async () => {
+    const thread1Headers = emlFixtures['reply-thread-1'].headers;
+
+    const response = await callIpc(
+      'mail:get-thread-from-db',
+      String(suiteAccountId),
+      thread1Headers.xGmThrid,
+      'INBOX',
+    ) as IpcResponse<ThreadWithMessages>;
+
+    expect(response.success).to.equal(true);
+    expect(response.data).to.exist;
+    expect(response.data!.xGmThrid).to.equal(thread1Headers.xGmThrid);
+    expect(response.data!.messages.length).to.equal(3);
+    expect(response.data).to.have.property('labels').that.is.an('array');
+    expect(response.data).to.have.property('folders').that.is.an('array');
+  });
+
   it('returns MAIL_THREAD_NOT_FOUND from DB for a non-existent thread', async () => {
     const response = await callIpc(
       'mail:get-thread-from-db',
@@ -683,6 +702,18 @@ describe('Mail Viewing', () => {
     }
   });
 
+  it('uses default pagination options when mail:fetch-emails is called without an options object', async () => {
+    const response = await callIpc(
+      'mail:fetch-emails',
+      String(suiteAccountId),
+      'INBOX',
+    ) as IpcResponse<ThreadRow[]>;
+
+    expect(response.success).to.equal(true);
+    expect(response.data).to.be.an('array');
+    expect(response.data!.length).to.be.greaterThan(0);
+  });
+
   it('returns INVALID_DATE error for a malformed beforeDate', async () => {
     const response = await callIpc(
       'mail:fetch-older',
@@ -694,5 +725,888 @@ describe('Mail Viewing', () => {
 
     expect(response.success).to.equal(false);
     expect(response.error!.code).to.equal('INVALID_DATE');
+  });
+
+  it('returns INVALID_ACCOUNT for a malformed accountId when mail:fetch-older is called', async () => {
+    const beforeDate = DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z';
+
+    const response = await callIpc(
+      'mail:fetch-older',
+      'not-a-number',
+      'INBOX',
+      beforeDate,
+      20,
+    ) as IpcResponse<FetchOlderResponse>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('INVALID_ACCOUNT');
+  });
+
+  it('returns MAIL_SEARCH_INVALID_INPUT when mail:search-by-msgids receives an invalid accountId', async () => {
+    const response = await callIpc(
+      'mail:search-by-msgids',
+      '',
+      ['123'],
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SEARCH_INVALID_INPUT');
+  });
+
+  it('returns MAIL_SEARCH_INVALID_INPUT when mail:search-by-msgids receives non-string message ids', async () => {
+    const response = await callIpc(
+      'mail:search-by-msgids',
+      String(suiteAccountId),
+      ['valid-id', 123],
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SEARCH_INVALID_INPUT');
+  });
+
+  it('recomputes thread metadata when some messages are pending server confirmation', async () => {
+    const pendingOpServiceModule = require('../../../electron/services/pending-op-service') as typeof import('../../../electron/services/pending-op-service');
+    const pendingOpService = pendingOpServiceModule.PendingOpService.getInstance();
+    const thread1Headers = emlFixtures['reply-thread-1'].headers;
+    const thread2Headers = emlFixtures['reply-thread-2'].headers;
+
+    pendingOpService.register(suiteAccountId, thread1Headers.xGmThrid, [thread1Headers.xGmMsgId]);
+
+    try {
+      const response = await callIpc(
+        'mail:fetch-thread',
+        String(suiteAccountId),
+        thread1Headers.xGmThrid,
+      ) as IpcResponse<ThreadWithMessages>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.exist;
+      expect(response.data!.messages.length).to.equal(2);
+      expect(response.data!.messageCount).to.equal(2);
+      expect(response.data!.messages.map((message) => message.xGmMsgId)).to.not.include(thread1Headers.xGmMsgId);
+      expect(response.data!.messages.map((message) => message.xGmMsgId)).to.include(thread2Headers.xGmMsgId);
+    } finally {
+      pendingOpService.clear(suiteAccountId, thread1Headers.xGmThrid, [thread1Headers.xGmMsgId]);
+    }
+  });
+
+  it('returns zeroed thread metadata when all thread messages are pending server confirmation', async () => {
+    const pendingOpServiceModule = require('../../../electron/services/pending-op-service') as typeof import('../../../electron/services/pending-op-service');
+    const pendingOpService = pendingOpServiceModule.PendingOpService.getInstance();
+    const thread1Headers = emlFixtures['reply-thread-1'].headers;
+    const thread2Headers = emlFixtures['reply-thread-2'].headers;
+    const thread3Headers = emlFixtures['reply-thread-3'].headers;
+    const pendingMessageIds = [thread1Headers.xGmMsgId, thread2Headers.xGmMsgId, thread3Headers.xGmMsgId];
+
+    pendingOpService.register(suiteAccountId, thread1Headers.xGmThrid, pendingMessageIds);
+
+    try {
+      const response = await callIpc(
+        'mail:fetch-thread',
+        String(suiteAccountId),
+        thread1Headers.xGmThrid,
+      ) as IpcResponse<ThreadWithMessages>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.exist;
+      expect(response.data!.messages).to.have.lengthOf(0);
+      expect(response.data!.messageCount).to.equal(0);
+      expect(response.data!.snippet).to.equal('');
+      expect(response.data!.participants).to.equal('');
+      expect(response.data!.lastMessageDate).to.equal('');
+      expect(response.data!.isRead).to.equal(true);
+      expect(response.data!.isStarred).to.equal(false);
+    } finally {
+      pendingOpService.clear(suiteAccountId, thread1Headers.xGmThrid, pendingMessageIds);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Label + manual sync validation
+  // -------------------------------------------------------------------------
+
+  it('returns MAIL_SEARCH_BY_MSGIDS_FAILED when thread resolution throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalGetThreadsByXGmMsgIds = databaseService.getThreadsByXGmMsgIds.bind(databaseService);
+    databaseService.getThreadsByXGmMsgIds = (() => {
+      throw new Error('forced search-by-msgids failure');
+    }) as typeof databaseService.getThreadsByXGmMsgIds;
+
+    try {
+      const response = await callIpc(
+        'mail:search-by-msgids',
+        String(suiteAccountId),
+        ['123'],
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_SEARCH_BY_MSGIDS_FAILED');
+    } finally {
+      databaseService.getThreadsByXGmMsgIds = originalGetThreadsByXGmMsgIds;
+    }
+  });
+
+  it('returns MAIL_SYNC_FAILED with the default message when sync-account throws a non-Error value', async () => {
+    const syncQueueBridgeModule = require('../../../electron/services/sync-queue-bridge') as typeof import('../../../electron/services/sync-queue-bridge');
+    const syncQueueBridge = syncQueueBridgeModule.SyncQueueBridge.getInstance() as unknown as {
+      enqueueSyncForAccount: (accountId: number, isInitial: boolean) => Promise<string | null>;
+    };
+    const originalEnqueueSyncForAccount = syncQueueBridge.enqueueSyncForAccount;
+    syncQueueBridge.enqueueSyncForAccount = (async () => {
+      throw 'non-error-sync-account-failure';
+    }) as typeof syncQueueBridge.enqueueSyncForAccount;
+
+    try {
+      const response = await callIpc('mail:sync-account', String(suiteAccountId)) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_SYNC_FAILED');
+      expect(response.error!.message).to.equal('Sync failed');
+    } finally {
+      syncQueueBridge.enqueueSyncForAccount = originalEnqueueSyncForAccount;
+    }
+  });
+
+  it('returns MAIL_SYNC_FOLDER_FAILED with the default message when sync-folder throws a non-Error value', async () => {
+    const databaseService = getDatabase();
+    const originalGetAccountById = databaseService.getAccountById.bind(databaseService);
+    databaseService.getAccountById = (() => {
+      throw 'non-error-sync-folder-failure';
+    }) as typeof databaseService.getAccountById;
+
+    try {
+      const response = await callIpc('mail:sync-folder', {
+        accountId: String(suiteAccountId),
+        folder: 'INBOX',
+      }) as IpcResponse<void>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_SYNC_FOLDER_FAILED');
+      expect(response.error!.message).to.equal('Failed to trigger folder sync');
+    } finally {
+      databaseService.getAccountById = originalGetAccountById;
+    }
+  });
+
+  it('returns INVALID_ACCOUNT when mail:fetch-older receives a non-numeric accountId', async () => {
+    const response = await callIpc(
+      'mail:fetch-older',
+      'not-a-number',
+      'INBOX',
+      DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z',
+      20,
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('INVALID_ACCOUNT');
+  });
+
+  it('returns MAIL_FETCH_OLDER_FAILED when fetch-older enqueue throws unexpectedly', async () => {
+    const queueServiceModule = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+    const queueService = queueServiceModule.MailQueueService.getInstance() as unknown as {
+      enqueue: (...args: unknown[]) => string;
+    };
+    const originalEnqueue = queueService.enqueue;
+    queueService.enqueue = (() => {
+      throw new Error('forced fetch-older enqueue failure');
+    }) as typeof queueService.enqueue;
+
+    try {
+      const response = await callIpc(
+        'mail:fetch-older',
+        String(suiteAccountId),
+        'INBOX',
+        DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z',
+        20,
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_FETCH_OLDER_FAILED');
+    } finally {
+      queueService.enqueue = originalEnqueue;
+    }
+  });
+
+  it('returns LABEL_INVALID_ACCOUNT when label:create receives a non-positive accountId', async () => {
+    const response = await callIpc(
+      'label:create',
+      '0',
+      'BadAccountLabel',
+      null,
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_ACCOUNT');
+  });
+
+  it('returns LABEL_INVALID_NAME when label:create receives a blank name', async () => {
+    const response = await callIpc(
+      'label:create',
+      String(suiteAccountId),
+      '   ',
+      null,
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_NAME');
+  });
+
+  it('returns LABEL_INVALID_NAME when label:create receives a name longer than 100 characters', async () => {
+    const overlongLabelName = 'L'.repeat(101);
+
+    const response = await callIpc(
+      'label:create',
+      String(suiteAccountId),
+      overlongLabelName,
+      null,
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_NAME');
+  });
+
+  it('returns LABEL_INVALID_NAME when label:create receives IMAP-invalid characters', async () => {
+    const response = await callIpc(
+      'label:create',
+      String(suiteAccountId),
+      'Bad*Label',
+      null,
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_NAME');
+  });
+
+  it('returns LABEL_INVALID_COLOR when label:create receives a non-string color value', async () => {
+    const response = await callIpc(
+      'label:create',
+      String(suiteAccountId),
+      'BadColorTypeLabel',
+      42,
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_COLOR');
+  });
+
+  it('returns LABEL_INVALID_ACCOUNT when label:delete receives a non-positive accountId', async () => {
+    const response = await callIpc(
+      'label:delete',
+      '0',
+      'LABEL_ID',
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_ACCOUNT');
+  });
+
+  it('returns LABEL_INVALID_ID when label:delete receives a blank label id', async () => {
+    const response = await callIpc(
+      'label:delete',
+      String(suiteAccountId),
+      '   ',
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_ID');
+  });
+
+  it('returns LABEL_INVALID_ACCOUNT when label:update-color receives a non-positive accountId', async () => {
+    const response = await callIpc(
+      'label:update-color',
+      '0',
+      'LABEL_ID',
+      '#ff0000',
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_ACCOUNT');
+  });
+
+  it('returns LABEL_INVALID_ID when label:update-color receives a blank label id', async () => {
+    const response = await callIpc(
+      'label:update-color',
+      String(suiteAccountId),
+      '',
+      '#ff0000',
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('LABEL_INVALID_ID');
+  });
+
+  it('returns MAIL_SYNC_FOLDER_INVALID_INPUT when mail:sync-folder receives a non-positive accountId', async () => {
+    const response = await callIpc('mail:sync-folder', {
+      accountId: '0',
+      folder: 'INBOX',
+    }) as IpcResponse<void>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SYNC_FOLDER_INVALID_INPUT');
+  });
+
+  it('returns MAIL_SYNC_FOLDER_INVALID_INPUT when mail:sync-folder receives a non-object payload', async () => {
+    const response = await callIpc('mail:sync-folder', 'not-an-object') as IpcResponse<void>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SYNC_FOLDER_INVALID_INPUT');
+  });
+
+  it('returns MAIL_SYNC_FOLDER_INVALID_INPUT when mail:sync-folder receives a blank accountId string', async () => {
+    const response = await callIpc('mail:sync-folder', {
+      accountId: '   ',
+      folder: 'INBOX',
+    }) as IpcResponse<void>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SYNC_FOLDER_INVALID_INPUT');
+  });
+
+  it('returns MAIL_SYNC_FOLDER_ACCOUNT_NOT_FOUND when mail:sync-folder receives a missing account', async () => {
+    const response = await callIpc('mail:sync-folder', {
+      accountId: '99999',
+      folder: 'INBOX',
+    }) as IpcResponse<void>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SYNC_FOLDER_ACCOUNT_NOT_FOUND');
+  });
+
+  it('returns MAIL_SYNC_FOLDER_INVALID_INPUT when mail:sync-folder receives a blank folder', async () => {
+    const response = await callIpc('mail:sync-folder', {
+      accountId: String(suiteAccountId),
+      folder: '   ',
+    }) as IpcResponse<void>;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('MAIL_SYNC_FOLDER_INVALID_INPUT');
+  });
+
+  it('returns LABEL_CREATE_FAILED when IMAP mailbox creation throws unexpectedly', async () => {
+    const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+    const imapService = imapServiceModule.ImapService.getInstance() as unknown as {
+      createMailbox: (accountId: string, mailboxName: string) => Promise<void>;
+    };
+    const originalCreateMailbox = imapService.createMailbox;
+    imapService.createMailbox = async (): Promise<void> => {
+      throw new Error('forced label create failure');
+    };
+
+    try {
+      const response = await callIpc(
+        'label:create',
+        String(suiteAccountId),
+        'CreateFailureLabel',
+        null,
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('LABEL_CREATE_FAILED');
+    } finally {
+      imapService.createMailbox = originalCreateMailbox;
+    }
+  });
+
+  it('returns LABEL_CREATE_FAILED with the default message when label creation throws a non-Error value', async () => {
+    const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
+    const imapService = imapServiceModule.ImapService.getInstance() as unknown as {
+      createMailbox: (accountId: string, mailboxName: string) => Promise<void>;
+    };
+    const originalCreateMailbox = imapService.createMailbox;
+    imapService.createMailbox = async (): Promise<void> => {
+      throw 'non-error-label-create-failure';
+    };
+
+    try {
+      const response = await callIpc(
+        'label:create',
+        String(suiteAccountId),
+        'CreateFailureLabelNonError',
+        null,
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('LABEL_CREATE_FAILED');
+      expect(response.error!.message).to.equal('Failed to create label');
+    } finally {
+      imapService.createMailbox = originalCreateMailbox;
+    }
+  });
+
+  it('returns LABEL_DELETE_FAILED when label lookup throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalGetLabelByGmailId = databaseService.getLabelByGmailId.bind(databaseService);
+    databaseService.getLabelByGmailId = (() => {
+      throw new Error('forced label delete failure');
+    }) as typeof databaseService.getLabelByGmailId;
+
+    try {
+      const response = await callIpc(
+        'label:delete',
+        String(suiteAccountId),
+        'Anything',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('LABEL_DELETE_FAILED');
+    } finally {
+      databaseService.getLabelByGmailId = originalGetLabelByGmailId;
+    }
+  });
+
+  it('returns LABEL_DELETE_FAILED with the default message when label deletion throws a non-Error value', async () => {
+    const databaseService = getDatabase();
+    const originalGetLabelByGmailId = databaseService.getLabelByGmailId.bind(databaseService);
+    databaseService.getLabelByGmailId = (() => {
+      throw 'non-error-label-delete-failure';
+    }) as typeof databaseService.getLabelByGmailId;
+
+    try {
+      const response = await callIpc(
+        'label:delete',
+        String(suiteAccountId),
+        'AnythingElse',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('LABEL_DELETE_FAILED');
+      expect(response.error!.message).to.equal('Failed to delete label');
+    } finally {
+      databaseService.getLabelByGmailId = originalGetLabelByGmailId;
+    }
+  });
+
+  it('returns LABEL_UPDATE_COLOR_FAILED when label color persistence throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalUpdateLabelColor = databaseService.updateLabelColor.bind(databaseService);
+    databaseService.updateLabelColor = (() => {
+      throw new Error('forced label color failure');
+    }) as typeof databaseService.updateLabelColor;
+
+    try {
+      const response = await callIpc(
+        'label:update-color',
+        String(suiteAccountId),
+        'AnyLabel',
+        '#ff0000',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('LABEL_UPDATE_COLOR_FAILED');
+    } finally {
+      databaseService.updateLabelColor = originalUpdateLabelColor;
+    }
+  });
+
+  it('returns LABEL_UPDATE_COLOR_FAILED with the default message when color update throws a non-Error value', async () => {
+    const databaseService = getDatabase();
+    const originalUpdateLabelColor = databaseService.updateLabelColor.bind(databaseService);
+    databaseService.updateLabelColor = (() => {
+      throw 'non-error-label-color-failure';
+    }) as typeof databaseService.updateLabelColor;
+
+    try {
+      const response = await callIpc(
+        'label:update-color',
+        String(suiteAccountId),
+        'AnyLabelAgain',
+        '#00ff00',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('LABEL_UPDATE_COLOR_FAILED');
+      expect(response.error!.message).to.equal('Failed to update label color');
+    } finally {
+      databaseService.updateLabelColor = originalUpdateLabelColor;
+    }
+  });
+
+  it('returns MAIL_GET_FOLDERS_FAILED when folder lookup throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalGetLabelsByAccount = databaseService.getLabelsByAccount.bind(databaseService);
+    databaseService.getLabelsByAccount = (() => {
+      throw new Error('forced get-folders failure');
+    }) as typeof databaseService.getLabelsByAccount;
+
+    try {
+      const response = await callIpc(
+        'mail:get-folders',
+        String(suiteAccountId),
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_GET_FOLDERS_FAILED');
+    } finally {
+      databaseService.getLabelsByAccount = originalGetLabelsByAccount;
+    }
+  });
+
+  it('returns MAIL_FETCH_FAILED when thread listing throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalGetThreadsByFolder = databaseService.getThreadsByFolder.bind(databaseService);
+    databaseService.getThreadsByFolder = (() => {
+      throw new Error('forced fetch-emails failure');
+    }) as typeof databaseService.getThreadsByFolder;
+
+    try {
+      const response = await callIpc(
+        'mail:fetch-emails',
+        String(suiteAccountId),
+        'INBOX',
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_FETCH_FAILED');
+    } finally {
+      databaseService.getThreadsByFolder = originalGetThreadsByFolder;
+    }
+  });
+
+  it('returns MAIL_FETCH_THREAD_FAILED when thread retrieval throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalGetThreadById = databaseService.getThreadById.bind(databaseService);
+    databaseService.getThreadById = (() => {
+      throw new Error('forced fetch-thread failure');
+    }) as typeof databaseService.getThreadById;
+
+    try {
+      const response = await callIpc(
+        'mail:fetch-thread',
+        String(suiteAccountId),
+        emlFixtures['reply-thread-1'].headers.xGmThrid,
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_FETCH_THREAD_FAILED');
+    } finally {
+      databaseService.getThreadById = originalGetThreadById;
+    }
+  });
+
+  it('returns MAIL_FETCH_THREAD_FAILED when DB-only thread retrieval throws unexpectedly', async () => {
+    const databaseService = getDatabase();
+    const originalGetThreadById = databaseService.getThreadById.bind(databaseService);
+    databaseService.getThreadById = (() => {
+      throw new Error('forced get-thread-from-db failure');
+    }) as typeof databaseService.getThreadById;
+
+    try {
+      const response = await callIpc(
+        'mail:get-thread-from-db',
+        String(suiteAccountId),
+        emlFixtures['reply-thread-1'].headers.xGmThrid,
+      ) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_FETCH_THREAD_FAILED');
+    } finally {
+      databaseService.getThreadById = originalGetThreadById;
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Direct mail mutation IPC coverage
+  // -------------------------------------------------------------------------
+
+  it('direct mail:send enqueues a send operation successfully', async function () {
+    this.timeout(20_000);
+
+    const response = await callIpc('mail:send', String(suiteAccountId), {
+      to: 'direct-send@example.com',
+      subject: 'Direct mail send coverage',
+      text: 'Direct mail send body',
+    }) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    expect(response.data!.queueId).to.be.a('string');
+
+    const snapshot = await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+    expect(snapshot['status']).to.equal('completed');
+  });
+
+  it('direct mail:send returns MAIL_SEND_FAILED with the default message when enqueue throws a non-Error value', async () => {
+    const queueServiceModule = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+    const queueService = queueServiceModule.MailQueueService.getInstance() as unknown as {
+      enqueue: (...args: unknown[]) => string;
+    };
+    const originalEnqueue = queueService.enqueue;
+    queueService.enqueue = (() => {
+      throw 'non-error-mail-send-failure';
+    }) as typeof queueService.enqueue;
+
+    try {
+      const response = await callIpc('mail:send', String(suiteAccountId), {
+        to: 'direct-send-failure@example.com',
+        subject: 'Direct mail send failure',
+        text: 'Direct send failure body',
+      }) as IpcResponse<unknown>;
+
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('MAIL_SEND_FAILED');
+      expect(response.error!.message).to.equal('Failed to enqueue send');
+    } finally {
+      queueService.enqueue = originalEnqueue;
+    }
+  });
+
+  it('direct mail:flag supports important updates without thread flag metadata updates', async function () {
+    this.timeout(20_000);
+
+    const db = getDatabase();
+    const rawDb = db.getDatabase();
+    const messageId = emlFixtures['plain-text'].headers.xGmMsgId;
+    const threadId = emlFixtures['plain-text'].headers.xGmThrid;
+    const threadBefore = db.getThreadById(suiteAccountId, threadId);
+
+    expect(threadBefore).to.not.equal(null);
+
+    const response = await callIpc(
+      'mail:flag',
+      String(suiteAccountId),
+      [messageId],
+      'important',
+      true,
+    ) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+
+    const emailRow = rawDb.prepare(
+      `SELECT is_important AS isImportant
+       FROM emails
+       WHERE account_id = :accountId AND x_gm_msgid = :xGmMsgId`
+    ).get({
+      accountId: suiteAccountId,
+      xGmMsgId: messageId,
+    }) as { isImportant: number } | undefined;
+    const threadAfter = db.getThreadById(suiteAccountId, threadId);
+
+    expect(emailRow).to.not.equal(undefined);
+    expect(emailRow!.isImportant).to.equal(1);
+    expect(threadAfter).to.not.equal(null);
+    expect(threadAfter!['isRead']).to.equal(threadBefore!['isRead']);
+    expect(threadAfter!['isStarred']).to.equal(threadBefore!['isStarred']);
+  });
+
+  it('direct mail:flag accepts an unknown flag name and still enqueues successfully', async function () {
+    this.timeout(20_000);
+
+    const response = await callIpc(
+      'mail:flag',
+      String(suiteAccountId),
+      [emlFixtures['html-email'].headers.xGmMsgId],
+      'unknown-flag',
+      true,
+    ) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+  });
+
+  it('direct mail:move removes orphan thread folder associations when the thread has no emails', async () => {
+    const orphanThreadId = 'orphan-thread-for-move';
+    const db = getDatabase();
+    const rawDb = db.getDatabase();
+    rawDb.prepare(
+      `INSERT INTO threads (account_id, x_gm_thrid, subject, last_message_date, participants, message_count, snippet, is_read, is_starred)
+       VALUES (:accountId, :xGmThrid, :subject, :lastMessageDate, :participants, :messageCount, :snippet, :isRead, :isStarred)`
+    ).run({
+      accountId: suiteAccountId,
+      xGmThrid: orphanThreadId,
+      subject: 'Orphan move thread',
+      lastMessageDate: DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z',
+      participants: 'Nobody',
+      messageCount: 0,
+      snippet: '',
+      isRead: 1,
+      isStarred: 0,
+    });
+    db.upsertThreadFolder(suiteAccountId, orphanThreadId, 'INBOX');
+
+    const response = await callIpc(
+      'mail:move',
+      String(suiteAccountId),
+      [orphanThreadId],
+      '[Gmail]/Sent Mail',
+      'INBOX',
+    ) as IpcResponse<unknown>;
+
+    expect(response.success).to.equal(true);
+    const threadStillInInbox = rawDb.prepare(
+      'SELECT COUNT(*) AS count FROM thread_folders WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid AND folder = :folder'
+    ).get({ accountId: suiteAccountId, xGmThrid: orphanThreadId, folder: 'INBOX' }) as { count: number };
+    expect(threadStillInInbox.count).to.equal(0);
+  });
+
+  it('direct mail:move filters out emails not present in the specified source folder', async function () {
+    this.timeout(20_000);
+
+    const db = getDatabase();
+
+    await createLocalThreadInFolder(
+      suiteAccountId,
+      '[Gmail]/Sent Mail',
+      'move-filter-thread',
+      'move-filter-msg',
+      'Move Filter Seed',
+    );
+
+    const response = await callIpc(
+      'mail:move',
+      String(suiteAccountId),
+      [emlFixtures['plain-text'].headers.xGmMsgId, 'move-filter-msg'],
+      '[Gmail]/Drafts',
+      'INBOX',
+    ) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+
+    const movedFolders = db.getFoldersForEmail(suiteAccountId, emlFixtures['plain-text'].headers.xGmMsgId);
+    const untouchedFolders = db.getFoldersForEmail(suiteAccountId, 'move-filter-msg');
+
+    expect(movedFolders).to.include('[Gmail]/Drafts');
+    expect(movedFolders).to.not.include('INBOX');
+    expect(untouchedFolders).to.include('[Gmail]/Sent Mail');
+    expect(untouchedFolders).to.not.include('[Gmail]/Drafts');
+  });
+
+  it('direct mail:move preserves source thread folder when sibling emails remain in the source folder', async function () {
+    this.timeout(20_000);
+
+    const db = getDatabase();
+    const moveMessageId = emlFixtures['reply-thread-1'].headers.xGmMsgId;
+    const threadId = emlFixtures['reply-thread-1'].headers.xGmThrid;
+    const response = await callIpc(
+      'mail:move',
+      String(suiteAccountId),
+      [moveMessageId],
+      '[Gmail]/Drafts',
+      'INBOX',
+    ) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+
+    const movedEmailFolders = db.getFoldersForEmail(suiteAccountId, moveMessageId);
+    const threadFolders = db.getFoldersForThread(suiteAccountId, threadId);
+
+    expect(movedEmailFolders).to.include('[Gmail]/Drafts');
+    expect(movedEmailFolders).to.not.include('INBOX');
+    expect(threadFolders).to.include('INBOX');
+    expect(threadFolders).to.include('[Gmail]/Drafts');
+  });
+
+  it('direct mail:move can compute source folders when sourceFolder is omitted', async function () {
+    this.timeout(20_000);
+
+    const db = getDatabase();
+    const messageId = emlFixtures['html-email'].headers.xGmMsgId;
+
+    const response = await callIpc(
+      'mail:move',
+      String(suiteAccountId),
+      [messageId],
+      '[Gmail]/Sent Mail',
+    ) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+
+    const folders = db.getFoldersForEmail(suiteAccountId, messageId);
+
+    expect(folders).to.include('[Gmail]/Sent Mail');
+    expect(folders).to.not.include('INBOX');
+  });
+
+  it('direct mail:delete returns no-op success when all emails are filtered out for the folder', async () => {
+    await createLocalThreadInFolder(
+      suiteAccountId,
+      '[Gmail]/Sent Mail',
+      'delete-filter-thread',
+      'delete-filter-msg',
+      'Delete Filter Seed',
+    );
+
+    const response = await callIpc(
+      'mail:delete',
+      String(suiteAccountId),
+      ['delete-filter-msg'],
+      'INBOX',
+    ) as IpcResponse<{ queueId: string | null }>;
+
+    expect(response.success).to.equal(true);
+    expect(response.data!.queueId).to.equal(null);
+  });
+
+  it('direct mail:delete preserves source thread folder when sibling emails remain in the folder', async function () {
+    this.timeout(20_000);
+
+    const db = getDatabase();
+    const trashFolder = db.getTrashFolder(suiteAccountId);
+    const deleteMessageId = emlFixtures['reply-thread-2'].headers.xGmMsgId;
+    const threadId = emlFixtures['reply-thread-2'].headers.xGmThrid;
+    const response = await callIpc(
+      'mail:delete',
+      String(suiteAccountId),
+      [deleteMessageId],
+      'INBOX',
+    ) as IpcResponse<{ queueId: string }>;
+
+    expect(response.success).to.equal(true);
+    await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
+
+    const deletedEmailFolders = db.getFoldersForEmail(suiteAccountId, deleteMessageId);
+    const threadFolders = db.getFoldersForThread(suiteAccountId, threadId);
+
+    expect(deletedEmailFolders).to.include(trashFolder);
+    expect(deletedEmailFolders).to.not.include('INBOX');
+    expect(threadFolders).to.include('INBOX');
+    expect(threadFolders).to.include(trashFolder);
+  });
+
+  it('direct get-thread-from-db filters pending messages when folderId is supplied', async () => {
+    const pendingOpServiceModule = require('../../../electron/services/pending-op-service') as typeof import('../../../electron/services/pending-op-service');
+    const pendingOpService = pendingOpServiceModule.PendingOpService.getInstance();
+    const pendingMessageId = emlFixtures['reply-thread-3'].headers.xGmMsgId;
+    const threadId = emlFixtures['reply-thread-1'].headers.xGmThrid;
+
+    pendingOpService.register(suiteAccountId, threadId, [pendingMessageId]);
+
+    try {
+      const response = await callIpc(
+        'mail:get-thread-from-db',
+        String(suiteAccountId),
+        threadId,
+        'INBOX',
+      ) as IpcResponse<ThreadWithMessages>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.messages.map((message) => message.xGmMsgId)).to.not.include(pendingMessageId);
+    } finally {
+      pendingOpService.clear(suiteAccountId, threadId, [pendingMessageId]);
+    }
+  });
+
+  it('direct get-thread-from-db filters pending messages when no folderId is supplied', async () => {
+    const pendingOpServiceModule = require('../../../electron/services/pending-op-service') as typeof import('../../../electron/services/pending-op-service');
+    const pendingOpService = pendingOpServiceModule.PendingOpService.getInstance();
+    const pendingMessageId = emlFixtures['plain-text'].headers.xGmMsgId;
+    const threadId = emlFixtures['plain-text'].headers.xGmThrid;
+
+    pendingOpService.register(suiteAccountId, threadId, [pendingMessageId]);
+
+    try {
+      const response = await callIpc(
+        'mail:get-thread-from-db',
+        String(suiteAccountId),
+        threadId,
+      ) as IpcResponse<ThreadWithMessages>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data!.messages.map((message) => message.xGmMsgId)).to.not.include(pendingMessageId);
+    } finally {
+      pendingOpService.clear(suiteAccountId, threadId, [pendingMessageId]);
+    }
   });
 });

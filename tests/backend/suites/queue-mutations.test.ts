@@ -32,6 +32,8 @@ import {
   waitForEvent,
   seedTestAccount,
   triggerSyncAndWait,
+  waitForNextFolderUpdated,
+  waitForQueueTerminalState,
 } from '../infrastructure/test-helpers';
 import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
@@ -58,44 +60,6 @@ interface QueueUpdateSnapshot {
 
 let suiteAccountId: number;
 let suiteEmail: string;
-
-// -------------------------------------------------------------------------
-// Helper: wait for a queue:update event with a specific queueId and status
-// -------------------------------------------------------------------------
-
-async function waitForQueueUpdate(
-  queueId: string,
-  status: 'completed' | 'failed',
-  timeoutMs: number = 15_000,
-): Promise<QueueUpdateSnapshot> {
-  const bus = TestEventBus.getInstance();
-
-  const resultArgs = await bus.waitFor('queue:update', {
-    timeout: timeoutMs,
-    predicate: (args) => {
-      const snapshot = args[0] as QueueUpdateSnapshot | undefined;
-      return (
-        snapshot != null &&
-        snapshot.queueId === queueId &&
-        // Match only terminal states — do not resolve on pending/processing.
-        (snapshot.status === 'completed' || snapshot.status === 'failed')
-      );
-    },
-  });
-
-  const snapshot = resultArgs[0] as QueueUpdateSnapshot;
-
-  // If the caller requested 'completed' but the worker reported 'failed', surface
-  // the failure so the test fails rather than continuing as if the operation succeeded.
-  if (status === 'completed' && snapshot.status === 'failed') {
-    throw new Error(
-      `waitForQueueUpdate: operation ${queueId} reached status 'failed' (expected 'completed')` +
-      (snapshot.error ? `: ${snapshot.error}` : ''),
-    );
-  }
-
-  return snapshot;
-}
 
 // -------------------------------------------------------------------------
 // Helper: seed account + sync a set of messages into the local DB
@@ -158,21 +122,6 @@ async function triggerFolderSyncAndWait(
   folder: string,
   timeoutMs: number = 15_000,
 ): Promise<void> {
-  const bus = TestEventBus.getInstance();
-  const priorFolderUpdatedCount = bus.getHistory('mail:folder-updated').filter((record) => {
-    const payload = record.args[0] as Record<string, unknown> | undefined;
-    if (payload == null) {
-      return false;
-    }
-
-    const folders = Array.isArray(payload['folders']) ? payload['folders'] as unknown[] : [];
-    return (
-      Number(payload['accountId']) === accountId &&
-      payload['reason'] === 'sync' &&
-      folders.some((folderValue) => folderValue === folder)
-    );
-  }).length;
-
   const response = await callIpc('mail:sync-folder', {
     accountId: String(accountId),
     folder,
@@ -180,41 +129,10 @@ async function triggerFolderSyncAndWait(
 
   expect(response.success).to.equal(true);
 
-  await waitForEvent('mail:folder-updated', {
+  await waitForNextFolderUpdated(accountId, {
+    reason: 'sync',
+    folder,
     timeout: timeoutMs,
-    predicate: (args) => {
-      const payload = args[0] as Record<string, unknown> | undefined;
-      if (payload == null) {
-        return false;
-      }
-      if (Number(payload['accountId']) !== accountId) {
-        return false;
-      }
-      if (payload['reason'] !== 'sync') {
-        return false;
-      }
-
-      const folders = Array.isArray(payload['folders']) ? payload['folders'] as unknown[] : [];
-      if (!folders.some((folderValue) => folderValue === folder)) {
-        return false;
-      }
-
-      const currentCount = bus.getHistory('mail:folder-updated').filter((record) => {
-        const recordPayload = record.args[0] as Record<string, unknown> | undefined;
-        if (recordPayload == null) {
-          return false;
-        }
-
-        const recordFolders = Array.isArray(recordPayload['folders']) ? recordPayload['folders'] as unknown[] : [];
-        return (
-          Number(recordPayload['accountId']) === accountId &&
-          recordPayload['reason'] === 'sync' &&
-          recordFolders.some((folderValue) => folderValue === folder)
-        );
-      }).length;
-
-      return currentCount > priorFolderUpdatedCount;
-    },
   });
 }
 
@@ -586,7 +504,7 @@ describe('Queue Mutations', () => {
 
       // queue:update with status=pending or processing should have fired when the item was enqueued
       // Wait for the worker to complete
-      const finalSnapshot = await waitForQueueUpdate(queueId, 'completed', 15_000);
+      const finalSnapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 15_000 });
 
       expect(finalSnapshot.queueId).to.equal(queueId);
       expect(finalSnapshot.accountId).to.equal(suiteAccountId);
@@ -619,13 +537,6 @@ describe('Queue Mutations', () => {
       });
       await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
 
-      const priorFolderUpdatedCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-        (record) => {
-          const payload = record.args[0] as Record<string, unknown> | undefined;
-          return payload != null && Number(payload['accountId']) === suiteAccountId;
-        },
-      ).length;
-
       const moveResponse = await callIpc(
         'mail:move',
         String(suiteAccountId),
@@ -637,22 +548,7 @@ describe('Queue Mutations', () => {
       expect(moveResponse.success).to.equal(true);
 
       // Wait for mail:folder-updated to be emitted as part of the move post-processing
-      await waitForEvent('mail:folder-updated', {
-        timeout: 15_000,
-        predicate: (args) => {
-          const payload = args[0] as Record<string, unknown> | undefined;
-          if (!payload || Number(payload['accountId']) !== suiteAccountId) {
-            return false;
-          }
-          const currentCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-            (record) => {
-              const recordPayload = record.args[0] as Record<string, unknown> | undefined;
-              return recordPayload != null && Number(recordPayload['accountId']) === suiteAccountId;
-            },
-          ).length;
-          return currentCount > priorFolderUpdatedCount;
-        },
-      });
+      await waitForNextFolderUpdated(suiteAccountId, { timeout: 15_000 });
     });
   });
 
@@ -743,7 +639,7 @@ describe('Queue Mutations', () => {
       expect(flagResponse.success).to.equal(true);
       const queueId = flagResponse.data!.queueId;
 
-      const finalSnapshot = await waitForQueueUpdate(queueId, 'completed', 15_000);
+      const finalSnapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 15_000 });
       expect(finalSnapshot.queueId).to.equal(queueId);
       expect(finalSnapshot.status).to.equal('completed');
     });
@@ -902,7 +798,7 @@ describe('Queue Mutations', () => {
       if (queueId !== null) {
         // waitForQueueUpdate with 'completed' throws if the worker fails, so
         // reaching the assertion below means the delete operation succeeded.
-        const finalSnapshot = await waitForQueueUpdate(queueId, 'completed', 15_000);
+        const finalSnapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 15_000 });
         expect(finalSnapshot.status).to.equal('completed');
       }
     });
@@ -1265,7 +1161,7 @@ describe('Queue Mutations', () => {
         },
       ]);
 
-      await waitForQueueUpdate(queueId, 'completed', 15_000);
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 15_000 });
     });
 
     it('returns queueId "skipped" for add-labels when no email UIDs resolve', async () => {
@@ -1312,7 +1208,7 @@ describe('Queue Mutations', () => {
       expect(addResponse.success).to.equal(true);
       expect(addResponse.data).to.exist;
 
-      await waitForQueueUpdate(addResponse.data!.queueId, 'completed', 15_000);
+      await waitForQueueTerminalState(addResponse.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
       await triggerFolderSyncAndWait(suiteAccountId, targetLabelName, 20_000);
 
       const labelFolderUid = databaseService
@@ -1354,7 +1250,7 @@ describe('Queue Mutations', () => {
         },
       ]);
 
-      await waitForQueueUpdate(queueId, 'completed', 15_000);
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 15_000 });
     });
 
     it('does not skip remove-labels when no label-folder UIDs resolve', async function () {
@@ -1397,7 +1293,37 @@ describe('Queue Mutations', () => {
 
       expect(payload.resolvedEmails).to.deep.equal([]);
 
-      await waitForQueueUpdate(queueId, 'completed', 15_000);
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 15_000 });
+    });
+
+    it('marks remove-labels as failed when dynamic UID resolution hits a non-existent label folder', async function () {
+      this.timeout(20_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const targetLabelName = 'QueueResolutionMissingServerLabel';
+      const databaseService = DatabaseService.getInstance();
+
+      databaseService.createLabel(suiteAccountId, targetLabelName, targetLabelName, '#CC8844');
+
+      const response = await callIpc('queue:enqueue', {
+        type: 'remove-labels',
+        accountId: suiteAccountId,
+        payload: {
+          xGmMsgIds: [plainHeaders.xGmMsgId],
+          targetLabels: [targetLabelName],
+          threadId: plainHeaders.xGmThrid,
+        },
+        description: 'Fail remove-labels when label folder does not exist on server',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.exist;
+      expect(response.data!.queueId).to.be.a('string');
+
+      const terminalUpdate = await waitForQueueTerminalState(response.data!.queueId, { expectedStatus: 'failed', timeout: 15_000 });
+      expect(terminalUpdate.queueId).to.equal(response.data!.queueId);
+      expect(terminalUpdate.status).to.equal('failed');
+      expect(terminalUpdate.error).to.include('remove-labels: all IMAP operations failed');
     });
   });
 
@@ -1615,7 +1541,7 @@ describe('Queue Mutations', () => {
         expect(response.success).to.equal(true);
         const queueId = response.data!.queueId;
 
-        const terminalUpdate = await waitForQueueUpdate(queueId, 'failed', 15_000);
+        const terminalUpdate = await waitForQueueTerminalState(queueId, { expectedStatus: 'failed', timeout: 15_000 });
         expect(terminalUpdate.status).to.equal('failed');
       } finally {
         imapService.copyMessages = originalCopyMessages;
@@ -1647,7 +1573,7 @@ describe('Queue Mutations', () => {
       }) as IpcResponse<{ queueId: string }>;
 
       expect(addResponse.success).to.equal(true);
-      await waitForQueueUpdate(addResponse.data!.queueId, 'completed', 15_000);
+      await waitForQueueTerminalState(addResponse.data!.queueId, { expectedStatus: 'completed', timeout: 15_000 });
       await triggerFolderSyncAndWait(suiteAccountId, failingLabelName, 20_000);
 
       const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
@@ -1674,7 +1600,7 @@ describe('Queue Mutations', () => {
         expect(response.success).to.equal(true);
         const queueId = response.data!.queueId;
 
-        const terminalUpdate = await waitForQueueUpdate(queueId, 'failed', 15_000);
+        const terminalUpdate = await waitForQueueTerminalState(queueId, { expectedStatus: 'failed', timeout: 15_000 });
         expect(terminalUpdate.status).to.equal('failed');
       } finally {
         imapService.removeFromLabel = originalRemoveFromLabel;

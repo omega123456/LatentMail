@@ -33,6 +33,7 @@ import { emlFixtures } from '../fixtures/index';
 import { TestEventBus } from '../infrastructure/test-event-bus';
 import { OllamaService } from '../../../electron/services/ollama-service';
 import { VectorDbService } from '../../../electron/services/vector-db-service';
+import { parseGmailQuery } from '../../../electron/utils/gmail-query-parser';
 
 // ---- Type helpers ----
 
@@ -712,6 +713,99 @@ describe('Search (Keyword and Semantic)', () => {
       expect(complete.status).to.equal('complete');
       expect(complete.totalResults).to.equal(1);
     });
+
+    it('caps IMAP-only streaming results at the hard maximum of 50', async function () {
+      this.timeout(30_000);
+
+      const broadSearchTerm = 'streaming-cap-branch-44192';
+      const injectedMsgIds: string[] = [];
+
+      for (let index = 0; index < 60; index += 1) {
+        const xGmMsgId = (BigInt('7000000000000000') + BigInt(index)).toString();
+        const xGmThrid = (BigInt('7100000000000000') + BigInt(index)).toString();
+        injectedMsgIds.push(xGmMsgId);
+
+        const rawEmail = createServerOnlyRawEmail({
+          from: 'streaming-cap@example.com',
+          to: suiteEmail,
+          subject: `${broadSearchTerm} subject ${index}`,
+          body: `${broadSearchTerm} body ${index}`,
+          xGmMsgId,
+          xGmThrid,
+          dateIso: DateTime.utc(2024, 1, 10, 12, 0, 0).plus({ minutes: index }).toISO()!,
+          labels: ['\\All Mail'],
+        });
+
+        imapStateInspector.injectMessage('[Gmail]/All Mail', rawEmail, {
+          xGmMsgId,
+          xGmThrid,
+          xGmLabels: ['\\All Mail'],
+        });
+      }
+
+      ollamaServer.setError('health', true);
+
+      const searchResult = await runAiSearch(
+        suiteAccountId,
+        broadSearchTerm,
+        'keyword',
+      );
+
+      expect(searchResult.complete.status).to.equal('complete');
+      expect(searchResult.complete.totalResults).to.equal(50);
+      expect(searchResult.localMsgIds).to.deep.equal([]);
+      expect(searchResult.imapMsgIds).to.have.length(50);
+      expect(new Set(searchResult.imapMsgIds).size).to.equal(50);
+
+      for (const msgId of searchResult.imapMsgIds) {
+        expect(injectedMsgIds).to.include(msgId);
+      }
+
+      expect(injectedMsgIds.some((msgId) => !searchResult.imapMsgIds.includes(msgId))).to.equal(true);
+
+      ollamaServer.setError('health', false);
+    });
+
+    it('stops emitting further batches once 50 local semantic results have already been sent', async function () {
+      this.timeout(30_000);
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+
+      const cappedAccount = seedTestAccount({
+        email: 'streaming-cap-semantic@example.com',
+        displayName: 'Streaming Cap Semantic',
+      });
+      const cappedSender = 'semantic-cap-sender@example.com';
+
+      for (let index = 0; index < 55; index += 1) {
+        seedLocalEmail({
+          accountId: cappedAccount.accountId,
+          subject: `semantic-cap-local-${index}`,
+          fromAddress: cappedSender,
+          dateIso: DateTime.utc(2026, 2, 1, 9, 0, 0).plus({ minutes: index }).toISO()!,
+        });
+      }
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: '',
+        filters: {
+          sender: cappedSender,
+        },
+      }));
+
+      const searchResult = await runAiSearch(
+        cappedAccount.accountId,
+        'semantic cap local batch query',
+        'semantic',
+      );
+
+      expect(searchResult.complete.status).to.equal('complete');
+      expect(searchResult.complete.totalResults).to.equal(50);
+      expect(searchResult.localMsgIds).to.have.length(50);
+      expect(searchResult.imapMsgIds).to.deep.equal([]);
+      expect(searchResult.batches.filter((batch) => batch.phase === 'local')).to.have.length(1);
+      expect(searchResult.batches.filter((batch) => batch.phase === 'imap')).to.deep.equal([]);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -932,6 +1026,223 @@ describe('Search (Keyword and Semantic)', () => {
       expect(resolvedResponse.success).to.equal(true);
       expect(resolvedResponse.data).to.have.length(1);
       expect(resolvedResponse.data![0]!['xGmThrid']).to.equal(serverOnlyThreadId);
+    });
+
+    it('falls back to IMAP when the email exists locally but its thread row is missing', async function () {
+      this.timeout(30_000);
+
+      const missingThreadMsgId = '1000000000000102';
+      const missingThreadId = '2000000000000102';
+      const missingThreadRaw = createServerOnlyRawEmail({
+        from: 'navigate-missing-thread@example.com',
+        to: suiteEmail,
+        subject: 'Navigate fallback because thread row is missing',
+        body: 'This email should fall back to IMAP when the local thread row is deleted.',
+        xGmMsgId: missingThreadMsgId,
+        xGmThrid: missingThreadId,
+        dateIso: DateTime.utc(2024, 1, 8, 12, 0, 0).toISO()!,
+        labels: ['\\Inbox', '\\All Mail'],
+      });
+
+      imapStateInspector.injectMessage('INBOX', missingThreadRaw, {
+        xGmMsgId: missingThreadMsgId,
+        xGmThrid: missingThreadId,
+        xGmLabels: ['\\Inbox'],
+      });
+      imapStateInspector.injectMessage('[Gmail]/All Mail', missingThreadRaw, {
+        xGmMsgId: missingThreadMsgId,
+        xGmThrid: missingThreadId,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 30_000 });
+
+      const databaseService = getDatabase();
+      expect(databaseService.getEmailByXGmMsgId(suiteAccountId, missingThreadMsgId)).to.not.equal(null);
+      expect(databaseService.getThreadById(suiteAccountId, missingThreadId)).to.not.equal(null);
+
+      databaseService.getDatabase().prepare(
+        'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+      ).run({
+        accountId: suiteAccountId,
+        xGmThrid: missingThreadId,
+      });
+
+      expect(databaseService.getThreadById(suiteAccountId, missingThreadId)).to.equal(null);
+
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:chat:navigate',
+        {
+          accountId: suiteAccountId,
+          xGmMsgId: missingThreadMsgId,
+        },
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localBatches = relevantBatches.filter((batch) => batch.phase === 'local');
+      const imapMsgIds = relevantBatches
+        .filter((batch) => batch.phase === 'imap')
+        .flatMap((batch) => batch.msgIds);
+
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(1);
+      expect(localBatches.length).to.be.greaterThan(0);
+      expect(localBatches[0]!.msgIds).to.deep.equal([]);
+      expect(imapMsgIds).to.include(missingThreadMsgId);
+      expect(databaseService.getThreadById(suiteAccountId, missingThreadId)).to.not.equal(null);
+    });
+
+    it('continues and emits the IMAP result when the fallback upsert throws', async function () {
+      this.timeout(25_000);
+
+      const upsertFailureMsgId = '1000000000000103';
+      const upsertFailureThreadId = '2000000000000103';
+      const upsertFailureRaw = createServerOnlyRawEmail({
+        from: 'navigate-upsert-failure@example.com',
+        to: suiteEmail,
+        subject: 'Navigate fallback upsert failure',
+        body: 'This email should still resolve even if local upsert fails.',
+        xGmMsgId: upsertFailureMsgId,
+        xGmThrid: upsertFailureThreadId,
+        dateIso: DateTime.utc(2024, 1, 9, 12, 0, 0).toISO()!,
+        labels: ['\\All Mail'],
+      });
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', upsertFailureRaw, {
+        xGmMsgId: upsertFailureMsgId,
+        xGmThrid: upsertFailureThreadId,
+        xGmLabels: ['\\All Mail'],
+      });
+
+      const databaseService = getDatabase() as unknown as {
+        getEmailByXGmMsgId: (accountId: number, xGmMsgId: string) => Record<string, unknown> | null;
+        upsertEmailFromEnvelope: (...args: unknown[]) => void;
+      };
+      expect(databaseService.getEmailByXGmMsgId(suiteAccountId, upsertFailureMsgId)).to.equal(null);
+
+      const originalUpsertEmailFromEnvelope = databaseService.upsertEmailFromEnvelope;
+      databaseService.upsertEmailFromEnvelope = (..._args: unknown[]): void => {
+        throw new Error('forced envelope upsert failure');
+      };
+
+      try {
+        const eventBus = TestEventBus.getInstance();
+        const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+        const response = await callIpc(
+          'ai:chat:navigate',
+          {
+            accountId: suiteAccountId,
+            xGmMsgId: upsertFailureMsgId,
+          },
+        ) as IpcResponse<{ searchToken: string }>;
+
+        expect(response.success).to.equal(true);
+
+        const searchToken = response.data!.searchToken;
+        const complete = await waitForSearchComplete(searchToken);
+        const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+        const localBatches = relevantBatches.filter((batch) => batch.phase === 'local');
+        const imapMsgIds = relevantBatches
+          .filter((batch) => batch.phase === 'imap')
+          .flatMap((batch) => batch.msgIds);
+
+        expect(complete.status).to.equal('complete');
+        expect(complete.totalResults).to.equal(1);
+        expect(localBatches.length).to.be.greaterThan(0);
+        expect(localBatches[0]!.msgIds).to.deep.equal([]);
+        expect(imapMsgIds).to.deep.equal([upsertFailureMsgId]);
+        expect(databaseService.getEmailByXGmMsgId(suiteAccountId, upsertFailureMsgId)).to.equal(null);
+      } finally {
+        databaseService.upsertEmailFromEnvelope = originalUpsertEmailFromEnvelope;
+      }
+    });
+
+    it('handles IMAP FETCH failures during fallback without throwing', async function () {
+      this.timeout(25_000);
+
+      const fetchFailureMsgId = '1000000000000104';
+      const fetchFailureThreadId = '2000000000000104';
+      const fetchFailureRaw = createServerOnlyRawEmail({
+        from: 'navigate-fetch-failure@example.com',
+        to: suiteEmail,
+        subject: 'Navigate fallback fetch failure',
+        body: 'This email exists on the server but FETCH will fail during fallback.',
+        xGmMsgId: fetchFailureMsgId,
+        xGmThrid: fetchFailureThreadId,
+        dateIso: DateTime.utc(2024, 1, 10, 12, 0, 0).toISO()!,
+        labels: ['\\All Mail'],
+      });
+
+      imapStateInspector.injectMessage('[Gmail]/All Mail', fetchFailureRaw, {
+        xGmMsgId: fetchFailureMsgId,
+        xGmThrid: fetchFailureThreadId,
+        xGmLabels: ['\\All Mail'],
+      });
+      imapStateInspector.injectCommandError('FETCH', 'FETCH failed');
+
+      const eventBus = TestEventBus.getInstance();
+      const priorBatchCount = eventBus.getHistory('ai:search:batch').length;
+
+      const response = await callIpc(
+        'ai:chat:navigate',
+        {
+          accountId: suiteAccountId,
+          xGmMsgId: fetchFailureMsgId,
+        },
+      ) as IpcResponse<{ searchToken: string }>;
+
+      expect(response.success).to.equal(true);
+
+      const searchToken = response.data!.searchToken;
+      const complete = await waitForSearchComplete(searchToken);
+      const relevantBatches = getSearchBatchesSince(searchToken, priorBatchCount);
+      const localBatches = relevantBatches.filter((batch) => batch.phase === 'local');
+      const imapBatches = relevantBatches.filter((batch) => batch.phase === 'imap');
+
+      expect(complete.status).to.equal('complete');
+      expect(complete.totalResults).to.equal(0);
+      expect(localBatches.length).to.be.greaterThan(0);
+      expect(localBatches[0]!.msgIds).to.deep.equal([]);
+      expect(imapBatches.length).to.be.greaterThan(0);
+      expect(imapBatches[0]!.msgIds).to.deep.equal([]);
+    });
+
+    it('handles unexpected local database lookup failures without throwing', async function () {
+      this.timeout(25_000);
+
+      const databaseService = getDatabase() as unknown as {
+        getEmailByXGmMsgId: (accountId: number, xGmMsgId: string) => Record<string, unknown> | null;
+      };
+      const originalGetEmailByXGmMsgId = databaseService.getEmailByXGmMsgId;
+      databaseService.getEmailByXGmMsgId = (_accountId: number, _xGmMsgId: string): Record<string, unknown> | null => {
+        throw new Error('forced local lookup failure');
+      };
+
+      try {
+        const response = await callIpc(
+          'ai:chat:navigate',
+          {
+            accountId: suiteAccountId,
+            xGmMsgId: 'forced-fatal-path-msg-id',
+          },
+        ) as IpcResponse<{ searchToken: string }>;
+
+        expect(response.success).to.equal(true);
+
+        const complete = await waitForSearchComplete(response.data!.searchToken);
+        expect(complete.status).to.equal('complete');
+        expect(complete.totalResults).to.equal(0);
+      } finally {
+        databaseService.getEmailByXGmMsgId = originalGetEmailByXGmMsgId;
+      }
     });
 
     it('completes with no results for an unknown xGmMsgId', async function () {
@@ -1932,6 +2243,130 @@ describe('Search (Keyword and Semantic)', () => {
 
       expect(emptyKeywordResponse.success).to.equal(false);
       expect(emptyKeywordResponse.error!.code).to.equal('AI_INVALID_INPUT');
+    });
+
+    it('treats blank label operators as no-op filters and still completes the keyword search', async function () {
+      this.timeout(25_000);
+
+      const blankLabelAccount = seedTestAccount({
+        email: 'keyword-blank-label@example.com',
+        displayName: 'Keyword Blank Label',
+      });
+      const blankLabelEmail = seedLocalEmail({
+        accountId: blankLabelAccount.accountId,
+        subject: 'keyword-blank-label-marker',
+        fromAddress: 'keyword-blank-label@example.com',
+      });
+
+      ollamaServer.setError('health', true);
+
+      const blankLabelSearch = await runAiSearch(
+        blankLabelAccount.accountId,
+        'label:""',
+        'keyword',
+      );
+
+      expect(blankLabelSearch.complete.status).to.equal('complete');
+      expect(blankLabelSearch.complete.totalResults).to.equal(1);
+      expect(blankLabelSearch.allMsgIds).to.deep.equal([blankLabelEmail.xGmMsgId]);
+
+      ollamaServer.setError('health', false);
+    });
+
+    it('falls back to literal text search for unsupported is: operators', async function () {
+      this.timeout(25_000);
+
+      const unsupportedIsAccount = seedTestAccount({
+        email: 'keyword-unsupported-is@example.com',
+        displayName: 'Keyword Unsupported Is',
+      });
+      const unsupportedIsEmail = seedLocalEmail({
+        accountId: unsupportedIsAccount.accountId,
+        subject: 'keyword-unsupported-is-marker',
+        fromAddress: 'keyword-unsupported-is@example.com',
+        textBody: 'This email contains the literal token is:muted for parser coverage.',
+      });
+
+      ollamaServer.setError('health', true);
+
+      const unsupportedIsSearch = await runAiSearch(
+        unsupportedIsAccount.accountId,
+        'is:muted keyword-unsupported-is-marker',
+        'keyword',
+      );
+
+      expect(unsupportedIsSearch.complete.status).to.equal('complete');
+      expect(unsupportedIsSearch.allMsgIds).to.deep.equal([unsupportedIsEmail.xGmMsgId]);
+
+      ollamaServer.setError('health', false);
+    });
+
+    it('falls back to literal text search for unsupported has: operators', async function () {
+      this.timeout(25_000);
+
+      const unsupportedHasAccount = seedTestAccount({
+        email: 'keyword-unsupported-has@example.com',
+        displayName: 'Keyword Unsupported Has',
+      });
+      const unsupportedHasEmail = seedLocalEmail({
+        accountId: unsupportedHasAccount.accountId,
+        subject: 'keyword-unsupported-has-marker has:drive',
+        fromAddress: 'keyword-unsupported-has@example.com',
+        textBody: 'This email contains the literal token has:drive for parser coverage.',
+      });
+
+      ollamaServer.setError('health', true);
+
+      const unsupportedHasSearch = await runAiSearch(
+        unsupportedHasAccount.accountId,
+        'has:drive keyword-unsupported-has-marker',
+        'keyword',
+      );
+
+      expect(unsupportedHasSearch.complete.status).to.equal('complete');
+      expect(unsupportedHasSearch.allMsgIds).to.deep.equal([unsupportedHasEmail.xGmMsgId]);
+
+      ollamaServer.setError('health', false);
+    });
+
+    it('parser covers blank label, no-account label, unsupported operators, negated relative dates, and empty-query fallback branches', () => {
+      const blankLabelParsed = parseGmailQuery('label:""', {
+        accountId: 123,
+        paramPrefix: 'raw-prefix!@#',
+      });
+      expect(blankLabelParsed.whereClause).to.equal('1=1');
+      expect(blankLabelParsed.params).to.deep.equal({});
+
+      const labelWithoutAccountParsed = parseGmailQuery('label:ProjectAlpha');
+      expect(labelWithoutAccountParsed.whereClause).to.equal('1 = 0');
+
+      const negatedLabelWithoutAccountParsed = parseGmailQuery('-label:ProjectAlpha');
+      expect(negatedLabelWithoutAccountParsed.whereClause).to.equal('1 = 1');
+
+      const unsupportedIsParsed = parseGmailQuery('is:muted');
+      expect(unsupportedIsParsed.whereClause).to.include('e.subject LIKE');
+      expect(Object.values(unsupportedIsParsed.params)).to.deep.equal(['%is:muted%']);
+
+      const unsupportedHasParsed = parseGmailQuery('has:drive');
+      expect(unsupportedHasParsed.whereClause).to.include('e.subject LIKE');
+      expect(Object.values(unsupportedHasParsed.params)).to.deep.equal(['%has:drive%']);
+
+      const negatedBeforeParsed = parseGmailQuery('-before:2026/03/12');
+      expect(negatedBeforeParsed.whereClause).to.equal('e.date >= :sqp1');
+
+      const negatedNewerThanParsed = parseGmailQuery('-newer_than:7d');
+      expect(negatedNewerThanParsed.whereClause).to.equal('e.date < :sqp1');
+
+      const negatedOlderThanParsed = parseGmailQuery('-older_than:3m');
+      expect(negatedOlderThanParsed.whereClause).to.equal('e.date >= :sqp1');
+
+      const trashAliasWithoutResolverParsed = parseGmailQuery('in:trash');
+      expect(trashAliasWithoutResolverParsed.whereClause).to.include('LOWER(ef_in.folder) = :sqp1');
+      expect(trashAliasWithoutResolverParsed.params['sqp1']).to.equal('[gmail]/trash');
+
+      const emptyParsed = parseGmailQuery('   ');
+      expect(emptyParsed.whereClause).to.equal('1=1');
+      expect(emptyParsed.params).to.deep.equal({});
     });
   });
 });

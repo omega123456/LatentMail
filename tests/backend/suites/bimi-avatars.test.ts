@@ -128,11 +128,50 @@ function clearAvatarCache(): void {
   }
 }
 
+function createMockAgent(): MockAgent {
+  const mockAgent = new MockAgent();
+  mockAgent.disableNetConnect();
+  setGlobalDispatcher(mockAgent);
+  return mockAgent;
+}
+
+function stubHttpResponse(
+  mockAgent: MockAgent,
+  urlString: string,
+  statusCode: number,
+  body: string | Buffer,
+  headers?: Record<string, string>,
+): void {
+  const url = new URL(urlString);
+  mockAgent.get(url.origin)
+    .intercept({ path: `${url.pathname}${url.search}`, method: 'GET' })
+    .reply(statusCode, body, headers ? { headers } : undefined);
+}
+
+function stubSvgLogo(mockAgent: MockAgent, logoUrl: string, svgContent: string = FAKE_SVG_CONTENT): void {
+  stubHttpResponse(mockAgent, logoUrl, 200, svgContent, { 'content-type': 'image/svg+xml' });
+}
+
+function stubAvatarDownload(
+  mockAgent: MockAgent,
+  avatarUrl: string,
+  statusCode: number,
+  body: string | Buffer,
+  contentType?: string,
+): void {
+  const headers = contentType ? { 'content-type': contentType } : undefined;
+  stubHttpResponse(mockAgent, avatarUrl, statusCode, body, headers);
+}
+
 // =========================================================================
 // BIMI logo tests
 // =========================================================================
 
 describe('BIMI & Avatars', () => {
+  function getAvatarCacheDirPath(): string {
+    return path.join(app.getPath('userData'), 'account-avatars');
+  }
+
   before(async function () {
     this.timeout(20_000);
 
@@ -183,16 +222,8 @@ describe('BIMI & Avatars', () => {
       });
 
       // Stub undici to serve the logo SVG
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
-
-      const mockPool = mockAgent.get('https://bimi.example.com');
-      mockPool.intercept({ path: '/logo.svg', method: 'GET' }).reply(
-        200,
-        FAKE_SVG_CONTENT,
-        { headers: { 'content-type': 'image/svg+xml' } },
-      );
+      const mockAgent = createMockAgent();
+      stubSvgLogo(mockAgent, 'https://bimi.example.com/logo.svg');
 
       const response = await callIpc('bimi:get-logo', 'sender@example.com') as IpcResponse<BimiLogoResult>;
 
@@ -212,9 +243,7 @@ describe('BIMI & Avatars', () => {
       });
 
       // Also set up DoH to fail (so the whole lookup fails gracefully)
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       const cloudflarePool = mockAgent.get('https://cloudflare-dns.com');
       cloudflarePool
@@ -251,9 +280,7 @@ describe('BIMI & Avatars', () => {
         'default._bimi.insecure.example': [['v=BIMI1; l=http://bimi.insecure.example/logo.svg; a=']],
       });
 
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       // DoH should not be called since DNS succeeded — no intercept needed
       // But set up cloudflare intercept anyway to avoid uncaught network errors
@@ -278,9 +305,7 @@ describe('BIMI & Avatars', () => {
         'default._bimi.dohtest.example': null,
       });
 
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       // Cloudflare DoH returns a valid BIMI record
       const cloudflarePool = mockAgent.get('https://cloudflare-dns.com');
@@ -298,10 +323,7 @@ describe('BIMI & Avatars', () => {
         );
 
       // Serve the logo
-      const logoPool = mockAgent.get('https://bimi.dohtest.example');
-      logoPool
-        .intercept({ path: '/logo.svg', method: 'GET' })
-        .reply(200, FAKE_SVG_CONTENT, { headers: { 'content-type': 'image/svg+xml' } });
+      stubSvgLogo(mockAgent, 'https://bimi.dohtest.example/logo.svg');
 
       const response = await callIpc('bimi:get-logo', 'sender@dohtest.example') as IpcResponse<BimiLogoResult>;
 
@@ -319,14 +341,8 @@ describe('BIMI & Avatars', () => {
         'default._bimi.cache-test.example': [['v=BIMI1; l=https://bimi.cache-test.example/logo.svg; a=']],
       });
 
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
-
-      const logoPool = mockAgent.get('https://bimi.cache-test.example');
-      logoPool
-        .intercept({ path: '/logo.svg', method: 'GET' })
-        .reply(200, FAKE_SVG_CONTENT, { headers: { 'content-type': 'image/svg+xml' } });
+      const mockAgent = createMockAgent();
+      stubSvgLogo(mockAgent, 'https://bimi.cache-test.example/logo.svg');
 
       const firstResponse = await callIpc('bimi:get-logo', 'sender@cache-test.example') as IpcResponse<BimiLogoResult>;
 
@@ -338,9 +354,7 @@ describe('BIMI & Avatars', () => {
       stubDnsResolve({}); // empty map → ENODATA for any lookup
 
       // Use a new MockAgent that disallows all connections
-      const strictAgent = new MockAgent();
-      strictAgent.disableNetConnect();
-      setGlobalDispatcher(strictAgent);
+      const strictAgent = createMockAgent();
 
       const secondResponse = await callIpc('bimi:get-logo', 'sender@cache-test.example') as IpcResponse<BimiLogoResult>;
 
@@ -360,9 +374,7 @@ describe('BIMI & Avatars', () => {
         'default._bimi.fallback-test.example': [['v=BIMI1; l=https://bimi.fallback-test.example/logo.svg; a=']],
       });
 
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       // DoH fallback for subdomain
       const cloudflarePool = mockAgent.get('https://cloudflare-dns.com');
@@ -374,10 +386,7 @@ describe('BIMI & Avatars', () => {
         .times(10); // may be called multiple times for different subdomains
 
       // Logo fetch for the apex domain
-      const logoPool = mockAgent.get('https://bimi.fallback-test.example');
-      logoPool
-        .intercept({ path: '/logo.svg', method: 'GET' })
-        .reply(200, FAKE_SVG_CONTENT, { headers: { 'content-type': 'image/svg+xml' } });
+      stubSvgLogo(mockAgent, 'https://bimi.fallback-test.example/logo.svg');
 
       const response = await callIpc('bimi:get-logo', 'sender@mail.fallback-test.example') as IpcResponse<BimiLogoResult>;
 
@@ -394,9 +403,7 @@ describe('BIMI & Avatars', () => {
         'default._bimi.timeout.example': null,
       });
 
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       const cloudflarePool = mockAgent.get('https://cloudflare-dns.com');
       cloudflarePool
@@ -416,9 +423,7 @@ describe('BIMI & Avatars', () => {
         'default._bimi.invalid-svg.example': [['v=BIMI1; l=https://bimi.invalid-svg.example/logo.svg; a=']],
       });
 
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       const logoPool = mockAgent.get('https://bimi.invalid-svg.example');
       logoPool
@@ -446,18 +451,127 @@ describe('BIMI & Avatars', () => {
       suiteAccountId = seeded.accountId;
     });
 
-    it('fetches remote avatar URL and caches to disk', async function () {
+    it('returns blank remote avatar URLs unchanged', async () => {
+      const blankUrl = '   ';
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: blankUrl, accountId: suiteAccountId });
+
+      const mockAgent = createMockAgent();
+
+      const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(response.success).to.equal(true);
+      const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.equal(blankUrl);
+    });
+
+    it('returns the original remote URL when avatar download returns HTTP 500', async function () {
       this.timeout(10_000);
 
-      // Set up a MockAgent to serve a fake avatar image
+      const remoteUrl = 'https://example.com/avatar-http-500.png';
       const mockAgent = new MockAgent();
       mockAgent.disableNetConnect();
       setGlobalDispatcher(mockAgent);
 
-      const avatarPool = mockAgent.get('https://example.com');
-      avatarPool
-        .intercept({ path: '/avatar.png', method: 'GET' })
-        .reply(200, FAKE_PNG_HEADER, { headers: { 'content-type': 'image/png' } });
+      stubAvatarDownload(mockAgent, remoteUrl, 500, 'server error');
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(response.success).to.equal(true);
+      const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.equal(remoteUrl);
+    });
+
+    it('keeps an existing cached extension when deleting alternate avatar files fails', async function () {
+      this.timeout(10_000);
+
+      const cacheDir = getAvatarCacheDirPath();
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const staleJpegPath = path.join(cacheDir, `${suiteAccountId}.jpg`);
+      fs.writeFileSync(staleJpegPath, Buffer.from('stale-jpeg-avatar'));
+      const staleDate = new Date(Date.now() - (2 * 24 * 60 * 60 * 1000));
+      fs.utimesSync(staleJpegPath, staleDate, staleDate);
+
+      const remoteUrl = 'https://example.com/avatar-delete-alt-failure.png';
+      const mockAgent = createMockAgent();
+      stubAvatarDownload(mockAgent, remoteUrl, 200, FAKE_PNG_HEADER, 'image/png');
+
+      const mutableFsModule = require('fs') as typeof import('fs');
+      const originalUnlinkSync = mutableFsModule.unlinkSync;
+      mutableFsModule.unlinkSync = ((targetPath: fs.PathLike) => {
+        if (path.resolve(String(targetPath)) === path.resolve(staleJpegPath)) {
+          throw new Error('forced alternate avatar delete failure');
+        }
+
+        return originalUnlinkSync(targetPath);
+      }) as typeof fs.unlinkSync;
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      try {
+        const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+          id: number;
+          avatarUrl: string | null;
+        }>>;
+
+        expect(response.success).to.equal(true);
+        const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+        expect(testAccount).to.not.equal(undefined);
+        expect(testAccount!.avatarUrl).to.equal(`account-avatar://${suiteAccountId}.png`);
+        expect(fs.existsSync(path.join(cacheDir, `${suiteAccountId}.png`))).to.equal(true);
+        expect(fs.existsSync(staleJpegPath)).to.equal(true);
+      } finally {
+        mutableFsModule.unlinkSync = originalUnlinkSync;
+      }
+    });
+
+    it('returns the original remote url when avatar fetch throws unexpectedly', async function () {
+      this.timeout(10_000);
+
+      const remoteUrl = 'https://example.com/avatar-network-failure.png';
+      const mockAgent = createMockAgent();
+
+      mockAgent.get('https://example.com')
+        .intercept({ path: '/avatar-network-failure.png', method: 'GET' })
+        .replyWithError(new Error('forced avatar network failure'));
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(response.success).to.equal(true);
+      const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.equal(remoteUrl);
+    });
+
+    it('fetches remote avatar URL and caches to disk', async function () {
+      this.timeout(10_000);
+
+      // Set up a MockAgent to serve a fake avatar image
+      const mockAgent = createMockAgent();
+      stubAvatarDownload(mockAgent, 'https://example.com/avatar.png', 200, FAKE_PNG_HEADER, 'image/png');
 
       // Set avatar_url on the test account in the DB
       const db = DatabaseService.getInstance();
@@ -500,9 +614,7 @@ describe('BIMI & Avatars', () => {
       ).run({ url: 'https://example.com/avatar-second.png', accountId: suiteAccountId });
 
       // First fetch
-      const mockAgent = new MockAgent();
-      mockAgent.disableNetConnect();
-      setGlobalDispatcher(mockAgent);
+      const mockAgent = createMockAgent();
 
       const pool = mockAgent.get('https://example.com');
       pool
@@ -513,9 +625,7 @@ describe('BIMI & Avatars', () => {
       await callIpc('auth:get-accounts');
 
       // Second fetch — no network calls should happen since cache exists
-      const strictAgent = new MockAgent();
-      strictAgent.disableNetConnect();
-      setGlobalDispatcher(strictAgent);
+      const strictAgent = createMockAgent();
 
       const secondResponse = await callIpc('auth:get-accounts') as IpcResponse<Array<{
         id: number;
@@ -552,6 +662,57 @@ describe('BIMI & Avatars', () => {
 
       // The avatar file should be removed
       expect(fs.existsSync(avatarFile)).to.equal(false);
+    });
+
+    it('swallows avatar cache deletion errors when clearing a real cached avatar file', async function () {
+      this.timeout(10_000);
+
+      const remoteUrl = 'https://example.com/avatar-delete-failure.png';
+      const mockAgent = createMockAgent();
+      stubAvatarDownload(mockAgent, remoteUrl, 200, FAKE_PNG_HEADER, 'image/png');
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      const accountsResponse = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(accountsResponse.success).to.equal(true);
+      const testAccount = accountsResponse.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.not.equal(null);
+      expect(testAccount!.avatarUrl!.startsWith('account-avatar://')).to.equal(true);
+
+      const cacheFilename = testAccount!.avatarUrl!.replace('account-avatar://', '');
+      const cacheFilePath = path.join(getAvatarCacheDirPath(), cacheFilename);
+      expect(fs.existsSync(cacheFilePath)).to.equal(true);
+
+      const mutableFsModule = require('fs') as typeof import('fs');
+      const originalUnlinkSync = mutableFsModule.unlinkSync;
+
+      mutableFsModule.unlinkSync = (targetPath: fs.PathLike): void => {
+        if (path.resolve(String(targetPath)) === path.resolve(cacheFilePath)) {
+          throw new Error('forced avatar cache delete failure');
+        }
+
+        originalUnlinkSync(targetPath);
+      };
+
+      try {
+        const logoutResponse = await callIpc('auth:logout', String(suiteAccountId)) as IpcResponse<null>;
+
+        expect(logoutResponse.success).to.equal(true);
+
+        expect(fs.existsSync(cacheFilePath)).to.equal(true);
+      } finally {
+        mutableFsModule.unlinkSync = originalUnlinkSync;
+        if (fs.existsSync(cacheFilePath)) {
+          fs.unlinkSync(cacheFilePath);
+        }
+      }
     });
 
     it('returns null avatarUrl when the account has no Google profile image configured', async () => {

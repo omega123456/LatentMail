@@ -42,15 +42,3 @@ export function formatParticipantList(
 
   return formatted.join(', ');
 }
-
-/**
- * Extracts the raw email address from a formatted participant string.
- * Handles both "Name <email>" format and plain email addresses.
- */
-export function extractEmailAddress(participant: string): string {
-  const match = participant.match(/<([^>]+)>/);
-  if (match) {
-    return match[1].trim();
-  }
-  return participant.trim();
-}

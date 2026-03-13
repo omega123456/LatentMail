@@ -135,6 +135,98 @@ describe('IMAP Crawl via Embedding Pipeline', () => {
     await waitForEvent('embedding:complete', { timeout: 30_000 });
     expect(getDatabase().countVectorIndexedEmails(suiteAccountId)).to.equal(4);
   });
+
+  it('skips messages whose FETCH response has no envelope', async function () {
+    this.timeout(10_000);
+
+    const crawlService = ImapCrawlService.getInstance();
+    const accountKey = String(suiteAccountId);
+    const fakeClient = {
+      usable: true,
+      getMailboxLock: async () => ({
+        release: (): void => {
+          return;
+        },
+      }),
+      search: async () => [1],
+      fetch: async function* () {
+        yield {
+          uid: 1,
+          envelope: null,
+          flags: new Set<string>(),
+          labels: new Set<string>(['\\All', '\\Inbox']),
+          threadId: '9400000000001',
+          emailId: '9300000000001',
+          size: 0,
+        };
+      },
+      logout: async (): Promise<void> => {
+        return;
+      },
+      on: (): void => {
+        return;
+      },
+    };
+
+    try {
+      crawlService['connections'].set(accountKey, fakeClient as never);
+
+      const envelopeResults = await crawlService.fetchEnvelopes(accountKey, ['9300000000001']);
+
+      expect(envelopeResults).to.deep.equal([]);
+    } finally {
+      crawlService['connections'].delete(accountKey);
+    }
+  });
+
+  it('skips crawl results when a fetched message has no Gmail message id', async function () {
+    this.timeout(10_000);
+
+    const crawlService = ImapCrawlService.getInstance();
+    const accountKey = String(suiteAccountId);
+    const fakeClient = {
+      usable: true,
+      getMailboxLock: async () => ({
+        release: (): void => {
+          return;
+        },
+      }),
+      fetch: async function* () {
+        yield {
+          uid: 1,
+          envelope: {
+            subject: 'Missing Gmail ID',
+            from: [{ address: 'sender@example.com', name: 'Sender' }],
+            to: [{ address: 'receiver@example.com', name: 'Receiver' }],
+            date: DateTime.utc().toJSDate(),
+            messageId: '<missing-gmail-id@example.com>',
+          },
+          flags: new Set<string>(),
+          labels: new Set<string>(['\\All', '\\Inbox']),
+          threadId: '9400000000002',
+          emailId: '',
+          size: 123,
+          source: Buffer.from('From: sender@example.com\r\nTo: receiver@example.com\r\nSubject: Missing Gmail ID\r\n\r\nBody'),
+        };
+      },
+      logout: async (): Promise<void> => {
+        return;
+      },
+      on: (): void => {
+        return;
+      },
+    };
+
+    try {
+      crawlService['connections'].set(accountKey, fakeClient as never);
+
+      const batchResults = await crawlService.fetchBatch(accountKey, [1]);
+
+      expect(batchResults).to.deep.equal([]);
+    } finally {
+      crawlService['connections'].delete(accountKey);
+    }
+  });
 });
 
 function restoreOllamaBaseUrl(): void {

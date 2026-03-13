@@ -286,6 +286,24 @@ describe('Auth & Account Lifecycle', () => {
     expect(response.error!.message).to.include('invalid_grant');
   });
 
+  it('returns AUTH_NOT_CONFIGURED when login reports a missing Google client id', async () => {
+    const oauthService = OAuthService.getInstance() as unknown as {
+      login: () => Promise<AuthAccount>;
+    };
+    const originalLogin = oauthService.login;
+    oauthService.login = async (): Promise<AuthAccount> => {
+      throw new Error('GOOGLE_CLIENT_ID not configured for tests');
+    };
+
+    try {
+      const response = await callIpc('auth:login') as IpcResponse<AuthAccount>;
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('AUTH_NOT_CONFIGURED');
+    } finally {
+      oauthService.login = originalLogin;
+    }
+  });
+
   it('refreshes an expired token and stores the updated tokens', async () => {
     const seededAccount = seedTestAccount({
       email: 'refresh-success@example.com',
@@ -641,6 +659,70 @@ describe('Auth & Account Lifecycle', () => {
     expect(secondTokens!.accessToken).to.equal('independent-two-access');
     expect(secondTokens!.refreshToken).to.equal('independent-two-refresh');
     expect(firstTokens).to.not.deep.equal(secondTokens);
+  });
+
+  it('returns AUTH_GET_ACCOUNTS_FAILED when account lookup throws', async () => {
+    const database = DatabaseService.getInstance() as unknown as {
+      getAccounts: () => AccountSummary[];
+    };
+    const originalGetAccounts = database.getAccounts;
+    database.getAccounts = (): AccountSummary[] => {
+      throw new Error('forced account listing failure');
+    };
+
+    try {
+      const response = await callIpc('auth:get-accounts') as IpcResponse<AccountSummary[]>;
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('AUTH_GET_ACCOUNTS_FAILED');
+    } finally {
+      database.getAccounts = originalGetAccounts;
+    }
+  });
+
+  it('falls back to the original avatar url when cached avatar resolution throws', async () => {
+    const seededAccount = seedTestAccount({
+      email: 'avatar-fallback@example.com',
+      displayName: 'Avatar Fallback User',
+    });
+    const originalAvatarUrl = 'https://example.com/avatar-fallback.png';
+
+    DatabaseService.getInstance().getDatabase().prepare(
+      'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+    ).run({ avatarUrl: originalAvatarUrl, accountId: seededAccount.accountId });
+
+    const avatarCacheModule = require('../../../electron/services/avatar-cache-service') as typeof import('../../../electron/services/avatar-cache-service');
+    const originalGetCachedAvatarUrl = avatarCacheModule.getCachedAvatarUrl;
+    avatarCacheModule.getCachedAvatarUrl = async (): Promise<string> => {
+      throw new Error('forced avatar cache resolution failure');
+    };
+
+    try {
+      const response = await callIpc('auth:get-accounts') as IpcResponse<AccountSummary[]>;
+      expect(response.success).to.equal(true);
+      const matchingAccount = response.data!.find((account) => account.id === seededAccount.accountId);
+      expect(matchingAccount).to.not.equal(undefined);
+      expect(matchingAccount!.avatarUrl).to.equal(originalAvatarUrl);
+    } finally {
+      avatarCacheModule.getCachedAvatarUrl = originalGetCachedAvatarUrl;
+    }
+  });
+
+  it('returns AUTH_GET_ACCOUNT_COUNT_FAILED when account count lookup throws', async () => {
+    const database = DatabaseService.getInstance() as unknown as {
+      getAccountCount: () => number;
+    };
+    const originalGetAccountCount = database.getAccountCount;
+    database.getAccountCount = (): number => {
+      throw new Error('forced account count failure');
+    };
+
+    try {
+      const response = await callIpc('auth:get-account-count') as IpcResponse<number>;
+      expect(response.success).to.equal(false);
+      expect(response.error!.code).to.equal('AUTH_GET_ACCOUNT_COUNT_FAILED');
+    } finally {
+      database.getAccountCount = originalGetAccountCount;
+    }
   });
 
   it('exposes OAuth loopback port and redirect URI after start', async function () {

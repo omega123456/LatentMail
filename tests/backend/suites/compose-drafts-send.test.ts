@@ -24,12 +24,12 @@ import { expect } from 'chai';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
-  waitForEvent,
   seedTestAccount,
+  waitForNextFolderUpdated,
+  waitForQueueTerminalState,
 } from '../infrastructure/test-helpers';
 import { imapStateInspector, smtpServer } from '../test-main';
 import { DatabaseService } from '../../../electron/services/database-service';
-import { TestEventBus } from '../infrastructure/test-event-bus';
 
 // ---- Type helpers ----
 
@@ -39,87 +39,10 @@ interface IpcResponse<T = unknown> {
   error?: { code: string; message: string };
 }
 
-interface QueueUpdateSnapshot {
-  queueId: string;
-  accountId: number;
-  type: string;
-  status: string;
-  error?: string;
-}
-
 // ---- Suite-level state ----
 
 let suiteAccountId: number;
 let suiteEmail: string;
-
-// ---- Helper: wait for a queue:update event with a specific queueId and terminal status ----
-
-async function waitForQueueUpdate(
-  queueId: string,
-  status: 'completed' | 'failed',
-  timeoutMs: number = 20_000,
-): Promise<QueueUpdateSnapshot> {
-  const bus = TestEventBus.getInstance();
-
-  const resultArgs = await bus.waitFor('queue:update', {
-    timeout: timeoutMs,
-    predicate: (args) => {
-      const snapshot = args[0] as QueueUpdateSnapshot | undefined;
-      return (
-        snapshot != null &&
-        snapshot.queueId === queueId &&
-        (snapshot.status === 'completed' || snapshot.status === 'failed')
-      );
-    },
-  });
-
-  return resultArgs[0] as QueueUpdateSnapshot;
-}
-
-// ---- Helper: wait for a mail:folder-updated event with specific reason ----
-
-async function waitForFolderUpdated(
-  accountId: number,
-  reason: string,
-  timeoutMs: number = 15_000,
-): Promise<Record<string, unknown>> {
-  const bus = TestEventBus.getInstance();
-  const priorCount = bus.getHistory('mail:folder-updated').filter((record) => {
-    const payload = record.args[0] as Record<string, unknown> | undefined;
-    return (
-      payload != null &&
-      Number(payload['accountId']) === accountId &&
-      payload['reason'] === reason
-    );
-  }).length;
-
-  const resultArgs = await bus.waitFor('mail:folder-updated', {
-    timeout: timeoutMs,
-    predicate: (args) => {
-      const payload = args[0] as Record<string, unknown> | undefined;
-      if (!payload) {
-        return false;
-      }
-      if (Number(payload['accountId']) !== accountId) {
-        return false;
-      }
-      if (payload['reason'] !== reason) {
-        return false;
-      }
-      const currentCount = bus.getHistory('mail:folder-updated').filter((record) => {
-        const innerPayload = record.args[0] as Record<string, unknown> | undefined;
-        return (
-          innerPayload != null &&
-          Number(innerPayload['accountId']) === accountId &&
-          innerPayload['reason'] === reason
-        );
-      }).length;
-      return currentCount > priorCount;
-    },
-  });
-
-  return resultArgs[0] as Record<string, unknown>;
-}
 
 // =========================================================================
 // Compose: signatures and contacts
@@ -375,7 +298,7 @@ describe('Compose Drafts and Send', () => {
       const queueId = enqueueResponse.data!.queueId;
 
       // Wait for queue completion
-      const snapshot = await waitForQueueUpdate(queueId, 'completed');
+      const snapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
       expect(snapshot.status).to.equal('completed');
       expect(snapshot.queueId).to.equal(queueId);
 
@@ -412,8 +335,8 @@ describe('Compose Drafts and Send', () => {
 
       // Wait for both the queue completion AND the folder-updated event
       const [, folderUpdatedPayload] = await Promise.all([
-        waitForQueueUpdate(queueId, 'completed'),
-        waitForFolderUpdated(suiteAccountId, 'draft-create'),
+        waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 }),
+        waitForNextFolderUpdated(suiteAccountId, { reason: 'draft-create', timeout: 15_000 }),
       ]);
 
       expect(folderUpdatedPayload['accountId']).to.equal(suiteAccountId);
@@ -442,7 +365,7 @@ describe('Compose Drafts and Send', () => {
       }) as IpcResponse<{ queueId: string }>;
 
       const queueId = enqueueResponse.data!.queueId;
-      await waitForQueueUpdate(queueId, 'completed');
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       // Check the DB for this draft
       const db = DatabaseService.getInstance();
@@ -452,6 +375,105 @@ describe('Compose Drafts and Send', () => {
         .all({ accountId: suiteAccountId, subject: uniqueSubject }) as Array<Record<string, unknown>>;
 
       expect(rows.length).to.be.greaterThan(0);
+    });
+
+    it('creates a draft when all optional MIME fields are blank or omitted', async function () {
+      this.timeout(25_000);
+
+      const draftSubject = 'Minimal Optional MIME Draft';
+      const draftsBefore = imapStateInspector.getMessages('[Gmail]/Drafts').length;
+
+      const enqueueResponse = await callIpc('queue:enqueue', {
+        type: 'draft-create',
+        accountId: suiteAccountId,
+        payload: {
+          subject: draftSubject,
+          to: '',
+          cc: '',
+          bcc: '',
+          htmlBody: '',
+          textBody: '',
+          inReplyTo: '',
+          references: '',
+          messageId: '',
+        },
+        description: 'Draft with blank optional MIME fields',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(enqueueResponse.success).to.equal(true);
+
+      const queueId = enqueueResponse.data!.queueId;
+      const snapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
+      expect(snapshot.status).to.equal('completed');
+
+      const draftsAfter = imapStateInspector.getMessages('[Gmail]/Drafts');
+      expect(draftsAfter.length).to.equal(draftsBefore + 1);
+
+      const createdDraft = draftsAfter.find((message) => {
+        const rawText = message.rfc822.toString('utf8');
+        return rawText.includes(`Subject: ${draftSubject}`);
+      });
+
+      expect(createdDraft).to.exist;
+
+      const rawText = createdDraft!.rfc822.toString('utf8');
+      expect(rawText).to.include(`Subject: ${draftSubject}`);
+      expect(rawText).to.not.include('\nTo: ');
+      expect(rawText).to.not.include('\nCc: ');
+      expect(rawText).to.not.include('\nBcc: ');
+      expect(rawText).to.not.include('\nIn-Reply-To: ');
+      expect(rawText).to.not.include('\nReferences: ');
+      expect(rawText).to.include('Message-ID: <draft-');
+      expect(rawText).to.include('X-Mozilla-Draft-Info: 1');
+    });
+
+    it('creates a draft when all optional MIME fields are populated', async function () {
+      this.timeout(25_000);
+
+      const draftSubject = 'Full Optional MIME Draft';
+      const draftsBefore = imapStateInspector.getMessages('[Gmail]/Drafts').length;
+
+      const enqueueResponse = await callIpc('queue:enqueue', {
+        type: 'draft-create',
+        accountId: suiteAccountId,
+        payload: {
+          subject: draftSubject,
+          to: 'Alice <alice@example.com>',
+          cc: 'Bob <bob@example.com>',
+          bcc: 'Charlie <charlie@example.com>',
+          htmlBody: '<p>Full MIME draft body.</p>',
+          textBody: 'Full MIME draft body.',
+          inReplyTo: '<original@example.com>',
+          references: '<ref1@example.com> <ref2@example.com>',
+        },
+        description: 'Draft with populated optional MIME fields',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(enqueueResponse.success).to.equal(true);
+
+      const queueId = enqueueResponse.data!.queueId;
+      const snapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
+      expect(snapshot.status).to.equal('completed');
+
+      const draftsAfter = imapStateInspector.getMessages('[Gmail]/Drafts');
+      expect(draftsAfter.length).to.equal(draftsBefore + 1);
+
+      const createdDraft = draftsAfter.find((message) => {
+        const rawText = message.rfc822.toString('utf8');
+        return rawText.includes(`Subject: ${draftSubject}`);
+      });
+
+      expect(createdDraft).to.exist;
+
+      const rawText = createdDraft!.rfc822.toString('utf8');
+      expect(rawText).to.include(`Subject: ${draftSubject}`);
+      expect(rawText).to.include('To: Alice <alice@example.com>');
+      expect(rawText).to.include('Cc: Bob <bob@example.com>');
+      expect(rawText).to.include('Bcc: Charlie <charlie@example.com>');
+      expect(rawText).to.include('In-Reply-To: <original@example.com>');
+      expect(rawText).to.include('References: <ref1@example.com> <ref2@example.com>');
+      expect(rawText).to.include('Message-ID: <draft-');
+      expect(rawText).to.include('X-Mozilla-Draft-Info: 1');
     });
   });
 
@@ -498,7 +520,7 @@ describe('Compose Drafts and Send', () => {
       const createQueueId = createResponse.data!.queueId;
 
       // Wait for create to complete
-      await waitForQueueUpdate(createQueueId, 'completed');
+      await waitForQueueTerminalState(createQueueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       // Step 2: Update the draft referencing the original queueId
       const updatePayload = {
@@ -519,7 +541,7 @@ describe('Compose Drafts and Send', () => {
       const updateQueueId = updateResponse.data!.queueId;
 
       // Wait for update to complete
-      const snapshot = await waitForQueueUpdate(updateQueueId, 'completed', 25_000);
+      const snapshot = await waitForQueueTerminalState(updateQueueId, { expectedStatus: 'completed', timeout: 25_000 });
       expect(snapshot.status).to.equal('completed');
 
       // Verify updated subject exists in IMAP Drafts
@@ -577,7 +599,7 @@ describe('Compose Drafts and Send', () => {
       const queueId = enqueueResponse.data!.queueId;
 
       // Wait for send to complete
-      const snapshot = await waitForQueueUpdate(queueId, 'completed');
+      const snapshot = await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
       expect(snapshot.status).to.equal('completed');
 
       // Verify the SMTP capture server received the message
@@ -610,7 +632,7 @@ describe('Compose Drafts and Send', () => {
       }) as IpcResponse<{ queueId: string }>;
 
       const queueId = enqueueResponse.data!.queueId;
-      await waitForQueueUpdate(queueId, 'completed');
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       const lastEmail = smtpServer.getLastEmail();
       expect(lastEmail).to.exist;
@@ -645,8 +667,8 @@ describe('Compose Drafts and Send', () => {
 
       // Wait for queue completion and folder-updated concurrently
       const [, folderUpdatedPayload] = await Promise.all([
-        waitForQueueUpdate(queueId, 'completed'),
-        waitForFolderUpdated(suiteAccountId, 'send'),
+        waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 }),
+        waitForNextFolderUpdated(suiteAccountId, { reason: 'send', timeout: 15_000 }),
       ]);
 
       expect(folderUpdatedPayload['accountId']).to.equal(suiteAccountId);
@@ -672,7 +694,7 @@ describe('Compose Drafts and Send', () => {
       }) as IpcResponse<{ queueId: string }>;
 
       const queueId = enqueueResponse.data!.queueId;
-      await waitForQueueUpdate(queueId, 'completed');
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       const lastEmail = smtpServer.getLastEmail();
       expect(lastEmail).to.exist;
@@ -709,7 +731,7 @@ describe('Compose Drafts and Send', () => {
       expect(createResponse.success).to.equal(true);
       const draftQueueId = createResponse.data!.queueId;
 
-      await waitForQueueUpdate(draftQueueId, 'completed');
+      await waitForQueueTerminalState(draftQueueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       // Record draft count before send
       const draftsBeforeSend = imapStateInspector.getMessages('[Gmail]/Drafts');
@@ -734,7 +756,7 @@ describe('Compose Drafts and Send', () => {
       expect(sendResponse.success).to.equal(true);
       const sendQueueId = sendResponse.data!.queueId;
 
-      await waitForQueueUpdate(sendQueueId, 'completed');
+      await waitForQueueTerminalState(sendQueueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       // Verify email was received by SMTP
       const lastEmail = smtpServer.getLastEmail();
@@ -762,7 +784,7 @@ describe('Compose Drafts and Send', () => {
       expect(sendResponse.success).to.equal(true);
       const queueId = sendResponse.data!.queueId;
 
-      await waitForQueueUpdate(queueId, 'completed');
+      await waitForQueueTerminalState(queueId, { expectedStatus: 'completed', timeout: 20_000 });
 
       const lastEmail = smtpServer.getLastEmail();
       expect(lastEmail).to.exist;

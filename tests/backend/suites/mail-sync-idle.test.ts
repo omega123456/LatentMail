@@ -30,11 +30,13 @@ import {
   waitForEvent,
   seedTestAccount,
   triggerSyncAndWait,
+  waitForNextFolderUpdated,
+  waitForQueueTerminalState,
 } from '../infrastructure/test-helpers';
 import { imapStateInspector } from '../test-main';
 import { emlFixtures } from '../fixtures/index';
 import { DatabaseService } from '../../../electron/services/database-service';
-import { ImapService } from '../../../electron/services/imap-service';
+import { FetchedEmail, ImapService } from '../../../electron/services/imap-service';
 import { ALL_MAIL_PATH, SyncService } from '../../../electron/services/sync-service';
 import { SyncQueueBridge } from '../../../electron/services/sync-queue-bridge';
 import { TestEventBus } from '../infrastructure/test-event-bus';
@@ -230,6 +232,40 @@ function buildSyntheticEmail(options: SyntheticEmailOptions): Buffer {
     ].join('\r\n'),
     'utf8',
   );
+}
+
+function buildRawEmailFromLines(lines: string[]): Buffer {
+  return Buffer.from(lines.join('\r\n'), 'utf8');
+}
+
+function buildFetchedEmail(overrides: Partial<FetchedEmail> = {}): FetchedEmail {
+  return {
+    uid: overrides.uid ?? 1,
+    xGmMsgId: overrides.xGmMsgId ?? 'synthetic-xgm-msgid',
+    xGmThrid: overrides.xGmThrid ?? 'synthetic-xgm-thrid',
+    messageId: overrides.messageId ?? '<synthetic-message-id@example.com>',
+    folder: overrides.folder ?? 'INBOX',
+    fromAddress: overrides.fromAddress ?? 'sender@example.com',
+    fromName: overrides.fromName ?? 'Sender Example',
+    toAddresses: overrides.toAddresses ?? suiteEmail,
+    ccAddresses: overrides.ccAddresses ?? '',
+    bccAddresses: overrides.bccAddresses ?? '',
+    subject: overrides.subject ?? 'Synthetic subject',
+    textBody: overrides.textBody ?? '',
+    htmlBody: overrides.htmlBody ?? '',
+    date: overrides.date ?? DateTime.utc().toISO()!,
+    isRead: overrides.isRead ?? false,
+    isStarred: overrides.isStarred ?? false,
+    isImportant: overrides.isImportant ?? false,
+    isDraft: overrides.isDraft ?? false,
+    snippet: overrides.snippet ?? 'Synthetic snippet',
+    size: overrides.size ?? 0,
+    hasAttachments: overrides.hasAttachments ?? false,
+    labels: overrides.labels ?? '',
+    rawLabels: overrides.rawLabels ?? [],
+    modseq: overrides.modseq,
+    attachments: overrides.attachments,
+  };
 }
 
 function injectInboxAndAllMailMessage(options: {
@@ -1118,13 +1154,6 @@ describe('Mail Sync & IDLE', () => {
       });
 
       // Capture event count before triggering IDLE notification
-      const priorFolderUpdatedCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-        (record) => {
-          const payload = record.args[0] as FolderUpdatedPayload | undefined;
-          return payload && payload.accountId === suiteAccountId;
-        },
-      ).length;
-
       // Send an EXISTS notification to the IDLE client — simulates new mail arriving
       imapStateInspector.injectAndNotify('INBOX', htmlMsg.raw, {
         xGmMsgId: '9991000000000099',
@@ -1133,22 +1162,7 @@ describe('Mail Sync & IDLE', () => {
       });
 
       // Wait for the sync triggered by IDLE to emit mail:folder-updated
-      await waitForEvent('mail:folder-updated', {
-        timeout: 20_000,
-        predicate: (args) => {
-          const payload = args[0] as FolderUpdatedPayload | undefined;
-          if (!payload || payload.accountId !== suiteAccountId) {
-            return false;
-          }
-          const currentCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-            (record) => {
-              const recordPayload = record.args[0] as FolderUpdatedPayload | undefined;
-              return recordPayload && recordPayload.accountId === suiteAccountId;
-            },
-          ).length;
-          return currentCount > priorFolderUpdatedCount;
-        },
-      });
+      await waitForNextFolderUpdated(suiteAccountId, { timeout: 20_000 });
     });
 
     it('triggers a new INBOX sync via IDLE when a second message arrives', async function () {
@@ -1168,13 +1182,6 @@ describe('Mail Sync & IDLE', () => {
         xGmLabels: ['\\Inbox'],
       });
 
-      const priorFolderUpdatedCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-        (record) => {
-          const payload = record.args[0] as FolderUpdatedPayload | undefined;
-          return payload && payload.accountId === suiteAccountId;
-        },
-      ).length;
-
       // Inject and notify via IDLE — gives both the message store AND the EXISTS signal
       imapStateInspector.injectAndNotify('INBOX', multipartMsg.raw, {
         xGmMsgId: multipartMsg.headers.xGmMsgId,
@@ -1183,22 +1190,7 @@ describe('Mail Sync & IDLE', () => {
       });
 
       // Wait for the IDLE-triggered sync to emit mail:folder-updated
-      await waitForEvent('mail:folder-updated', {
-        timeout: 20_000,
-        predicate: (args) => {
-          const payload = args[0] as FolderUpdatedPayload | undefined;
-          if (!payload || payload.accountId !== suiteAccountId) {
-            return false;
-          }
-          const currentCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-            (record) => {
-              const recordPayload = record.args[0] as FolderUpdatedPayload | undefined;
-              return recordPayload && recordPayload.accountId === suiteAccountId;
-            },
-          ).length;
-          return currentCount > priorFolderUpdatedCount;
-        },
-      });
+      await waitForNextFolderUpdated(suiteAccountId, { timeout: 20_000 });
 
       // Verify the new message was synced into the DB
       const db = DatabaseService.getInstance();
@@ -1339,13 +1331,6 @@ describe('Mail Sync & IDLE', () => {
         internalDate: reconnectDate.toISO()!,
       });
 
-      const priorFolderUpdatedCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-        (record) => {
-          const payload = record.args[0] as FolderUpdatedPayload | undefined;
-          return payload?.accountId === suiteAccountId;
-        },
-      ).length;
-
       imapStateInspector.injectAndNotify('INBOX', reconnectRaw, {
         xGmMsgId: '7990000000000001',
         xGmThrid: '7990000000000101',
@@ -1353,22 +1338,7 @@ describe('Mail Sync & IDLE', () => {
         internalDate: reconnectDate.toISO()!,
       });
 
-      await waitForEvent('mail:folder-updated', {
-        timeout: 15_000,
-        predicate: (args) => {
-          const payload = args[0] as FolderUpdatedPayload | undefined;
-          if (!payload || payload.accountId !== suiteAccountId) {
-            return false;
-          }
-          const currentCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-            (record) => {
-              const recordPayload = record.args[0] as FolderUpdatedPayload | undefined;
-              return recordPayload?.accountId === suiteAccountId;
-            },
-          ).length;
-          return currentCount > priorFolderUpdatedCount;
-        },
-      });
+      await waitForNextFolderUpdated(suiteAccountId, { timeout: 15_000 });
 
       expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '7990000000000001')).to.not.be.null;
     });
@@ -1445,33 +1415,11 @@ describe('Mail Sync & IDLE', () => {
     it('triggers reconcile sync and emits mail:folder-updated when expunge occurs via IDLE', async function () {
       this.timeout(25_000);
 
-      const priorFolderUpdatedCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-        (record) => {
-          const payload = record.args[0] as FolderUpdatedPayload | undefined;
-          return payload && payload.accountId === suiteAccountId;
-        },
-      ).length;
-
       // Remove the first message from All Mail on the server and send EXPUNGE notification
       imapStateInspector.expungeAndNotify('[Gmail]/All Mail', injectedUid);
 
       // Wait for the reconcile sync triggered by the EXPUNGE IDLE event
-      await waitForEvent('mail:folder-updated', {
-        timeout: 20_000,
-        predicate: (args) => {
-          const payload = args[0] as FolderUpdatedPayload | undefined;
-          if (!payload || payload.accountId !== suiteAccountId) {
-            return false;
-          }
-          const currentCount = TestEventBus.getInstance().getHistory('mail:folder-updated').filter(
-            (record) => {
-              const recordPayload = record.args[0] as FolderUpdatedPayload | undefined;
-              return recordPayload && recordPayload.accountId === suiteAccountId;
-            },
-          ).length;
-          return currentCount > priorFolderUpdatedCount;
-        },
-      });
+      await waitForNextFolderUpdated(suiteAccountId, { timeout: 20_000 });
     });
   });
 
@@ -1727,41 +1675,11 @@ describe('Mail Sync & IDLE', () => {
       // Wait for queue:update with status=completed for the sync item.
       // Accept 'failed' in the predicate so the waitFor resolves (rather than timing out),
       // then inspect the terminal status and throw if the sync worker failed.
-      const terminalArgs = await waitForEvent('queue:update', {
+      expect(syncQueueId).to.not.equal(null);
+      await waitForQueueTerminalState(syncQueueId!, {
+        expectedStatus: 'completed',
         timeout: 15_000,
-        predicate: (args) => {
-          const snapshot = args[0] as QueueUpdateSnapshot | undefined;
-          if (!snapshot) {
-            return false;
-          }
-          if (snapshot.accountId !== suiteAccountId) {
-            return false;
-          }
-          if (snapshot.type !== 'sync-allmail' && snapshot.type !== 'sync-folder') {
-            return false;
-          }
-          if (snapshot.status !== 'completed' && snapshot.status !== 'failed') {
-            return false;
-          }
-          // When the IPC returned a specific queueId, match only that exact item.
-          // This prevents a stale previous-suite sync item (same account, same type)
-          // from resolving our wait prematurely.
-          if (syncQueueId !== null) {
-            return snapshot.queueId === syncQueueId;
-          }
-          // Fallback: accept any terminal sync event for this account
-          return true;
-        },
       });
-
-      // Fail the test if the sync worker itself failed.
-      const terminalSnapshot = terminalArgs[0] as QueueUpdateSnapshot;
-      if (terminalSnapshot.status === 'failed') {
-        throw new Error(
-          `mail:sync-account IPC test: sync worker failed` +
-          (terminalSnapshot.error ? `: ${terminalSnapshot.error}` : ''),
-        );
-      }
 
       // Verify the message was synced
       const db = DatabaseService.getInstance();
@@ -1797,22 +1715,10 @@ describe('Mail Sync & IDLE', () => {
         expect(syncResponse.success).to.equal(true);
         expect(syncResponse.data!.queueId).to.be.a('string');
 
-        const terminalArgs = await waitForEvent('queue:update', {
+        await waitForQueueTerminalState(syncResponse.data!.queueId!, {
+          expectedStatus: 'completed',
           timeout: 15_000,
-          predicate: (args) => {
-            const snapshot = args[0] as QueueUpdateSnapshot | undefined;
-            if (!snapshot) {
-              return false;
-            }
-            if (snapshot.queueId !== syncResponse.data!.queueId) {
-              return false;
-            }
-            return snapshot.status === 'completed' || snapshot.status === 'failed';
-          },
         });
-
-        const terminalSnapshot = terminalArgs[0] as QueueUpdateSnapshot;
-        expect(terminalSnapshot.status).to.equal('completed');
 
         const pausedState = await callIpc('sync:get-paused') as IpcResponse<SyncPausedResponse>;
         expect(pausedState.success).to.equal(true);
@@ -1935,6 +1841,1173 @@ describe('Mail Sync & IDLE', () => {
 
       expect(emailRow).to.not.be.undefined;
       expect(emailRow!['is_filtered']).to.equal(1);
+    });
+  });
+
+  // =========================================================================
+  // Format participant branches and IMAP parser fallbacks
+  // =========================================================================
+
+  describe('Format participant branches and IMAP parser fallbacks', () => {
+    before(async function () {
+      this.timeout(30_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-format-parser@example.com',
+        displayName: 'Format Parser Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+    });
+
+    it('stores sender participants as address-only when the sender omits a display name', async function () {
+      this.timeout(20_000);
+
+      const sentAt = DateTime.utc();
+      const rawEmail = buildSyntheticEmail({
+        fromHeader: 'sender-no-name@example.com',
+        toHeader: suiteEmail,
+        subject: 'Sender without display name',
+        body: 'No display name body',
+        dateIso: sentAt.toISO()!,
+        xGmMsgId: '8666000000000001',
+        xGmThrid: '8666000000000101',
+        messageId: '<sender-no-name@example.com>',
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: rawEmail,
+        xGmMsgId: '8666000000000001',
+        xGmThrid: '8666000000000101',
+        internalDate: sentAt.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const thread = DatabaseService.getInstance().getThreadById(suiteAccountId, '8666000000000101');
+      expect(thread).to.not.be.null;
+      expect(thread!['participants']).to.equal('sender-no-name@example.com');
+    });
+
+    it('keeps only one address-only participant when the newest sender name equals the email address', async function () {
+      this.timeout(20_000);
+
+      const threadId = '8666000000000102';
+      const newestDate = DateTime.utc();
+      const olderDate = newestDate.minus({ minutes: 1 });
+
+      const newestRaw = buildSyntheticEmail({
+        fromHeader: 'alice@example.com <alice@example.com>',
+        toHeader: suiteEmail,
+        subject: 'Newest sender uses email as name',
+        body: 'Newest body',
+        dateIso: newestDate.toISO()!,
+        xGmMsgId: '8666000000000002',
+        xGmThrid: threadId,
+        messageId: '<alice-name-equals-address-newest@example.com>',
+      });
+      const olderRaw = buildSyntheticEmail({
+        fromHeader: 'Alice Example <alice@example.com>',
+        toHeader: suiteEmail,
+        subject: 'Older sender uses human name',
+        body: 'Older body',
+        dateIso: olderDate.toISO()!,
+        xGmMsgId: '8666000000000003',
+        xGmThrid: threadId,
+        messageId: '<alice-name-equals-address-older@example.com>',
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: olderRaw,
+        xGmMsgId: '8666000000000003',
+        xGmThrid: threadId,
+        internalDate: olderDate.toISO()!,
+      });
+      injectInboxAndAllMailMessage({
+        raw: newestRaw,
+        xGmMsgId: '8666000000000002',
+        xGmThrid: threadId,
+        internalDate: newestDate.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const thread = DatabaseService.getInstance().getThreadById(suiteAccountId, threadId);
+      expect(thread).to.not.be.null;
+      expect(thread!['participants']).to.equal('alice@example.com');
+    });
+
+    it('stores parser defaults when IMAP envelope fields like sender subject and message-id are missing', async function () {
+      this.timeout(20_000);
+
+      const sentAt = DateTime.utc();
+      const rawEmail = buildRawEmailFromLines([
+        `Date: ${sentAt.toUTC().toRFC2822()}`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        'X-GM-MSGID: 8666000000000004',
+        'X-GM-THRID: 8666000000000103',
+        'X-GM-LABELS: \\Inbox \\All',
+        '',
+        'Minimal message body without sender or subject headers.',
+      ]);
+
+      injectInboxAndAllMailMessage({
+        raw: rawEmail,
+        xGmMsgId: '8666000000000004',
+        xGmThrid: '8666000000000103',
+        internalDate: sentAt.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const email = DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8666000000000004');
+      const thread = DatabaseService.getInstance().getThreadById(suiteAccountId, '8666000000000103');
+
+      expect(email).to.not.be.null;
+      expect(email!['fromAddress']).to.equal('');
+      expect(email!['fromName']).to.equal('');
+      expect(email!['subject']).to.equal('(no subject)');
+      expect(email!['messageId']).to.equal(null);
+
+      expect(thread).to.not.be.null;
+      expect(thread!['participants']).to.equal('');
+    });
+
+    it('falls back to parsing Message-ID from raw headers when the IMAP envelope omits it', async function () {
+      this.timeout(20_000);
+
+      const sentAt = DateTime.utc();
+      const rawEmail = buildRawEmailFromLines([
+        'From: Fallback Header <fallback-header@example.com>',
+        `To: ${suiteEmail}`,
+        'Subject: Folded Message-ID fallback',
+        `Date: ${sentAt.toUTC().toRFC2822()}`,
+        'Message-ID:',
+        ' <folded-message-id-fallback@example.com>',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        'X-GM-MSGID: 8666000000000005',
+        'X-GM-THRID: 8666000000000104',
+        'X-GM-LABELS: \\Inbox \\All',
+        '',
+        'Folded Message-ID body.',
+      ]);
+
+      injectInboxAndAllMailMessage({
+        raw: rawEmail,
+        xGmMsgId: '8666000000000005',
+        xGmThrid: '8666000000000104',
+        internalDate: sentAt.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const email = DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8666000000000005');
+      expect(email).to.not.be.null;
+      expect(email!['messageId']).to.equal('<folded-message-id-fallback@example.com>');
+    });
+  });
+
+  // =========================================================================
+  // IMAP connection reuse and empty-folder sync
+  // =========================================================================
+
+  describe('IMAP connection reuse and empty-folder sync', () => {
+    before(async function () {
+      this.timeout(30_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-imap-pool@example.com',
+        displayName: 'IMAP Pool Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+      imapStateInspector.getStore().createMailbox('Projects');
+
+      const initialDate = DateTime.utc();
+      const initialRaw = buildSyntheticEmail({
+        fromHeader: 'pool-initial@example.com',
+        toHeader: suiteEmail,
+        subject: 'Initial pooled message',
+        body: 'Initial pooled body',
+        dateIso: initialDate.toISO()!,
+        xGmMsgId: '8777000000000001',
+        xGmThrid: '8777000000000101',
+        messageId: '<initial-pooled-message@example.com>',
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: initialRaw,
+        xGmMsgId: '8777000000000001',
+        xGmThrid: '8777000000000101',
+        internalDate: initialDate.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+    });
+
+    it('reuses the existing shared IMAP connection across two sequential syncs', async function () {
+      this.timeout(20_000);
+
+      const imapService = ImapService.getInstance();
+      const imapInternals = imapService as unknown as {
+        connections: Map<string, { usable?: boolean }>;
+      };
+
+      const initialConnection = imapInternals.connections.get(String(suiteAccountId));
+      expect(initialConnection).to.not.equal(undefined);
+      expect(initialConnection!.usable).to.equal(true);
+
+      const secondDate = DateTime.utc();
+      const secondRaw = buildSyntheticEmail({
+        fromHeader: 'pool-second@example.com',
+        toHeader: suiteEmail,
+        subject: 'Second pooled message',
+        body: 'Second pooled body',
+        dateIso: secondDate.toISO()!,
+        xGmMsgId: '8777000000000002',
+        xGmThrid: '8777000000000102',
+        messageId: '<second-pooled-message@example.com>',
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: secondRaw,
+        xGmMsgId: '8777000000000002',
+        xGmThrid: '8777000000000102',
+        internalDate: secondDate.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const reusedConnection = imapInternals.connections.get(String(suiteAccountId));
+      expect(reusedConnection).to.equal(initialConnection);
+      expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8777000000000002')).to.not.be.null;
+    });
+
+    it('syncs an empty custom folder without storing any additional emails', async function () {
+      this.timeout(20_000);
+
+      const rawDb = DatabaseService.getInstance().getDatabase();
+      const beforeRow = rawDb.prepare(
+        'SELECT COUNT(*) AS emailCount FROM emails WHERE account_id = :accountId',
+      ).get({ accountId: suiteAccountId }) as { emailCount: number };
+
+      const response = await callIpc('mail:sync-folder', {
+        accountId: String(suiteAccountId),
+        folder: 'Projects',
+      }) as IpcResponse<void>;
+
+      expect(response.success).to.equal(true);
+
+      await waitForNextFolderUpdated(suiteAccountId, {
+        folder: 'Projects',
+        timeout: 15_000,
+      });
+
+      const afterRow = rawDb.prepare(
+        'SELECT COUNT(*) AS emailCount FROM emails WHERE account_id = :accountId',
+      ).get({ accountId: suiteAccountId }) as { emailCount: number };
+
+      expect(afterRow.emailCount).to.equal(beforeRow.emailCount);
+      expect(imapStateInspector.getMessageCount('Projects')).to.equal(0);
+    });
+  });
+
+  // =========================================================================
+  // IDLE non-growth EXISTS branch
+  // =========================================================================
+
+  describe('IDLE non-growth EXISTS notifications', () => {
+    let idleCallbackCount = 0;
+
+    before(async function () {
+      this.timeout(30_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'idle-non-growth@example.com',
+        displayName: 'IDLE Non Growth Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const initialDate = DateTime.utc();
+      const initialRaw = buildSyntheticEmail({
+        fromHeader: 'idle-baseline@example.com',
+        toHeader: suiteEmail,
+        subject: 'IDLE baseline message',
+        body: 'IDLE baseline body',
+        dateIso: initialDate.toISO()!,
+        xGmMsgId: '8888000000000001',
+        xGmThrid: '8888000000000101',
+        messageId: '<idle-baseline-message@example.com>',
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: initialRaw,
+        xGmMsgId: '8888000000000001',
+        xGmThrid: '8888000000000101',
+        internalDate: initialDate.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      await SyncService.getInstance().startIdle(String(suiteAccountId), () => {
+        idleCallbackCount += 1;
+      });
+      idleCallbackCount = 0;
+    });
+
+    after(async () => {
+      try {
+        await SyncService.getInstance().stopAllIdle();
+      } catch {
+        // Non-fatal cleanup
+      }
+    });
+
+    it('ignores EXISTS notifications whose count does not grow', async function () {
+      this.timeout(15_000);
+
+      const existingCount = imapStateInspector.getMessageCount('INBOX');
+      imapStateInspector.sendExistsNotification('INBOX', existingCount);
+
+      await waitForMilliseconds(1_000);
+
+      expect(idleCallbackCount).to.equal(0);
+      expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8888000000000001')).to.not.be.null;
+    });
+  });
+
+  // =========================================================================
+  // Fetch-older edge cases
+  // =========================================================================
+
+  describe('Fetch-older edge cases', () => {
+    it('returns an empty result when no messages are older than the requested cursor', async function () {
+      this.timeout(25_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'fetch-older-none@example.com',
+        displayName: 'Fetch Older None Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const recentDate = DateTime.utc().minus({ days: 2 });
+      const recentRaw = buildSyntheticEmail({
+        fromHeader: 'recent-only@example.com',
+        toHeader: suiteEmail,
+        subject: 'Recent only message',
+        body: 'Recent only body',
+        dateIso: recentDate.toISO()!,
+        xGmMsgId: '8999000000000001',
+        xGmThrid: '8999000000000101',
+        messageId: '<recent-only-message@example.com>',
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: recentRaw,
+        xGmMsgId: '8999000000000001',
+        xGmThrid: '8999000000000101',
+        internalDate: recentDate.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      const response = await callIpc(
+        'mail:fetch-older',
+        String(suiteAccountId),
+        'INBOX',
+        DateTime.utc().minus({ days: 40 }).toISO()!,
+        10,
+      ) as IpcResponse<FetchOlderResponse>;
+
+      expect(response.success).to.equal(true);
+
+      const doneArgs = await waitForEvent('mail:fetch-older-done', {
+        timeout: 20_000,
+        predicate: (args) => {
+          const payload = args[0] as FetchOlderDonePayload | undefined;
+          return payload != null && payload.queueId === response.data!.queueId;
+        },
+      });
+
+      const donePayload = doneArgs[0] as FetchOlderDonePayload;
+      expect(donePayload.error).to.equal(undefined);
+      expect(donePayload.threads).to.deep.equal([]);
+      expect(donePayload.hasMore).to.equal(false);
+      expect(donePayload.nextBeforeDate).to.equal(null);
+    });
+
+    it('decorates fetch-older thread rows with hasDraft when the thread also contains a draft', async function () {
+      this.timeout(30_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'fetch-older-draft@example.com',
+        displayName: 'Fetch Older Draft Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const threadId = '8999000000000102';
+      const olderInboxDate = DateTime.utc().minus({ days: 55 });
+      const recentDraftDate = DateTime.utc().minus({ days: 5 });
+
+      const olderInboxRaw = buildSyntheticEmail({
+        fromHeader: 'older-thread@example.com',
+        toHeader: suiteEmail,
+        subject: 'Older inbox thread message',
+        body: 'Older inbox body',
+        dateIso: olderInboxDate.toISO()!,
+        xGmMsgId: '8999000000000002',
+        xGmThrid: threadId,
+        messageId: '<older-inbox-thread-message@example.com>',
+      });
+      const recentDraftRaw = buildSyntheticEmail({
+        fromHeader: suiteEmail,
+        toHeader: 'draft-target@example.com',
+        subject: 'Recent draft in same thread',
+        body: 'Recent draft body',
+        dateIso: recentDraftDate.toISO()!,
+        xGmMsgId: '8999000000000003',
+        xGmThrid: threadId,
+        messageId: '<recent-draft-same-thread@example.com>',
+        labels: ['\\Draft', '\\All'],
+      });
+
+      injectInboxAndAllMailMessage({
+        raw: olderInboxRaw,
+        xGmMsgId: '8999000000000002',
+        xGmThrid: threadId,
+        internalDate: olderInboxDate.toISO()!,
+      });
+      imapStateInspector.injectMessage('[Gmail]/All Mail', recentDraftRaw, {
+        xGmMsgId: '8999000000000003',
+        xGmThrid: threadId,
+        xGmLabels: ['\\Draft', '\\All'],
+        flags: ['\\Draft'],
+        internalDate: recentDraftDate.toISO()!,
+      });
+      imapStateInspector.injectMessage('[Gmail]/Drafts', recentDraftRaw, {
+        xGmMsgId: '8999000000000003',
+        xGmThrid: threadId,
+        xGmLabels: ['\\Draft'],
+        flags: ['\\Draft'],
+        internalDate: recentDraftDate.toISO()!,
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
+
+      expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8999000000000003')).to.not.be.null;
+      expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8999000000000002')).to.be.null;
+
+      const response = await callIpc(
+        'mail:fetch-older',
+        String(suiteAccountId),
+        'INBOX',
+        DateTime.utc().minus({ days: 20 }).toISO()!,
+        10,
+      ) as IpcResponse<FetchOlderResponse>;
+
+      expect(response.success).to.equal(true);
+
+      const doneArgs = await waitForEvent('mail:fetch-older-done', {
+        timeout: 20_000,
+        predicate: (args) => {
+          const payload = args[0] as FetchOlderDonePayload | undefined;
+          return payload != null && payload.queueId === response.data!.queueId;
+        },
+      });
+
+      const donePayload = doneArgs[0] as FetchOlderDonePayload;
+      expect(donePayload.error).to.equal(undefined);
+      expect(donePayload.threads).to.be.an('array').that.is.not.empty;
+
+      const draftThread = donePayload.threads!.find((thread) => String(thread['xGmThrid']) === threadId);
+      expect(draftThread).to.not.equal(undefined);
+      expect(draftThread!['hasDraft']).to.equal(true);
+      expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '8999000000000002')).to.not.be.null;
+    });
+
+    it('falls back nextBeforeDate when fetch-older receives same-day messages newer than the cursor time', async function () {
+      this.timeout(20_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'fetch-older-next-date@example.com',
+        displayName: 'Fetch Older Next Date Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      const imapService = ImapService.getInstance() as unknown as {
+        fetchOlderEmails: (accountId: string, folder: string, beforeDate: Date, limit: number) => Promise<{ emails: FetchedEmail[]; hasMore: boolean }>;
+      };
+      const originalFetchOlderEmails = imapService.fetchOlderEmails;
+      const beforeDate = DateTime.utc().startOf('day').plus({ hours: 9 });
+      const newerSameDay = beforeDate.plus({ hours: 2 });
+
+      imapService.fetchOlderEmails = async (): Promise<{ emails: FetchedEmail[]; hasMore: boolean }> => {
+        return {
+          emails: [
+            buildFetchedEmail({
+              uid: 11,
+              xGmMsgId: '9000000000000001',
+              xGmThrid: '',
+              messageId: '<same-day-newer@example.com>',
+              date: newerSameDay.toISO()!,
+            }),
+          ],
+          hasMore: true,
+        };
+      };
+
+      try {
+        const response = await callIpc(
+          'mail:fetch-older',
+          String(suiteAccountId),
+          'INBOX',
+          beforeDate.toISO()!,
+          10,
+        ) as IpcResponse<FetchOlderResponse>;
+
+        expect(response.success).to.equal(true);
+
+        const doneArgs = await waitForEvent('mail:fetch-older-done', {
+          timeout: 20_000,
+          predicate: (args) => {
+            const payload = args[0] as FetchOlderDonePayload | undefined;
+            return payload != null && payload.queueId === response.data!.queueId;
+          },
+        });
+
+        const donePayload = doneArgs[0] as FetchOlderDonePayload;
+        expect(donePayload.error).to.equal(undefined);
+        expect(donePayload.threads).to.deep.equal([]);
+        expect(donePayload.hasMore).to.equal(true);
+        expect(donePayload.nextBeforeDate).to.equal(beforeDate.minus({ days: 1 }).toUTC().toISO());
+      } finally {
+        imapService.fetchOlderEmails = originalFetchOlderEmails;
+      }
+    });
+
+    it('continues fetch-older when All Mail UID resolution fails and leaves undecorated string-id rows unchanged', async function () {
+      this.timeout(20_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'fetch-older-uid-failure@example.com',
+        displayName: 'Fetch Older UID Failure Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      const imapService = ImapService.getInstance() as unknown as {
+        fetchOlderEmails: (accountId: string, folder: string, beforeDate: Date, limit: number) => Promise<{ emails: FetchedEmail[]; hasMore: boolean }>;
+        resolveUidsByXGmMsgIdBatch: (accountId: string, folder: string, xGmMsgIds: string[]) => Promise<Map<string, number>>;
+      };
+      const databaseService = DatabaseService.getInstance() as unknown as {
+        getThreadsByFolderBeforeDate: (accountId: number, folder: string, beforeDate: string, limit: number) => Array<Record<string, unknown>>;
+      };
+      const originalFetchOlderEmails = imapService.fetchOlderEmails;
+      const originalResolveUidsByXGmMsgIdBatch = imapService.resolveUidsByXGmMsgIdBatch;
+      const originalGetThreadsByFolderBeforeDate = databaseService.getThreadsByFolderBeforeDate;
+      const olderDate = DateTime.utc().minus({ days: 40 });
+
+      imapService.fetchOlderEmails = async (): Promise<{ emails: FetchedEmail[]; hasMore: boolean }> => {
+        return {
+          emails: [
+            buildFetchedEmail({
+              uid: 12,
+              xGmMsgId: '9000000000000002',
+              xGmThrid: '9000000000000102',
+              messageId: '<uid-resolution-failure@example.com>',
+              date: olderDate.toISO()!,
+            }),
+          ],
+          hasMore: false,
+        };
+      };
+      imapService.resolveUidsByXGmMsgIdBatch = async (): Promise<Map<string, number>> => {
+        throw new Error('forced fetch-older uid resolution failure');
+      };
+      databaseService.getThreadsByFolderBeforeDate = (_accountId: number, _folder: string, _beforeDate: string, _limit: number): Array<Record<string, unknown>> => {
+        return [{ id: '123', xGmThrid: '9000000000000102', subject: 'Synthetic thread row' }];
+      };
+
+      try {
+        const response = await callIpc(
+          'mail:fetch-older',
+          String(suiteAccountId),
+          'INBOX',
+          DateTime.utc().minus({ days: 20 }).toISO()!,
+          10,
+        ) as IpcResponse<FetchOlderResponse>;
+
+        expect(response.success).to.equal(true);
+
+        const doneArgs = await waitForEvent('mail:fetch-older-done', {
+          timeout: 20_000,
+          predicate: (args) => {
+            const payload = args[0] as FetchOlderDonePayload | undefined;
+            return payload != null && payload.queueId === response.data!.queueId;
+          },
+        });
+
+        const donePayload = doneArgs[0] as FetchOlderDonePayload;
+        expect(donePayload.error).to.equal(undefined);
+        expect(donePayload.threads).to.have.length(1);
+        expect(donePayload.threads![0]!['id']).to.equal('123');
+        expect(donePayload.threads![0]!['hasDraft']).to.equal(undefined);
+      } finally {
+        imapService.fetchOlderEmails = originalFetchOlderEmails;
+        imapService.resolveUidsByXGmMsgIdBatch = originalResolveUidsByXGmMsgIdBatch;
+        databaseService.getThreadsByFolderBeforeDate = originalGetThreadsByFolderBeforeDate;
+      }
+    });
+  });
+
+  // =========================================================================
+  // Direct service branch coverage helpers
+  // =========================================================================
+
+  describe('Direct service branch coverage helpers', () => {
+    it('covers remaining ImapService edge branches through public service methods', async function () {
+      this.timeout(20_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'imap-direct-branches@example.com',
+        displayName: 'IMAP Direct Branches Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      const imapService = ImapService.getInstance() as unknown as {
+        connect: (accountId: string) => Promise<unknown>;
+      };
+      const originalConnect = imapService.connect;
+
+      try {
+        const makeLock = (): { release: () => void } => ({ release: () => {} });
+
+        imapService.connect = async (): Promise<unknown> => {
+          return {
+            mailbox: { uidValidity: BigInt(999), highestModseq: BigInt(555) },
+            getMailboxLock: async (_folder: string): Promise<{ release: () => void }> => makeLock(),
+            search: async (criteria: Record<string, unknown>): Promise<number[]> => {
+              if ('before' in criteria) {
+                return [4, 3, 2];
+              }
+              if ('gmraw' in criteria) {
+                return [8, 7];
+              }
+              if ('threadId' in criteria) {
+                return [15];
+              }
+              if ('emailId' in criteria) {
+                return [21];
+              }
+              return [1, 2];
+            },
+            fetch: async function* (_uidRange: string): AsyncGenerator<unknown> {
+              yield null;
+              yield {
+                uid: 4,
+                envelope: {
+                  from: [{ address: 'raw-message-id@example.com', name: null }],
+                  to: [{ address: undefined, name: 'Missing Address' }],
+                  cc: [],
+                  bcc: [],
+                  subject: '',
+                  messageId: '',
+                },
+                headers: 'Message-ID: raw-message-id@example.com\r\n',
+                threadId: '',
+                emailId: '',
+                bodyStructure: null,
+                size: undefined,
+              };
+              yield {
+                uid: 5,
+                envelope: {
+                  from: [{ address: 'nested-attachment@example.com', name: 'Nested Attachment' }],
+                  to: [{ address: 'recipient@example.com', name: 'Recipient Example' }],
+                  cc: [],
+                  bcc: [],
+                  subject: 'Nested attachment subject',
+                  date: DateTime.utc().minus({ days: 3 }).toJSDate(),
+                  messageId: '',
+                },
+                headers: '',
+                threadId: '',
+                emailId: '',
+                flags: undefined,
+                labels: undefined,
+                bodyStructure: {
+                  childNodes: [
+                    {
+                      childNodes: [
+                        {
+                          disposition: 'attachment',
+                        },
+                      ],
+                    },
+                  ],
+                },
+                size: undefined,
+              };
+            },
+            messageDelete: async (_uidRange: string, _options: Record<string, unknown>): Promise<void> => {},
+          };
+        };
+
+        const limitZeroOlder = await ImapService.getInstance().fetchOlderEmails(
+          String(suiteAccountId),
+          'INBOX',
+          DateTime.utc().toJSDate(),
+          0,
+        );
+        expect(limitZeroOlder.emails).to.deep.equal([]);
+        expect(limitZeroOlder.hasMore).to.equal(false);
+
+        const regularOlder = await ImapService.getInstance().fetchOlderEmails(
+          String(suiteAccountId),
+          'INBOX',
+          DateTime.utc().toJSDate(),
+          5,
+        );
+        expect(regularOlder.emails).to.have.length(2);
+        expect(regularOlder.emails[0]!.xGmMsgId).to.equal('raw-message-id@example.com');
+        expect(regularOlder.emails[0]!.subject).to.equal('(no subject)');
+        expect(regularOlder.emails[0]!.fromName).to.equal('raw-message-id@example.com');
+        expect(regularOlder.emails[0]!.date).to.be.a('string');
+        expect(regularOlder.emails[0]!.size).to.equal(0);
+        expect(regularOlder.emails[1]!.xGmMsgId).to.equal('5');
+        expect(regularOlder.emails[1]!.hasAttachments).to.equal(true);
+
+        const zeroSearchResults = await ImapService.getInstance().searchEmails(
+          String(suiteAccountId),
+          'from:anyone',
+          0,
+        );
+        expect(zeroSearchResults).to.deep.equal([]);
+
+        const regularSearchResults = await ImapService.getInstance().searchEmails(
+          String(suiteAccountId),
+          'from:anyone',
+          5,
+        );
+        expect(regularSearchResults).to.have.length(2);
+
+        const fetchedEmails = await ImapService.getInstance().fetchEmails(String(suiteAccountId), 'INBOX');
+        expect(fetchedEmails).to.have.length(2);
+
+        const emptyThreadResults = await ImapService.getInstance().fetchThread(String(suiteAccountId), '   ');
+        expect(emptyThreadResults).to.deep.equal([]);
+
+        await ImapService.getInstance().deleteDraftByUid(String(suiteAccountId), '[Gmail]/Drafts', 999, 123);
+      } finally {
+        imapService.connect = originalConnect;
+      }
+    });
+
+    it('covers remaining SyncService resilience and mapping branches through direct service calls', async function () {
+      this.timeout(25_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-direct-branches@example.com',
+        displayName: 'Sync Direct Branches Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      const syncService = SyncService.getInstance();
+      const imapService = ImapService.getInstance() as unknown as {
+        getMailboxStatus: (accountId: string, folder: string) => Promise<{ highestModseq: string; uidValidity: string; messages: number; condstoreSupported: boolean }>;
+        fetchEmails: (accountId: string, folder: string, options?: { limit?: number; since?: Date }) => Promise<FetchedEmail[]>;
+        fetchChangedSince: (accountId: string, folder: string, changedSince: string) => Promise<{ emails: FetchedEmail[]; highestModseq: string; uidValidity: string; noModseq: boolean }>;
+        fetchFolderUids: (accountId: string, folder: string) => Promise<number[]>;
+        resolveUidsByXGmMsgIdBatch: (accountId: string, folder: string, xGmMsgIds: string[]) => Promise<Map<string, number>>;
+        startIdle: (
+          accountId: string,
+          folder: string,
+          onNewMail: () => void,
+          onExpunge?: () => void,
+          onClose?: () => void,
+          onError?: (err: Error) => void,
+        ) => Promise<void>;
+      };
+      const databaseService = DatabaseService.getInstance() as unknown as {
+        removeOrphanedEmails: (accountId: number) => Array<{ xGmThrid?: string }>;
+        removeOrphanedThreads: (accountId: number) => number;
+        recomputeThreadMetadata: (accountId: number, xGmThrid: string) => void;
+        cleanupStaleFolderStates: (accountId: number, keepFolders: string[]) => number;
+      };
+
+      const originalGetMailboxStatus = imapService.getMailboxStatus;
+      const originalFetchEmails = imapService.fetchEmails;
+      const originalFetchChangedSince = imapService.fetchChangedSince;
+      const originalFetchFolderUids = imapService.fetchFolderUids;
+      const originalResolveUidsByXGmMsgIdBatch = imapService.resolveUidsByXGmMsgIdBatch;
+      const originalStartIdle = imapService.startIdle;
+      const originalRemoveOrphanedEmails = databaseService.removeOrphanedEmails;
+      const originalRemoveOrphanedThreads = databaseService.removeOrphanedThreads;
+      const originalRecomputeThreadMetadata = databaseService.recomputeThreadMetadata;
+      const originalCleanupStaleFolderStates = databaseService.cleanupStaleFolderStates;
+
+      try {
+        const condstoreThreadId = '9100000000000101';
+
+        imapService.getMailboxStatus = async (_accountId: string, _folder: string) => {
+          return {
+            highestModseq: '200',
+            uidValidity: '9101',
+            messages: 3,
+            condstoreSupported: true,
+          };
+        };
+        imapService.fetchChangedSince = async (): Promise<{ emails: FetchedEmail[]; highestModseq: string; uidValidity: string; noModseq: boolean }> => {
+          return {
+            emails: [
+              buildFetchedEmail({
+                uid: 32,
+                xGmMsgId: '9100000000000002',
+                xGmThrid: condstoreThreadId,
+                modseq: '12',
+                date: DateTime.utc().minus({ days: 2 }).toISO()!,
+              }),
+              buildFetchedEmail({
+                uid: 31,
+                xGmMsgId: '9100000000000001',
+                xGmThrid: condstoreThreadId,
+                modseq: '12',
+                date: DateTime.utc().minus({ days: 3 }).toISO()!,
+              }),
+            ],
+            highestModseq: '250',
+            uidValidity: '9101',
+            noModseq: false,
+          };
+        };
+        DatabaseService.getInstance().upsertFolderState({
+          accountId: suiteAccountId,
+          folder: 'INBOX',
+          uidValidity: '9101',
+          highestModseq: null,
+          condstoreSupported: true,
+        });
+
+        const condstoreResult = await syncService.syncFolder(
+          String(suiteAccountId),
+          'INBOX',
+          true,
+          DateTime.utc().minus({ days: 10 }).toJSDate(),
+          false,
+          null,
+        );
+
+        expect(condstoreResult.folderChanged).to.equal(true);
+        expect(DatabaseService.getInstance().getThreadById(suiteAccountId, condstoreThreadId)).to.not.be.null;
+
+        imapStateInspector.reset();
+        imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+        imapStateInspector.getStore().createMailbox('Projects');
+
+        const allMailRaw = buildSyntheticEmail({
+          fromHeader: 'trash-only@example.com',
+          toHeader: suiteEmail,
+          subject: 'Trash only message',
+          body: 'Trash mapping body',
+          dateIso: DateTime.utc().minus({ days: 1 }).toISO()!,
+          xGmMsgId: '9100000000000003',
+          xGmThrid: '',
+          messageId: '<trash-only-message@example.com>',
+          labels: ['[Gmail]/All Mail', 'UnknownLabel'],
+        });
+        imapStateInspector.injectMessage('[Gmail]/All Mail', allMailRaw, {
+          xGmMsgId: '9100000000000003',
+          xGmThrid: '',
+          xGmLabels: ['[Gmail]/All Mail', 'UnknownLabel'],
+          internalDate: DateTime.utc().minus({ days: 1 }).toISO()!,
+        });
+
+        const directAffectedFolders = await runDirectAllMailSync(suiteAccountId, true);
+        const mappedFolders = DatabaseService.getInstance().getFoldersForEmail(suiteAccountId, '9100000000000003');
+        expect(Array.from(directAffectedFolders)).to.include(ALL_MAIL_PATH);
+        expect(mappedFolders).to.include(ALL_MAIL_PATH);
+        expect(mappedFolders).to.not.include('UnknownLabel');
+
+        imapService.fetchFolderUids = async (): Promise<number[]> => {
+          throw new Error('forced uid diff failure');
+        };
+        databaseService.removeOrphanedEmails = (): Array<{ xGmThrid?: string }> => {
+          throw new Error('forced orphan email cleanup failure');
+        };
+        databaseService.removeOrphanedThreads = (): number => {
+          throw new Error('forced orphan thread cleanup failure');
+        };
+        databaseService.recomputeThreadMetadata = (): void => {
+          throw new Error('forced recompute failure');
+        };
+        databaseService.cleanupStaleFolderStates = (): number => {
+          throw new Error('forced stale folder-state cleanup failure');
+        };
+        const filterServiceModule = require('../../../electron/services/filter-service') as typeof import('../../../electron/services/filter-service');
+        const filterService = filterServiceModule.FilterService.getInstance() as unknown as {
+          processNewEmails: (accountId: number) => Promise<{ emailsMatched: number; actionsDispatched: number }>;
+        };
+        const originalProcessNewEmails = filterService.processNewEmails;
+        filterService.processNewEmails = async (): Promise<{ emailsMatched: number; actionsDispatched: number }> => {
+          throw new Error('forced sync filter failure');
+        };
+
+        try {
+          const resilientFolders = await runDirectAllMailSync(suiteAccountId, false);
+          expect(resilientFolders.size).to.be.greaterThan(0);
+        } finally {
+          filterService.processNewEmails = originalProcessNewEmails;
+        }
+
+        imapService.resolveUidsByXGmMsgIdBatch = async (): Promise<Map<string, number>> => {
+          throw new Error('forced all-mail uid resolution failure');
+        };
+        databaseService.recomputeThreadMetadata = (): void => {
+          throw new Error('forced folder recompute failure');
+        };
+        const pendingOpServiceModule = require('../../../electron/services/pending-op-service') as typeof import('../../../electron/services/pending-op-service');
+        const pendingOpService = pendingOpServiceModule.PendingOpService.getInstance();
+        const pendingThreadId = '9100000000000104';
+        pendingOpService.register(suiteAccountId, pendingThreadId, ['9100000000000004']);
+        imapService.fetchEmails = async (): Promise<FetchedEmail[]> => {
+          return [
+            buildFetchedEmail({
+              uid: 41,
+              xGmMsgId: '9100000000000004',
+              xGmThrid: pendingThreadId,
+              fromAddress: 'pending@example.com',
+              date: DateTime.utc().minus({ minutes: 5 }).toISO()!,
+            }),
+            buildFetchedEmail({
+              uid: 42,
+              xGmMsgId: '9100000000000005',
+              xGmThrid: '',
+              fromAddress: 'kept@example.com',
+              fromName: '',
+              date: DateTime.utc().minus({ minutes: 4 }).toISO()!,
+            }),
+          ];
+        };
+
+        try {
+          const folderResult = await syncService.syncFolder(
+            String(suiteAccountId),
+            'INBOX',
+            false,
+            DateTime.utc().minus({ days: 1 }).toJSDate(),
+            true,
+            1,
+          );
+          expect(folderResult.folderChanged).to.equal(true);
+          expect(DatabaseService.getInstance().getEmailByXGmMsgId(suiteAccountId, '9100000000000004')).to.equal(null);
+        } finally {
+          pendingOpService.clear(suiteAccountId, pendingThreadId, ['9100000000000004']);
+        }
+
+        const syncInternals = syncService as unknown as {
+          globalIdleSuppression: boolean;
+          scheduleIdleReconnect: (accountId: string) => void;
+          scheduleIdleAllMailReconnect: (accountId: string) => void;
+        };
+        syncInternals.globalIdleSuppression = true;
+        syncInternals.scheduleIdleReconnect(String(suiteAccountId));
+        syncInternals.scheduleIdleAllMailReconnect(String(suiteAccountId));
+        syncInternals.globalIdleSuppression = false;
+
+        let startIdleCallCount = 0;
+        imapService.startIdle = async (): Promise<void> => {
+          startIdleCallCount += 1;
+        };
+        await syncService.startIdle(String(suiteAccountId), () => {});
+        await syncService.startIdle(String(suiteAccountId), () => {});
+        await syncService.startIdleAllMail(String(suiteAccountId), () => {});
+        await syncService.startIdleAllMail(String(suiteAccountId), () => {});
+        expect(startIdleCallCount).to.equal(2);
+      } finally {
+        imapService.getMailboxStatus = originalGetMailboxStatus;
+        imapService.fetchEmails = originalFetchEmails;
+        imapService.fetchChangedSince = originalFetchChangedSince;
+        imapService.fetchFolderUids = originalFetchFolderUids;
+        imapService.resolveUidsByXGmMsgIdBatch = originalResolveUidsByXGmMsgIdBatch;
+        imapService.startIdle = originalStartIdle;
+        databaseService.removeOrphanedEmails = originalRemoveOrphanedEmails;
+        databaseService.removeOrphanedThreads = originalRemoveOrphanedThreads;
+        databaseService.recomputeThreadMetadata = originalRecomputeThreadMetadata;
+        databaseService.cleanupStaleFolderStates = originalCleanupStaleFolderStates;
+        await syncService.stopAllIdle().catch(() => {});
+      }
+    });
+
+    it('covers notification batching and stale idle lifecycle teardown branches', async function () {
+      this.timeout(20_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'sync-notify-idle-branches@example.com',
+        displayName: 'Sync Notify Idle Branches Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      const syncService = SyncService.getInstance() as unknown as {
+        accumulateNotification: (accountId: string, folder: string, emails: Array<Record<string, unknown>>) => void;
+        flushNotificationBatch: (accountId: string, folder: string) => void;
+        notificationBatches: Map<string, { timer: ReturnType<typeof setTimeout>; emails: Array<Record<string, unknown>> }>;
+        emitToRenderer: (channel: string, payload: unknown) => void;
+      };
+      const imapService = ImapService.getInstance() as unknown as {
+        startIdle: (
+          accountId: string,
+          folder: string,
+          onNewMail: () => void,
+          onExpunge?: () => void,
+          onClose?: () => void,
+          onError?: (err: Error) => void,
+        ) => Promise<void>;
+        disconnectIdle: (accountId: string, folder: string) => Promise<void>;
+      };
+      const trayServiceModule = require('../../../electron/services/tray-service') as typeof import('../../../electron/services/tray-service');
+      const trayService = trayServiceModule.TrayService.getInstance() as unknown as {
+        refreshUnreadCount: () => void;
+      };
+
+      const originalEmitToRenderer = syncService.emitToRenderer;
+      const originalRefreshUnreadCount = trayService.refreshUnreadCount;
+      const originalStartIdle = imapService.startIdle;
+      const originalDisconnectIdle = imapService.disconnectIdle;
+
+      const emittedPayloads: Array<{ channel: string; payload: unknown }> = [];
+      let disconnectCalls = 0;
+
+      try {
+        syncService.emitToRenderer = (channel: string, payload: unknown): void => {
+          emittedPayloads.push({ channel, payload });
+        };
+        trayService.refreshUnreadCount = (): void => {
+          throw new Error('forced tray refresh failure');
+        };
+
+        syncService.flushNotificationBatch(String(suiteAccountId), 'INBOX');
+        expect(emittedPayloads).to.deep.equal([]);
+
+        syncService.accumulateNotification(String(suiteAccountId), 'INBOX', [
+          {
+            xGmMsgId: '9200000000000001',
+            xGmThrid: '9200000000000101',
+            sender: 'Batch Sender',
+            subject: 'Batch Subject',
+            snippet: 'Batch snippet',
+            date: DateTime.utc().toISO()!,
+          },
+          {
+            xGmMsgId: '9200000000000001',
+            xGmThrid: '9200000000000101',
+            sender: 'Batch Sender',
+            subject: 'Batch Subject',
+            snippet: 'Batch snippet',
+            date: DateTime.utc().toISO()!,
+          },
+        ]);
+        syncService.flushNotificationBatch(String(suiteAccountId), 'INBOX');
+
+        expect(emittedPayloads).to.have.length(1);
+        const batchPayload = emittedPayloads[0]!.payload as { totalNewCount: number; newEmails: Array<{ xGmMsgId: string }> };
+        expect(batchPayload.totalNewCount).to.equal(1);
+        expect(batchPayload.newEmails).to.have.length(1);
+
+        const duplicateTimer = setTimeout(() => {}, 60_000);
+        syncService.notificationBatches.set(String(suiteAccountId), {
+          timer: duplicateTimer,
+          emails: [
+            {
+              xGmMsgId: '9200000000000002',
+              xGmThrid: '9200000000000102',
+              sender: 'Dup Sender',
+              subject: 'Dup Subject',
+              snippet: 'Dup snippet',
+              date: DateTime.utc().toISO()!,
+            },
+            {
+              xGmMsgId: '9200000000000002',
+              xGmThrid: '9200000000000102',
+              sender: 'Dup Sender',
+              subject: 'Dup Subject',
+              snippet: 'Dup snippet',
+              date: DateTime.utc().toISO()!,
+            },
+          ],
+        });
+        syncService.flushNotificationBatch(String(suiteAccountId), 'INBOX');
+        clearTimeout(duplicateTimer);
+
+        imapService.startIdle = async (): Promise<void> => {};
+        imapService.disconnectIdle = async (): Promise<void> => {
+          disconnectCalls += 1;
+        };
+
+        await SyncService.getInstance().startIdle(
+          String(suiteAccountId),
+          () => {},
+          { isValid: () => false },
+        );
+        await SyncService.getInstance().startIdleAllMail(
+          String(suiteAccountId),
+          () => {},
+          { isValid: () => false },
+        );
+
+        expect(disconnectCalls).to.equal(2);
+      } finally {
+        syncService.emitToRenderer = originalEmitToRenderer;
+        trayService.refreshUnreadCount = originalRefreshUnreadCount;
+        imapService.startIdle = originalStartIdle;
+        imapService.disconnectIdle = originalDisconnectIdle;
+        await SyncService.getInstance().stopAllIdle().catch(() => {});
+      }
     });
   });
 
