@@ -47,9 +47,3 @@ if [ -z "$SOURCE_DIR" ]; then
 fi
 
 copy_context_files "$SOURCE_DIR"
-
-echo "Running yarn install..."
-yarn install
-echo "Running electron rebuild for better-sqlite3..."
-npx @electron/rebuild -f -w better-sqlite3
-echo "Done."
