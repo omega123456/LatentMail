@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+src="$(git worktree list | awk 'NR==1{print $1}')"
+cp -r "$src/.opencode" . 2>/dev/null || true; cp "$src/opencode.json" . 2>/dev/null || true
