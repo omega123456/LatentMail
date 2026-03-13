@@ -1,2 +1,3 @@
 # Ensure shell scripts in .githooks always have LF line endings (bash requirement)
 .githooks/* text eol=lf
+.scripts/setup-worktree.sh text eol=lf
