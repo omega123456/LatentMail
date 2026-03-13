@@ -989,6 +989,15 @@ export class ImapService {
       emitLogs: false,
     });
 
+    // Dedicated connections are returned to callers, which may attach their own
+    // close/error handlers after this method resolves. Register a baseline error
+    // listener here so a disconnect during connect(), teardown, or an early
+    // logout() cannot crash the process with an unhandled 'error' event before
+    // the owning service wires up its own listeners.
+    client.on('error', (err: Error) => {
+      log.warn(`[IMAP] Dedicated ${logTag.toLowerCase()} connection error for account ${accountId}:`, err);
+    });
+
     await client.connect();
     log.info(`[IMAP] Dedicated ${logTag.toLowerCase()} connection established for account ${accountId} (${account.email})`);
     return client;

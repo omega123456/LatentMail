@@ -65,6 +65,7 @@ process.on('warning', (warning) => {
 // Safety net: delete latentmail-test-* dirs older than 1 hour.
 // This handles cases where signal handlers couldn't run (hard kill, crash, etc.)
 const STALE_DIR_AGE_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_TEST_GOOGLE_CLIENT_ID = 'latentmail-test-client-id.apps.googleusercontent.com';
 try {
   const tmpParent = os.tmpdir();
   for (const entry of fs.readdirSync(tmpParent)) {
@@ -105,6 +106,10 @@ process.env['EMBEDDING_INTER_BATCH_DELAY_MS'] = process.env['EMBEDDING_INTER_BAT
 process.env['EMBEDDING_IMAP_RECONNECT_DELAYS_MS'] = process.env['EMBEDDING_IMAP_RECONNECT_DELAYS_MS'] ?? '50,100,200';
 process.env['EMBEDDING_OLLAMA_RETRY_DELAYS_MS'] = process.env['EMBEDDING_OLLAMA_RETRY_DELAYS_MS'] ?? '25,50,100';
 process.env['EMBEDDING_WORKER_TERMINATE_DELAY_MS'] = process.env['EMBEDDING_WORKER_TERMINATE_DELAY_MS'] ?? '25';
+// Provide a test-only OAuth client ID override so auth-flow tests do not depend on
+// local secrets or ambient shell environment. OAuthService gives this env var
+// precedence only in the backend test harness.
+process.env['LATENTMAIL_TEST_GOOGLE_CLIENT_ID'] = DEFAULT_TEST_GOOGLE_CLIENT_ID;
 
 // ---- IPC handler map (exported for test helpers) ----
 // Populated by the ipcMain.handle shim below.
@@ -195,6 +200,36 @@ async function destroyHiddenWindow(): Promise<void> {
   });
 }
 
+async function quiesceServicesForShutdown(): Promise<void> {
+  try {
+    const { SyncQueueBridge } = require('../../electron/services/sync-queue-bridge') as typeof import('../../electron/services/sync-queue-bridge');
+    SyncQueueBridge.getInstance().resetForTesting();
+  } catch {
+    // Best effort only during test shutdown
+  }
+
+  try {
+    const { BodyFetchQueueService } = require('../../electron/services/body-fetch-queue-service') as typeof import('../../electron/services/body-fetch-queue-service');
+    BodyFetchQueueService.getInstance().resetForTesting();
+  } catch {
+    // Best effort only during test shutdown
+  }
+
+  try {
+    const { ImapService } = require('../../electron/services/imap-service') as typeof import('../../electron/services/imap-service');
+    await ImapService.getInstance().disconnectAllAndClearPending();
+  } catch {
+    // Best effort only during test shutdown
+  }
+
+  try {
+    const { ImapCrawlService } = require('../../electron/services/imap-crawl-service') as typeof import('../../electron/services/imap-crawl-service');
+    await ImapCrawlService.getInstance().disconnectAll();
+  } catch {
+    // Best effort only during test shutdown
+  }
+}
+
 // ---- Mock server singletons (exported for test helpers) ----
 export const imapStore = new MessageStore();
 export const imapServer = new GmailImapServer(imapStore);
@@ -250,6 +285,12 @@ async function shutdownTestHarness(exitCode: number, trigger: string): Promise<v
     } catch {
       // Best effort
     }
+
+  try {
+    await quiesceServicesForShutdown();
+  } catch {
+    // Best effort
+  }
 
     // Stop all mock servers
     try {
@@ -661,7 +702,51 @@ app.whenReady().then(async () => {
 
   console.log(`[test-main] Tests complete. Failures: ${failures}`);
 
+  // Step 14: Ensure the hidden window cannot become visible during shutdown.
+  try {
+    await destroyHiddenWindow();
+    console.log('[test-main] Hidden window destroyed');
+  } catch (error) {
+    console.warn('[test-main] Failed to destroy hidden window cleanly (non-fatal):', error);
+  }
+
+  // Step 14b: Quiesce long-lived services so network sockets close before the
+  // fake servers are stopped, preventing late unhandled IMAP ECONNRESET errors.
+  try {
+    await quiesceServicesForShutdown();
+  } catch (error) {
+    console.warn('[test-main] Failed to quiesce services during shutdown (non-fatal):', error);
+  }
+
+  // Step 15: Shut down all mock servers
+  try {
+    await Promise.allSettled([
+      imapServer.stop(),
+      smtpServer.stop(),
+      oauthServer.stop(),
+      ollamaServer.stop(),
+    ]);
+    console.log('[test-main] All mock servers stopped');
+  } catch (error) {
+    console.warn('[test-main] Error stopping mock servers (non-fatal):', error);
+  }
+
+  if (process.env['NODE_V8_COVERAGE']) {
+    v8.takeCoverage();
+    console.log('[test-main] V8 coverage data flushed');
+  }
+
+  // Step 16: Cleanup temp directory
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  } catch {
+    // Non-fatal cleanup error
+  }
+
   await shutdownTestHarness(failures, 'normal completion');
+
+  app.exit(failures);
+  
 }).catch((error: unknown) => {
   console.error('[test-main] app.whenReady() rejected:', error);
   void shutdownTestHarness(1, 'app.whenReady rejection');

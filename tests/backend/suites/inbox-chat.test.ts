@@ -278,10 +278,10 @@ describe('Inbox Chat Pipeline', () => {
       { query: 'history final', dateOrder: 'desc' },
     ]));
     ollamaServer.setEmbeddings([
-      [0, 1, 0, 0],
-      [0, 0, 1, 0],
-      [0, 0, 0, 1],
-      [-1, 0, 0, 0],
+      [1, 0, 0, 0],
+      [1, 0, 0, 0],
+      [1, 0, 0, 0],
+      [1, 0, 0, 0],
       [1, 0, 0, 0],
     ]);
     ollamaServer.setChatStreamChunks(['The original answer referenced the synced email [1].']);
@@ -305,10 +305,10 @@ describe('Inbox Chat Pipeline', () => {
       { query: 'follow-up final', dateOrder: 'desc' },
     ]));
     ollamaServer.setEmbeddings([
-      [0, 1, 0, 0],
-      [0, 0, 1, 0],
-      [0, 0, 0, 1],
-      [-1, 0, 0, 0],
+      [1, 0, 0, 0],
+      [1, 0, 0, 0],
+      [1, 0, 0, 0],
+      [1, 0, 0, 0],
       [1, 0, 0, 0],
     ]);
     ollamaServer.setChatStreamChunks(['The follow-up still uses the earlier context [1].']);
@@ -325,7 +325,9 @@ describe('Inbox Chat Pipeline', () => {
       accountId: suiteAccountId,
     });
 
-    await waitForChatDone(secondRequestId);
+    const secondDonePayload = await waitForChatDone(secondRequestId);
+    expect(secondDonePayload.success).to.equal(true);
+    expect(secondDonePayload.cancelled).to.equal(false);
 
     const chatRequests = ollamaServer.getRequestsFor('/api/chat');
     expect(chatRequests.length).to.be.greaterThan(1);

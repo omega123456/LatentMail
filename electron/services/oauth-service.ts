@@ -17,6 +17,7 @@ const GOOGLE_AUTH_URL_DEFAULT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL_DEFAULT = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USERINFO_URL_DEFAULT = 'https://www.googleapis.com/oauth2/v3/userinfo';
 const GOOGLE_REVOKE_URL_DEFAULT = 'https://oauth2.googleapis.com/revoke';
+const TEST_GOOGLE_CLIENT_ID_ENV = 'LATENTMAIL_TEST_GOOGLE_CLIENT_ID';
 
 /** Resolve the Google token endpoint URL, with env var override support. */
 function resolveTokenUrl(): string {
@@ -108,8 +109,13 @@ export class OAuthService {
   private refreshTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   private constructor() {
+    const testClientIdOverride = process.env['OAUTH_TEST_MODE'] === '1'
+      ? process.env[TEST_GOOGLE_CLIENT_ID_ENV]
+      : undefined;
     // Prefer secrets, then env override, then built-in Desktop client ID
-    this.clientId = GOOGLE_CLIENT_ID || process.env['GOOGLE_CLIENT_ID'] || '';
+    this.clientId = testClientIdOverride !== undefined && testClientIdOverride.length > 0
+      ? testClientIdOverride
+      : GOOGLE_CLIENT_ID || process.env['GOOGLE_CLIENT_ID'] || '';
     if (!this.clientId) {
       log.warn('GOOGLE_CLIENT_ID not set — OAuth login will not work');
     }

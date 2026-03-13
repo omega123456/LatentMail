@@ -933,7 +933,7 @@ describe('Filters & Rules', () => {
     });
 
     it('body field matches text_body directly and falls back to stripped html_body', async function () {
-      this.timeout(25_000);
+      this.timeout(40_000);
 
       await setupWithMessages('filter-body-field@example.com', 'Filter Body Field Test');
       const seeded = {

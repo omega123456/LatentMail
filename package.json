@@ -16,6 +16,7 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "test:backend": "tsc -p tsconfig.test.json && node -e \"require('fs').cpSync('electron/prompts', 'dist-test/electron/prompts', {recursive: true})\" && node scripts/run-electron-tests.js",
+    "test:backend:parallel": "tsc -p tsconfig.test.json && node -e \"require('fs').cpSync('electron/prompts', 'dist-test/electron/prompts', {recursive: true})\" && node scripts/run-parallel-tests.js",
     "package": "yarn build:all && electron-builder --dir",
     "make": "yarn build:all && electron-builder",
     "build:native": "node -e \"if(process.platform==='win32'){const{execSync}=require('child_process');const ev=require('electron/package.json').version;execSync('node-gyp rebuild --target='+ev+' --arch=x64 --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native/win32-drop-target'})}else{console.log('Skipping native addon build (not Windows)')}\"",

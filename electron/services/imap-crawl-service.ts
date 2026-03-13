@@ -111,6 +111,15 @@ export class ImapCrawlService {
   }
 
   /**
+   * Disconnect all dedicated crawl connections.
+   * Used during test/app shutdown to avoid leaving live IMAP sockets behind.
+   */
+  async disconnectAll(): Promise<void> {
+    const accountIds = Array.from(this.connections.keys());
+    await Promise.allSettled(accountIds.map((accountId) => this.disconnect(accountId)));
+  }
+
+  /**
    * Disconnect and reconnect (gets a fresh OAuth token via createDedicatedConnection).
    * Used for reconnect-and-resume on IMAP connection failures during a build.
    */

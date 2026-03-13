@@ -341,19 +341,17 @@ describe('Auth & Account Lifecycle', () => {
 
   it('returns AUTH_NOT_CONFIGURED when login reports a missing Google client id', async () => {
     const oauthService = OAuthService.getInstance() as unknown as {
-      login: () => Promise<AuthAccount>;
+      clientId: string;
     };
-    const originalLogin = oauthService.login;
-    oauthService.login = async (): Promise<AuthAccount> => {
-      throw new Error('GOOGLE_CLIENT_ID not configured for tests');
-    };
+    const originalClientId = oauthService.clientId;
+    oauthService.clientId = '';
 
     try {
       const response = await callIpc('auth:login') as IpcResponse<AuthAccount>;
       expect(response.success).to.equal(false);
       expect(response.error!.code).to.equal('AUTH_NOT_CONFIGURED');
     } finally {
-      oauthService.login = originalLogin;
+      oauthService.clientId = originalClientId;
     }
   });
 

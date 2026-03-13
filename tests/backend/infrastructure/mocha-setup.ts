@@ -67,9 +67,20 @@ export function createMochaRunner(): Mocha {
   const grepPattern = process.env['MOCHA_GREP'];
   const fileFilter = process.env['MOCHA_FILE_FILTER'];
 
+  // In parallel mode the orchestrator sets MOCHA_REPORTER=json-stream so it
+  // can parse individual test events without displaying anything to the
+  // terminal. Serial runs (yarn test:backend) leave the variable unset and
+  // fall back to the human-readable 'spec' reporter.
+  // Only whitelisted reporter names are accepted to prevent accidental
+  // module loading from an inherited environment variable.
+  const ALLOWED_REPORTERS = new Set(['spec', 'min', 'dot', 'json', 'json-stream']);
+  const reporterEnv = process.env['MOCHA_REPORTER'];
+  const reporter =
+    reporterEnv !== undefined && ALLOWED_REPORTERS.has(reporterEnv) ? reporterEnv : 'spec';
+
   const mochaOptions: Mocha.MochaOptions = {
     timeout: 30_000,
-    reporter: 'spec',
+    reporter,
     // Fail the run if zero tests execute — catches typos in --filter / --file
     // and guards against accidentally deleting all suite files.
     failZero: true,
