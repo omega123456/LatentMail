@@ -29,6 +29,7 @@ copy_context_files() {
   done
 }
 
+
 # Resolve source directory: explicit arg, or another worktree
 SOURCE_DIR="${1:-}"
 if [ -z "$SOURCE_DIR" ]; then
