@@ -118,6 +118,20 @@ export function createMochaRunner(): Mocha {
   return mocha;
 }
 
+export interface MochaRunStats {
+  suites: number;
+  tests: number;
+  passes: number;
+  pending: number;
+  failures: number;
+  duration: number;
+}
+
+export interface MochaRunResult {
+  failures: number;
+  stats: MochaRunStats;
+}
+
 /**
  * Run Mocha and return the failure count.
  * Wraps the callback-based mocha.run() in a Promise.
@@ -125,16 +139,32 @@ export function createMochaRunner(): Mocha {
  * @param mocha - Configured Mocha instance from createMochaRunner()
  * @returns Promise resolving with the number of test failures
  */
-export function runMocha(mocha: Mocha): Promise<number> {
+export function runMocha(mocha: Mocha): Promise<MochaRunResult> {
   return new Promise((resolve) => {
     const runner = mocha.run((failures) => {
       const pendingCount = runner.stats?.pending ?? 0;
+      const stats: MochaRunStats = {
+        suites: runner.stats?.suites ?? 0,
+        tests: runner.stats?.tests ?? 0,
+        passes: runner.stats?.passes ?? 0,
+        pending: pendingCount,
+        failures: runner.stats?.failures ?? failures,
+        duration: runner.stats?.duration ?? 0,
+      };
+
       if (pendingCount > 0) {
         console.error(`[mocha-setup] Pending tests are not allowed: ${pendingCount}`);
-        resolve(failures + pendingCount);
+        resolve({
+          failures: failures + pendingCount,
+          stats,
+        });
         return;
       }
-      resolve(failures);
+
+      resolve({
+        failures,
+        stats,
+      });
     });
   });
 }

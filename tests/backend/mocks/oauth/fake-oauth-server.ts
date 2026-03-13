@@ -56,8 +56,14 @@ export interface FakeUserInfo {
 export interface OAuthErrorConfig {
   /** If set, POST /o/oauth2/token returns this error code with HTTP 400 */
   tokenError?: string;
+  /** If set, POST /o/oauth2/token returns malformed JSON for auth-code exchange */
+  tokenMalformedJson?: boolean;
+  /** If set, POST /o/oauth2/token returns malformed JSON for refresh-token exchange */
+  refreshMalformedJson?: boolean;
   /** If set, GET /oauth2/v3/userinfo returns this error with HTTP 401 */
   userInfoError?: string;
+  /** If set, GET /oauth2/v3/userinfo returns malformed JSON */
+  userInfoMalformedJson?: boolean;
   /** If set, POST /o/oauth2/revoke returns this error with HTTP 400 */
   revokeError?: string;
   /** If set, adds an artificial delay (in ms) before responding to /o/oauth2/token */
@@ -260,6 +266,12 @@ export class FakeOAuthServer {
         );
         return;
       }
+
+      if (this.errorConfig.tokenMalformedJson) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end('{invalid-json');
+        return;
+      }
     }
 
     if (grantType === 'refresh_token') {
@@ -267,6 +279,12 @@ export class FakeOAuthServer {
       if (!refreshToken) {
         response.writeHead(400, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ error: 'invalid_request' }));
+        return;
+      }
+
+      if (this.errorConfig.refreshMalformedJson) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end('{invalid-json');
         return;
       }
     }
@@ -310,6 +328,12 @@ export class FakeOAuthServer {
     if (this.errorConfig.userInfoError) {
       response.writeHead(401, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ error: this.errorConfig.userInfoError }));
+      return;
+    }
+
+    if (this.errorConfig.userInfoMalformedJson) {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end('{invalid-json');
       return;
     }
 

@@ -45,9 +45,8 @@ export class CredentialService {
         const decrypted = safeStorage.decryptString(fileContent);
         return JSON.parse(decrypted);
       } else {
-        // Fallback to plaintext (with warning)
-        log.warn('safeStorage not available — credentials stored without encryption');
-        return JSON.parse(fileContent.toString('utf-8'));
+        log.error('safeStorage not available — refusing to read credentials without encryption');
+        return {};
       }
     } catch (err) {
       log.error('Failed to read credentials:', err);
@@ -63,8 +62,8 @@ export class CredentialService {
         const encrypted = safeStorage.encryptString(json);
         fs.writeFileSync(this.credentialsPath, encrypted);
       } else {
-        log.warn('safeStorage not available — credentials stored without encryption');
-        fs.writeFileSync(this.credentialsPath, json, 'utf-8');
+        log.error('safeStorage not available — refusing to store credentials without encryption');
+        throw new Error('Secure credential storage unavailable');
       }
     } catch (err) {
       log.error('Failed to write credentials:', err);
@@ -85,6 +84,19 @@ export class CredentialService {
   }
 
   removeTokens(accountId: string): void {
+    if (!this.isEncryptionAvailable()) {
+      try {
+        if (fs.existsSync(this.credentialsPath)) {
+          fs.unlinkSync(this.credentialsPath);
+        }
+        log.info(`Tokens removed for account ${accountId} by deleting unavailable secure store`);
+        return;
+      } catch (err) {
+        log.error('Failed to remove credentials while secure storage is unavailable:', err);
+        throw err;
+      }
+    }
+
     const credentials = this.readCredentials();
     delete credentials[accountId];
     this.writeCredentials(credentials);

@@ -34,7 +34,11 @@
  *     than replaying the original failure from history.
  */
 
+import { app } from 'electron';
 import { expect } from 'chai';
+import * as fs from 'fs';
+import * as path from 'path';
+import { DateTime } from 'luxon';
 import { quiesceAndRestore } from '../infrastructure/suite-lifecycle';
 import {
   callIpc,
@@ -592,6 +596,131 @@ describe('Queue Resilience', () => {
         });
         expect(retriedEvents).to.have.lengthOf(0);
       }
+    });
+
+    it('a send operation fails without auto-retry when the account credentials are missing', async function () {
+      this.timeout(20_000);
+
+      const credentialsFilePath = path.join(app.getPath('userData'), 'credentials.enc');
+      const originalCredentialsFile = fs.existsSync(credentialsFilePath)
+        ? fs.readFileSync(credentialsFilePath)
+        : null;
+
+      try {
+        if (fs.existsSync(credentialsFilePath)) {
+          fs.unlinkSync(credentialsFilePath);
+        }
+
+        const sendResponse = await callIpc('queue:enqueue', {
+          type: 'send',
+          accountId: suiteAccountId,
+          payload: {
+            to: 'recipient@example.com',
+            subject: 'Missing Credentials Send Failure',
+            text: 'This send should fail without stored credentials.',
+          },
+          description: 'Send missing credentials failure',
+        }) as IpcResponse<{ queueId: string }>;
+
+        expect(sendResponse.success).to.equal(true);
+        const queueId = sendResponse.data!.queueId;
+
+        const finalSnapshot = await waitForQueueUpdate(queueId, 'failed', 15_000);
+        expect(finalSnapshot.status).to.equal('failed');
+
+        const retriedEvents = TestEventBus.getInstance().getHistory('queue:update').filter((record) => {
+          const snapshot = record.args[0] as QueueUpdateSnapshot | undefined;
+          return (
+            snapshot != null &&
+            snapshot.queueId === queueId &&
+            snapshot.status === 'pending' &&
+            (snapshot.retryCount ?? 0) > 0
+          );
+        });
+        expect(retriedEvents).to.have.lengthOf(0);
+      } finally {
+        if (originalCredentialsFile !== null) {
+          fs.writeFileSync(credentialsFilePath, originalCredentialsFile);
+        }
+      }
+    });
+
+    it('a send operation fails without auto-retry when the account is missing', async function () {
+      this.timeout(20_000);
+
+      const sendResponse = await callIpc('queue:enqueue', {
+        type: 'send',
+        accountId: 999_999,
+        payload: {
+          to: 'recipient@example.com',
+          subject: 'Missing Account Send Failure',
+          text: 'This send should fail because the account does not exist.',
+        },
+        description: 'Send missing account failure',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(sendResponse.success).to.equal(true);
+      const queueId = sendResponse.data!.queueId;
+
+      const finalSnapshot = await waitForQueueUpdate(queueId, 'failed', 15_000);
+      expect(finalSnapshot.status).to.equal('failed');
+
+      const retriedEvents = TestEventBus.getInstance().getHistory('queue:update').filter((record) => {
+        const snapshot = record.args[0] as QueueUpdateSnapshot | undefined;
+        return (
+          snapshot != null &&
+          snapshot.queueId === queueId &&
+          snapshot.status === 'pending' &&
+          (snapshot.retryCount ?? 0) > 0
+        );
+      });
+      expect(retriedEvents).to.have.lengthOf(0);
+    });
+
+    it('a send operation fails without auto-retry when an expired token has no refresh token', async function () {
+      this.timeout(20_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'resilience-send-no-refresh@example.com',
+        accessToken: 'expired-send-access-token',
+        refreshToken: '',
+        expiresAt: DateTime.now().minus({ hours: 1 }).toMillis(),
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const sendResponse = await callIpc('queue:enqueue', {
+        type: 'send',
+        accountId: suiteAccountId,
+        payload: {
+          to: 'recipient@example.com',
+          subject: 'Missing Refresh Token Send Failure',
+          text: 'This send should fail because the expired token cannot refresh.',
+        },
+        description: 'Send missing refresh token failure',
+      }) as IpcResponse<{ queueId: string }>;
+
+      expect(sendResponse.success).to.equal(true);
+      const queueId = sendResponse.data!.queueId;
+
+      const finalSnapshot = await waitForQueueUpdate(queueId, 'failed', 15_000);
+      expect(finalSnapshot.status).to.equal('failed');
+
+      const retriedEvents = TestEventBus.getInstance().getHistory('queue:update').filter((record) => {
+        const snapshot = record.args[0] as QueueUpdateSnapshot | undefined;
+        return (
+          snapshot != null &&
+          snapshot.queueId === queueId &&
+          snapshot.status === 'pending' &&
+          (snapshot.retryCount ?? 0) > 0
+        );
+      });
+      expect(retriedEvents).to.have.lengthOf(0);
     });
   });
 

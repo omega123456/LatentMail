@@ -1,9 +1,9 @@
 /**
  * TestEventBus — singleton event bus used by test suites to observe IPC events
- * emitted by the main process via webContents.send().
+ * emitted by the main process via intercepted webContents.send() calls.
  *
  * The bus is populated by a monkey-patch in test-main.ts that intercepts
- * hiddenWindow.webContents.send() and forwards every call here.
+ * hiddenWindow.webContents.send() and records every call here.
  */
 
 import { DateTime } from 'luxon';
@@ -36,7 +36,7 @@ export class TestEventBus {
 
   /**
    * Called by the webContents.send monkey-patch in test-main.ts.
-   * Records the event and notifies any waiting listeners.
+   * Records the intercepted event and notifies any waiting listeners.
    */
   emit(channel: string, args: unknown[]): void {
     const record: EventRecord = { channel, args, timestamp: DateTime.now().toMillis() };

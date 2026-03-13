@@ -603,6 +603,75 @@ describe('BIMI & Avatars', () => {
       }
     });
 
+    it('caches WEBP avatars with the expected extension and protocol URL', async function () {
+      this.timeout(10_000);
+
+      const remoteUrl = 'https://example.com/avatar.webp';
+      const mockAgent = createMockAgent();
+      stubAvatarDownload(mockAgent, remoteUrl, 200, Buffer.from('RIFFfakeWEBP'), 'image/webp');
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(response.success).to.equal(true);
+      const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.equal(`account-avatar://${suiteAccountId}.webp`);
+      expect(fs.existsSync(path.join(getAvatarCacheDirPath(), `${suiteAccountId}.webp`))).to.equal(true);
+    });
+
+    it('caches JPEG avatars using the jpg extension', async function () {
+      this.timeout(10_000);
+
+      const remoteUrl = 'https://example.com/avatar-jpeg';
+      const mockAgent = createMockAgent();
+      stubAvatarDownload(mockAgent, remoteUrl, 200, Buffer.from('fake-jpeg-data'), 'image/jpeg');
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(response.success).to.equal(true);
+      const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.equal(`account-avatar://${suiteAccountId}.jpg`);
+      expect(fs.existsSync(path.join(getAvatarCacheDirPath(), `${suiteAccountId}.jpg`))).to.equal(true);
+    });
+
+    it('defaults avatar cache files to jpg when the response has no content type', async function () {
+      this.timeout(10_000);
+
+      const remoteUrl = 'https://example.com/avatar-no-content-type';
+      const mockAgent = createMockAgent();
+      stubAvatarDownload(mockAgent, remoteUrl, 200, Buffer.from('no-content-type-avatar'));
+
+      DatabaseService.getInstance().getDatabase().prepare(
+        'UPDATE accounts SET avatar_url = :avatarUrl WHERE id = :accountId',
+      ).run({ avatarUrl: remoteUrl, accountId: suiteAccountId });
+
+      const response = await callIpc('auth:get-accounts') as IpcResponse<Array<{
+        id: number;
+        avatarUrl: string | null;
+      }>>;
+
+      expect(response.success).to.equal(true);
+      const testAccount = response.data!.find((account) => account.id === suiteAccountId);
+      expect(testAccount).to.not.equal(undefined);
+      expect(testAccount!.avatarUrl).to.equal(`account-avatar://${suiteAccountId}.jpg`);
+      expect(fs.existsSync(path.join(getAvatarCacheDirPath(), `${suiteAccountId}.jpg`))).to.equal(true);
+    });
+
     it('cache hit: second call returns cached URL without re-fetching', async function () {
       this.timeout(10_000);
 

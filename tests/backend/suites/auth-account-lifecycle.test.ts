@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { app } from 'electron';
+import { app, safeStorage } from 'electron';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -260,6 +260,42 @@ describe('Auth & Account Lifecycle', () => {
     expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
   });
 
+  it('recovers from a malformed credentials file during login and rewrites valid tokens', async () => {
+    fs.writeFileSync(getCredentialsFilePath(), Buffer.from('not-encrypted-json', 'utf-8'));
+
+    oauthServer.setTokenConfig({
+      accessToken: 'recovered-access-token',
+      refreshToken: 'recovered-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'recover-corrupt-credentials@example.com',
+      name: 'Recovered Credentials User',
+    });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(true);
+    const storedTokens = CredentialService.getInstance().getTokens(String(response.data!.id));
+    expect(storedTokens).to.not.be.null;
+    expect(storedTokens!.accessToken).to.equal('recovered-access-token');
+    expect(storedTokens!.refreshToken).to.equal('recovered-refresh-token');
+  });
+
+  it('returns AUTH_LOGIN_FAILED when the token endpoint returns invalid JSON', async () => {
+    oauthServer.setErrorConfig({ tokenMalformedJson: true });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
+    expect(response.error!.message).to.include('Failed to parse token response');
+  });
+
    it('returns AUTH_LOGIN_FAILED when user info lookup fails after token exchange', async () => {
     oauthServer.setUserInfo({ email: 'userinfo-fail@example.com', name: 'UserInfo Failure' });
     oauthServer.setErrorConfig({ userInfoError: 'invalid_token' });
@@ -271,6 +307,23 @@ describe('Auth & Account Lifecycle', () => {
     expect(response.success).to.equal(false);
     expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
     expect(response.error!.message.toLowerCase()).to.include('user info');
+  });
+
+  it('returns AUTH_LOGIN_FAILED when the user info endpoint returns invalid JSON', async () => {
+    oauthServer.setTokenConfig({
+      accessToken: 'userinfo-invalid-json-access-token',
+      refreshToken: 'userinfo-invalid-json-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setErrorConfig({ userInfoMalformedJson: true });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(false);
+    expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
+    expect(response.error!.message).to.include('Failed to parse user info');
   });
 
   it('returns AUTH_LOGIN_FAILED when the OAuth callback uses an invalid authorization code', async () => {
@@ -329,6 +382,38 @@ describe('Auth & Account Lifecycle', () => {
     const tokenRequest = oauthServer.getCapturedRequests().find((request) => request.endpoint === '/o/oauth2/token');
     expect(tokenRequest).to.exist;
     expect(tokenRequest!.body).to.include('grant_type=refresh_token');
+  });
+
+  it('surfaces a parse failure when the refresh endpoint returns invalid JSON', async function () {
+    this.timeout(10_000);
+
+    const seededAccount = seedTestAccount({
+      email: 'refresh-invalid-json@example.com',
+      accessToken: 'refresh-invalid-json-stale-access-token',
+      refreshToken: 'refresh-invalid-json-refresh-token',
+      expiresAt: DateTime.now().minus({ hours: 1 }).toMillis(),
+    });
+    oauthServer.setErrorConfig({ refreshMalformedJson: true });
+
+    const originalSetTimeout = global.setTimeout;
+    const fastSetTimeout = ((callback: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) => {
+      return originalSetTimeout(callback, 0, ...args);
+    }) as typeof setTimeout;
+    global.setTimeout = fastSetTimeout;
+
+    try {
+      let caughtError: Error | null = null;
+      try {
+        await OAuthService.getInstance().refreshAccessToken(String(seededAccount.accountId));
+      } catch (error) {
+        caughtError = error as Error;
+      }
+
+      expect(caughtError).to.not.be.null;
+      expect(caughtError!.message).to.include('Failed to parse refresh response');
+    } finally {
+      global.setTimeout = originalSetTimeout;
+    }
   });
 
   it('automatically refreshes a token when the scheduled refresh timer fires', async function () {
@@ -661,6 +746,131 @@ describe('Auth & Account Lifecycle', () => {
     expect(firstTokens).to.not.deep.equal(secondTokens);
   });
 
+  it('fails login when the credentials path cannot be written', async () => {
+    fs.mkdirSync(getCredentialsFilePath(), { recursive: true });
+
+    oauthServer.setTokenConfig({
+      accessToken: 'write-failure-access-token',
+      refreshToken: 'write-failure-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'write-failure@example.com',
+      name: 'Write Failure User',
+    });
+
+    try {
+      const { loginPromise, authEvent } = await startLoginFlow();
+      await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+      const response = await loginPromise;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.exist;
+      expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
+      expect(fs.statSync(getCredentialsFilePath()).isDirectory()).to.equal(true);
+    } finally {
+      fs.rmSync(getCredentialsFilePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('fails login closed when secure credential storage is unavailable', async () => {
+    fs.writeFileSync(getCredentialsFilePath(), 'stale-unencrypted-credentials', 'utf-8');
+
+    const safeStorageApi = safeStorage as unknown as {
+      isEncryptionAvailable: () => boolean;
+    };
+    const originalIsEncryptionAvailable = safeStorageApi.isEncryptionAvailable;
+    safeStorageApi.isEncryptionAvailable = (): boolean => {
+      return false;
+    };
+
+    oauthServer.setTokenConfig({
+      accessToken: 'secure-storage-missing-access-token',
+      refreshToken: 'secure-storage-missing-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'secure-storage-missing@example.com',
+      name: 'Secure Storage Missing User',
+    });
+
+    try {
+      const { loginPromise, authEvent } = await startLoginFlow();
+      await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+      const response = await loginPromise;
+
+      expect(response.success).to.equal(false);
+      expect(response.error).to.exist;
+      expect(response.error!.code).to.equal('AUTH_LOGIN_FAILED');
+      expect(response.error!.message).to.include('Secure credential storage unavailable');
+      expect(fs.readFileSync(getCredentialsFilePath(), 'utf-8')).to.equal('stale-unencrypted-credentials');
+    } finally {
+      safeStorageApi.isEncryptionAvailable = originalIsEncryptionAvailable;
+    }
+  });
+
+  it('clears the credentials file when clearAll is invoked after a login flow', async () => {
+    oauthServer.setTokenConfig({
+      accessToken: 'clear-all-access-token',
+      refreshToken: 'clear-all-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'clear-all@example.com',
+      name: 'Clear All User',
+    });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(true);
+    expect(fs.existsSync(getCredentialsFilePath())).to.equal(true);
+
+    CredentialService.getInstance().clearAll();
+
+    expect(fs.existsSync(getCredentialsFilePath())).to.equal(false);
+    expect(CredentialService.getInstance().getTokens(String(response.data!.id))).to.equal(null);
+  });
+
+  it('swallows credential file deletion failures in clearAll', async () => {
+    oauthServer.setTokenConfig({
+      accessToken: 'clear-all-error-access-token',
+      refreshToken: 'clear-all-error-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'clear-all-error@example.com',
+      name: 'Clear All Error User',
+    });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const response = await loginPromise;
+
+    expect(response.success).to.equal(true);
+    expect(fs.existsSync(getCredentialsFilePath())).to.equal(true);
+
+    const mutableFsModule = require('fs') as typeof import('fs');
+    const originalUnlinkSync = mutableFsModule.unlinkSync;
+    mutableFsModule.unlinkSync = (targetPath: fs.PathLike): void => {
+      if (path.resolve(String(targetPath)) === path.resolve(getCredentialsFilePath())) {
+        throw new Error('forced credential clearAll failure');
+      }
+
+      originalUnlinkSync(targetPath);
+    };
+
+    try {
+      CredentialService.getInstance().clearAll();
+
+      expect(fs.existsSync(getCredentialsFilePath())).to.equal(true);
+      expect(CredentialService.getInstance().getTokens(String(response.data!.id))).to.not.equal(null);
+    } finally {
+      mutableFsModule.unlinkSync = originalUnlinkSync;
+    }
+  });
+
   it('returns AUTH_GET_ACCOUNTS_FAILED when account lookup throws', async () => {
     const database = DatabaseService.getInstance() as unknown as {
       getAccounts: () => AccountSummary[];
@@ -774,7 +984,7 @@ describe('Auth & Account Lifecycle', () => {
     this.timeout(10_000);
 
     const server = new OAuthLoopbackServer();
-    const { port, callbackPromise } = await server.start('wrong-path-state', 50);
+    const { port, callbackPromise } = await server.start('wrong-path-state', 200);
 
     const invalidPathUrl = `http://127.0.0.1:${port}/wrong-path?code=test_code&state=wrong-path-state`;
     await new Promise<void>((resolve, reject) => {

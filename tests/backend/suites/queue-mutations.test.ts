@@ -417,6 +417,166 @@ describe('Queue Mutations', () => {
         mailQueueService.enqueue = originalEnqueue;
       }
     });
+
+    it('returns QUEUE_STATUS_FAILED when queue:get-status throws unexpectedly', async () => {
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const mailQueueService = queueService.MailQueueService.getInstance() as unknown as {
+        getAllItems: () => unknown[];
+      };
+      const originalGetAllItems = mailQueueService.getAllItems;
+      mailQueueService.getAllItems = (): unknown[] => {
+        throw new Error('forced queue:get-status failure');
+      };
+
+      try {
+        const response = await callIpc('queue:get-status') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('QUEUE_STATUS_FAILED');
+      } finally {
+        mailQueueService.getAllItems = originalGetAllItems;
+      }
+    });
+
+    it('returns QUEUE_RETRY_FAILED when queue:retry-failed throws unexpectedly', async () => {
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const mailQueueService = queueService.MailQueueService.getInstance() as unknown as {
+        retryFailed: (queueId?: string) => number;
+      };
+      const originalRetryFailed = mailQueueService.retryFailed;
+      mailQueueService.retryFailed = (_queueId?: string): number => {
+        throw new Error('forced queue:retry-failed failure');
+      };
+
+      try {
+        const response = await callIpc('queue:retry-failed', { queueId: 'queue-id-123' }) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('QUEUE_RETRY_FAILED');
+      } finally {
+        mailQueueService.retryFailed = originalRetryFailed;
+      }
+    });
+
+    it('returns QUEUE_CLEAR_FAILED when queue:clear-completed throws unexpectedly', async () => {
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const mailQueueService = queueService.MailQueueService.getInstance() as unknown as {
+        clearCompleted: () => number;
+      };
+      const originalClearCompleted = mailQueueService.clearCompleted;
+      mailQueueService.clearCompleted = (): number => {
+        throw new Error('forced queue:clear-completed failure');
+      };
+
+      try {
+        const response = await callIpc('queue:clear-completed') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('QUEUE_CLEAR_FAILED');
+      } finally {
+        mailQueueService.clearCompleted = originalClearCompleted;
+      }
+    });
+
+    it('returns QUEUE_CANCEL_FAILED when queue:cancel throws unexpectedly', async () => {
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const mailQueueService = queueService.MailQueueService.getInstance() as unknown as {
+        cancel: (queueId: string) => boolean;
+      };
+      const originalCancel = mailQueueService.cancel;
+      mailQueueService.cancel = (_queueId: string): boolean => {
+        throw new Error('forced queue:cancel failure');
+      };
+
+      try {
+        const response = await callIpc('queue:cancel', { queueId: 'queue-id-456' }) as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('QUEUE_CANCEL_FAILED');
+      } finally {
+        mailQueueService.cancel = originalCancel;
+      }
+    });
+
+    it('returns QUEUE_PENDING_COUNT_FAILED when queue:get-pending-count throws unexpectedly', async () => {
+      const queueService = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
+      const mailQueueService = queueService.MailQueueService.getInstance() as unknown as {
+        getPendingCount: () => number;
+      };
+      const originalGetPendingCount = mailQueueService.getPendingCount;
+      mailQueueService.getPendingCount = (): number => {
+        throw new Error('forced queue:get-pending-count failure');
+      };
+
+      try {
+        const response = await callIpc('queue:get-pending-count') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('QUEUE_PENDING_COUNT_FAILED');
+      } finally {
+        mailQueueService.getPendingCount = originalGetPendingCount;
+      }
+    });
+
+    it('returns BODY_QUEUE_STATUS_FAILED when body-queue:get-status throws unexpectedly', async () => {
+      const bodyQueueModule = require('../../../electron/services/body-fetch-queue-service') as typeof import('../../../electron/services/body-fetch-queue-service');
+      const bodyQueueService = bodyQueueModule.BodyFetchQueueService.getInstance() as unknown as {
+        getAllItems: () => unknown[];
+      };
+      const originalGetAllItems = bodyQueueService.getAllItems;
+      bodyQueueService.getAllItems = (): unknown[] => {
+        throw new Error('forced body-queue:get-status failure');
+      };
+
+      try {
+        const response = await callIpc('body-queue:get-status') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('BODY_QUEUE_STATUS_FAILED');
+      } finally {
+        bodyQueueService.getAllItems = originalGetAllItems;
+      }
+    });
+
+    it('returns BODY_QUEUE_CLEAR_FAILED when body-queue:clear-completed throws unexpectedly', async () => {
+      const bodyQueueModule = require('../../../electron/services/body-fetch-queue-service') as typeof import('../../../electron/services/body-fetch-queue-service');
+      const bodyQueueService = bodyQueueModule.BodyFetchQueueService.getInstance() as unknown as {
+        clearCompleted: () => void;
+      };
+      const originalClearCompleted = bodyQueueService.clearCompleted;
+      bodyQueueService.clearCompleted = (): void => {
+        throw new Error('forced body-queue:clear-completed failure');
+      };
+
+      try {
+        const response = await callIpc('body-queue:clear-completed') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('BODY_QUEUE_CLEAR_FAILED');
+      } finally {
+        bodyQueueService.clearCompleted = originalClearCompleted;
+      }
+    });
+
+    it('returns BODY_QUEUE_CANCEL_FAILED when body-queue:cancel throws unexpectedly', async () => {
+      const bodyQueueModule = require('../../../electron/services/body-fetch-queue-service') as typeof import('../../../electron/services/body-fetch-queue-service');
+      const bodyQueueService = bodyQueueModule.BodyFetchQueueService.getInstance() as unknown as {
+        cancel: (queueId: string) => boolean;
+      };
+      const originalCancel = bodyQueueService.cancel;
+      bodyQueueService.cancel = (_queueId: string): boolean => {
+        throw new Error('forced body-queue:cancel failure');
+      };
+
+      try {
+        const response = await callIpc('body-queue:cancel', 'body-queue-id-789') as IpcResponse<unknown>;
+
+        expect(response.success).to.equal(false);
+        expect(response.error!.code).to.equal('BODY_QUEUE_CANCEL_FAILED');
+      } finally {
+        bodyQueueService.cancel = originalCancel;
+      }
+    });
   });
 
   describe('mail:move — move to Sent Mail', () => {

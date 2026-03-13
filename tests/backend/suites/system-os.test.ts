@@ -71,6 +71,21 @@ describe('System & OS', () => {
       expect(result).to.be.a('boolean');
     });
 
+    it('system:is-maximized returns false when BrowserWindow lookup fails', async () => {
+      const originalFromWebContents = BrowserWindow.fromWebContents;
+
+      BrowserWindow.fromWebContents = (() => {
+        return null;
+      }) as typeof BrowserWindow.fromWebContents;
+
+      try {
+        const result = await callIpc('system:is-maximized');
+        expect(result).to.equal(false);
+      } finally {
+        BrowserWindow.fromWebContents = originalFromWebContents;
+      }
+    });
+
     it('system:maximize does not throw', async () => {
       // Maximize / unmaximize on a headless window is a no-op but must not error
       const result = await callIpc('system:maximize');
@@ -197,6 +212,21 @@ describe('System & OS', () => {
       expect(result).to.be.a('number');
       // Zoom should be near 1.1 (may vary slightly due to float precision)
       expect(result as number).to.be.closeTo(1.1, 0.05);
+    });
+
+    it('system:get-zoom returns 1.0 when BrowserWindow lookup fails', async () => {
+      const originalFromWebContents = BrowserWindow.fromWebContents;
+
+      BrowserWindow.fromWebContents = (() => {
+        return null;
+      }) as typeof BrowserWindow.fromWebContents;
+
+      try {
+        const result = await callIpc('system:get-zoom');
+        expect(result).to.equal(1.0);
+      } finally {
+        BrowserWindow.fromWebContents = originalFromWebContents;
+      }
     });
 
     it('system:set-zoom returns 1.0 when given a non-number string', async () => {

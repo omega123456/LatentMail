@@ -29,13 +29,16 @@ import * as v8 from 'v8';
 
 // Static imports for test infrastructure only — these do NOT import production services
 import { TestEventBus } from './infrastructure/test-event-bus';
-import { createMochaRunner, runMocha } from './infrastructure/mocha-setup';
+import { createMochaRunner, runMocha, type MochaRunStats } from './infrastructure/mocha-setup';
 import { GmailImapServer } from './mocks/imap/gmail-imap-server';
 import { MessageStore } from './mocks/imap/message-store';
 import { StateInspector } from './mocks/imap/state-inspector';
 import { SmtpCaptureServer } from './mocks/smtp/smtp-capture-server';
 import { FakeOAuthServer } from './mocks/oauth/fake-oauth-server';
 import { FakeOllamaServer } from './mocks/ollama/fake-ollama-server';
+
+let mochaCompleted = false;
+let lastMochaStats: MochaRunStats | null = null;
 
 // ---- Protocol registration (must be BEFORE app.whenReady()) ----
 protocol.registerSchemesAsPrivileged([
@@ -196,64 +199,98 @@ export const oauthServer = new FakeOAuthServer();
 export const ollamaServer = new FakeOllamaServer();
 
 // ---- Signal handlers for graceful cleanup on interrupt (Ctrl+C, SIGTERM) ----
-let isCleaningUp = false;
+let shutdownPromise: Promise<void> | null = null;
+let preservedExitCode: number | null = null;
 
-async function cleanupAndExit(exitCode: number): Promise<void> {
-  if (isCleaningUp) {
+function getPreservedExitCode(exitCode: number): number {
+  if (preservedExitCode === null) {
+    preservedExitCode = exitCode;
+  }
+
+  return preservedExitCode;
+}
+
+async function waitForShutdownIfRequested(): Promise<boolean> {
+  if (shutdownPromise === null) {
+    return false;
+  }
+
+  await shutdownPromise;
+  return true;
+}
+
+async function shutdownTestHarness(exitCode: number, trigger: string): Promise<void> {
+  const effectiveExitCode = getPreservedExitCode(exitCode);
+
+  if (shutdownPromise !== null) {
+    await shutdownPromise;
     return;
   }
-  isCleaningUp = true;
 
-  console.log('\n[test-main] Signal received, cleaning up...');
+  shutdownPromise = (async () => {
+    if (trigger.startsWith('signal:')) {
+      console.log(`\n[test-main] ${trigger} received, cleaning up...`);
+    }
 
-  // Destroy hidden window
-  try {
-    await destroyHiddenWindow();
-  } catch {
-    // Best effort
-  }
+    if (!mochaCompleted && trigger !== 'normal completion') {
+      console.error('[test-main] Cleanup started before Mocha reported completion. Treating this as an interrupted test run.');
+      if (lastMochaStats !== null) {
+        console.error('[test-main] Last known Mocha stats before interruption:', JSON.stringify(lastMochaStats));
+      }
+    }
 
-  // Stop all mock servers
-  try {
-    await Promise.allSettled([
-      imapServer.stop(),
-      smtpServer.stop(),
-      oauthServer.stop(),
-      ollamaServer.stop(),
-    ]);
-    console.log('[test-main] Mock servers stopped');
-  } catch {
-    // Best effort
-  }
-
-  // Flush V8 coverage if enabled
-  if (process.env['NODE_V8_COVERAGE']) {
+    // Destroy hidden window
     try {
-      v8.takeCoverage();
+      await destroyHiddenWindow();
     } catch {
       // Best effort
     }
-  }
 
-  // Delete temp directory
-  try {
-    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    console.log('[test-main] Temp directory cleaned up');
-  } catch {
-    // Best effort — may fail if files are locked
-  }
+    // Stop all mock servers
+    try {
+      await Promise.allSettled([
+        imapServer.stop(),
+        smtpServer.stop(),
+        oauthServer.stop(),
+        ollamaServer.stop(),
+      ]);
+      console.log('[test-main] Mock servers stopped');
+    } catch {
+      // Best effort
+    }
 
-  app.exit(exitCode);
+    // Flush V8 coverage if enabled
+    if (process.env['NODE_V8_COVERAGE']) {
+      try {
+        v8.takeCoverage();
+      } catch {
+        // Best effort
+      }
+    }
+
+    // Delete temp directory
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      console.log('[test-main] Temp directory cleaned up');
+    } catch {
+      // Best effort — may fail if files are locked
+    }
+
+    process.exitCode = effectiveExitCode;
+    app.quit();
+  })();
+
+  await shutdownPromise;
 }
 
 // Register signal handlers
 // SIGINT = Ctrl+C, SIGTERM = kill signal (e.g., from process manager)
 process.on('SIGINT', () => {
-  cleanupAndExit(130); // 128 + 2 (SIGINT)
+  void shutdownTestHarness(130, 'signal:SIGINT'); // 128 + 2 (SIGINT)
 });
 
 process.on('SIGTERM', () => {
-  cleanupAndExit(143); // 128 + 15 (SIGTERM)
+  void shutdownTestHarness(143, 'signal:SIGTERM'); // 128 + 15 (SIGTERM)
 });
 
 // ---- App startup ----
@@ -274,7 +311,10 @@ app.whenReady().then(async () => {
     console.log(`[test-main] Fake IMAP server started on port ${imapPort}`);
   } catch (error) {
     console.error('[test-main] Failed to start fake IMAP server:', error);
-    app.exit(1);
+    await shutdownTestHarness(1, 'startup failure');
+    return;
+  }
+  if (await waitForShutdownIfRequested()) {
     return;
   }
 
@@ -288,7 +328,10 @@ app.whenReady().then(async () => {
     console.log(`[test-main] Fake SMTP server started on port ${smtpPort}`);
   } catch (error) {
     console.error('[test-main] Failed to start fake SMTP server:', error);
-    app.exit(1);
+    await shutdownTestHarness(1, 'startup failure');
+    return;
+  }
+  if (await waitForShutdownIfRequested()) {
     return;
   }
 
@@ -304,7 +347,10 @@ app.whenReady().then(async () => {
     console.log(`[test-main] Fake OAuth server started on port ${oauthPort}`);
   } catch (error) {
     console.error('[test-main] Failed to start fake OAuth server:', error);
-    app.exit(1);
+    await shutdownTestHarness(1, 'startup failure');
+    return;
+  }
+  if (await waitForShutdownIfRequested()) {
     return;
   }
 
@@ -316,7 +362,10 @@ app.whenReady().then(async () => {
     console.log(`[test-main] Fake Ollama server started on port ${ollamaPort}`);
   } catch (error) {
     console.error('[test-main] Failed to start fake Ollama server:', error);
-    app.exit(1);
+    await shutdownTestHarness(1, 'startup failure');
+    return;
+  }
+  if (await waitForShutdownIfRequested()) {
     return;
   }
 
@@ -343,7 +392,10 @@ app.whenReady().then(async () => {
     console.log('[test-main] DatabaseService initialized');
   } catch (error) {
     console.error('[test-main] DatabaseService initialization failed:', error);
-    app.exit(1);
+    await shutdownTestHarness(1, 'startup failure');
+    return;
+  }
+  if (await waitForShutdownIfRequested()) {
     return;
   }
 
@@ -499,12 +551,20 @@ app.whenReady().then(async () => {
     },
   });
 
-  // Step 11: Monkey-patch webContents.send to mirror events to TestEventBus
+  // Step 11: Monkey-patch webContents.send to mirror events to TestEventBus.
+  // In backend tests we assert push events through TestEventBus, not through a real
+  // renderer listener tree. Forwarding every send() call into the hidden about:blank
+  // renderer is unnecessary and can produce noisy transient Electron errors such as:
+  //   CompileAndCall failed to evaluate electron script (electron/js2c/node_init):
+  //   script execution has been terminated
+  // when Chromium tears down and recreates the hidden renderer context mid-run.
+  // So the test harness records the event and intentionally does NOT forward it to
+  // the renderer process. This keeps the hidden window available for explicit
+  // executeJavaScript()/ipcRenderer.invoke() coverage tests without making every
+  // backend push event depend on renderer-context liveness.
   // This must happen BEFORE the window loads any content.
-  const originalSend = hiddenWindow.webContents.send.bind(hiddenWindow.webContents);
   hiddenWindow.webContents.send = (channel: string, ...args: unknown[]): void => {
     TestEventBus.getInstance().emit(channel, args);
-    originalSend(channel, ...args);
   };
 
   // Load a blank page so the window is ready to receive IPC
@@ -514,6 +574,9 @@ app.whenReady().then(async () => {
   await new Promise<void>((resolve) => {
     hiddenWindow!.webContents.once('did-finish-load', () => resolve());
   });
+  if (await waitForShutdownIfRequested()) {
+    return;
+  }
 
   console.log('[test-main] Hidden window ready');
 
@@ -574,49 +637,27 @@ app.whenReady().then(async () => {
 
   try {
     const mocha = createMochaRunner();
-    failures = await runMocha(mocha);
+    const mochaRunResult = await runMocha(mocha);
+    if (await waitForShutdownIfRequested()) {
+      return;
+    }
+    failures = mochaRunResult.failures;
+    mochaCompleted = true;
+    lastMochaStats = mochaRunResult.stats;
+    console.log('[test-main] Mocha completion summary:', JSON.stringify(mochaRunResult.stats));
   } catch (error) {
+    if (await waitForShutdownIfRequested()) {
+      return;
+    }
     console.error('[test-main] Mocha runner threw an unexpected error:', error);
     failures = 1;
+    mochaCompleted = false;
   }
 
   console.log(`[test-main] Tests complete. Failures: ${failures}`);
 
-  // Step 14: Ensure the hidden window cannot become visible during shutdown.
-  try {
-    await destroyHiddenWindow();
-    console.log('[test-main] Hidden window destroyed');
-  } catch (error) {
-    console.warn('[test-main] Failed to destroy hidden window cleanly (non-fatal):', error);
-  }
-
-  // Step 15: Shut down all mock servers
-  try {
-    await Promise.allSettled([
-      imapServer.stop(),
-      smtpServer.stop(),
-      oauthServer.stop(),
-      ollamaServer.stop(),
-    ]);
-    console.log('[test-main] All mock servers stopped');
-  } catch (error) {
-    console.warn('[test-main] Error stopping mock servers (non-fatal):', error);
-  }
-
-  if (process.env['NODE_V8_COVERAGE']) {
-    v8.takeCoverage();
-    console.log('[test-main] V8 coverage data flushed');
-  }
-
-  // Step 16: Cleanup temp directory
-  try {
-    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-  } catch {
-    // Non-fatal cleanup error
-  }
-
-  app.exit(failures);
+  await shutdownTestHarness(failures, 'normal completion');
 }).catch((error: unknown) => {
   console.error('[test-main] app.whenReady() rejected:', error);
-  app.exit(1);
+  void shutdownTestHarness(1, 'app.whenReady rejection');
 });
