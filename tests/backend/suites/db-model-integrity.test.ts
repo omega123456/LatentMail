@@ -1498,6 +1498,429 @@ describe('DB Model Integrity', () => {
   });
 
   // =========================================================================
+  // Additional database helper coverage
+  // =========================================================================
+
+  describe('Additional database helper coverage', () => {
+    describe('Email-folder cleanup helpers', () => {
+      it('removeStaleEmailFolderAssociations returns early for an empty message list', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('stale-empty');
+        const threadId = 'thread-stale-empty-001';
+        const messageId = 'msg-stale-empty-001';
+
+        db.upsertThread(makeThreadInput(accountId, threadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: messageId,
+          xGmThrid: threadId,
+          folder: 'INBOX',
+          folderUid: 1,
+        }));
+
+        db.removeStaleEmailFolderAssociations(accountId, 'INBOX', []);
+
+        expect(db.getFoldersForEmail(accountId, messageId)).to.include('INBOX');
+      });
+
+      it('removeStaleEmailFolderAssociations removes folder links and prunes thread folders only after the last email leaves the folder', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('stale-prune');
+        const threadId = 'thread-stale-prune-001';
+        const firstMessageId = 'msg-stale-prune-001';
+        const secondMessageId = 'msg-stale-prune-002';
+        const staleFolder = 'Projects/Stale';
+
+        db.upsertThread(makeThreadInput(accountId, threadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: firstMessageId,
+          xGmThrid: threadId,
+          folder: 'INBOX',
+          folderUid: 11,
+        }));
+        db.addEmailFolderAssociation(accountId, firstMessageId, staleFolder);
+
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: secondMessageId,
+          xGmThrid: threadId,
+          folder: staleFolder,
+          folderUid: 22,
+        }));
+
+        db.upsertThreadFolder(accountId, threadId, 'INBOX');
+        db.upsertThreadFolder(accountId, threadId, staleFolder);
+
+        db.removeStaleEmailFolderAssociations(accountId, staleFolder, [firstMessageId]);
+
+        const firstMessageFolders = db.getFoldersForEmail(accountId, firstMessageId);
+        expect(firstMessageFolders).to.include('INBOX');
+        expect(firstMessageFolders).to.not.include(staleFolder);
+        expect(db.getFoldersForThread(accountId, threadId)).to.include(staleFolder);
+
+        db.removeStaleEmailFolderAssociations(accountId, staleFolder, [secondMessageId]);
+
+        expect(db.getFoldersForEmail(accountId, secondMessageId)).to.not.include(staleFolder);
+        expect(db.getFoldersForThread(accountId, threadId)).to.not.include(staleFolder);
+      });
+
+      it('removeAllEmailFolderAssociations removes only non-trash and non-spam folders and reports affected folders and threads', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('bulk-remove');
+        const threadId = 'thread-bulk-remove-001';
+        const messageId = 'msg-bulk-remove-001';
+        const projectFolder = 'Projects/Bulk';
+        const trashFolder = db.getTrashFolder(accountId);
+        const spamFolder = '[Gmail]/Spam';
+
+        db.upsertThread(makeThreadInput(accountId, threadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: messageId,
+          xGmThrid: threadId,
+          folder: 'INBOX',
+          folderUid: 31,
+        }));
+        db.addEmailFolderAssociation(accountId, messageId, projectFolder);
+        db.addEmailFolderAssociation(accountId, messageId, trashFolder);
+        db.addEmailFolderAssociation(accountId, messageId, spamFolder);
+
+        db.upsertThreadFolder(accountId, threadId, 'INBOX');
+        db.upsertThreadFolder(accountId, threadId, projectFolder);
+        db.upsertThreadFolder(accountId, threadId, trashFolder);
+        db.upsertThreadFolder(accountId, threadId, spamFolder);
+
+        const removalResult = db.removeAllEmailFolderAssociations(
+          accountId,
+          [messageId],
+          trashFolder,
+          spamFolder,
+        );
+
+        expect(Array.from(removalResult.affectedFolderPaths).sort()).to.deep.equal(['INBOX', projectFolder]);
+        expect(Array.from(removalResult.affectedThreadIds)).to.deep.equal([threadId]);
+
+        const remainingFolders = db.getFoldersForEmail(accountId, messageId).sort();
+        expect(remainingFolders).to.deep.equal([spamFolder, trashFolder].sort());
+
+        const remainingThreadFolders = db.getFoldersForThread(accountId, threadId).sort();
+        expect(remainingThreadFolders).to.deep.equal([spamFolder, trashFolder].sort());
+      });
+
+      it('removeAllEmailFolderAssociations leaves trash-only and spam-only associations untouched', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('bulk-remove-skip');
+        const threadId = 'thread-bulk-remove-skip-001';
+        const messageId = 'msg-bulk-remove-skip-001';
+        const trashFolder = db.getTrashFolder(accountId);
+        const spamFolder = '[Gmail]/Spam';
+
+        db.upsertThread(makeThreadInput(accountId, threadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: messageId,
+          xGmThrid: threadId,
+          folder: trashFolder,
+          folderUid: 41,
+        }));
+        db.addEmailFolderAssociation(accountId, messageId, spamFolder);
+        db.upsertThreadFolder(accountId, threadId, trashFolder);
+        db.upsertThreadFolder(accountId, threadId, spamFolder);
+
+        const removalResult = db.removeAllEmailFolderAssociations(
+          accountId,
+          [messageId],
+          trashFolder,
+          spamFolder,
+        );
+
+        expect(Array.from(removalResult.affectedFolderPaths)).to.deep.equal([]);
+        expect(Array.from(removalResult.affectedThreadIds)).to.deep.equal([]);
+        expect(db.getFoldersForEmail(accountId, messageId).sort()).to.deep.equal([spamFolder, trashFolder].sort());
+      });
+    });
+
+    describe('Folder movement and lookup helpers', () => {
+      it('moveEmailFolder and moveThreadFolder move associations and preserve the provided target UID', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('move-with-uid');
+        const threadId = 'thread-move-with-uid-001';
+        const messageId = 'msg-move-with-uid-001';
+        const targetFolder = 'Projects/Moved';
+
+        db.upsertThread(makeThreadInput(accountId, threadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: messageId,
+          xGmThrid: threadId,
+          folder: 'INBOX',
+          folderUid: 51,
+        }));
+        db.upsertThreadFolder(accountId, threadId, 'INBOX');
+
+        db.moveEmailFolder(accountId, messageId, 'INBOX', targetFolder, 99);
+        db.moveThreadFolder(accountId, threadId, 'INBOX', targetFolder);
+
+        const messageFolders = db.getFoldersForEmail(accountId, messageId);
+        expect(messageFolders).to.not.include('INBOX');
+        expect(messageFolders).to.include(targetFolder);
+        expect(db.getFoldersForThread(accountId, threadId)).to.deep.equal([targetFolder]);
+
+        const folderUids = db.getFolderUidsForEmail(accountId, messageId);
+        const movedEntry = folderUids.find((entry) => entry.folder === targetFolder);
+        expect(movedEntry).to.not.equal(undefined);
+        expect(movedEntry!.uid).to.equal(99);
+        expect(db.getEmailXGmMsgIdsByFolder(accountId, targetFolder)).to.deep.equal([messageId]);
+      });
+
+      it('moveEmailFolder inserts the target association even when no target UID is available', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('move-without-uid');
+        const threadId = 'thread-move-without-uid-001';
+        const messageId = 'msg-move-without-uid-001';
+        const targetFolder = 'Projects/NoUid';
+
+        db.upsertThread(makeThreadInput(accountId, threadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: messageId,
+          xGmThrid: threadId,
+          folder: 'INBOX',
+          folderUid: 61,
+        }));
+
+        db.moveEmailFolder(accountId, messageId, 'INBOX', targetFolder, null);
+
+        expect(db.getFoldersForEmail(accountId, messageId)).to.deep.equal([targetFolder]);
+        const targetUidEntry = db.getFolderUidsForEmail(accountId, messageId).find((entry) => {
+          return entry.folder === targetFolder;
+        });
+        expect(targetUidEntry).to.equal(undefined);
+      });
+
+      it('getAffectedThreadIds returns distinct thread IDs for the given message IDs and an empty array for empty input', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('affected-threads');
+        const firstThreadId = 'thread-affected-001';
+        const secondThreadId = 'thread-affected-002';
+
+        db.upsertThread(makeThreadInput(accountId, firstThreadId));
+        db.upsertThread(makeThreadInput(accountId, secondThreadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-affected-001',
+          xGmThrid: firstThreadId,
+          folder: 'INBOX',
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-affected-002',
+          xGmThrid: firstThreadId,
+          folder: 'INBOX',
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-affected-003',
+          xGmThrid: secondThreadId,
+          folder: 'INBOX',
+        }));
+
+        const affectedThreadIds = db.getAffectedThreadIds(accountId, [
+          'msg-affected-001',
+          'msg-affected-002',
+          'msg-affected-003',
+        ]).sort();
+
+        expect(affectedThreadIds).to.deep.equal([firstThreadId, secondThreadId].sort());
+        expect(db.getAffectedThreadIds(accountId, [])).to.deep.equal([]);
+      });
+    });
+
+    describe('Folder state and label batch helpers', () => {
+      it('getAllFolderStates returns every stored folder state and updateFolderStateReconciliation stamps lastReconciledAt', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('folder-state-batch');
+
+        db.upsertFolderState({
+          accountId,
+          folder: 'INBOX',
+          uidValidity: '1001',
+          highestModseq: '500',
+          condstoreSupported: true,
+        });
+        db.upsertFolderState({
+          accountId,
+          folder: 'Projects/Archive',
+          uidValidity: '2002',
+          highestModseq: '700',
+          condstoreSupported: false,
+        });
+
+        const allFolderStates = db.getAllFolderStates(accountId);
+        expect(allFolderStates.map((folderState) => folderState.folder).sort()).to.deep.equal([
+          'INBOX',
+          'Projects/Archive',
+        ]);
+
+        const initialInboxState = db.getFolderState(accountId, 'INBOX');
+        expect(initialInboxState).to.not.be.null;
+        expect(initialInboxState!.lastReconciledAt).to.equal(null);
+
+        db.updateFolderStateReconciliation(accountId, 'INBOX');
+
+        const updatedInboxState = db.getFolderState(accountId, 'INBOX');
+        expect(updatedInboxState).to.not.be.null;
+        expect(updatedInboxState!.lastReconciledAt).to.be.a('string');
+      });
+
+      it('getLabelsForThreadBatch returns only user labels for the requested threads and updateLabelCounts persists counts', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('label-batch');
+        const labeledThreadId = 'thread-label-batch-001';
+        const unlabeledThreadId = 'thread-label-batch-002';
+        const userLabelId = 'Projects/Batch';
+
+        expect(db.getLabelsForThreadBatch(accountId, []).size).to.equal(0);
+
+        db.createLabel(accountId, userLabelId, 'Batch Label', '#123456');
+        db.upsertLabel({
+          accountId,
+          gmailLabelId: 'INBOX',
+          name: 'INBOX',
+          type: 'system',
+          unreadCount: 0,
+          totalCount: 0,
+        });
+
+        db.upsertThread(makeThreadInput(accountId, labeledThreadId));
+        db.upsertThread(makeThreadInput(accountId, unlabeledThreadId));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-label-batch-001',
+          xGmThrid: labeledThreadId,
+          folder: userLabelId,
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-label-batch-002',
+          xGmThrid: unlabeledThreadId,
+          folder: 'INBOX',
+        }));
+
+        const labelsByThread = db.getLabelsForThreadBatch(accountId, [labeledThreadId, unlabeledThreadId]);
+        const labeledThreadLabels = labelsByThread.get(labeledThreadId);
+        expect(labeledThreadLabels).to.not.equal(undefined);
+        expect(labeledThreadLabels).to.have.length(1);
+        expect(labeledThreadLabels![0]!.id).to.be.a('number');
+        expect(labeledThreadLabels![0]!.name).to.equal('Batch Label');
+        expect(labeledThreadLabels![0]!.color).to.equal('#123456');
+        expect(labeledThreadLabels![0]!.gmailLabelId).to.equal(userLabelId);
+        expect(labelsByThread.has(unlabeledThreadId)).to.equal(false);
+
+        db.updateLabelCounts(accountId, userLabelId, 5, 12);
+
+        const updatedLabel = db.getLabelsByAccount(accountId).find((label) => {
+          return label['gmailLabelId'] === userLabelId;
+        });
+        expect(updatedLabel).to.not.equal(undefined);
+        expect(updatedLabel!['unreadCount']).to.equal(5);
+        expect(updatedLabel!['totalCount']).to.equal(12);
+      });
+    });
+
+    describe('Direct thread search helpers', () => {
+      it('searchEmails resolves the trash alias via the account trash folder and excludes trash-only message links from the reported thread count', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('search-direct');
+        const threadId = 'thread-search-direct-001';
+
+        db.upsertLabel({
+          accountId,
+          gmailLabelId: '[Gmail]/Bin',
+          name: 'Bin',
+          type: 'system',
+          unreadCount: 0,
+          totalCount: 0,
+          specialUse: '\\Trash',
+        });
+        db.upsertThread(makeThreadInput(accountId, threadId, {
+          subject: 'Budget Update',
+          lastMessageDate: DateTime.utc(2026, 3, 12, 9, 0, 0).toISO()!,
+          participants: 'Searcher <searcher@example.com>',
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-search-direct-inbox',
+          xGmThrid: threadId,
+          folder: 'INBOX',
+          fromAddress: 'searcher@example.com',
+          fromName: 'Searcher',
+          subject: 'Budget Update',
+          textBody: 'Budget update in inbox',
+          date: DateTime.utc(2026, 3, 12, 9, 0, 0).toISO()!,
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-search-direct-trash',
+          xGmThrid: threadId,
+          folder: '[Gmail]/Bin',
+          fromAddress: 'searcher@example.com',
+          fromName: 'Searcher',
+          subject: 'Budget Update',
+          textBody: 'Budget update in trash',
+          date: DateTime.utc(2026, 3, 11, 9, 0, 0).toISO()!,
+        }));
+
+        const senderSearchResults = db.searchEmails(accountId, 'from:searcher@example.com subject:"Budget Update"') as Array<{
+          xGmThrid: string;
+          messageCount: number;
+          folder: string;
+        }>;
+        expect(senderSearchResults).to.have.length(1);
+        expect(senderSearchResults[0]!.xGmThrid).to.equal(threadId);
+        expect(senderSearchResults[0]!.messageCount).to.equal(1);
+        expect(senderSearchResults[0]!.folder).to.equal('search');
+
+        const trashAliasSearchResults = db.searchEmails(accountId, 'in:trash subject:"Budget Update"') as Array<{
+          xGmThrid: string;
+        }>;
+        expect(trashAliasSearchResults).to.have.length(1);
+        expect(trashAliasSearchResults[0]!.xGmThrid).to.equal(threadId);
+      });
+
+      it('searchEmailsMulti trims blank queries, returns empty for blank-only input, and unions results across multiple queries', () => {
+        const db = getDatabase();
+        const accountId = createTestAccount('search-multi-direct');
+        const firstThreadId = 'thread-search-multi-001';
+        const secondThreadId = 'thread-search-multi-002';
+
+        expect(db.searchEmailsMulti(accountId, ['   ', '']).length).to.equal(0);
+
+        db.upsertThread(makeThreadInput(accountId, firstThreadId, {
+          subject: 'Union Alpha',
+          lastMessageDate: DateTime.utc(2026, 3, 12, 12, 0, 0).toISO()!,
+        }));
+        db.upsertThread(makeThreadInput(accountId, secondThreadId, {
+          subject: 'Union Beta',
+          lastMessageDate: DateTime.utc(2026, 3, 12, 11, 0, 0).toISO()!,
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-search-multi-001',
+          xGmThrid: firstThreadId,
+          folder: 'INBOX',
+          subject: 'Union Alpha',
+          textBody: 'alpha body',
+        }));
+        db.upsertEmail(makeEmailInput(accountId, {
+          xGmMsgId: 'msg-search-multi-002',
+          xGmThrid: secondThreadId,
+          folder: 'INBOX',
+          subject: 'Union Beta',
+          textBody: 'beta body',
+        }));
+
+        const searchResults = db.searchEmailsMulti(accountId, [
+          'subject:"Union Alpha"',
+          '   ',
+          'subject:"Union Beta"',
+        ]) as Array<{ xGmThrid: string }>;
+
+        expect(searchResults.map((row) => row.xGmThrid).sort()).to.deep.equal([
+          firstThreadId,
+          secondThreadId,
+        ].sort());
+      });
+    });
+  });
+
+  // =========================================================================
   // 16. Embedding bookkeeping
   // =========================================================================
 

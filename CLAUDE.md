@@ -35,17 +35,35 @@ yarn make
 ### Testing
 
 ```bash
-# Run all backend tests
+# Run all backend tests (sequential)
 yarn test:backend
 
-# Filter tests by name (regex match on describe/it titles)
+# Filter tests by name (regex match on describe/it titles, sequential)
 yarn test:backend --filter="sync"
 
-# Run tests from a specific suite file (substring match)
+# Run tests from a specific suite file (substring match, sequential)
 yarn test:backend --file="database-settings"
 
-# List available test suites
+# List available test suites (sequential runner)
 yarn test:backend --list
+
+# Run all backend tests in parallel across suites
+yarn test:backend:parallel
+
+# Limit number of parallel workers
+yarn test:backend:parallel --jobs=8
+
+# List available test suites and usage (parallel runner)
+yarn test:backend:parallel --list
+
+# Run parallel tests with coverage report
+yarn test:backend:parallel --coverage
+
+# Enforce overall coverage threshold (example: 80%)
+yarn test:backend:parallel --check-coverage=80
+
+# Enforce per-metric coverage thresholds
+yarn test:backend:parallel --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90
 ```
 
 ### Native Module Rebuilding
@@ -287,7 +305,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 - **Always use curly braces for control statements** — no single-line `if`/`else`/`for`/`while`/`do`. Every branch or loop body must be wrapped in `{ }`.
 - **Use full words for variable and parameter names** — no single letters (e.g. use `deltaX` not `dx`, `width` not `w`) and no abbreviations (e.g. use `element` not `el`, `bounds` not `rect`, `index` not `i` where readability benefits). Exception: very short loop variables in tiny scope (e.g. `index` in a 2-line loop) may use a full word like `index`; avoid `i`, `j`, `n`, `x`, etc.
-- **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:backend` before finishing and ensure all tests pass. Do not leave a session with failing tests. If tests fail, fix them before completing the task.
+- **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:backend:parallel --jobs=19` before finishing and ensure all tests pass. Do not leave a session with failing tests. If tests fail, fix them before completing the task.
 - **New code requires test coverage** — Any new functionality, service, IPC handler, or non-trivial logic must have corresponding tests in `tests/backend/`. Do not add features without tests. Tests live in `tests/backend/suites/` and follow the existing patterns (Mocha + Chai). See "Backend Testing" section below for details.
 - **Only end-to-end tests** — Write **only** end-to-end (E2E) or functional tests. **Never** write unit tests. **Never** test by calling application functions, classes, or services directly; always exercise behavior through the public IPC interface (e.g. `callIpc()`). Tests must verify real workflows and real system state, not isolated units.
 

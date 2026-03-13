@@ -1748,6 +1748,11 @@ describe('Queue Resilience', () => {
 
       let moveStarted = false;
       let capturedSyncPromise: Promise<void> | null = null;
+      let releaseMove: (() => void) | null = null;
+
+      const moveBlocked = new Promise<void>((resolve) => {
+        releaseMove = resolve;
+      });
 
       lockManager.lockTimeoutMs = 75;
 
@@ -1758,9 +1763,7 @@ describe('Queue Resilience', () => {
         targetFolder: string,
       ): Promise<void> => {
         moveStarted = true;
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        await moveBlocked;
         await originalMoveMessages(accountId, sourceFolder, uids, targetFolder);
       };
 
@@ -1810,9 +1813,15 @@ describe('Queue Resilience', () => {
           return lockManager.getWaiterCount('INBOX', suiteAccountId) === 0;
         }, 10_000, 25);
 
+        releaseMove!();
+
         const moveSnapshot = await waitForQueueUpdate(moveResponse.data!.queueId, 'completed', 15_000);
         expect(moveSnapshot.status).to.equal('completed');
       } finally {
+        const releaseMoveFn = releaseMove as unknown as (() => void) | null;
+        if (typeof releaseMoveFn === 'function') {
+          releaseMoveFn();
+        }
         lockManager.lockTimeoutMs = originalLockTimeoutMs;
         imapService.moveMessages = originalMoveMessages;
         syncService.syncFolderWithReconciliation = originalSyncFolderWithReconciliation;
