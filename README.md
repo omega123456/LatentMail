@@ -102,7 +102,50 @@ Then run or package as above. If you skip this step, the app still runs; only dr
 | `yarn electron:start` | Build and run packaged app |
 | `yarn package` | Build and output unpacked app to `out/` |
 | `yarn make` | Build platform installer (e.g. `.exe`, `.dmg`) |
-| `yarn test` | Run Angular unit tests |
+| `yarn test:full-suite` | Run backend + frontend tests with coverage checks |
+| `yarn test:backend` | Run backend tests (sequential) |
+| `yarn test:backend:parallel` | Run backend tests in parallel (with optional `--coverage`) |
+| `yarn test:frontend` | Run frontend E2E tests (builds app, then Playwright) |
+| `yarn test:frontend:run` | Run frontend tests only (assumes build already done) |
+
+---
+
+## Testing
+
+The project uses **functional and E2E tests only** (no unit tests). Backend tests exercise the main process via IPC; frontend tests launch the real Electron app and drive the Angular UI with Playwright.
+
+### Full suite (recommended before committing)
+
+```bash
+yarn test:full-suite
+```
+
+Runs backend tests in parallel with a 90% coverage check, then frontend E2E tests with a 90% coverage check.
+
+### Backend (Electron main process)
+
+- **Stack**: Mocha + Chai. Tests live in `tests/backend/suites/`. They call IPC handlers directly and assert on database state; external services (IMAP, SMTP, OAuth, Ollama) are mocked.
+- **Commands**:
+  - `yarn test:backend` — all backend tests, sequential
+  - `yarn test:backend --filter="sync"` — run tests whose describe/it titles match the regex
+  - `yarn test:backend --file="database-settings"` — run suites whose path contains the given string
+  - `yarn test:backend --list` — list available suites
+  - `yarn test:backend:parallel` — run all suites in parallel
+  - `yarn test:backend:parallel --coverage` — parallel run with coverage report
+  - `yarn test:backend:parallel --check-coverage=80` — enforce overall coverage (e.g. 80%)
+  - `yarn test:backend:parallel --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90` — per-metric thresholds
+
+### Frontend (Playwright + Electron renderer)
+
+- **Stack**: Playwright E2E against the real Electron app. Tests live in `tests/frontend/suites/`. They use a test-specific Electron main (`test-frontend-main.js`), reset app state when needed, and assert on DOM and behavior.
+- **Commands**:
+  - `yarn test:frontend` — full run: build Angular (electron config) + Electron + tests, then run Playwright
+  - `yarn test:frontend:run` — run Playwright only (use after a previous build for quick re-runs)
+  - `yarn test:frontend:update-screenshots` — update visual regression snapshots
+  - `yarn test:frontend --coverage` — collect renderer JS coverage
+  - `yarn test:frontend --check-coverage=90` — run tests and enforce 90% coverage threshold
+
+For test structure, helpers, and writing new tests, see [AGENTS.md](AGENTS.md) (Backend Testing and Frontend Testing sections).
 
 ---
 
