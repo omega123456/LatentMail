@@ -35,6 +35,10 @@ yarn make
 ### Testing
 
 ```bash
+# Full test suite (backend + frontend with coverage) — run before ending any session with code changes
+yarn test:full-suite
+
+# --- Backend (electron/main process) ---
 # Run all backend tests (sequential)
 yarn test:backend
 
@@ -64,6 +68,20 @@ yarn test:backend:parallel --check-coverage=80
 
 # Enforce per-metric coverage thresholds
 yarn test:backend:parallel --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90
+
+# --- Frontend (Playwright + Electron renderer) ---
+# Run frontend E2E tests (builds Angular + Electron, then Playwright)
+yarn test:frontend
+
+# Run frontend tests only (assumes build already done; use for quick re-runs)
+yarn test:frontend:run
+
+# Update visual regression snapshots
+yarn test:frontend:update-screenshots
+
+# Frontend tests with coverage collection and threshold check
+yarn test:frontend --coverage
+yarn test:frontend --check-coverage=90
 ```
 
 ### Native Module Rebuilding
@@ -305,8 +323,8 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 
 - **Always use curly braces for control statements** — no single-line `if`/`else`/`for`/`while`/`do`. Every branch or loop body must be wrapped in `{ }`.
 - **Use full words for variable and parameter names** — no single letters (e.g. use `deltaX` not `dx`, `width` not `w`) and no abbreviations (e.g. use `element` not `el`, `bounds` not `rect`, `index` not `i` where readability benefits). Exception: very short loop variables in tiny scope (e.g. `index` in a 2-line loop) may use a full word like `index`; avoid `i`, `j`, `n`, `x`, etc.
-- **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:backend:parallel --jobs=19` before finishing and ensure all tests pass. Do not leave a session with failing tests. If tests fail, fix them before completing the task.
-- **New code requires test coverage** — Any new functionality, service, IPC handler, or non-trivial logic must have corresponding tests in `tests/backend/`. Do not add features without tests. Tests live in `tests/backend/suites/` and follow the existing patterns (Mocha + Chai). See "Backend Testing" section below for details.
+- **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:full-suite` before finishing and ensure all tests pass. This runs backend tests (parallel, with 90% coverage check) then frontend tests (Playwright E2E, with 90% coverage check). Do not leave a session with failing tests. If tests fail, fix them before completing the task.
+- **New code requires test coverage** — Any new functionality, service, IPC handler, or non-trivial logic must have corresponding tests: backend code in `tests/backend/suites/` (Mocha + Chai, see "Backend Testing"), frontend/UI code in `tests/frontend/suites/` (Playwright, see "Frontend Testing"). Do not add features without tests.
 - **Only end-to-end tests** — Write **only** end-to-end (E2E) or functional tests. **Never** write unit tests. **Never** test by calling application functions, classes, or services directly; always exercise behavior through the public IPC interface (e.g. `callIpc()`). Tests must verify real workflows and real system state, not isolated units.
 
 ### Dates and Time
@@ -507,6 +525,54 @@ Each test suite gets a fresh database snapshot via `quiesceAndRestore()`. This e
 - Tests don't leak state to other suites
 - Each suite starts with a known clean state
 - Tests can mutate the DB freely without cleanup
+
+## Frontend Testing
+
+Frontend tests are **Playwright** E2E tests that launch the real Electron app (main + renderer), load the Angular UI, and assert on DOM and behavior. They live in `tests/frontend/` and are run via `scripts/run-frontend-tests.js`.
+
+### Commands and workflow
+
+- **`yarn test:frontend`** — Full run: builds Angular (electron config), compiles Electron + test code, copies prompts, then runs Playwright. Use `--coverage` to collect renderer JS coverage (rebuilds with `electron-coverage`), or `--check-coverage=N` to enforce a coverage threshold (e.g. 90).
+- **`yarn test:frontend:run`** — Same as above but skips native rebuild; use when only re-running tests after a previous build.
+- **`yarn test:frontend:update-screenshots`** — Runs frontend tests with `--update-snapshots` to refresh visual regression images.
+- **`yarn test:full-suite`** — Runs `yarn test:backend:parallel --check-coverage=90` then `yarn test:frontend --check-coverage=90`. **Mandatory** before ending any session that changed code.
+
+### Test structure
+
+```
+tests/frontend/
+├── infrastructure/
+│   ├── electron-fixture.ts   # Playwright worker fixtures: electronApp, sharedPage, resetApp()
+│   ├── helpers.ts           # Shared DOM/assertion helpers
+│   └── test-hooks-types.ts   # Types for resetApp options/result
+├── suites/                   # Test files (*.test.ts)
+├── screenshots/              # Visual regression snapshots (per platform)
+├── playwright.config.ts      # Playwright config (testDir, timeouts, snapshot paths)
+└── test-frontend-main.ts     # Electron main entry used when launching the app under test
+```
+
+Playwright is configured with `workers: 1`, retries, and long timeouts. The runner sets `LATENTMAIL_TEST_MODE=1` and `LATENTMAIL_TEST_TEMP_DIR`; the Electron main used for tests is `dist-test/tests/frontend/test-frontend-main.js`.
+
+### Fixtures and isolation
+
+- **`electronApp`** — Launched once per worker via `playwright`'s `_electron.launch()` with args pointing at `test-frontend-main.js`.
+- **`sharedPage`** / **`page`** — First window of the Electron app; tests interact with the Angular UI in this window.
+- **`resetApp(options?)`** — Resets app state (e.g. database) for isolation. Use in `beforeEach` or at the start of tests that need a clean state. Options and result types are in `test-hooks-types.ts`.
+
+When coverage is requested (`--coverage` or `--check-coverage`), the script rebuilds Angular with the `electron-coverage` config, sets `PLAYWRIGHT_COVERAGE_DIR`, and the fixture starts JS coverage on the first window. After tests, `run-frontend-tests.js` runs c8 report (and optional threshold check) then exits with the combined result.
+
+### Writing frontend tests
+
+1. Create a file in `tests/frontend/suites/` named `<feature>.test.ts`.
+2. Use the `test` and fixtures from `tests/frontend/infrastructure/electron-fixture.ts` (e.g. `test.extend(workerFixtures)` or the default export that provides `page`, `electronApp`, `resetApp`).
+3. Use `resetApp()` when the test needs a clean DB/state.
+4. Prefer user-facing behavior and DOM assertions; avoid depending on internal APIs. For visual regression, use Playwright snapshots (stored under `screenshots/{platform}/`).
+
+### Coverage
+
+- Enable with `yarn test:frontend --coverage` or `--check-coverage=N`.
+- Coverage is collected from the renderer (Angular) via Playwright's JS coverage API; c8 produces reports under `coverage/frontend/`.
+- Per-metric thresholds: `--check-statements`, `--check-branches`, `--check-functions`, `--check-lines` (same semantics as backend).
 
 ## Common Gotchas
 

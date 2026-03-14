@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const isWindows = process.platform === 'win32';
+let testTempDir = null;
 const COVERAGE_FLAG_PREFIXES = [
   '--coverage',
   '--check-coverage',
@@ -95,36 +96,39 @@ async function runFrontendCoverageReporting(
 ) {
   const c8BinPath = require.resolve('c8/bin/c8.js');
 
+  // Coverage script URLs are bundle paths (dist-test/.../browser/*.js); c8 remaps them via source maps
+  // to original sources (e.g. node_modules/@angular/..., src/...). Apply exclude after remap so
+  // node_modules is excluded from the report.
+  const excludePattern = '**/node_modules/**';
   const reportArgs = [
     c8BinPath,
     'report',
     `--temp-directory=${coverageTempDir}`,
+    `--exclude=${excludePattern}`,
+    '--exclude-after-remap',
     '--reporter=text',
     '--reporter=html',
     '--reporter=lcov',
     '--reports-dir=coverage/frontend',
   ];
-  const reportCode = await spawnAsync(process.execPath, reportArgs);
 
-  let checkCode = 0;
+  // Run threshold check in the same process as report so the same Report (with exclude-after-remap)
+  // is used; the separate "check-coverage" command does not pass excludeAfterRemap to Report.
   if (thresholdCheckEnabled) {
     const stmts = checkStatements ?? 0;
-    const branches = checkBranches ?? 0;
     const funcs = checkFunctions ?? 0;
     const lines = checkLines ?? 0;
-    const checkArgs = [
-      c8BinPath,
-      'check-coverage',
-      `--temp-directory=${coverageTempDir}`,
+    reportArgs.push(
+      '--check-coverage',
       `--statements=${stmts}`,
-      `--branches=${branches}`,
+      `--branches=0`,
       `--functions=${funcs}`,
       `--lines=${lines}`,
-    ];
-    checkCode = await spawnAsync(process.execPath, checkArgs);
+    );
   }
 
-  return { reportCode, checkCode };
+  const reportCode = await spawnAsync(process.execPath, reportArgs);
+  return { reportCode, checkCode: reportCode };
 }
 
 async function main() {
@@ -135,8 +139,7 @@ async function main() {
       // Ignore errors (for example if chcp is unavailable)
     }
   }
-  const testTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-frontend-test-'));
-  cleanEnv['LATENTMAIL_TEST_TEMP_DIR'] = testTempDir;
+  testTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-frontend-test-'));
   fs.writeFileSync(
     path.join(testTempDir, '.frontend-test-owner.json'),
     JSON.stringify({ pid: process.pid, role: 'frontend-test-launcher', createdAt: Date.now() }),
@@ -197,6 +200,7 @@ async function main() {
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   childEnv.LATENTMAIL_TEST_MODE = '1';
+  childEnv.LATENTMAIL_TEST_TEMP_DIR = testTempDir;
 
   let coverageTempDir = null;
 
@@ -257,30 +261,30 @@ async function main() {
     }
   }
 
-  return finalExitCode;
+  return { code: finalExitCode, testTempDir: testTempDir };
 }
 
-function cleanupTempDir() {
+function cleanupTempDir(dirPath) {
+  if (!dirPath) return;
   try {
-    fs.rmSync(testTempDir, {
+    fs.rmSync(dirPath, {
       recursive: true,
       force: true,
       maxRetries: 20,
       retryDelay: 100,
     });
   } catch (error) {
-    console.error('[run-frontend-tests] Failed to clean up test temp directory:', testTempDir, error.message);
+    console.error('[run-frontend-tests] Failed to clean up test temp directory:', dirPath, error.message);
   }
 }
 
-
 main()
-  .then((code) => {
-    cleanupTempDir();
-    process.exit(code ?? 1);
+  .then((result) => {
+    cleanupTempDir(result.testTempDir);
+    process.exit(result.code ?? 1);
   })
   .catch((err) => {
-    cleanupTempDir();
+    cleanupTempDir(testTempDir);
     console.error(err);
     process.exit(1);
   });
