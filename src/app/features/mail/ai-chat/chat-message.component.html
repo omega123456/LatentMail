@@ -34,11 +34,13 @@
           <div class="sources-label">SOURCES</div>
           <div class="sources-list">
             @for (source of message().sources; track source.xGmMsgId; let idx = $index) {
-              <app-source-card
-                [source]="source"
-                [displayIndex]="idx + 1"
-                (sourceClicked)="onSourceClicked($event)"
-              />
+              <div [attr.data-testid]="'ai-source-card-' + idx">
+                <app-source-card
+                  [source]="source"
+                  [displayIndex]="idx + 1"
+                  (sourceClicked)="onSourceClicked($event)"
+                />
+              </div>
             }
           </div>
         </div>

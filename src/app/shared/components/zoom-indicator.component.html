@@ -1,5 +1,5 @@
 @if (zoomService.zoomIndicatorVisible()) {
-  <div class="zoom-indicator" role="status" aria-live="polite" aria-atomic="true">
+  <div class="zoom-indicator" role="status" aria-live="polite" aria-atomic="true" data-testid="zoom-indicator">
     <span class="material-symbols-outlined zoom-icon" aria-hidden="true">zoom_in</span>
     <span class="zoom-label">{{ zoomService.zoomLevel() }}%</span>
   </div>

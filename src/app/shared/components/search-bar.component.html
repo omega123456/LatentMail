@@ -1,9 +1,11 @@
 <div class="search-bar"
+     data-testid="search-bar"
      [class.focused]="focused()"
      [attr.aria-busy]="aiStore.searchStreamStatus() === 'searching' ? 'true' : null">
   <span class="material-symbols-outlined search-icon">search</span>
   <input
     class="search-bar-input"
+    data-testid="search-input"
     type="text"
     [placeholder]="searchMode() === 'semantic' ? 'Ask AI to find emails...' : 'Search emails...'"
     [value]="query()"
@@ -17,7 +19,7 @@
     <span class="material-symbols-outlined spinning search-loading">sync</span>
   }
   @if (query() && aiStore.searchStreamStatus() !== 'searching') {
-    <button class="search-action-btn" (click)="onClear()" title="Clear search">
+    <button class="search-action-btn" (click)="onClear()" title="Clear search" data-testid="search-clear-button">
       <span class="material-symbols-outlined">close</span>
     </button>
   }
@@ -27,6 +29,7 @@
         class="search-mode-btn"
         [attr.aria-pressed]="searchMode() === 'keyword'"
         aria-label="Keyword search"
+        data-testid="search-mode-keyword"
         [disabled]="aiStore.searchStreamStatus() === 'searching'"
         (click)="setSearchMode('keyword')"
         title="Keyword search"
@@ -37,6 +40,7 @@
         class="search-mode-btn"
         [attr.aria-pressed]="searchMode() === 'semantic'"
         aria-label="Semantic search"
+        data-testid="search-mode-semantic"
         [disabled]="aiStore.searchStreamStatus() === 'searching'"
         (click)="setSearchMode('semantic')"
         title="Semantic AI search"

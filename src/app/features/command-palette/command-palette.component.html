@@ -1,6 +1,7 @@
 @if (uiStore.commandPaletteOpen()) {
   <div
     class="palette-backdrop"
+    data-testid="command-palette"
     (click)="closeOnBackdrop($event)"
     role="dialog"
     aria-modal="true"
@@ -14,6 +15,7 @@
           #searchInput
           type="text"
           class="palette-input"
+          data-testid="command-palette-input"
           placeholder="Search commands…"
           autocomplete="off"
           autocorrect="off"
@@ -37,7 +39,7 @@
       <div class="palette-divider"></div>
 
       <!-- Results -->
-      <div id="palette-listbox" class="palette-results" role="listbox" aria-label="Commands">
+      <div id="palette-listbox" class="palette-results" role="listbox" aria-label="Commands" data-testid="command-palette-results">
 
         <!-- Recent commands (shown when query is empty) -->
         @if (showRecentSection()) {
@@ -46,6 +48,7 @@
             <button
               type="button"
               class="palette-item"
+              [attr.data-testid]="'command-palette-item-' + index"
               [id]="'palette-item-' + index"
               [class.focused]="isRecentFocused(index)"
               (click)="executeCommand(cmd)"
@@ -76,6 +79,7 @@
           <button
             type="button"
             class="palette-item"
+            [attr.data-testid]="'command-palette-item-' + (showRecentSection() ? recentCommands().length + index : index)"
             [id]="'palette-item-' + (showRecentSection() ? recentCommands().length + index : index)"
             [class.focused]="isFilteredFocused(index)"
             (click)="executeCommand(cmd)"

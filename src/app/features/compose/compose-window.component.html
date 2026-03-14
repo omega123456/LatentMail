@@ -3,6 +3,7 @@
     <div
       #composeWindowEl
       class="compose-window"
+      data-testid="compose-window"
       [style.width.px]="composeWidth()"
       [style.height]="composeHeight() === null ? 'auto' : composeHeight() + 'px'"
       (click)="onComposeWindowClick($event)"
@@ -10,7 +11,7 @@
       (drop)="onDrop($event)"
     >
       <!-- Header -->
-      <div class="compose-header">
+      <div class="compose-header" data-testid="compose-header">
         <span class="compose-title">
           @switch (composeStore.mode()) {
             @case ('reply') { Reply }
@@ -20,7 +21,7 @@
           }
         </span>
         <div class="header-actions">
-          <button class="header-btn" (click)="close()" title="Close">
+          <button class="header-btn" (click)="close()" title="Close" data-testid="compose-close-button">
             <span class="material-symbols-outlined">close</span>
           </button>
         </div>
@@ -29,7 +30,7 @@
       <!-- From -->
       <div class="field-row from-row">
         <label class="field-label">From</label>
-        <span class="from-value">{{ composeStore.accountDisplayName() }} &lt;{{ composeStore.accountEmail() }}&gt;</span>
+        <span class="from-value" data-testid="compose-from-value">{{ composeStore.accountDisplayName() }} &lt;{{ composeStore.accountEmail() }}&gt;</span>
       </div>
 
       <!-- To -->
@@ -73,6 +74,7 @@
         <input
           #subjectInput
           class="subject-input"
+          data-testid="compose-subject-input"
           [ngModel]="composeStore.subject()"
           (ngModelChange)="composeStore.updateField('subject', $event)"
           placeholder="Subject"
@@ -91,6 +93,7 @@
       <!-- Editor (reduced height when quoted message is shown below) -->
       <div
         class="editor-container"
+        data-testid="compose-editor"
         [class.editor-container--with-quoted]="composeStore.quotedHtml()"
         #editorContainer
         (click)="focusEditor($event)"
@@ -123,7 +126,7 @@
       <!-- Footer -->
       <div class="compose-footer">
         <div class="footer-left">
-          <button class="attach-btn" (click)="openAttachPicker()">
+          <button class="attach-btn" (click)="openAttachPicker()" data-testid="compose-attach-button">
             <span class="material-symbols-outlined">attach_file</span>
             <span>Attach</span>
           </button>
@@ -131,16 +134,17 @@
         </div>
         <div class="footer-right">
           @if (composeStore.saving()) {
-            <span class="save-status">Saving...</span>
+            <span class="save-status" data-testid="compose-save-status">Saving...</span>
           } @else if (composeStore.lastSavedAt()) {
-            <span class="save-status">Draft saved</span>
+            <span class="save-status" data-testid="compose-save-status">Draft saved</span>
           }
-          <button class="discard-btn" (click)="discard()">
+          <button class="discard-btn" (click)="discard()" data-testid="compose-discard-button">
             <span class="material-symbols-outlined">delete</span>
             <span>Discard</span>
           </button>
           <button
             class="send-btn"
+            data-testid="compose-send-button"
             [disabled]="!composeStore.canSend() || composeStore.sending()"
             (click)="send()"
           >
@@ -156,7 +160,7 @@
       </div>
 
       @if (composeStore.error()) {
-        <div class="compose-error">
+        <div class="compose-error" data-testid="compose-error">
           <span class="material-symbols-outlined">error</span>
           {{ composeStore.error() }}
         </div>

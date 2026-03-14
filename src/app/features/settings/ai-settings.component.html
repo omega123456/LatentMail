@@ -9,7 +9,7 @@
   <!-- Connection Status -->
   <div class="setting-section">
     <h3>Connection</h3>
-    <div class="connection-status" [class.connected]="aiStore.connected()" [class.disconnected]="!aiStore.connected()">
+    <div class="connection-status" data-testid="ai-status-indicator" [class.connected]="aiStore.connected()" [class.disconnected]="!aiStore.connected()">
       <span class="status-dot"></span>
       <span class="status-text">
         {{ aiStore.connected() ? 'Connected' : 'Disconnected' }}
@@ -22,6 +22,7 @@
         <input
           type="text"
           class="url-input"
+          data-testid="ai-url-input"
           [ngModel]="urlInput()"
           (ngModelChange)="urlInput.set($event)"
           placeholder="http://localhost:11434"
@@ -65,7 +66,7 @@
         <p>No models found. Pull a model using <code>ollama pull llama3.2</code></p>
       </div>
     } @else {
-      <div class="model-list">
+      <div class="model-list" data-testid="ai-model-select">
         @for (model of aiStore.availableModels(); track model.name) {
           <div
             class="model-card"
@@ -134,7 +135,7 @@
             </div>
           </div>
         }
-        <div class="model-list">
+        <div class="model-list" data-testid="ai-embedding-model-select">
           @for (model of aiStore.embeddingModels(); track model.name) {
             <div
               class="model-card"
@@ -245,6 +246,7 @@
         <div class="index-actions">
           <button
             class="action-btn"
+            data-testid="ai-build-index-button"
             (click)="checkForNewEmailsToIndex()"
             [disabled]="!aiStore.embeddingModel() || aiStore.indexStatus() === 'building'"
           >

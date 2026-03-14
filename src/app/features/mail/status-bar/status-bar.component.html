@@ -1,4 +1,4 @@
-<div class="status-bar" [class.sync-paused]="syncPaused()">
+<div class="status-bar" [class.sync-paused]="syncPaused()" data-testid="status-bar">
   <div class="status-left">
     @if (syncPaused()) {
       <button
@@ -25,6 +25,7 @@
     }
     <button
       class="status-item sync-status"
+      data-testid="sync-status-indicator"
       [class.syncing]="emailsStore.syncing()"
       [class.paused]="syncPaused()"
       [disabled]="emailsStore.syncing() || syncPaused()"

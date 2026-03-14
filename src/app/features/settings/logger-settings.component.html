@@ -6,7 +6,7 @@
   <div class="select-row">
     <label>Log level:</label>
     <mat-form-field appearance="outline" class="sync-select">
-      <mat-select [value]="settingsStore.logLevel()" (selectionChange)="settingsStore.setLogLevel($event.value)">
+      <mat-select [value]="settingsStore.logLevel()" (selectionChange)="settingsStore.setLogLevel($event.value)" data-testid="log-level-select">
         <mat-option value="debug">Debug</mat-option>
         <mat-option value="info">Info</mat-option>
         <mat-option value="warn">Warning</mat-option>
@@ -54,7 +54,7 @@
     <div class="log-empty">No entries match your search.</div>
   }
   @if (!loading() && filteredLogEntries().length > 0) {
-    <div class="log-list">
+    <div class="log-list" data-testid="logger-entries">
       @for (entry of filteredLogEntries(); track $index) {
         <div class="log-entry" [class]="'level-' + entry.level">
           <span class="log-date">{{ entry.date }}</span>

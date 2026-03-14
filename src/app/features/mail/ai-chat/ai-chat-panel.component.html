@@ -1,5 +1,6 @@
 <div
   class="chat-panel"
+  data-testid="ai-chat-panel"
   [class.panel-open]="uiStore.aiChatPanelOpen()"
   [class.panel-disabled]="chatStore.panelStatus() === 'disabled'"
   [style.width.px]="uiStore.aiChatPanelOpen() ? uiStore.aiChatPanelWidth() : null"
@@ -84,10 +85,14 @@
 
         <!-- Messages -->
         @for (message of chatStore.messages(); track message.id) {
-          <app-chat-message
-            [message]="message"
-            (sourceClicked)="onSourceClicked($event)"
-          />
+          <div [attr.data-testid]="'ai-chat-message-' + $index">
+            <div [attr.data-testid]="'ai-chat-message-content-' + $index">
+              <app-chat-message
+                [message]="message"
+                (sourceClicked)="onSourceClicked($event)"
+              />
+            </div>
+          </div>
         }
       </div>
 
@@ -95,6 +100,7 @@
       <div class="input-area">
         <textarea
           class="chat-input"
+          data-testid="ai-chat-input"
           [(ngModel)]="inputText"
           (keydown)="onKeyDown($event)"
           [disabled]="chatStore.inputDisabled() || chatStore.panelStatus() === 'disabled'"
@@ -106,6 +112,7 @@
           <button
             mat-mini-fab
             class="send-btn"
+            data-testid="ai-chat-send-button"
             (click)="stopStream()"
             aria-label="Stop generating"
             matTooltip="Stop"
@@ -116,6 +123,7 @@
           <button
             matMiniFab
             class="send-btn"
+            data-testid="ai-chat-send-button"
             (click)="sendMessage()"
             [disabled]="!inputText.trim() || chatStore.panelStatus() === 'disabled'"
             aria-label="Send message"

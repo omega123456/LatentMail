@@ -1,4 +1,4 @@
-<div class="ribbon-actions">
+<div class="ribbon-actions" [attr.data-testid]="'action-ribbon-' + ribbonId()">
   @for (action of visibleActions(); track action.id; let i = $index) {
     <!-- Separator between groups -->
     @if (shouldShowSeparator(i)) {
@@ -22,6 +22,7 @@
         [class]="getActionClass(action)"
         [disabled]="true"
         [title]="getTooltip(action)"
+        [attr.data-testid]="'action-' + action.id"
       >
         <span class="material-symbols-outlined">{{ getIcon(action) }}</span>
         <span>{{ getLabel(action) }}</span>
@@ -44,6 +45,7 @@
         [class]="getActionClass(action)"
         [disabled]="true"
         [title]="getTooltip(action)"
+        [attr.data-testid]="'action-' + action.id"
       >
         <span class="material-symbols-outlined">{{ getIcon(action) }}</span>
         <span>{{ getLabel(action) }}</span>
@@ -55,6 +57,7 @@
         [class]="getActionClass(action)"
         [disabled]="!isEnabled(action)"
         [title]="getTooltip(action)"
+        [attr.data-testid]="'action-' + action.id"
         (click)="onActionClick(action)"
       >
         <span

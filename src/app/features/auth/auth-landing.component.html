@@ -7,7 +7,7 @@
     <p class="tagline">Your email, your way.<br>AI-powered. Private.</p>
 
     @if (accountsStore.error(); as error) {
-      <div class="error-banner">
+      <div class="error-banner" data-testid="auth-error-banner">
         <span class="material-symbols-outlined">error</span>
         <span>{{ error }}</span>
         <button class="dismiss-btn" (click)="accountsStore.clearError()">
@@ -19,6 +19,7 @@
     <button
       mat-raised-button
       class="google-signin-btn"
+      data-testid="auth-login-button"
       (click)="onLogin()"
       [disabled]="accountsStore.loginInProgress()"
     >
@@ -45,6 +46,7 @@
       <button
         mat-button
         class="skip-btn"
+        data-testid="auth-skip-button"
         (click)="goToMail()"
       >
         Skip — go to inbox

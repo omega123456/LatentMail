@@ -2,6 +2,7 @@
   <!-- Sidebar -->
   <aside
     class="sidebar"
+    data-testid="sidebar"
     [class.collapsed]="uiStore.sidebarCollapsed()"
     [style.width.px]="uiStore.effectiveSidebarWidth()"
     appResizablePanel
@@ -12,7 +13,7 @@
     <app-account-switcher [collapsed]="uiStore.sidebarCollapsed()" (accountSwitched)="onAccountSwitch($event)" />
 
     <!-- Compose button -->
-    <button class="compose-btn" [class.collapsed]="uiStore.sidebarCollapsed()" (click)="openNewCompose()">
+    <button class="compose-btn" [class.collapsed]="uiStore.sidebarCollapsed()" (click)="openNewCompose()" data-testid="compose-button">
       <span class="material-symbols-outlined">edit</span>
       @if (!uiStore.sidebarCollapsed()) {
         <span>Compose</span>
@@ -25,7 +26,7 @@
       (searchDismissed)="onSearchDismissed()"
     />
     <div class="sidebar-footer">
-      <button class="footer-item" (click)="uiStore.toggleSidebar()">
+      <button class="footer-item" (click)="uiStore.toggleSidebar()" data-testid="sidebar-collapse-button">
         <span class="material-symbols-outlined">
           {{ uiStore.sidebarCollapsed() ? 'chevron_right' : 'chevron_left' }}
         </span>
@@ -33,7 +34,7 @@
           <span>Collapse</span>
         }
       </button>
-      <a class="footer-item" routerLink="/settings">
+      <a class="footer-item" routerLink="/settings" data-testid="settings-link">
         <span class="material-symbols-outlined">settings</span>
         @if (!uiStore.sidebarCollapsed()) {
           <span>Settings</span>
@@ -47,10 +48,10 @@
     <div class="main-content">
       @if (uiStore.isThreeColumn()) {
       <!-- Three-column layout -->
-      <div class="email-list-panel" [style.width.px]="uiStore.emailListWidth()" appResizablePanel [minSize]="240"
+      <div class="email-list-panel" data-testid="email-list-panel" [style.width.px]="uiStore.emailListWidth()" appResizablePanel [minSize]="240"
         [maxSize]="600" (resized)="onEmailListResized($event)">
         @if (accountsStore.accountsNeedingReauth().length > 0) {
-        <div class="reauth-banner">
+        <div class="reauth-banner" data-testid="reauth-banner">
           <span class="material-symbols-outlined">warning</span>
           <span>Some accounts need re-authentication.</span>
           <a routerLink="/settings/accounts">Fix</a>
@@ -61,27 +62,27 @@
         <app-email-list #emailList1 (threadSelected)="onThreadSelected($event)" (threadContextMenu)="onThreadContextMenu($event)" />
       </div>
 
-      <div class="reading-pane-panel">
+      <div class="reading-pane-panel" data-testid="reading-pane-panel">
         <app-reading-pane (actionClicked)="onAction($event)" />
       </div>
       } @else if (uiStore.isBottomPreview()) {
       <!-- Bottom preview layout -->
       <div class="bottom-layout-container">
         @if (accountsStore.accountsNeedingReauth().length > 0) {
-        <div class="reauth-banner">
+        <div class="reauth-banner" data-testid="reauth-banner">
           <span class="material-symbols-outlined">warning</span>
           <span>Some accounts need re-authentication.</span>
           <a routerLink="/settings/accounts">Fix</a>
         </div>
         }
-        <div class="email-list-panel-full">
+        <div class="email-list-panel-full" data-testid="email-list-panel">
           <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
           <app-email-list-header />
           <app-email-list #emailList2 (threadSelected)="onThreadSelected($event)" (threadContextMenu)="onThreadContextMenu($event)" />
         </div>
 
         @if (emailsStore.selectedThread()) {
-        <div class="reading-pane-bottom" [style.height.%]="uiStore.readingPaneHeight()" appResizablePanel direction="vertical"
+        <div class="reading-pane-bottom" data-testid="reading-pane-panel" [style.height.%]="uiStore.readingPaneHeight()" appResizablePanel direction="vertical"
           [minSize]="150" [maxSize]="600" (resized)="onReadingPaneResized($event)">
           <app-reading-pane (actionClicked)="onAction($event)" />
         </div>
@@ -91,13 +92,13 @@
         <!-- List only layout -->
         <div class="bottom-layout-container">
           @if (accountsStore.accountsNeedingReauth().length > 0) {
-          <div class="reauth-banner">
+          <div class="reauth-banner" data-testid="reauth-banner">
             <span class="material-symbols-outlined">warning</span>
             <span>Some accounts need re-authentication.</span>
             <a routerLink="/settings/accounts">Fix</a>
           </div>
           }
-          <div class="email-list-panel-full">
+          <div class="email-list-panel-full" data-testid="email-list-panel">
             <app-search-bar (searchExecuted)="onSearch($event)" (searchCleared)="onSearchCleared()" />
             <app-email-list-header />
             <app-email-list #emailList3 (threadSelected)="onThreadSelected($event)" (threadContextMenu)="onThreadContextMenu($event)" />

@@ -15,6 +15,7 @@
 } @else {
 <div
   class="email-item"
+  [attr.data-testid]="'email-item-' + thread().xGmThrid"
   [class.unread]="!thread().isRead"
   [class.selected]="isSelected()"
   [class.multi-selected]="isMultiSelected()"
@@ -58,18 +59,20 @@
         }
       </div>
       <div class="email-top-right">
-        <span class="email-date">{{ thread().lastMessageDate | relativeTime }}</span>
+        <span class="email-date" data-testid="email-list-timestamp">{{ thread().lastMessageDate | relativeTime }}</span>
         @if (showStarAction()) {
           @if (thread().isStarred) {
             <span
               class="material-symbols-outlined star-icon starred"
               aria-label="Unstar"
+              [attr.data-testid]="'email-star-' + thread().xGmThrid"
               (click)="onStarClick($event)"
             >star</span>
           } @else {
             <span
               class="material-symbols-outlined star-icon"
               aria-label="Star"
+              [attr.data-testid]="'email-star-' + thread().xGmThrid"
               (click)="onStarClick($event)"
             >star_border</span>
           }

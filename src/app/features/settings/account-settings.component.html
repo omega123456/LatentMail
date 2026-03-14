@@ -17,7 +17,7 @@
 
   <div class="accounts-list">
     @for (account of accountsStore.accounts(); track account.id) {
-      <div class="account-card">
+      <div class="account-card" [attr.data-testid]="'account-card-' + account.id">
         <div class="account-avatar" [style.background-image]="account.avatarUrl ? 'url(' + account.avatarUrl + ')' : ''">
           @if (!account.avatarUrl) {
             <span class="avatar-letter">{{ account.email[0].toUpperCase() }}</span>
@@ -35,13 +35,14 @@
         </div>
         <div class="account-actions">
           @if (account.needsReauth) {
-            <button mat-raised-button color="primary" (click)="reauthAccount(account.id)">
+            <button mat-raised-button color="primary" (click)="reauthAccount(account.id)" [attr.data-testid]="'reauth-button-' + account.id">
               Re-authenticate
             </button>
           }
           <button
             mat-button
             color="warn"
+            [attr.data-testid]="'remove-account-button-' + account.id"
             (click)="confirmRemoveAccount(account.id, account.email)"
             [disabled]="accountsStore.loading()"
           >
@@ -55,6 +56,7 @@
   <div class="add-account-section">
     <button
       mat-stroked-button
+      data-testid="add-account-button"
       (click)="addAccount()"
       [disabled]="accountsStore.loginInProgress()"
     >

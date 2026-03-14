@@ -1,5 +1,5 @@
 @if (!collapsed()) {
-  <div class="label-manager">
+  <div class="label-manager" data-testid="labels-section">
 
     <!-- Header row: "LABELS" title + add button -->
     <div class="labels-header">
@@ -7,6 +7,7 @@
       <button
         class="add-label-btn"
         type="button"
+        data-testid="create-label-button"
         title="Add label"
         aria-label="Add label"
         (click)="openAddForm()"
@@ -59,6 +60,7 @@
     @for (label of foldersStore.userLabels(); track label.gmailLabelId) {
       <div
         class="label-item folder-item"
+        [attr.data-testid]="'label-item-' + label.gmailLabelId"
         [class.active]="!foldersStore.searchActive() && label.gmailLabelId === foldersStore.activeFolderId()"
         (click)="onLabelClick(label.gmailLabelId)"
         role="button"

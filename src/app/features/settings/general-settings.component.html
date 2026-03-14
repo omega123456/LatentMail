@@ -2,7 +2,7 @@
 
 <section class="settings-section">
   <h3>Theme</h3>
-  <mat-radio-group [value]="themeService.theme()" (change)="onThemeChange($event.value)">
+  <mat-radio-group [value]="themeService.theme()" (change)="onThemeChange($event.value)" data-testid="setting-theme">
     <mat-radio-button value="light">Light</mat-radio-button>
     <mat-radio-button value="dark">Dark</mat-radio-button>
     <mat-radio-button value="system">System</mat-radio-button>
@@ -11,7 +11,7 @@
 
 <section class="settings-section">
   <h3>Layout</h3>
-  <mat-radio-group [value]="uiStore.layout()" (change)="onLayoutChange($event.value)">
+  <mat-radio-group [value]="uiStore.layout()" (change)="onLayoutChange($event.value)" data-testid="setting-layout">
     <mat-radio-button value="three-column">Three-column</mat-radio-button>
     <mat-radio-button value="bottom-preview">Bottom preview</mat-radio-button>
     <mat-radio-button value="list-only">List only</mat-radio-button>
@@ -20,7 +20,7 @@
 
 <section class="settings-section">
   <h3>Density</h3>
-  <mat-radio-group [value]="uiStore.density()" (change)="onDensityChange($event.value)">
+  <mat-radio-group [value]="uiStore.density()" (change)="onDensityChange($event.value)" data-testid="setting-density">
     <mat-radio-button value="compact">Compact (44px)</mat-radio-button>
     <mat-radio-button value="comfortable">Comfortable (56px)</mat-radio-button>
     <mat-radio-button value="spacious">Spacious (72px)</mat-radio-button>
@@ -77,9 +77,10 @@
     >Sync on startup</mat-slide-toggle>
   </div>
   <div class="toggle-row">
-    <mat-slide-toggle
-      [checked]="settingsStore.desktopNotifications()"
-      (change)="settingsStore.toggleSetting('desktopNotifications')"
+      <mat-slide-toggle
+        data-testid="setting-notifications"
+        [checked]="settingsStore.desktopNotifications()"
+        (change)="settingsStore.toggleSetting('desktopNotifications')"
     >Desktop notifications for new mail</mat-slide-toggle>
   </div>
 </section>
@@ -114,9 +115,10 @@
 <section class="settings-section">
   <h3>Privacy</h3>
   <div class="toggle-row">
-    <mat-slide-toggle
-      [checked]="settingsStore.showAvatars()"
-      (change)="settingsStore.toggleSetting('showAvatars')"
+      <mat-slide-toggle
+        data-testid="setting-avatars"
+        [checked]="settingsStore.showAvatars()"
+        (change)="settingsStore.toggleSetting('showAvatars')"
     >Show sender avatars</mat-slide-toggle>
   </div>
 

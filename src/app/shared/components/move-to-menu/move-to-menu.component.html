@@ -1,9 +1,10 @@
 <div class="move-to-menu">
   <!-- Trigger button (origin for overlay) -->
-  <button
-    #trigger
-    class="move-to-trigger"
-    (click)="toggle(); $event.stopPropagation()"
+    <button
+      #trigger
+      class="move-to-trigger"
+      data-testid="action-move-to"
+      (click)="toggle(); $event.stopPropagation()"
     [attr.aria-haspopup]="true"
     [attr.aria-expanded]="isOpen()"
     title="Move to folder"
@@ -16,6 +17,7 @@
   <ng-template #dropdownPanel>
     <div
       class="move-to-dropdown"
+      data-testid="move-to-menu"
       role="menu"
       aria-label="Move to folder"
       tabindex="-1"
@@ -44,6 +46,7 @@
         @for (folder of filteredSystemFolders(); track folder.gmailLabelId; let i = $index) {
           <button
             class="folder-item"
+            [attr.data-testid]="'move-to-option-' + folder.id"
             role="menuitem"
             [class.focused]="focusedIndex() === i"
             (click)="selectFolder(folder)"

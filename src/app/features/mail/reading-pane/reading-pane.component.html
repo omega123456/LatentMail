@@ -18,12 +18,12 @@
 </mat-menu>
 
 @if (emailsStore.loadingThread()) {
-  <div class="reading-pane-loading">
+  <div class="reading-pane-loading" data-testid="reading-pane-loading">
     <span class="material-symbols-outlined spinning">sync</span>
     <p>Loading thread...</p>
   </div>
 } @else if (emailsStore.selectedThread(); as thread) {
-  <div class="reading-pane-content">
+  <div class="reading-pane-content" data-testid="reading-pane-content">
     <!-- Top-level thread toolbar (standard variant) -->
     <app-email-action-ribbon
       [ribbonId]="'standard'"
@@ -37,7 +37,7 @@
 
     <!-- AI Summary Panel (shown below toolbar when active) -->
     @if (aiStore.summaryText() || aiStore.summaryLoading()) {
-      <div class="ai-summary-panel">
+      <div class="ai-summary-panel" data-testid="ai-summary-panel">
         <div class="ai-panel-header">
           <span class="material-symbols-outlined ai-icon">auto_awesome</span>
           <span class="ai-panel-title">AI Summary</span>
@@ -63,7 +63,7 @@
 
     <!-- AI Reply Suggestions (shown below toolbar/summary when active) -->
     @if (aiStore.replySuggestions().length > 0 || aiStore.replySuggestionsLoading()) {
-      <div class="ai-replies-panel">
+      <div class="ai-replies-panel" data-testid="ai-replies-panel">
         <div class="ai-panel-header">
           <span class="material-symbols-outlined ai-icon">quickreply</span>
           <span class="ai-panel-title">Smart Replies</span>
@@ -92,7 +92,7 @@
 
     <!-- AI Follow-up Detection (shown for sent emails) -->
     @if (aiStore.followUpResult() || aiStore.followUpLoading()) {
-      <div class="ai-followup-panel">
+      <div class="ai-followup-panel" data-testid="ai-followup-panel">
         <div class="ai-panel-header">
           <span class="material-symbols-outlined ai-icon">notifications_active</span>
           <span class="ai-panel-title">Follow-up Check</span>
@@ -129,16 +129,17 @@
 
     <!-- Thread subject -->
     <div class="thread-subject">
-      <h2>{{ thread.subject || '(no subject)' }}</h2>
+      <h2 data-testid="thread-subject">{{ thread.subject || '(no subject)' }}</h2>
     </div>
 
     <!-- Messages -->
     <div class="messages-list">
       @for (message of emailsStore.selectedMessages(); track message.xGmMsgId; let i = $index; let last = $last) {
-        <div class="message-card" [class.collapsed]="!last && !expandedMessages.has(message.xGmMsgId)">
+        <div class="message-card" [attr.data-testid]="'message-card-' + message.xGmMsgId" [class.collapsed]="!last && !expandedMessages.has(message.xGmMsgId)">
           <!-- Message header (always visible) -->
           <div
             class="message-header"
+            [attr.data-testid]="'message-header-' + message.xGmMsgId"
             (click)="toggleExpand(message.xGmMsgId)"
           >
             @if (settingsStore.showAvatars()) {
@@ -176,7 +177,7 @@
                     <span class="material-symbols-outlined attachment-icon" aria-hidden="true">attach_file</span>
                   </span>
                 }
-                <span class="message-date">{{ message.date | relativeTime }}</span>
+                <span class="message-date" data-testid="message-timestamp">{{ message.date | relativeTime }}</span>
               </div>
               <div class="header-bottom">
                 <button
@@ -232,12 +233,12 @@
   </div>
 } @else {
   @if (emailsStore.multiSelectActive()) {
-    <div class="reading-pane-empty">
+      <div class="reading-pane-empty" data-testid="reading-pane-empty">
       <span class="material-symbols-outlined">done_all</span>
       <p>{{ emailsStore.multiSelectCount() }} conversations selected</p>
     </div>
   } @else {
-    <div class="reading-pane-empty">
+    <div class="reading-pane-empty" data-testid="reading-pane-empty">
       <span class="material-symbols-outlined">mail</span>
       <p>Select an email to read</p>
     </div>

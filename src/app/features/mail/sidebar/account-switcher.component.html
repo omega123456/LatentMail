@@ -1,11 +1,11 @@
-<div class="account-switcher" [class.collapsed]="collapsed()">
+<div class="account-switcher" [class.collapsed]="collapsed()" data-testid="account-switcher">
   <button
     class="account-trigger"
     [matMenuTriggerFor]="accountMenu"
     [title]="collapsed() ? (accountsStore.activeAccount()?.email || 'Switch account') : ''"
   >
     @if (accountsStore.activeAccount(); as active) {
-      <div class="avatar" [style.background-image]="active.avatarUrl ? 'url(' + active.avatarUrl + ')' : ''">
+      <div class="avatar" data-testid="account-switcher-avatar" [style.background-image]="active.avatarUrl ? 'url(' + active.avatarUrl + ')' : ''">
         @if (!active.avatarUrl) {
           <span class="avatar-letter">{{ active.email[0].toUpperCase() }}</span>
         }
@@ -30,6 +30,7 @@
       <button
         mat-menu-item
         (click)="switchAccount(account.id)"
+        [attr.data-testid]="'account-item-' + account.id"
         [class.active]="account.id === accountsStore.activeAccountId()"
       >
         <div class="menu-account">

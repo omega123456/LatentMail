@@ -3,6 +3,7 @@
   @if (foldersStore.searchActive()) {
     <div
       class="folder-item search-result-folder active"
+      data-testid="search-result-folder"
       [class.collapsed]="collapsed()"
       [title]="collapsed() ? 'Search: ' + foldersStore.searchDisplayQuery() : ''"
       (click)="onSearchFolderClick()"
@@ -26,6 +27,7 @@
             }
             <button
               class="dismiss-btn"
+              data-testid="search-dismiss-button"
               (click)="onDismissSearch($event)"
               aria-label="Clear search"
               title="Clear search"
@@ -44,6 +46,7 @@
   @for (folder of foldersStore.systemFolders(); track folder.gmailLabelId) {
     <div
       class="folder-item"
+      [attr.data-testid]="'folder-item-' + folder.gmailLabelId"
       [class.active]="!foldersStore.searchActive() && folder.gmailLabelId === foldersStore.activeFolderId()"
       [class.collapsed]="collapsed()"
       [title]="collapsed() ? folder.name : ''"

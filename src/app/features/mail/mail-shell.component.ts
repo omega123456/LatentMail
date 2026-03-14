@@ -1,6 +1,6 @@
 import { Component, inject, OnInit, OnDestroy, AfterViewInit, ChangeDetectorRef, signal, computed, WritableSignal, HostListener, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { AccountSwitcherComponent } from './sidebar/account-switcher.component';
 import { FolderListComponent } from './sidebar/folder-list.component';
@@ -50,6 +50,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly commandRegistry = inject(CommandRegistryService);
   private readonly aiStore = inject(AiStore);
   private readonly chatStore = inject(ChatStore);
+  private readonly router = inject(Router);
   private readonly cdr = inject(ChangeDetectorRef);
   private syncSub?: Subscription;
   private commandSub?: Subscription;
@@ -468,6 +469,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       if (accounts.length === 0) {
         this.lastLoadedAccountId = null;
         this.lastLoadedFolderId = null;
+        void this.router.navigate(['/auth']);
         return;
       }
       this.accountsStore.setActiveAccount(accounts[0].id);

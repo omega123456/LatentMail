@@ -49,13 +49,13 @@
         <!-- Actions -->
         <div class="actions">
           @if (mailFailedCount() > 0) {
-            <button mat-stroked-button color="warn" (click)="retryAll()">
+            <button mat-stroked-button color="warn" (click)="retryAll()" data-testid="queue-retry-all-button">
               <span class="material-symbols-outlined">refresh</span>
               Retry All Failed
             </button>
           }
           @if (mailCompletedCount() > 0) {
-            <button mat-stroked-button (click)="clearCompleted()">
+            <button mat-stroked-button (click)="clearCompleted()" data-testid="queue-clear-completed-button">
               <span class="material-symbols-outlined">clear_all</span>
               Clear Completed
             </button>
@@ -65,9 +65,9 @@
         <!-- Queue list -->
         @if (sortedMailItems().length > 0) {
           <div class="queue-list-container">
-            <div class="queue-list">
+            <div class="queue-list" data-testid="queue-list">
               @for (item of paginatedMailItems(); track item.queueId) {
-                <div class="queue-item" [class]="'status-' + item.status">
+                <div class="queue-item" [attr.data-testid]="'queue-item-' + item.queueId" [class]="'status-' + item.status">
                   <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
                   <div class="item-info">
                     <div class="item-description">{{ item.description }}</div>
@@ -173,7 +173,7 @@
         <!-- Actions -->
         @if (prefetchCompletedCount() + prefetchCancelledCount() + prefetchFailedCount() > 0) {
           <div class="actions">
-            <button mat-stroked-button (click)="clearCompleted()" title="Clears completed and cancelled items from both queues">
+            <button mat-stroked-button (click)="clearCompleted()" title="Clears completed and cancelled items from both queues" data-testid="queue-clear-completed-button">
               <span class="material-symbols-outlined">clear_all</span>
               Clear All Completed
             </button>
@@ -183,9 +183,9 @@
         <!-- Queue list -->
         @if (sortedPrefetchItems().length > 0) {
           <div class="queue-list-container">
-            <div class="queue-list">
+            <div class="queue-list" data-testid="queue-list">
               @for (item of paginatedPrefetchItems(); track item.queueId) {
-                <div class="queue-item" [class]="'status-' + item.status">
+                <div class="queue-item" [attr.data-testid]="'queue-item-' + item.queueId" [class]="'status-' + item.status">
                   <span class="material-symbols-outlined type-icon">{{ typeIcon(item.type) }}</span>
                   <div class="item-info">
                     <div class="item-description">{{ item.description }}</div>

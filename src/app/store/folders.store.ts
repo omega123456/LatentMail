@@ -72,6 +72,14 @@ const SPECIAL_USE_ORDER: Record<string, number> = {
   '\\Trash': 5,
 };
 
+function isRecognizedSystemFolder(folder: Pick<Folder, 'gmailLabelId' | 'specialUse'>): boolean {
+  if (folder.specialUse && SPECIAL_USE_ORDER[folder.specialUse] !== undefined) {
+    return true;
+  }
+
+  return SYSTEM_FOLDER_ORDER[folder.gmailLabelId] !== undefined;
+}
+
 function compareSystemFolders(a: Folder, b: Folder): number {
   const orderA = SYSTEM_FOLDER_ORDER[a.gmailLabelId]
     ?? (a.specialUse ? SPECIAL_USE_ORDER[a.specialUse] : undefined)
@@ -157,21 +165,23 @@ export const FoldersStore = signalStore(
           const response = await electronService.getFolders(String(accountId));
           if (response.success && response.data) {
             const rawFolders = response.data as Array<Record<string, unknown>>;
-            const folders: Folder[] = rawFolders.map(f => {
-              const gmailLabelId = f['gmailLabelId'] as string;
-              const specialUse = (f['specialUse'] as string | null | undefined) ?? null;
-              const icon = (f['icon'] as string | undefined)
+            const folders: Folder[] = rawFolders.map((rawFolder) => {
+              const gmailLabelId = rawFolder['gmailLabelId'] as string;
+              const specialUse = (rawFolder['specialUse'] as string | null | undefined) ?? null;
+              const isSystemFolder = isRecognizedSystemFolder({ gmailLabelId, specialUse });
+              const icon = (rawFolder['icon'] as string | undefined)
                 || FOLDER_ICON_MAP[gmailLabelId]
                 || (specialUse ? SPECIAL_USE_ICON_MAP[specialUse] : undefined);
+
               return {
-                id: f['id'] as number,
-                accountId: f['accountId'] as number,
+                id: rawFolder['id'] as number,
+                accountId: rawFolder['accountId'] as number,
                 gmailLabelId,
-                name: f['name'] as string,
-                type: f['type'] as 'system' | 'user',
-                color: f['color'] as string | undefined,
-                unreadCount: f['unreadCount'] as number,
-                totalCount: f['totalCount'] as number,
+                name: rawFolder['name'] as string,
+                type: isSystemFolder ? 'system' : 'user',
+                color: rawFolder['color'] as string | undefined,
+                unreadCount: rawFolder['unreadCount'] as number,
+                totalCount: rawFolder['totalCount'] as number,
                 icon,
                 specialUse,
               };

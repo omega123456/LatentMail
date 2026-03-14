@@ -11,9 +11,12 @@
 
 import { ipcHandlerMap, hiddenWindow, imapStateInspector, smtpServer, oauthServer } from '../test-main';
 import { DatabaseService } from '../../../electron/services/database-service';
-import { CredentialService } from '../../../electron/services/credential-service';
 import { TestEventBus } from './test-event-bus';
-import { DateTime } from 'luxon';
+import {
+  seedTestAccount as seedSharedTestAccount,
+  type SeedAccountOptions,
+  type SeededAccount,
+} from '../../shared/account-seeding';
 
 /**
  * Invoke an IPC handler directly, bypassing the Electron wire protocol.
@@ -178,37 +181,6 @@ export async function waitForNextFolderUpdated(
 }
 
 /**
- * Options for seedTestAccount().
- */
-export interface SeedAccountOptions {
-  /** Gmail address for the test account. Defaults to 'test@example.com'. */
-  email?: string;
-  /** Display name. Defaults to 'Test User'. */
-  displayName?: string;
-  /** Access token to store in credentials. Defaults to 'fake-access-token-12345'. */
-  accessToken?: string;
-  /** Refresh token to store in credentials. Defaults to 'fake-refresh-token-67890'. */
-  refreshToken?: string;
-  /**
-   * Token expiry timestamp (ms since epoch).
-   * Defaults to 1 hour from now so the token is considered valid for the test duration.
-   */
-  expiresAt?: number;
-}
-
-/**
- * Result from seedTestAccount().
- */
-export interface SeededAccount {
-  /** Numeric account ID as assigned by DatabaseService.createAccount() */
-  accountId: number;
-  /** The email address used when creating the account */
-  email: string;
-  /** The access token stored in CredentialService */
-  accessToken: string;
-}
-
-/**
  * Seed a test account by:
  *   1. Creating a DB row via DatabaseService
  *   2. Storing fake credentials via CredentialService (so getAccessToken() succeeds)
@@ -223,78 +195,7 @@ export interface SeededAccount {
  * @returns The numeric accountId and the email/accessToken used
  */
 export function seedTestAccount(options: SeedAccountOptions = {}): SeededAccount {
-  const email = options.email ?? 'test@example.com';
-  const displayName = options.displayName ?? 'Test User';
-  const accessToken = options.accessToken ?? 'fake-access-token-12345';
-  const refreshToken = options.refreshToken ?? 'fake-refresh-token-67890';
-  // Default: expires 1 hour from now (well within test run window)
-  const expiresAt = options.expiresAt ?? DateTime.now().plus({ hours: 1 }).toMillis();
-
-  // 1. Create the DB row
-  const db = DatabaseService.getInstance();
-  const accountId = db.createAccount(email, displayName, null);
-
-  // 2. Store fake credentials so OAuthService.getAccessToken() returns immediately
-  const credentialService = CredentialService.getInstance();
-  credentialService.storeTokens(String(accountId), accessToken, refreshToken, expiresAt);
-
-  // 3. Configure the fake IMAP server to accept this email address
-  // addAllowedAccount() adds to the existing set without clearing it,
-  // so multiple seedTestAccount() calls accumulate allowed emails correctly.
-  imapStateInspector.getServer().addAllowedAccount(email);
-
-  // 4. Configure the fake SMTP server to accept this email address
-  smtpServer.addAllowedAccount(email);
-
-  // 5. Configure the fake OAuth server: token config and user info
-  oauthServer.setTokenConfig({ accessToken, refreshToken });
-  oauthServer.setUserInfo({ email, name: displayName });
-
-  // 6. Lift MailQueueService and SyncQueueBridge test suspensions.
-  //    quiesceAndRestore() sets both services to "suspended" at its start to block
-  //    any in-flight async callers from the previous suite (e.g. a background sync
-  //    tick triggered by sync:resume). By the time seedTestAccount() is called the DB
-  //    has been restored, credentials cleared and re-added, and mock servers reset —
-  //    so it is safe to lift the suspensions now. Any legitimate IPC call
-  //    (callIpc('mail:sync-account'), triggerSyncAndWait(), etc.) made after this
-  //    point will reach the queue normally.
-  try {
-    const { MailQueueService } = require('../../../electron/services/mail-queue-service') as typeof import('../../../electron/services/mail-queue-service');
-    MailQueueService.getInstance().resumeFromTesting();
-  } catch {
-    // Non-fatal — service may not be available in all environments
-  }
-  try {
-    const { SyncQueueBridge } = require('../../../electron/services/sync-queue-bridge') as typeof import('../../../electron/services/sync-queue-bridge');
-    SyncQueueBridge.getInstance().resumeForTesting();
-  } catch {
-    // Non-fatal
-  }
-  // 6b. Lift SyncService global IDLE suppression.
-  //     quiesceAndRestore() → resetIdleStateForTesting() sets globalIdleSuppression=true
-  //     to prevent the onClose callbacks fired by IMAP teardown from scheduling new
-  //     reconnect timers for the dying previous-suite connections.  Now that the new
-  //     suite is fully set up, clear the flag so that any IDLE connections started by
-  //     this suite can auto-reconnect normally if the connection drops mid-test.
-  try {
-    const { SyncService } = require('../../../electron/services/sync-service') as typeof import('../../../electron/services/sync-service');
-    SyncService.getInstance().setGlobalIdleSuppression(false);
-  } catch {
-    // Non-fatal
-  }
-  // 7. Lift BodyFetchQueueService isPaused flag so body-fetch workers can run again.
-  //    quiesceAndRestore() calls BodyFetchQueueService.resetForTesting() which sets
-  //    isPaused=true (to make any surviving in-flight worker fail fast).  Now that
-  //    the DB is restored and credentials are ready, clear the flag so the new
-  //    suite's syncs can enqueue body fetches normally.
-  try {
-    const { BodyFetchQueueService } = require('../../../electron/services/body-fetch-queue-service') as typeof import('../../../electron/services/body-fetch-queue-service');
-    BodyFetchQueueService.getInstance().resumeFromTesting();
-  } catch {
-    // Non-fatal
-  }
-
-  return { accountId, email, accessToken };
+  return seedSharedTestAccount(options, { imapStateInspector, smtpServer, oauthServer });
 }
 
 /**

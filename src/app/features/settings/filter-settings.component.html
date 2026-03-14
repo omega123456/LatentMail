@@ -60,7 +60,7 @@
         }
         Run Filters Now
       </button>
-      <button class="add-filter-btn" (click)="openNewFilter()">
+      <button class="add-filter-btn" (click)="openNewFilter()" data-testid="add-filter-button">
         <span class="material-symbols-outlined">add</span>
         New Filter
       </button>
@@ -85,9 +85,9 @@
       <p class="hint">Create a filter to automatically organize your emails</p>
     </div>
   } @else {
-    <div class="filter-list">
+    <div class="filter-list" data-testid="filter-list">
       @for (filter of filters(); track filter.id) {
-        <div class="filter-card" [class.disabled]="!filter.isEnabled">
+        <div class="filter-card" [attr.data-testid]="'filter-item-' + filter.id" [class.disabled]="!filter.isEnabled">
           <div class="filter-header">
             <div class="filter-info">
               <span class="filter-name">{{ filter.name }}</span>

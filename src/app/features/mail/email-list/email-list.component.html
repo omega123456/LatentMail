@@ -1,11 +1,11 @@
-<div class="email-list-container">
+<div class="email-list-container" data-testid="email-list-container">
   @if (emailsStore.loading() && emailsStore.threads().length === 0) {
-    <div class="email-list-loading">
+    <div class="email-list-loading" data-testid="email-list-loading">
       <span class="material-symbols-outlined spinning">sync</span>
       <p>Loading emails...</p>
     </div>
   } @else if (emailsStore.isEmpty() && aiStore.searchStreamStatus() !== 'searching') {
-    <div class="email-list-empty">
+    <div class="email-list-empty" data-testid="email-list-empty">
       <span class="material-symbols-outlined">inbox</span>
       <p>No emails yet</p>
       <p class="hint">Emails will appear here after syncing</p>
@@ -41,6 +41,7 @@
       [itemSize]="uiStore.densityHeight()"
       [class.viewport-overlay-visible]="emailsStore.anyLoadingMore() || !!emailsStore.fetchError()"
       class="email-scroll-viewport"
+      data-testid="email-scroll-viewport"
     >
       <app-email-list-item
         *cdkVirtualFor="let thread of filteredThreads(); trackBy: trackByThreadId"
@@ -58,7 +59,7 @@
       />
       <!-- End-of-list inline indicator: only shown when all emails are loaded -->
       @if (!emailsStore.hasMore() && !emailsStore.isEmpty()) {
-        <div class="list-bottom-indicator end" role="status" aria-live="polite">
+        <div class="list-bottom-indicator end" role="status" aria-live="polite" data-testid="email-list-end">
           <span class="material-symbols-outlined end-icon">check_circle</span>
           <span class="end-text">You've reached the end</span>
         </div>
@@ -69,7 +70,7 @@
          Rendered outside the viewport so it does not scroll with content.
          pointer-events: none on the container; interactive children restore auto. -->
     @if (emailsStore.anyLoadingMore() || emailsStore.fetchError()) {
-      <div class="load-more-overlay">
+      <div class="load-more-overlay" data-testid="load-more-overlay">
         @if (emailsStore.anyLoadingMore()) {
           <div class="overlay-content" role="status" aria-live="polite">
             <span class="ellipsis-animated" aria-hidden="true">
@@ -81,7 +82,7 @@
           <div class="overlay-content" role="alert" aria-live="assertive">
             <span class="material-symbols-outlined overlay-error-icon">error_outline</span>
             <span class="overlay-text overlay-error-text">{{ emailsStore.fetchError() }}</span>
-            <button class="retry-btn" (click)="onRetryFetch()">Retry</button>
+            <button class="retry-btn" (click)="onRetryFetch()" data-testid="retry-fetch-button">Retry</button>
           </div>
         }
       </div>

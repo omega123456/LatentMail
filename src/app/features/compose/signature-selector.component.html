@@ -1,4 +1,4 @@
-<div class="signature-selector" (click)="toggleDropdown()">
+<div class="signature-selector" data-testid="signature-selector" (click)="toggleDropdown()">
   <span class="material-symbols-outlined">draw</span>
   <span>{{ composeStore.activeSignature()?.name || 'Signature' }}</span>
   <span class="material-symbols-outlined arrow">expand_more</span>
@@ -11,8 +11,8 @@
           <span class="material-symbols-outlined check">check</span>
         }
       </button>
-      @for (sig of composeStore.signatures(); track sig.id) {
-        <button class="dropdown-item" (click)="selectSignature(sig)">
+      @for (sig of composeStore.signatures(); track sig.id; let index = $index) {
+        <button class="dropdown-item" [attr.data-testid]="'signature-item-' + index" (click)="selectSignature(sig)">
           <span>{{ sig.name }}</span>
           @if (composeStore.activeSignatureId() === sig.id) {
             <span class="material-symbols-outlined check">check</span>

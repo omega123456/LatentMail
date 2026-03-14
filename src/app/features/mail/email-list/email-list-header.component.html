@@ -1,17 +1,17 @@
-<div class="email-list-header">
+<div class="email-list-header" data-testid="email-list-header">
   <div class="header-left">
     <span class="folder-name">{{ foldersStore.activeFolder()?.name || 'Inbox' }}</span>
   </div>
   <div class="header-actions">
     <!-- Density toggle -->
-    <button class="header-btn" (click)="cycleDensity()" title="Change density">
+    <button class="header-btn" (click)="cycleDensity()" title="Change density" data-testid="density-toggle">
       <span class="material-symbols-outlined">
         {{ densityIcon() }}
       </span>
     </button>
 
     <!-- Layout toggle -->
-    <button class="header-btn" (click)="cycleLayout()" title="Change layout">
+    <button class="header-btn" (click)="cycleLayout()" title="Change layout" data-testid="layout-toggle">
       <span class="material-symbols-outlined">
         {{ layoutIcon() }}
       </span>

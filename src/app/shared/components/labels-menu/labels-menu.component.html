@@ -1,9 +1,10 @@
 <div class="labels-menu">
   <!-- Trigger button -->
-  <button
-    #trigger
-    class="labels-trigger"
-    (click)="toggle(); $event.stopPropagation()"
+    <button
+      #trigger
+      class="labels-trigger"
+      data-testid="action-labels"
+      (click)="toggle(); $event.stopPropagation()"
     [attr.aria-haspopup]="true"
     [attr.aria-expanded]="isOpen()"
     title="Assign labels"
@@ -16,6 +17,7 @@
   <ng-template #dropdownPanel>
     <div
       class="labels-dropdown"
+      data-testid="labels-menu"
       role="menu"
       aria-label="Assign labels"
       tabindex="-1"
@@ -53,6 +55,7 @@
           @for (label of filteredLabels(); track label.gmailLabelId; let i = $index) {
             <button
               class="label-item"
+              [attr.data-testid]="'labels-menu-option-' + label.id"
               type="button"
               role="menuitem"
               [class.focused]="focusedIndex() === i"

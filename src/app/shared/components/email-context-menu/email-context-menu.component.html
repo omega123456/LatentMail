@@ -13,12 +13,13 @@
 
   <!-- ── Main context menu ──────────────────────────────────────────────── -->
   <mat-menu #contextMenu="matMenu" panelClass="email-context-menu-panel">
+    <div data-testid="context-menu">
 
     <!-- Section 0: Draft ────────────────────────────────────────────────── -->
     @if (isActionVisible('edit-draft')) {
       @let editDraftAction = getAction('edit-draft');
       @if (editDraftAction) {
-        <button mat-menu-item type="button" (click)="onActionClick('edit-draft')" (mouseenter)="onItemMouseEnter($event)">
+        <button mat-menu-item type="button" data-testid="context-action-edit-draft" (click)="onActionClick('edit-draft')" (mouseenter)="onItemMouseEnter($event)">
           <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(editDraftAction) }}</span>
           <span>{{ getActionLabel(editDraftAction) }}</span>
         </button>
@@ -33,7 +34,7 @@
     @for (actionId of ['reply', 'reply-all', 'forward']; track actionId) {
       @let composeAction = getAction(actionId);
       @if (composeAction && isActionVisible(actionId)) {
-        <button mat-menu-item type="button" (click)="onActionClick(actionId)" (mouseenter)="onItemMouseEnter($event)">
+        <button mat-menu-item type="button" [attr.data-testid]="'context-action-' + actionId" (click)="onActionClick(actionId)" (mouseenter)="onItemMouseEnter($event)">
           <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(composeAction) }}</span>
           <span>{{ getActionLabel(composeAction) }}</span>
         </button>
@@ -48,7 +49,7 @@
     <!-- MatMenu appends a right-facing chevron automatically for nested triggers. -->
     @let moveToAction = getAction('move-to');
     @if (moveToAction) {
-      <button mat-menu-item type="button" [matMenuTriggerFor]="moveToMenu" (mouseenter)="onItemMouseEnter($event)">
+      <button mat-menu-item type="button" data-testid="context-action-move-to" [matMenuTriggerFor]="moveToMenu" (mouseenter)="onItemMouseEnter($event)">
         <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(moveToAction) }}</span>
         <span>{{ getActionLabel(moveToAction) }}</span>
       </button>
@@ -56,7 +57,7 @@
 
     @let labelsAction = getAction('labels');
     @if (labelsAction) {
-      <button mat-menu-item type="button" [matMenuTriggerFor]="labelsMenu" (mouseenter)="onItemMouseEnter($event)">
+      <button mat-menu-item type="button" data-testid="context-action-labels" [matMenuTriggerFor]="labelsMenu" (mouseenter)="onItemMouseEnter($event)">
         <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(labelsAction) }}</span>
         <span>{{ getActionLabel(labelsAction) }}</span>
       </button>
@@ -65,7 +66,7 @@
     @if (isActionVisible('mark-spam')) {
       @let markSpamAction = getAction('mark-spam');
       @if (markSpamAction) {
-        <button mat-menu-item type="button" (click)="onActionClick('mark-spam')" (mouseenter)="onItemMouseEnter($event)">
+          <button mat-menu-item type="button" data-testid="context-action-mark-spam" (click)="onActionClick('mark-spam')" (mouseenter)="onItemMouseEnter($event)">
           <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(markSpamAction) }}</span>
           <span>{{ getActionLabel(markSpamAction) }}</span>
         </button>
@@ -75,7 +76,7 @@
     @if (isActionVisible('mark-not-spam')) {
       @let markNotSpamAction = getAction('mark-not-spam');
       @if (markNotSpamAction) {
-        <button mat-menu-item type="button" (click)="onActionClick('mark-not-spam')" (mouseenter)="onItemMouseEnter($event)">
+          <button mat-menu-item type="button" data-testid="context-action-mark-not-spam" (click)="onActionClick('mark-not-spam')" (mouseenter)="onItemMouseEnter($event)">
           <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(markNotSpamAction) }}</span>
           <span>{{ getActionLabel(markNotSpamAction) }}</span>
         </button>
@@ -90,7 +91,7 @@
     @for (actionId of ['star', 'mark-read-unread']; track actionId) {
       @let stateAction = getAction(actionId);
       @if (stateAction && isActionVisible(actionId)) {
-        <button mat-menu-item type="button" (click)="onActionClick(actionId)" (mouseenter)="onItemMouseEnter($event)">
+        <button mat-menu-item type="button" [attr.data-testid]="'context-action-' + actionId" (click)="onActionClick(actionId)" (mouseenter)="onItemMouseEnter($event)">
           <span class="material-symbols-outlined context-menu-icon" [class.starred]="actionId === 'star' && actionContext()?.isStarred">{{ getActionIcon(stateAction) }}</span>
           <span>{{ actionId === 'star' ? 'Star' : getActionLabel(stateAction) }}</span>
         </button>
@@ -105,13 +106,14 @@
     @if (isActionVisible('delete')) {
       @let deleteAction = getAction('delete');
       @if (deleteAction) {
-        <button mat-menu-item type="button" class="context-menu-item--danger" (click)="onActionClick('delete')" (mouseenter)="onItemMouseEnter($event)">
+        <button mat-menu-item type="button" class="context-menu-item--danger" data-testid="context-action-delete" (click)="onActionClick('delete')" (mouseenter)="onItemMouseEnter($event)">
           <span class="material-symbols-outlined context-menu-icon">{{ getActionIcon(deleteAction) }}</span>
           <span>{{ getActionLabel(deleteAction) }}</span>
         </button>
       }
     }
 
+    </div>
   </mat-menu>
 
   <!-- ── Move To submenu ───────────────────────────────────────────────── -->

@@ -4,9 +4,9 @@
   (dragover)="handleDragOver($event)"
 >
   @if (attachments().length > 0) {
-    <div class="attachment-bar">
+    <div class="attachment-bar" data-testid="attachment-list">
       @for (att of attachments(); track att.id ?? att.filename; let i = $index) {
-        <div class="attachment-chip" [class.has-preview]="isImageMime(att.mimeType) && getPreview(att)">
+        <div class="attachment-chip" [attr.data-testid]="'attachment-item-' + i" [class.has-preview]="isImageMime(att.mimeType) && getPreview(att)">
           <!-- Image thumbnail or generic icon -->
           @if (isImageMime(att.mimeType) && getPreview(att); as previewUrl) {
             <img class="att-thumbnail" [src]="previewUrl" [alt]="att.filename" />

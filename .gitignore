@@ -12,6 +12,7 @@ dist-test
 npm-debug.log
 yarn-error.log
 opencode.json
+test-results
 
 # IDEs and editors
 .idea/

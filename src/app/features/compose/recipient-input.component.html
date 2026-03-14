@@ -1,4 +1,4 @@
-<div class="recipient-row">
+<div class="recipient-row" [attr.data-testid]="'recipient-input-' + label().toLowerCase()">
   <label class="recipient-label">{{ label() }}</label>
   <div class="chips-input" (click)="focusInput()">
     @for (chip of chips(); track chip; let i = $index) {
@@ -12,6 +12,7 @@
     <input
       #inputEl
       class="chip-text-input"
+      [attr.data-testid]="'recipient-input-field-' + label().toLowerCase()"
       [placeholder]="chips().length === 0 ? placeholder() : ''"
       [(ngModel)]="inputValue"
       (input)="onInput()"
