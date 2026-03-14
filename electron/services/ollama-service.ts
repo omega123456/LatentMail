@@ -187,6 +187,7 @@ export class OllamaService {
     } catch (err) {
       log.warn('Failed to save Ollama model to DB:', err);
     }
+    this.broadcastStatus();
   }
 
   /** Get the currently selected model, or empty string if none */
@@ -208,6 +209,15 @@ export class OllamaService {
     } catch (err) {
       log.warn('Failed to save Ollama embedding model to DB:', err);
     }
+  }
+
+  /** Reset in-memory model state for isolated test harness runs. */
+  resetForTesting(): void {
+    this.baseUrl = process.env['OLLAMA_URL'] || 'http://localhost:11434';
+    this.currentModel = '';
+    this.currentEmbeddingModel = '';
+    this.connected = false;
+    this.broadcastStatus();
   }
 
   /**

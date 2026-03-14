@@ -4,6 +4,7 @@ import { test, expect } from '../infrastructure/electron-fixture';
 import {
   configureOllama,
   discardComposeIfOpen,
+  ensureOllamaModelSelected,
   extractSeededAccount,
   injectInboxMessage,
   navigateToSettings,
@@ -36,16 +37,6 @@ async function openAiSettings(page: import('@playwright/test').Page): Promise<vo
 async function returnToMail(page: import('@playwright/test').Page): Promise<void> {
   await returnToMailShell(page);
   await waitForMailShell(page);
-}
-
-async function ensureOllamaModelSelected(page: import('@playwright/test').Page): Promise<void> {
-  const modelSelect = page.getByTestId('ai-model-select');
-
-  await expect(page.getByTestId('ai-status-indicator')).toContainText('Connected', { timeout: 10_000 });
-  await expect(modelSelect).toBeVisible({ timeout: 10_000 });
-
-  await modelSelect.getByText('llama3', { exact: true }).click();
-  await expect(modelSelect.locator('.model-card.selected')).toContainText('llama3');
 }
 
 async function ensureSelectedThread(page: import('@playwright/test').Page, threadId: string): Promise<void> {

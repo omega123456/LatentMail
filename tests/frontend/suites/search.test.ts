@@ -2,6 +2,7 @@ import { DateTime } from 'luxon';
 
 import { test, expect } from '../infrastructure/electron-fixture';
 import {
+  configureOllama,
   extractSeededAccount,
   injectInboxMessage,
   triggerSync,
@@ -21,6 +22,19 @@ test.describe('Search', () => {
   let searchableSubject: string;
   let nonMatchingSubject: string;
   let searchKeyword: string;
+
+  async function reloadWindowWithFreshState(
+    electronApp: import('playwright').ElectronApplication,
+    page: import('@playwright/test').Page,
+  ): Promise<void> {
+    await Promise.all([
+      page.waitForEvent('load', { timeout: 60_000 }),
+      electronApp.evaluate(() => {
+        const testGlobal = globalThis as import('../infrastructure/test-hooks-types').TestHookGlobal;
+        return testGlobal.testHooks?.reloadWindow() ?? { success: false };
+      }),
+    ]);
+  }
 
   test.beforeAll(async ({ resetApp, electronApp, page }) => {
     const result = await resetApp({ seedAccount: true });
@@ -88,18 +102,21 @@ test.describe('Search', () => {
     await expect(page.getByTestId('email-list-header')).toContainText('Inbox');
   });
 
-  test('search mode toggle buttons are visible', async ({ page }) => {
+  test('search mode toggle buttons are visible', async ({ electronApp, page }) => {
+    await configureOllama(electronApp, {
+      models: ['llama3', 'nomic-embed-text:latest'],
+      selectedModel: 'llama3',
+      healthy: true,
+      enableAiChat: true,
+    });
+
+    await reloadWindowWithFreshState(electronApp, page);
+    await waitForMailShell(page);
+
     const keywordModeButton = page.getByTestId('search-mode-keyword');
     const semanticModeButton = page.getByTestId('search-mode-semantic');
-    const hasKeywordModeToggle = await keywordModeButton.isVisible().catch(() => false);
-    const hasSemanticModeToggle = await semanticModeButton.isVisible().catch(() => false);
 
-    test.skip(
-      !hasKeywordModeToggle || !hasSemanticModeToggle,
-      'Search mode toggles render only when Ollama is available and the embedding index is complete.',
-    );
-
-    await expect(keywordModeButton).toBeVisible();
-    await expect(semanticModeButton).toBeVisible();
+    await expect(keywordModeButton).toBeVisible({ timeout: 10_000 });
+    await expect(semanticModeButton).toBeVisible({ timeout: 10_000 });
   });
 });

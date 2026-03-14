@@ -154,6 +154,11 @@ function validateConfigureOllamaPayload(payload: unknown): ConfigureOllamaPayloa
     }
   }
 
+  const selectedModel = payload['selectedModel'];
+  if (selectedModel !== undefined && typeof selectedModel !== 'string') {
+    throw new Error('configureOllama payload.selectedModel must be a string when provided.');
+  }
+
   const responses = payload['responses'];
   if (responses !== undefined) {
     if (!isRecord(responses)) {
@@ -177,6 +182,7 @@ function validateConfigureOllamaPayload(payload: unknown): ConfigureOllamaPayloa
 
   return {
     models: models as string[] | undefined,
+    selectedModel: selectedModel as string | undefined,
     responses: responses as Record<string, string> | undefined,
     healthy: payload['healthy'] as boolean | undefined,
     enableAiChat: payload['enableAiChat'] as boolean | undefined,
@@ -644,12 +650,14 @@ function registerTestHooks(): void {
     resetDb: async (options?: ResetDbOptions): Promise<ResetDbResult> => {
       const validatedOptions = validateResetDbOptions(options);
       const bootstrapResult = ensureBootstrap();
+      const { OllamaService } = require('../../electron/services/ollama-service') as typeof import('../../electron/services/ollama-service');
 
       await quiesceAndRestore();
       bootstrapResult.imapStateInspector.reset();
       bootstrapResult.smtpServer.reset();
       bootstrapResult.oauthServer.reset();
       bootstrapResult.ollamaServer.reset();
+      OllamaService.getInstance().resetForTesting();
 
       if (validatedOptions.seedAccount !== false) {
         const seededAccount = seedDefaultTestAccount(bootstrapResult);
@@ -744,6 +752,11 @@ function registerTestHooks(): void {
             digest: `sha256:frontend-test-${index}`,
           };
         }));
+      }
+
+      if (validatedConfig.selectedModel !== undefined) {
+        const { OllamaService } = require('../../electron/services/ollama-service') as typeof import('../../electron/services/ollama-service');
+        OllamaService.getInstance().setModel(validatedConfig.selectedModel);
       }
 
       configureFakeOllamaResponses(validatedConfig);

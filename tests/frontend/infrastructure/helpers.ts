@@ -318,6 +318,21 @@ export async function navigateToSettings(page: Page, section: SettingsSection = 
   await expect(page.getByTestId('settings-content')).toBeVisible();
 }
 
+export async function ensureOllamaModelSelected(page: Page, modelName = 'llama3'): Promise<void> {
+  const modelSelect = page.getByTestId('ai-model-select');
+
+  await expect(page.getByTestId('ai-status-indicator')).toContainText('Connected', { timeout: 10_000 });
+  await expect(modelSelect).toBeVisible({ timeout: 10_000 });
+
+  await modelSelect.getByText(modelName, { exact: true }).click();
+  await expect(modelSelect.locator('.model-card.selected')).toContainText(modelName);
+}
+
+export async function waitForSemanticSearchReady(page: Page): Promise<void> {
+  await expect(page.getByTestId('ai-status-indicator')).toContainText('Connected', { timeout: 10_000 });
+  await expect(page.getByTestId('ai-index-status')).toContainText('Complete', { timeout: 10_000 });
+}
+
 export async function returnToMailShell(page: Page): Promise<void> {
   const backLink = page.getByTestId('settings-back-link');
 

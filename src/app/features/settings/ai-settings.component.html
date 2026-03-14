@@ -164,6 +164,7 @@
       <!-- Status row -->
       <div
         class="index-status"
+        data-testid="ai-index-status"
         [class.status-building]="aiStore.indexStatus() === 'building'"
         [class.status-complete]="aiStore.indexStatus() === 'complete'"
         [class.status-unavailable]="aiStore.indexStatus() === 'unavailable'"

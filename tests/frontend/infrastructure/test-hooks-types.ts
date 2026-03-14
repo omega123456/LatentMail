@@ -26,6 +26,7 @@ export interface TriggerSyncPayload {
 
 export interface ConfigureOllamaPayload {
   models?: string[];
+  selectedModel?: string;
   responses?: Record<string, string>;
   healthy?: boolean;
   enableAiChat?: boolean;
