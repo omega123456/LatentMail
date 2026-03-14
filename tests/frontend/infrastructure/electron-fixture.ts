@@ -1,6 +1,7 @@
-import * as fs from 'fs';
+import fs from 'node:fs';
+import path from 'node:path';
 import * as os from 'os';
-import * as path from 'path';
+
 
 import { expect, test as base, type Page, type TestType, type WorkerInfo } from '@playwright/test';
 import { _electron as electron, type ElectronApplication } from 'playwright';
@@ -72,11 +73,55 @@ const workerFixtures = {
           },
         });
 
+      const coverageDir = (process.env.PLAYWRIGHT_COVERAGE_DIR ?? '').trim() || null;
+      let coveragePage: Page | undefined;
+      let coverageStarted = false;
+
+      function warnCoverageError(phase: string, err: unknown): void {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[electron-fixture] Coverage ${phase} failed: ${msg}`);
+      }
+
+      if (coverageDir !== null) {
+        try {
+          coveragePage = await electronApp.firstWindow();
+
+          if (coveragePage.coverage === undefined) {
+            console.warn('Playwright page.coverage is unavailable; skipping frontend coverage collection.');
+          } else {
+            await coveragePage.coverage.startJSCoverage({ resetOnNavigation: false });
+            coverageStarted = true;
+          }
+        } catch (error) {
+          warnCoverageError('start', error);
+        }
+      }
+
         await use(electronApp);
       } finally {
         try {
           if (electronApp !== null) {
-            await electronApp.close();
+      
+      if (coverageStarted && coveragePage !== undefined && coverageDir !== null) {
+        try {
+          const entries = await coveragePage.coverage.stopJSCoverage();
+          const filteredEntries = entries.filter((entry) => entry.url.startsWith('file://'));
+          const coverageFilePath = path.join(
+            coverageDir,
+            `coverage-${process.pid}-${Date.now()}.json`,
+          );
+
+          fs.writeFileSync(
+            coverageFilePath,
+            JSON.stringify({ result: filteredEntries }),
+            'utf8',
+          );
+        } catch (error) {
+          warnCoverageError('stop', error);
+        }
+      }
+
+      await electronApp.close();
           }
         } finally {
           cleanupTempDir(workerTempDir);
