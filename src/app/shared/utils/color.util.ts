@@ -1,5 +1,5 @@
 /** HSV color representation (hue: 0–360, saturation: 0–1, value/brightness: 0–1). */
-export interface HsvColor {
+interface HsvColor {
   hue: number;
   saturation: number;
   value: number;

@@ -35,7 +35,7 @@ export interface Command {
   context?: KeyboardShortcut['context'];
 }
 
-export interface ConflictResult {
+interface ConflictResult {
   hasConflict: boolean;
   conflictingCommandId?: string;
 }

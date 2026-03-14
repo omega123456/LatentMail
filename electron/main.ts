@@ -470,5 +470,3 @@ app.on('activate', () => {
     createMainWindow();
   }
 });
-
-export { mainWindow };

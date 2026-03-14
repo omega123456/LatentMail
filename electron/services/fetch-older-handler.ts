@@ -7,7 +7,7 @@ import { formatParticipantList } from '../utils/format-participant';
 
 const log = LoggerService.getInstance();
 
-export interface FetchOlderResult {
+interface FetchOlderResult {
   threads: Array<Record<string, unknown>>;
   hasMore: boolean;
   nextBeforeDate: string | null;

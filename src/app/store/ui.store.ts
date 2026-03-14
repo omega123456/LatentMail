@@ -2,7 +2,7 @@ import { computed } from '@angular/core';
 import { signalStore, withState, withComputed, withMethods, patchState } from '@ngrx/signals';
 import { LayoutMode, DensityMode } from '../core/services/layout.service';
 
-export interface UiState {
+interface UiState {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   emailListWidth: number;

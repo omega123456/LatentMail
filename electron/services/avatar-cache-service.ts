@@ -154,17 +154,3 @@ export function clearAvatarCacheForAccount(accountId: number): void {
   }
 }
 
-export function getContentTypeFromAvatarUrl(urlString: string): string {
-  try {
-    const parsed = new URL(urlString);
-    const filename = parsed.hostname || parsed.pathname.replace(/^\//, '');
-    const extension = path.extname(filename);
-    if (!extension) {
-      return 'image/jpeg';
-    }
-    return getContentTypeForExtension(extension);
-  } catch {
-    return 'image/jpeg';
-  }
-}
-

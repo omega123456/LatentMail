@@ -17,12 +17,12 @@
 
 import { DateTime } from 'luxon';
 
-export interface ParsedQuery {
+interface ParsedQuery {
   whereClause: string;
   params: Record<string, unknown>;
 }
 
-export interface ParseGmailQueryOptions {
+interface ParseGmailQueryOptions {
   accountId?: number;
   paramPrefix?: string;
   /**

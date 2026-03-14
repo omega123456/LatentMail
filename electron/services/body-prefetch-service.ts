@@ -7,14 +7,14 @@ import type { ImapFlow } from 'imapflow';
 const log = LoggerService.getInstance();
 
 /** A minimal descriptor of an email that needs its body fetched. */
-export interface EmailBodyDescriptor {
+interface EmailBodyDescriptor {
   accountId: number;
   xGmMsgId: string;
   xGmThrid: string;
 }
 
 /** Summary counts returned by fetchAndStoreBodies. */
-export interface BodyFetchSummary {
+interface BodyFetchSummary {
   fetched: number;
   skipped: number;
   failed: number;

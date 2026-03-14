@@ -8,19 +8,19 @@ import { SearchIntent } from '../utils/search-query-generator';
 import { loadPrompt } from '../utils/prompt-loader';
 import { SemanticSearchIntent, SemanticSearchFilters } from '../utils/search-filter-translator';
 
-export interface OllamaModel {
+interface OllamaModel {
   name: string;
   size: number;
   modified_at: string;
   digest: string;
 }
 
-export interface OllamaChatMessage {
+interface OllamaChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-export interface OllamaChatRequest {
+interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
   stream?: boolean;
@@ -33,7 +33,7 @@ export interface OllamaChatRequest {
   format?: 'json' | string;
 }
 
-export interface OllamaChatResponse {
+interface OllamaChatResponse {
   model: string;
   message: OllamaChatMessage;
   done: boolean;

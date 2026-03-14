@@ -7,7 +7,7 @@ import { MatInputModule } from '@angular/material/input';
 import { SettingsStore } from '../../store/settings.store';
 import { ElectronService } from '../../core/services/electron.service';
 
-export interface LogEntry {
+interface LogEntry {
   date: string;
   level: string;
   message: string;

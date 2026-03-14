@@ -30,13 +30,6 @@ export function getLastIpcActivityTimestamp(): number {
 }
 
 /**
- * Manually record IPC activity (for testing or explicit touch points).
- */
-export function touchIpcActivity(): void {
-  lastActivityTimestamp = Date.now();
-}
-
-/**
  * Patch ipcMain.handle so that any invocation on a `mail:*` or `compose:*` channel
  * automatically updates `lastActivityTimestamp`.
  *

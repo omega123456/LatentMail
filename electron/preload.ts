@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-export interface IpcResponse<T = unknown> {
+interface IpcResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: {
@@ -257,4 +257,4 @@ const electronAPI = {
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 
-export type ElectronAPI = typeof electronAPI;
+type ElectronAPI = typeof electronAPI;

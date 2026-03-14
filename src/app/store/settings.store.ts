@@ -4,11 +4,11 @@ import { ElectronService } from '../core/services/electron.service';
 import { ThemeMode } from '../core/services/theme.service';
 import { LayoutMode, DensityMode } from '../core/services/layout.service';
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
-export interface SettingsState {
+interface SettingsState {
   theme: ThemeMode;
   layout: LayoutMode;
   density: DensityMode;

@@ -1,7 +1,7 @@
 import type { ThemeMode } from '../services/theme.service';
 import type { LayoutMode, DensityMode } from '../services/layout.service';
 
-export interface AppSettings {
+interface AppSettings {
   theme: ThemeMode;
   layout: LayoutMode;
   density: DensityMode;
@@ -23,7 +23,7 @@ export interface AppSettings {
   allowedImageSenders: string[];
 }
 
-export const DEFAULT_SETTINGS: AppSettings = {
+const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   layout: 'three-column',
   density: 'comfortable',

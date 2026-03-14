@@ -5,7 +5,7 @@
 
 // ---- Email ----
 
-export interface EmailRecord {
+interface EmailRecord {
   id: number;
   accountId: number;
   xGmMsgId: string;
@@ -35,7 +35,7 @@ export interface EmailRecord {
 
 // ---- Email-Folder Junction ----
 
-export interface EmailFolderRecord {
+interface EmailFolderRecord {
   id: number;
   accountId: number;
   xGmMsgId: string;
@@ -45,7 +45,7 @@ export interface EmailFolderRecord {
 
 // ---- Thread ----
 
-export interface ThreadRecord {
+interface ThreadRecord {
   id: number;
   accountId: number;
   xGmThrid: string;
@@ -62,7 +62,7 @@ export interface ThreadRecord {
 
 // ---- Thread-Folder Junction ----
 
-export interface ThreadFolderRecord {
+interface ThreadFolderRecord {
   id: number;
   accountId: number;
   xGmThrid: string;
@@ -150,7 +150,7 @@ export interface AttachmentRecord {
 
 // ---- Payload for folder-updated event ----
 
-export interface FolderUpdatedPayload {
+interface FolderUpdatedPayload {
   accountId: number;
   folders: string[];
   reason: 'sync' | 'move' | 'delete' | 'flag' | 'send' | 'draft-create' | 'draft-update' | 'filter';

@@ -23,7 +23,7 @@ const CHUNK_OVERLAP_WORDS = 50;
  * Uses a lightweight regex approach — not a full HTML parser, but sufficient
  * for typical email bodies before embedding.
  */
-export function stripHtml(html: string): string {
+function stripHtml(html: string): string {
   // Remove script and style element content entirely
   let text = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
@@ -156,7 +156,8 @@ export function chunkEmailBody(
 
   return chunkText(rawText, metadata);
 }
-export interface EmbeddingChunkMetadata {
+
+interface EmbeddingChunkMetadata {
   subject?: string;
   fromAddress?: string;
   toAddresses?: string;

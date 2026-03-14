@@ -5,28 +5,28 @@ export interface AiModel {
   digest?: string;
 }
 
-export interface AiStatus {
+interface AiStatus {
   connected: boolean;
   url: string;
   currentModel?: string;
   availableModels?: AiModel[];
 }
 
-export interface AiSummary {
+interface AiSummary {
   threadId: string;
   summary: string;
   keyPoints: string[];
   createdAt: string;
 }
 
-export interface AiReplySuggestion {
+interface AiReplySuggestion {
   text: string;
   tone: 'professional' | 'casual' | 'grateful' | 'concerned';
 }
 
-export type TextTransformation = 'improve' | 'shorten' | 'formalize' | 'casualize';
+type TextTransformation = 'improve' | 'shorten' | 'formalize' | 'casualize';
 
-export interface AiComposeRequest {
+interface AiComposeRequest {
   prompt: string;
   context?: string;
   tone?: 'professional' | 'casual' | 'formal';
@@ -39,13 +39,13 @@ export interface AiStreamEvent {
   requestId?: string;
 }
 
-export interface SearchIntentDateRange {
+interface SearchIntentDateRange {
   after?: string;
   before?: string;
   relative?: string;
 }
 
-export interface SearchIntentFlags {
+interface SearchIntentFlags {
   unread?: boolean;
   starred?: boolean;
   important?: boolean;
@@ -66,7 +66,7 @@ export interface SearchIntent {
 }
 
 /** @deprecated Use SearchIntent and generated queries instead. */
-export interface AiSearchResult {
+interface AiSearchResult {
   query: string;
 }
 
