@@ -35,6 +35,90 @@ protocol.registerSchemesAsPrivileged([
 app.setAppUserModelId('com.latentmail.app');
 app.disableHardwareAcceleration();
 
+const STALE_DIR_AGE_MS = 60 * 60 * 1000;
+const RUN_OWNER_FILENAME = '.frontend-test-owner.json';
+
+function getRunOwnerFilePath(tempDir: string): string {
+  return path.join(tempDir, RUN_OWNER_FILENAME);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode === 'ESRCH') {
+      return false;
+    }
+
+    return true;
+  }
+}
+
+function getLiveOwnerPid(tempDir: string): number | null {
+  try {
+    const ownerFile = fs.readFileSync(getRunOwnerFilePath(tempDir), 'utf8');
+    const parsed = JSON.parse(ownerFile) as unknown;
+    if (!isRecord(parsed) || typeof parsed['pid'] !== 'number' || !Number.isInteger(parsed['pid']) || parsed['pid'] <= 0) {
+      return null;
+    }
+
+    return isPidAlive(parsed['pid']) ? parsed['pid'] : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanupStaleTempDirs(): void {
+  try {
+    const tempParentDir = os.tmpdir();
+    for (const entry of fs.readdirSync(tempParentDir)) {
+      if (!entry.startsWith('latentmail-frontend-test-')) {
+        continue;
+      }
+
+      const fullPath = path.join(tempParentDir, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (!stat.isDirectory() || Date.now() - stat.mtimeMs <= STALE_DIR_AGE_MS) {
+          continue;
+        }
+
+        const liveOwnerPid = getLiveOwnerPid(fullPath);
+        if (liveOwnerPid !== null) {
+          continue;
+        }
+
+        fs.rmSync(fullPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        console.log(`[frontend-test-main] Cleaned up stale temp dir: ${entry}`);
+      } catch {
+        // Ignore errors for individual dirs (may be in use by another process)
+      }
+    }
+  } catch {
+    // Non-fatal: if tmpdir cannot be read, continue test startup.
+  }
+}
+
+function writeRunOwnerMarker(tempDir: string): void {
+  try {
+    fs.writeFileSync(
+      getRunOwnerFilePath(tempDir),
+      JSON.stringify({ pid: process.pid, role: 'frontend-test-harness', createdAt: Date.now() }),
+      'utf8',
+    );
+  } catch {
+    // Non-fatal: cleanup can still fall back to age-only deletion for abandoned dirs.
+  }
+}
+
+cleanupStaleTempDirs();
+
 let mainWindow: BrowserWindow | null = null;
 let bootstrap: BootstrapResult | null = null;
 let tempDirPath: string | null = null;
@@ -79,10 +163,6 @@ function seedDefaultTestAccount(bootstrapResult: BootstrapResult): {
     accountId: seededAccount.accountId,
     email: seededAccount.email,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function validateResetDbOptions(options: unknown): ResetDbOptions {
@@ -574,7 +654,7 @@ function cleanupTempDir(): void {
   }
 
   try {
-    fs.rmSync(tempDirPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    fs.rmSync(tempDirPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   } catch {
     // Best effort during shutdown.
   }
@@ -780,7 +860,9 @@ function registerTestHooks(): void {
 }
 
 app.whenReady().then(async () => {
-  tempDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-frontend-test-'));
+  tempDirPath = process.env['LATENTMAIL_TEST_TEMP_DIR'] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-frontend-test-'));
+  fs.mkdirSync(tempDirPath, { recursive: true });
+  writeRunOwnerMarker(tempDirPath);
   app.setPath('userData', tempDirPath);
   process.env['LATENTMAIL_TEST_MODE'] = '1';
 

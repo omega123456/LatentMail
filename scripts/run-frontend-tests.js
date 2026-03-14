@@ -14,6 +14,8 @@
 'use strict';
 
 const { execSync, spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 if (process.platform === 'win32') {
@@ -27,6 +29,14 @@ if (process.platform === 'win32') {
 const cleanEnv = Object.assign({}, process.env);
 delete cleanEnv['ELECTRON_RUN_AS_NODE'];
 cleanEnv['LATENTMAIL_TEST_MODE'] = '1';
+
+const testTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-frontend-test-'));
+cleanEnv['LATENTMAIL_TEST_TEMP_DIR'] = testTempDir;
+fs.writeFileSync(
+  path.join(testTempDir, '.frontend-test-owner.json'),
+  JSON.stringify({ pid: process.pid, role: 'frontend-test-launcher', createdAt: Date.now() }),
+  'utf8',
+);
 
 const playwrightBin = path.join(
   __dirname,
@@ -49,11 +59,26 @@ const child = spawn(playwrightBin, playwrightArgs, {
   shell: process.platform === 'win32',
 });
 
+function cleanupTempDir() {
+  try {
+    fs.rmSync(testTempDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch (error) {
+    console.error('[run-frontend-tests] Failed to clean up test temp directory:', testTempDir, error.message);
+  }
+}
+
 child.on('close', (code) => {
+  cleanupTempDir();
   process.exit(code ?? 1);
 });
 
 child.on('error', (error) => {
+  cleanupTempDir();
   console.error('[run-frontend-tests] Failed to launch Playwright:', error.message);
   process.exit(1);
 });

@@ -1,4 +1,8 @@
-import { expect, test as base, type Page, type TestType } from '@playwright/test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import { expect, test as base, type Page, type TestType, type WorkerInfo } from '@playwright/test';
 import { _electron as electron, type ElectronApplication } from 'playwright';
 
 import type { ResetDbOptions, ResetDbResult, TestHookGlobal } from './test-hooks-types';
@@ -26,18 +30,58 @@ export interface FrontendTestFixtures {
 
 const resetAppWaitTimeoutMs = 60_000;
 
+function createWorkerTempDir(workerInfo: WorkerInfo): string {
+  const configuredBaseDir = process.env['LATENTMAIL_TEST_TEMP_DIR'];
+  if (typeof configuredBaseDir === 'string' && configuredBaseDir.length > 0) {
+    fs.mkdirSync(configuredBaseDir, { recursive: true });
+    return fs.mkdtempSync(path.join(configuredBaseDir, `worker-${workerInfo.workerIndex}-`));
+  }
+
+  return fs.mkdtempSync(path.join(os.tmpdir(), `latentmail-frontend-test-worker-${workerInfo.workerIndex}-`));
+}
+
+function cleanupTempDir(tempDirPath: string): void {
+  try {
+    fs.rmSync(tempDirPath, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch {
+    // Best effort — the launcher-level cleanup will retry at process end.
+  }
+}
+
 const workerFixtures = {
   electronApp: [
     async (
       {},
       use: (electronApplication: ElectronApplication) => Promise<void>,
+      workerInfo: WorkerInfo,
     ) => {
-      const electronApp = await electron.launch({
-        args: ['dist-test/tests/frontend/test-frontend-main.js'],
-      });
+      const workerTempDir = createWorkerTempDir(workerInfo);
+      let electronApp: ElectronApplication | null = null;
 
-      await use(electronApp);
-      await electronApp.close();
+      try {
+        electronApp = await electron.launch({
+          args: ['dist-test/tests/frontend/test-frontend-main.js'],
+          env: {
+            ...process.env,
+            LATENTMAIL_TEST_TEMP_DIR: workerTempDir,
+          },
+        });
+
+        await use(electronApp);
+      } finally {
+        try {
+          if (electronApp !== null) {
+            await electronApp.close();
+          }
+        } finally {
+          cleanupTempDir(workerTempDir);
+        }
+      }
     },
     { scope: 'worker' },
   ],
