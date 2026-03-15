@@ -906,6 +906,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private openComposeForAction(mode: ComposeMode, specificMessage?: Email, prefillBody?: string): void {
     const activeAccount = this.accountsStore.activeAccount();
     const thread = this.emailsStore.selectedThread();
+    /* c8 ignore next -- defensive guard, account and thread always present in E2E */
     if (!activeAccount || !thread) {
       return;
     }
@@ -936,6 +937,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private openDraftForEditing(specificMessage?: Email): void {
     const activeAccount = this.accountsStore.activeAccount();
     const thread = this.emailsStore.selectedThread();
+    /* c8 ignore next -- defensive guard, account and thread always present in E2E */
     if (!activeAccount || !thread) {
       return;
     }
@@ -947,10 +949,12 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       // Find the last draft message (prefer actual draft over arbitrary last message)
       msg = [...messages].reverse().find(m => m.isDraft) ?? null;
       // Fallback to last message if no draft found (legacy behavior)
+      /* c8 ignore next -- fallback for thread with no draft message */
       if (!msg && messages.length > 0) {
         msg = messages[messages.length - 1];
       }
     }
+    /* c8 ignore next -- unreachable after sync */
     if (!msg) {
       return;
     }

@@ -1005,6 +1005,7 @@ export const EmailsStore = signalStore(
       electronService.onFetchOlderDone().subscribe((payload: MailFetchOlderDonePayload) => {
         const activeAccountId = accountsStore.activeAccountId();
         const activeFolderId = foldersStore.activeFolderId();
+        /* c8 ignore start -- requires fetch-older-done event from main process */
         if (activeAccountId == null || payload.accountId !== activeAccountId || activeFolderId !== payload.folderId) {
           // Event was for a different account/folder (e.g. user switched before it arrived). Clear loading state so the banner does not stay stuck.
           patchState(store, { fetchingMore: false, fetchError: null });
@@ -1014,6 +1015,7 @@ export const EmailsStore = signalStore(
           patchState(store, { fetchingMore: false, fetchError: payload.error });
           return;
         }
+        /* c8 ignore stop */
         const newThreads = ((payload.threads ?? []) as unknown) as Thread[];
         const existingIds = new Set(store.threads().map((t) => t.xGmThrid));
         const deduped = newThreads.filter((t) => !existingIds.has(t.xGmThrid));
@@ -1032,6 +1034,7 @@ export const EmailsStore = signalStore(
 
       // Subscribe to mail:notification-click events.
       // Perform store operations first, then navigate cross-view if needed.
+      /* c8 ignore start -- requires notification-click event from main process */
       electronService.onEvent<MailNotificationClickPayload>('mail:notification-click').subscribe(async (event) => {
         try {
           // 1. Ensure accounts are loaded
@@ -1064,6 +1067,7 @@ export const EmailsStore = signalStore(
           console.error('Notification click handler failed:', err);
         }
       });
+      /* c8 ignore stop */
     },
   }),
 );

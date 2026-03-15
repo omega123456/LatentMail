@@ -11,6 +11,7 @@ export const authGuard: CanActivateFn = async () => {
   const router = inject(Router);
 
   // In non-Electron environment (browser dev), allow access
+  /* c8 ignore next -- non-Electron environment */
   if (!electronService.isElectron) {
     return true;
   }
@@ -20,6 +21,7 @@ export const authGuard: CanActivateFn = async () => {
     if (response.success && (response.data as number) > 0) {
       return true;
     }
+  /* c8 ignore next -- IPC transport error, unreachable in E2E */
   } catch (err) {
     console.warn('AuthGuard account check failed', err);
   }

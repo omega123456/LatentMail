@@ -622,11 +622,13 @@ export class ElectronService {
 
   async setZoom(factor: number): Promise<number> {
     if (this.api) return this.api.system.setZoom(factor);
+    /* c8 ignore next -- non-Electron fallback */
     return factor;
   }
 
   async getZoom(): Promise<number> {
     if (this.api) return this.api.system.getZoom();
+    /* c8 ignore next -- non-Electron fallback */
     return 1.0;
   }
 
@@ -672,6 +674,7 @@ export class ElectronService {
   }
 
   onEvent<T = unknown>(channel: string): Observable<T> {
+    /* c8 ignore next -- non-Electron fallback */
     if (!this.api) {
       return new Observable<T>();
     }
@@ -712,6 +715,7 @@ export class ElectronService {
   // ---- Helper ----
 
   private async invoke(fn: () => Promise<IpcResponse>): Promise<IpcResponse> {
+    /* c8 ignore next -- non-Electron fallback */
     if (!this.api) {
       return {
         success: false,

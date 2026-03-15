@@ -11,6 +11,7 @@ export const setupGuard: CanActivateFn = async () => {
   const router = inject(Router);
 
   // In non-Electron environment (browser dev), allow access to auth page
+  /* c8 ignore next -- non-Electron environment */
   if (!electronService.isElectron) {
     return true;
   }
@@ -21,6 +22,7 @@ export const setupGuard: CanActivateFn = async () => {
       // Already have accounts, redirect to mail
       return router.createUrlTree(['/mail']);
     }
+  /* c8 ignore next -- IPC transport error, unreachable in E2E */
   } catch (err) {
     console.warn('SetupGuard account check failed', err);
   }

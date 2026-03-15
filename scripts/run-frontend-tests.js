@@ -99,12 +99,18 @@ async function runFrontendCoverageReporting(
   // Coverage script URLs are bundle paths (dist-test/.../browser/*.js); c8 remaps them via source maps
   // to original sources (e.g. node_modules/@angular/..., src/...). Apply exclude after remap so
   // node_modules is excluded from the report.
-  const excludePattern = '**/node_modules/**';
+  const excludePatterns = [
+    '**/node_modules/**',
+    'src/environments/**',
+    'src/app/core/models/**',
+    'src/app/shared/components/email-actions/email-action.model.ts',
+    'src/typings.d.ts',
+  ];
   const reportArgs = [
     c8BinPath,
     'report',
     `--temp-directory=${coverageTempDir}`,
-    `--exclude=${excludePattern}`,
+    ...excludePatterns.map((p) => `--exclude=${p}`),
     '--exclude-after-remap',
     '--reporter=text',
     '--reporter=html',

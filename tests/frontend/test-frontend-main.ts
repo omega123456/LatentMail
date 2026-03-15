@@ -33,6 +33,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.setAppUserModelId('com.latentmail.app');
+app.commandLine.appendSwitch('force-device-scale-factor', '1');
+app.commandLine.appendSwitch('high-dpi-support', '1');
 app.disableHardwareAcceleration();
 
 const STALE_DIR_AGE_MS = 60 * 60 * 1000;

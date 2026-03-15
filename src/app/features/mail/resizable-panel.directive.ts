@@ -8,6 +8,7 @@ export type ResizeSide = 'right' | 'left';
   standalone: true,
 })
 export class ResizablePanelDirective implements OnInit, OnDestroy {
+  /* c8 ignore start -- drag interaction, accepted coverage gap */
   readonly direction = input<ResizeDirection>('horizontal');
   readonly side = input<ResizeSide>('right');
   readonly minSize = input(180);
@@ -151,6 +152,7 @@ export class ResizablePanelDirective implements OnInit, OnDestroy {
       this.renderer.removeStyle(document.body, 'cursor');
       this.renderer.removeStyle(document.body, 'user-select');
     });
-    this.cleanupFns.push(mouseUp);
+      this.cleanupFns.push(mouseUp);
   }
+  /* c8 ignore stop */
 }

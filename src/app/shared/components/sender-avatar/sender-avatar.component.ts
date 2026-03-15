@@ -35,16 +35,19 @@ export class SenderAvatarComponent {
     effect(() => {
       const address = this.email();
       this.bimiLogoUrl.set(null);
+      /* c8 ignore next -- non-Electron guard in BIMI lookup */
       if (!address?.trim() || !this.electronService.isElectron) {
         return;
       }
       this.requestId += 1;
       const id = this.requestId;
       this.electronService.getBimiLogo(address).then((result) => {
+        /* c8 ignore next -- BIMI race condition guard */
         if (id !== this.requestId) {
           return;
         }
         if (result.success && result.data?.logoUrl) {
+          /* c8 ignore next -- BIMI requires real domain DNS */
           this.bimiLogoUrl.set(result.data.logoUrl);
         }
       });

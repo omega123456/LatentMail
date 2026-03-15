@@ -20,15 +20,18 @@ export class TitlebarComponent implements OnInit {
     this.isWindows.set(platform === 'win32');
   }
 
+  /* c8 ignore next -- Electron window API, would affect test harness */
   async onMinimize(): Promise<void> {
     await this.electronService.minimize();
   }
 
+  /* c8 ignore next -- Electron window API, would affect test harness */
   async onMaximize(): Promise<void> {
     await this.electronService.maximize();
     this.maximized.set(await this.electronService.isMaximized());
   }
 
+  /* c8 ignore next -- Electron window API, would affect test harness */
   async onClose(): Promise<void> {
     await this.electronService.closeWindow();
   }

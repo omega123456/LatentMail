@@ -30,6 +30,10 @@ export interface FrontendTestFixtures {
 }
 
 const resetAppWaitTimeoutMs = 60_000;
+const stableViewportSize = {
+  width: 1280,
+  height: 800,
+} as const;
 
 function createWorkerTempDir(workerInfo: WorkerInfo): string {
   const configuredBaseDir = process.env['LATENTMAIL_TEST_TEMP_DIR'];
@@ -145,6 +149,7 @@ const workerFixtures = {
     ) => {
       const sharedPage = await electronApp.firstWindow();
       await sharedPage.waitForLoadState('domcontentloaded');
+      await sharedPage.setViewportSize(stableViewportSize);
       await use(sharedPage);
     },
     { scope: 'worker' },
@@ -189,6 +194,8 @@ const workerFixtures = {
             testGlobal.testHooks?.reloadWindow();
           }),
         ]);
+
+        await sharedPage.setViewportSize(stableViewportSize);
 
         if (options?.seedAccount === false) {
           await expect(sharedPage.getByTestId('auth-login-button')).toBeVisible({ timeout: resetAppWaitTimeoutMs });

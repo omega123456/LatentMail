@@ -38,6 +38,11 @@ const inboxMailboxes = ['[Gmail]/All Mail', 'INBOX'];
 const inboxLabels = ['\\All', '\\Inbox'];
 const screenshotDiffRatio = 0.01;
 
+interface StableScreenshotOptions {
+  fullPage?: boolean;
+  mask?: Locator[];
+}
+
 let accountId = 0;
 let seededEmail = '';
 let shortcutModifier: ShortcutModifier = 'Control';
@@ -207,6 +212,19 @@ async function openCommandPaletteOverlay(page: Page, modifier: ShortcutModifier)
   await expect(page.getByTestId('command-palette-input')).toBeFocused();
 }
 
+async function expectStableScreenshot(
+  page: Page,
+  screenshotName: string,
+  options: StableScreenshotOptions = {},
+): Promise<void> {
+  await expect(page).toHaveScreenshot(screenshotName, {
+    fullPage: options.fullPage,
+    scale: 'css',
+    maxDiffPixelRatio: screenshotDiffRatio,
+    mask: options.mask ?? [],
+  });
+}
+
 test.describe('Visual regression', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -222,10 +240,8 @@ test.describe('Visual regression', () => {
     await expect(page.getByTestId('auth-login-button')).toBeVisible();
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('auth-landing.png', {
+    await expectStableScreenshot(page, 'auth-landing.png', {
       fullPage: true,
-      maxDiffPixelRatio: screenshotDiffRatio,
-      mask: [],
     });
 
     await resetToSeededMailShell(resetApp, page);
@@ -234,8 +250,7 @@ test.describe('Visual regression', () => {
   test('mail shell with email list (light theme)', async ({ page, electronApp, resetApp }) => {
     await prepareMailShellWithEmails(resetApp, page, electronApp);
 
-    await expect(page).toHaveScreenshot('mail-shell-light.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
+    await expectStableScreenshot(page, 'mail-shell-light.png', {
       mask: await buildMailShellMasks(page),
     });
   });
@@ -245,8 +260,7 @@ test.describe('Visual regression', () => {
     await setTheme(page, 'dark');
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('mail-shell-dark.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
+    await expectStableScreenshot(page, 'mail-shell-dark.png', {
       mask: await buildMailShellMasks(page),
     });
 
@@ -261,8 +275,7 @@ test.describe('Visual regression', () => {
     await expect(page.getByTestId('thread-subject')).toContainText(messageFixtures.primarySubject);
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('reading-pane-thread.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
+    await expectStableScreenshot(page, 'reading-pane-thread.png', {
       mask: await buildReadingPaneMasks(page),
     });
   });
@@ -276,8 +289,7 @@ test.describe('Visual regression', () => {
     await expect(getComposeEditor(page)).toBeVisible();
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('compose-window.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
+    await expectStableScreenshot(page, 'compose-window.png', {
       mask: await buildComposeMasks(page),
     });
 
@@ -290,10 +302,7 @@ test.describe('Visual regression', () => {
     await openGeneralSettings(page);
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('settings-general.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
-      mask: [],
-    });
+    await expectStableScreenshot(page, 'settings-general.png');
 
     await returnToMailShell(page);
     await waitForStableMailShell(page);
@@ -307,10 +316,7 @@ test.describe('Visual regression', () => {
     await expect(page.getByTestId('command-palette-results')).toBeVisible();
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('command-palette.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
-      mask: [],
-    });
+    await expectStableScreenshot(page, 'command-palette.png');
 
     await closeCommandPaletteIfOpen(page);
   });
@@ -321,9 +327,6 @@ test.describe('Visual regression', () => {
     await expect(page.getByTestId('email-list-empty')).toBeVisible();
     await blurActiveElement(page);
 
-    await expect(page).toHaveScreenshot('empty-inbox.png', {
-      maxDiffPixelRatio: screenshotDiffRatio,
-      mask: [],
-    });
+    await expectStableScreenshot(page, 'empty-inbox.png');
   });
 });

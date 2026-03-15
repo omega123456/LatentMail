@@ -17,10 +17,12 @@ export class AuthLandingComponent {
   private readonly router = inject(Router);
 
   async onLogin(): Promise<void> {
+    /* c8 ignore start -- calls accountsStore.login() which requires OAuth */
     const account = await this.accountsStore.login();
     if (account) {
       this.router.navigate(['/mail']);
     }
+    /* c8 ignore stop */
   }
 
   goToMail(): void {

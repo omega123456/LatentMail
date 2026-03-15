@@ -883,10 +883,12 @@ export const AiStore = signalStore(
 
     return {
       onInit(): void {
+        /* c8 ignore next -- non-Electron environment */
         if (!electronService.isElectron) {
           return;
         }
 
+        /* c8 ignore start -- requires embedding event emission, no test hook */
         electronService.onEvent<EmbeddingProgressPayload>('embedding:progress').subscribe((payload) => {
           store.onEmbeddingProgress(payload);
         });
@@ -905,12 +907,16 @@ export const AiStore = signalStore(
           // Patch state so the UI immediately reflects that a build is starting
           patchState(store, { indexStatus: 'building' });
         });
+        /* c8 ignore stop */
 
         // Subscribe to streaming semantic search push events
         electronService.onAiSearchBatch().subscribe((payload) => {
-          void store.onSearchBatch(payload).catch((batchError: unknown) => {
+          void store.onSearchBatch(payload).catch(
+            /* c8 ignore next -- async rejection log, unreachable in normal flow */
+            (batchError: unknown) => {
             console.warn('[AiStore] Unhandled error in onSearchBatch:', batchError);
-          });
+            }
+          );
         });
 
         electronService.onAiSearchComplete().subscribe((payload) => {

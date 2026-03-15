@@ -1,6 +1,6 @@
 import {
   Component, inject, OnInit, OnDestroy, ElementRef, ViewChild, AfterViewInit,
-  NgZone, ChangeDetectorRef, signal, HostListener,
+  NgZone, ChangeDetectorRef, signal, HostListener, effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -73,9 +73,9 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   @ViewChild('linkUrlInputRef') linkUrlInputRef?: ElementRef<HTMLInputElement>;
 
   editor: Editor | null = null;
-  private openWatchTimer: ReturnType<typeof setInterval> | null = null;
   private resizeState: ResizeState | null = null;
   private readonly osDropSubscriptions = new Subscription();
+  private readonly viewInitialized = signal(false);
 
   /** Whether an OS file drag is currently active over the window. */
   readonly osDragActive = signal(false);
@@ -102,32 +102,33 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   /** Selection to apply link to when dialog is confirmed (from context menu). */
   readonly pendingLinkSelection = signal<{ from: number; to: number } | null>(null);
 
+  constructor() {
+    effect(() => {
+      if (!this.viewInitialized()) {
+        return;
+      }
+
+      const isOpen = this.composeStore.isOpen();
+      if (isOpen) {
+        this.initEditor();
+        this.focusSubjectInput();
+      } else {
+        this.destroyEditor();
+      }
+    });
+  }
+
   ngOnInit(): void {
     this.composeStore.loadSignatures();
     this.subscribeToOsDropEvents();
   }
 
   ngAfterViewInit(): void {
-    // Poll open-state transitions to initialize interactive controls after render.
-    let wasOpen = false;
-    this.openWatchTimer = setInterval(() => {
-      const isOpen = this.composeStore.isOpen();
-      if (isOpen && !wasOpen) {
-        this.initEditor();
-        this.focusSubjectInput();
-      } else if (!isOpen && wasOpen) {
-        this.destroyEditor();
-      }
-      wasOpen = isOpen;
-    }, 100);
+    this.viewInitialized.set(true);
   }
 
   ngOnDestroy(): void {
     this.osDropSubscriptions.unsubscribe();
-    if (this.openWatchTimer) {
-      clearInterval(this.openWatchTimer);
-      this.openWatchTimer = null;
-    }
     this.destroyEditor();
   }
 
@@ -591,6 +592,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
    * before acting. Subscriptions live for the component's lifetime.
    */
   private subscribeToOsDropEvents(): void {
+    /* c8 ignore start -- Win32 native drag/drop addon */
     this.osDropSubscriptions.add(
       this.electronService.onOsFileDragEnter().subscribe((meta) => {
         if (this.composeStore.isOpen()) {
@@ -611,6 +613,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
         this.handleOsFileDrop(payload);
       })
     );
+    /* c8 ignore stop */
   }
 
   /**
@@ -618,6 +621,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
    * Images are inserted inline into the TipTap editor; non-images become attachments.
    */
   private handleOsFileDrop(payload: OsFileDropPayload): void {
+    /* c8 ignore start -- Win32 native drag/drop addon */
     // Always clear overlay
     this.osDragActive.set(false);
     this.osDragOnlyImages.set(false);
@@ -648,5 +652,6 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
         data: attachment.data,
       });
     }
+    /* c8 ignore stop */
   }
 }

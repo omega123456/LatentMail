@@ -10,6 +10,7 @@
       mat-stroked-button
       color="warn"
       class="reset-all-btn"
+      data-testid="shortcut-reset-all"
       (click)="resetAllBindings()"
     >
       <span class="material-symbols-outlined btn-icon">restart_alt</span>
@@ -20,7 +21,7 @@
 
 <div class="commands-list" data-testid="keyboard-shortcut-list">
   @for (row of commandRows(); track row.id) {
-    <div class="command-row" [class.is-capturing]="capturingCommandId() === row.id">
+    <div class="command-row" [class.is-capturing]="capturingCommandId() === row.id" [attr.data-testid]="'shortcut-row-' + row.id">
       <!-- Left: icon + label + description -->
       <div class="command-info">
         <span class="material-symbols-outlined command-icon">{{ row.icon }}</span>
@@ -41,6 +42,7 @@
               type="text"
               readonly
               class="capture-input"
+              data-testid="shortcut-pending-keys"
               [value]="pendingKeys() ? commandRegistry.formatKeyCombo(pendingKeys()) : ''"
               placeholder="Press a key combination…"
               (keydown)="onCaptureKeydown($event)"
@@ -49,7 +51,7 @@
             />
 
             @if (conflictWarning()) {
-              <div class="conflict-warning" role="alert">
+              <div class="conflict-warning" role="alert" data-testid="shortcut-conflict-warning">
                 <span class="material-symbols-outlined conflict-icon">warning</span>
                 <span class="conflict-message">
                   Conflicts with <strong>{{ conflictWarning()!.conflictingCommandLabel }}</strong>
@@ -58,6 +60,7 @@
                   mat-stroked-button
                   color="warn"
                   class="reassign-btn"
+                  data-testid="shortcut-reassign-btn"
                   [disabled]="saving()"
                   (mousedown)="$event.preventDefault()"
                   (click)="reassignAndApply()"
@@ -101,6 +104,7 @@
             <button
               mat-stroked-button
               class="edit-btn"
+              [attr.data-testid]="'shortcut-capture-btn-' + row.id"
               (click)="startCapture(row.id)"
               [attr.aria-label]="'Edit binding for ' + row.label"
             >
@@ -111,6 +115,7 @@
                 mat-stroked-button
                 color="warn"
                 class="reset-btn"
+                [attr.data-testid]="'shortcut-reset-btn-' + row.id"
                 (click)="resetBinding(row.id)"
                 [matTooltip]="'Reset to: ' + commandRegistry.formatKeyCombo(row.defaultKeys[0])"
                 [attr.aria-label]="'Reset ' + row.label + ' to default'"

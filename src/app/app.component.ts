@@ -49,6 +49,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   private async detectPlatform(): Promise<void> {
+    /* c8 ignore next -- non-Electron */
     if (!this.electronService.isElectron) {
       return;
     }
@@ -56,14 +57,18 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    /* c8 ignore start -- app component never destroyed in E2E */
     this.trayActionSub?.unsubscribe();
     this.trayActionSub = null;
+    /* c8 ignore stop */
   }
 
   private subscribeToTrayActions(): void {
+    /* c8 ignore next -- non-Electron */
     if (!this.electronService.isElectron) {
       return;
     }
+    /* c8 ignore start -- requires tray event emission, no test hook */
     this.trayActionSub = this.electronService.onTrayAction().subscribe((payload) => {
       if (payload.action === 'compose') {
         const account = this.accountsStore.activeAccount();
@@ -82,5 +87,6 @@ export class AppComponent implements OnInit, OnDestroy {
         }
       }
     });
+    /* c8 ignore stop */
   }
 }

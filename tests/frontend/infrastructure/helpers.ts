@@ -114,6 +114,11 @@ export function getComposeEditor(page: Page) {
   return page.getByTestId('compose-editor').locator('[contenteditable]');
 }
 
+export async function waitForComposeEditor(page: Page): Promise<void> {
+  await expect(page.getByTestId('compose-window')).toBeVisible();
+  await expect(getComposeEditor(page)).toBeVisible({ timeout: 10_000 });
+}
+
 // Reserved for Phase 8 keyboard/theme tests.
 export async function getPlatform(electronApp: ElectronApplication): Promise<NodeJS.Platform> {
   return await electronApp.evaluate(() => {
@@ -376,6 +381,132 @@ export async function configureOllama(
   if (!response.success) {
     throw new Error('configureOllama test hook reported failure.');
   }
+}
+
+export const TEST_PNG_1X1_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+export const TEST_TEXT_FILE_CONTENT = 'Hello from test attachment';
+
+export interface HtmlRfc822MessageOptions {
+  from: string;
+  to: string;
+  subject: string;
+  htmlBody: string;
+  date?: string;
+  messageId?: string;
+}
+
+export interface AttachmentPart {
+  filename: string;
+  mimeType: string;
+  base64Content: string;
+}
+
+export interface MultipartRfc822MessageOptions {
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  attachments: AttachmentPart[];
+  date?: string;
+  messageId?: string;
+}
+
+export function buildHtmlRfc822(options: HtmlRfc822MessageOptions): string {
+  const messageDate = options.date ?? DateTime.utc().toRFC2822();
+  const messageId = options.messageId !== undefined ? ensureMessageId(options.messageId) : buildDefaultMessageId();
+
+  const headerLines = [
+    `From: ${sanitizeHeaderValue(options.from)}`,
+    `To: ${sanitizeHeaderValue(options.to)}`,
+    `Subject: ${sanitizeHeaderValue(options.subject)}`,
+    `Date: ${sanitizeHeaderValue(messageDate)}`,
+    `Message-ID: ${messageId}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+  ];
+
+  const rfc822Message = `${headerLines.join('\r\n')}\r\n\r\n${normalizeBody(options.htmlBody)}\r\n`;
+  return Buffer.from(rfc822Message, 'utf8').toString('base64');
+}
+
+export function buildMultipartRfc822(options: MultipartRfc822MessageOptions): string {
+  const messageDate = options.date ?? DateTime.utc().toRFC2822();
+  const messageId = options.messageId !== undefined ? ensureMessageId(options.messageId) : buildDefaultMessageId();
+  const boundary = `----=_LatentMailTestBoundary_${DateTime.utc().toMillis()}_${messageSequence++}`;
+
+  const headerLines = [
+    `From: ${sanitizeHeaderValue(options.from)}`,
+    `To: ${sanitizeHeaderValue(options.to)}`,
+    `Subject: ${sanitizeHeaderValue(options.subject)}`,
+    `Date: ${sanitizeHeaderValue(messageDate)}`,
+    `Message-ID: ${messageId}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ];
+
+  const textPart = [
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    normalizeBody(options.body),
+  ].join('\r\n');
+
+  const attachmentParts = options.attachments.map((attachment) => {
+    return [
+      `--${boundary}`,
+      `Content-Type: ${attachment.mimeType}; name="${attachment.filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${attachment.filename}"`,
+      '',
+      attachment.base64Content,
+    ].join('\r\n');
+  });
+
+  const mimeBody = [textPart, ...attachmentParts, `--${boundary}--`].join('\r\n');
+  const rfc822Message = `${headerLines.join('\r\n')}\r\n\r\n${mimeBody}\r\n`;
+  return Buffer.from(rfc822Message, 'utf8').toString('base64');
+}
+
+export async function injectInboxMessageWithAttachments(
+  electronApp: ElectronApplication,
+  options: {
+    from: string;
+    to: string;
+    subject: string;
+    body: string;
+    attachments: AttachmentPart[];
+  },
+): Promise<MessageIdentity> {
+  const messageIdentity = createMessageIdentity(options.subject);
+  const internalDate = DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z';
+  const rfc822 = buildMultipartRfc822({
+    from: options.from,
+    to: options.to,
+    subject: options.subject,
+    body: options.body,
+    attachments: options.attachments,
+    messageId: messageIdentity.messageId,
+  });
+
+  for (const mailbox of GMAIL_ALL_MAIL_MAILBOXES) {
+    await injectEmail(electronApp, {
+      mailbox,
+      rfc822,
+      options: {
+        flags: [],
+        internalDate,
+        xGmMsgId: messageIdentity.xGmMsgId,
+        xGmThrid: messageIdentity.xGmThrid,
+        xGmLabels: [...GMAIL_INBOX_LABELS],
+      },
+    });
+  }
+
+  return messageIdentity;
 }
 
 export async function getSmtpCaptured(
