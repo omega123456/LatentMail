@@ -152,7 +152,6 @@ export const QueueStore = signalStore(
         return 0;
       },
 
-      /* c8 ignore next -- requires failed queue item */
       async retrySingle(queueId: string): Promise<void> {
         await electronService.retryFailedOperations(queueId);
       },
@@ -199,13 +198,11 @@ export const QueueStore = signalStore(
         return clearedCount;
       },
 
-      /* c8 ignore next -- requires in-progress queue item */
       async cancelOperation(queueId: string): Promise<void> {
         await electronService.cancelOperation(queueId);
       },
 
       /** Cancel a specific body-fetch queue operation by its queue ID. */
-      /* c8 ignore next -- requires in-progress body-fetch item */
       async cancelBodyFetchOperation(queueId: string): Promise<void> {
         await electronService.cancelBodyQueueOperation(queueId);
       },

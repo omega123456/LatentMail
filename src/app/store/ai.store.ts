@@ -888,7 +888,6 @@ export const AiStore = signalStore(
           return;
         }
 
-        /* c8 ignore start -- requires embedding event emission, no test hook */
         electronService.onEvent<EmbeddingProgressPayload>('embedding:progress').subscribe((payload) => {
           store.onEmbeddingProgress(payload);
         });
@@ -907,7 +906,6 @@ export const AiStore = signalStore(
           // Patch state so the UI immediately reflects that a build is starting
           patchState(store, { indexStatus: 'building' });
         });
-        /* c8 ignore stop */
 
         // Subscribe to streaming semantic search push events
         electronService.onAiSearchBatch().subscribe((payload) => {

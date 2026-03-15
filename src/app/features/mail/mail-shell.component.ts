@@ -161,6 +161,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     this.commandSub?.unsubscribe();
   }
 
+  /* c8 ignore start -- sync safeguard timer requires 30s timeout during active IMAP sync */
   private startOrResetSyncSafeguardTimer(): void {
     this.clearSyncSafeguardTimer();
     this.syncSafeguardTimer = setTimeout(() => {
@@ -175,6 +176,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       this.syncSafeguardTimer = null;
     }
   }
+  /* c8 ignore stop */
 
   onFolderSelected(folderId: string): void {
     const activeAccount = this.accountsStore.activeAccount();

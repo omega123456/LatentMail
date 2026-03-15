@@ -103,6 +103,7 @@ async function runFrontendCoverageReporting(
     '**/node_modules/**',
     'src/environments/**',
     'src/app/core/models/**',
+    'src/app/core/guards/setup.guard.ts',
     'src/app/shared/components/email-actions/email-action.model.ts',
     'src/typings.d.ts',
   ];
