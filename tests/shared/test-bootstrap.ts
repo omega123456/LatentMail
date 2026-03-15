@@ -172,7 +172,32 @@ function patchIpcMainForTesting(
     listener: (...args: unknown[]) => unknown,
   ): void => {
     ipcHandlerMap.set(channel, listener);
-    activityTrackedHandle(channel, listener);
+    const wrappedListener = (...args: unknown[]) => {
+      const overrideState = globalThis as {
+        __LATENTMAIL_IPC_OVERRIDES__?: Map<string, Array<{ response?: unknown; throwMessage?: string; once?: boolean }>>;
+      };
+      const overrideQueue = overrideState.__LATENTMAIL_IPC_OVERRIDES__?.get(channel);
+      const override = overrideQueue?.[0];
+
+      if (override !== undefined) {
+        if (override.once === true) {
+          overrideQueue?.shift();
+          if (overrideQueue?.length === 0) {
+            overrideState.__LATENTMAIL_IPC_OVERRIDES__?.delete(channel);
+          }
+        }
+
+        if (typeof override.throwMessage === 'string' && override.throwMessage.length > 0) {
+          throw new Error(override.throwMessage);
+        }
+
+        return override.response;
+      }
+
+      return listener(...args);
+    };
+
+    activityTrackedHandle(channel, wrappedListener);
   };
 
   const { registerAllIpcHandlers } = require('../../electron/ipc') as typeof import('../../electron/ipc');

@@ -1,11 +1,15 @@
 import { test, expect } from '../infrastructure/electron-fixture';
 import {
+  clearMockIpc,
   closeCommandPaletteIfOpen,
   configureOllama,
   discardComposeIfOpen,
+  emitRendererEvent,
+  ensureOllamaModelSelected,
   extractSeededAccount,
   focusMailShell,
   getShortcutModifier,
+  mockIpc,
   navigateToSettings,
   openCommandPalette,
   returnToMailShell,
@@ -24,6 +28,10 @@ test.describe('Settings and UI coverage', () => {
     ({ accountId, email: seededEmail } = extractSeededAccount(result));
     await waitForMailShell(page);
     shortcutModifier = await getShortcutModifier(electronApp);
+  });
+
+  test.afterEach(async ({ electronApp }) => {
+    await clearMockIpc(electronApp);
   });
 
   // ═════════════════════════════════════════════════════════════════════
@@ -317,5 +325,134 @@ test.describe('Settings and UI coverage', () => {
         await cancelButton.click();
       }
     }
+  });
+
+  // ── AI settings: save/test, errors, embedding flows, index events ───
+
+  test('AI settings covers save/test, errors, embedding flows, and index events', async ({ page, electronApp }) => {
+    await configureOllama(electronApp, {
+      healthy: true,
+      models: ['llama3', 'nomic-embed-text:latest'],
+      selectedModel: 'llama3',
+    });
+
+    await navigateToSettings(page, 'ai');
+    await expect(page.getByTestId('ai-status-indicator')).toContainText('Connected', { timeout: 10_000 });
+    await ensureOllamaModelSelected(page, 'llama3');
+
+    const urlInput = page.getByTestId('ai-url-input');
+    const currentUrl = (await urlInput.inputValue()).trim();
+    await urlInput.fill(`   ${currentUrl}   `);
+    await page.getByRole('button', { name: 'Save & Test' }).click();
+    await expect(urlInput).toHaveValue(`   ${currentUrl}   `);
+
+    await page.getByRole('button', { name: 'Test Connection' }).click();
+    await expect(page.getByTestId('ai-model-select')).toBeVisible({ timeout: 10_000 });
+
+    await mockIpc(electronApp, {
+      channel: 'ai:set-model',
+      response: { success: false, error: { code: 'MODEL_FAIL', message: 'Model select failed' } },
+      once: true,
+    });
+    await page.getByTestId('ai-model-select').locator('.model-card').first().click();
+    await expect(page.locator('.error-banner')).toContainText('Model select failed');
+    await page.getByRole('button', { name: 'Dismiss error' }).click();
+    await expect(page.locator('.error-banner')).toHaveCount(0);
+
+    await mockIpc(electronApp, {
+      channel: 'ai:set-embedding-model',
+      response: { success: false, error: { code: 'EMBED_FAIL', message: 'Embedding select failed' } },
+      once: true,
+    });
+    await page.getByTestId('ai-embedding-model-select').locator('.model-card').last().click();
+    await expect(page.locator('.error-banner')).toContainText('Embedding select failed');
+    await page.getByRole('button', { name: 'Dismiss error' }).click();
+
+    await mockIpc(electronApp, {
+      channel: 'ai:get-embedding-status',
+      response: {
+        success: true,
+        data: {
+          embeddingModel: 'llama3',
+          indexStatus: 'complete',
+          indexed: 42,
+          total: 42,
+          vectorDimension: 768,
+        },
+      },
+      once: true,
+    });
+    await page.getByRole('button', { name: 'Test Connection' }).click();
+    await page.getByTestId('ai-embedding-model-select').locator('.model-card').last().click();
+    await expect(page.getByText('Changing the embedding model will clear the existing index')).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByText('Changing the embedding model will clear the existing index')).toHaveCount(0);
+
+    await mockIpc(electronApp, {
+      channel: 'ai:set-embedding-model',
+      response: { success: true, data: {} },
+      once: true,
+    });
+    await page.getByTestId('ai-embedding-model-select').locator('.model-card').last().click();
+    await page.getByRole('button', { name: 'Change Model' }).click();
+
+    await mockIpc(electronApp, {
+      channel: 'ai:build-index',
+      response: { success: true, data: {} },
+      once: true,
+    });
+    const buildButton = page.getByTestId('ai-build-index-button');
+    await buildButton.click();
+    await expect(page.getByTestId('ai-index-status')).toContainText('Building');
+
+    await emitRendererEvent(electronApp, {
+      channel: 'embedding:progress',
+      payload: { indexed: 5, total: 10, percent: 50 },
+    });
+    await expect(page.getByText('5 / 10 emails indexed (50%)')).toBeVisible();
+
+    await emitRendererEvent(electronApp, {
+      channel: 'embedding:error',
+      payload: { message: 'Index interrupted' },
+    });
+    await page.waitForTimeout(200);
+    await expect(page.locator('.index-error-banner')).toContainText('Index interrupted');
+    await page.getByRole('button', { name: 'Dismiss error' }).click();
+    await expect(page.locator('.index-error-banner')).toHaveCount(0);
+
+    await emitRendererEvent(electronApp, {
+      channel: 'embedding:resume',
+      payload: undefined,
+    });
+    await expect(page.locator('.toast-message').filter({ hasText: 'Resuming index build...' })).toBeVisible();
+
+    await emitRendererEvent(electronApp, {
+      channel: 'embedding:complete',
+      payload: undefined,
+    });
+    await expect(page.getByTestId('ai-index-status')).toContainText('Complete');
+
+    await page.getByRole('button', { name: 'Rebuild all index' }).click();
+    await expect(page.getByText('This will delete all existing index data')).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByText('This will delete all existing index data')).toHaveCount(0);
+
+    await mockIpc(electronApp, {
+      channel: 'ai:get-embedding-status',
+      response: {
+        success: true,
+        data: {
+          embeddingModel: 'nomic-embed-text:latest',
+          indexStatus: 'building',
+          indexed: 0,
+          total: 0,
+          vectorDimension: 768,
+        },
+      },
+      once: true,
+    });
+    await page.getByRole('button', { name: 'Test Connection' }).click();
+    await page.getByTestId('ai-embedding-model-select').locator('.model-card').first().click();
+    await expect(page.getByText('Changing the embedding model will cancel the current build')).toBeVisible();
   });
 });

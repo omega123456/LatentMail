@@ -101,6 +101,7 @@ async function runFrontendCoverageReporting(
   // node_modules is excluded from the report.
   const excludePatterns = [
     '**/node_modules/**',
+    '**/assets/**',
     'src/environments/**',
     'src/app/core/models/**',
     'src/app/core/guards/setup.guard.ts',

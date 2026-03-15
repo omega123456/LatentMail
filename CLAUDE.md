@@ -325,7 +325,7 @@ IMAP operations on the same folder must be serialized to avoid UID corruption. `
 - **Use full words for variable and parameter names** — no single letters (e.g. use `deltaX` not `dx`, `width` not `w`) and no abbreviations (e.g. use `element` not `el`, `bounds` not `rect`, `index` not `i` where readability benefits). Exception: very short loop variables in tiny scope (e.g. `index` in a 2-line loop) may use a full word like `index`; avoid `i`, `j`, `n`, `x`, etc.
 - **Run tests before ending any session with code changes** — If you modified any code during the session, you MUST run `yarn test:full-suite` before finishing and ensure all tests pass. This runs backend tests (parallel, with 90% coverage check) then frontend tests (Playwright E2E, with 90% coverage check). Do not leave a session with failing tests. If tests fail, fix them before completing the task.
 - **New code requires test coverage** — Any new functionality, service, IPC handler, or non-trivial logic must have corresponding tests: backend code in `tests/backend/suites/` (Mocha + Chai, see "Backend Testing"), frontend/UI code in `tests/frontend/suites/` (Playwright, see "Frontend Testing"). Do not add features without tests.
-- **Only end-to-end tests** — Write **only** end-to-end (E2E) or functional tests. **Never** write unit tests. **Never** test by calling application functions, classes, or services directly; always exercise behavior through the public IPC interface (e.g. `callIpc()`). Tests must verify real workflows and real system state, not isolated units.
+- **Only end-to-end tests** — Write **only** end-to-end (E2E) or functional tests. **Never** write unit tests. **Backend tests**: never mock internal services; always exercise behavior through the public IPC interface (e.g. `callIpc()`). **Frontend tests**: mocking of embedding service, events, IMAP, Ollama, and other backend/external services is allowed (see "Frontend Testing → Mocking in frontend tests"). Tests must verify real workflows and real system state, not isolated units.
 
 ### Dates and Time
 
@@ -560,6 +560,21 @@ Playwright is configured with `workers: 1`, retries, and long timeouts. The runn
 - **`resetApp(options?)`** — Resets app state (e.g. database) for isolation. Use in `beforeEach` or at the start of tests that need a clean state. Options and result types are in `test-hooks-types.ts`.
 
 When coverage is requested (`--coverage` or `--check-coverage`), the script rebuilds Angular with the `electron-coverage` config, sets `PLAYWRIGHT_COVERAGE_DIR`, and the fixture starts JS coverage on the first window. After tests, `run-frontend-tests.js` runs c8 report (and optional threshold check) then exits with the combined result.
+
+### Mocking in frontend tests
+
+**Mocking is allowed** in frontend tests. Unlike backend tests, you may mock or stub the following so that UI and user-facing behavior can be tested without real network or main-process services:
+
+| What may be mocked | Purpose |
+|--------------------|---------|
+| Embedding service | Avoid real embedding/vector APIs; control search or AI-related UI |
+| IPC events | Simulate main→renderer events (e.g. `mail:sync`, `queue:update`) |
+| IMAP / mail backend | Control mailbox state, sync results, or folder data without a real IMAP server |
+| Ollama / AI backend | Control AI responses, model list, or connection status |
+| OAuth / auth | Simulate logged-in state or login flows |
+| Other external or backend services | SMTP, logger, system APIs, etc., as needed for the scenario |
+
+Use the test Electron main (`test-frontend-main.ts`) or fixtures to inject mocks (e.g. stub IPC handlers or event emission). Prefer focused UI scenarios with deterministic mocked data over depending on full backend stacks.
 
 ### Writing frontend tests
 

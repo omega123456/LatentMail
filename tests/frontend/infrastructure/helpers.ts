@@ -4,7 +4,11 @@ import { DateTime } from 'luxon';
 
 import type {
   ConfigureOllamaPayload,
+  EmitRendererEventPayload,
+  FrontendTestHooks,
   InjectEmailPayload,
+  MockIpcPayload,
+  SeedQueuePayload,
   SmtpCapturedResponse,
   TestHookGlobal,
   TestHookResponse,
@@ -50,6 +54,8 @@ export interface SeededAppContext {
   accountId: number;
   email: string;
 }
+
+type FrontendTestHookName = keyof FrontendTestHooks;
 
 export const GMAIL_INBOX_LABELS = ['\\All', '\\Inbox'] as const;
 export const GMAIL_ALL_MAIL_MAILBOXES = ['[Gmail]/All Mail', 'INBOX'] as const;
@@ -172,46 +178,53 @@ function createMessageIdentity(prefix: string): MessageIdentity {
   };
 }
 
-export async function injectEmail(
+async function invokeFrontendTestHook<TResult>(
   electronApp: ElectronApplication,
-  payload: InjectEmailPayload,
-): Promise<void> {
-  const response = await electronApp.evaluate(
-    async (_electronApp, evaluatedPayload: InjectEmailPayload) => {
+  hookName: FrontendTestHookName,
+  payload?: unknown,
+): Promise<TResult> {
+  return await electronApp.evaluate(
+    async (_electronApp, evaluatedCall: { hookName: FrontendTestHookName; payload?: unknown }) => {
       const testGlobal = globalThis as TestHookGlobal;
       if (testGlobal.testHooks === undefined) {
         throw new Error('global.testHooks is not available in the Electron main process.');
       }
 
-      return await testGlobal.testHooks.injectEmail(evaluatedPayload);
-    },
-    payload,
-  ) as TestHookResponse;
+      const hook = testGlobal.testHooks[evaluatedCall.hookName] as ((value?: unknown) => unknown) | undefined;
+      if (hook === undefined) {
+        throw new Error(`test hook ${evaluatedCall.hookName} is not available.`);
+      }
 
+      return await hook(evaluatedCall.payload);
+    },
+    { hookName, payload },
+  ) as TResult;
+}
+
+function assertTestHookSuccess(response: TestHookResponse, hookName: FrontendTestHookName): void {
   if (!response.success) {
-    throw new Error('injectEmail test hook reported failure.');
+    throw new Error(`${hookName} test hook reported failure.`);
   }
+}
+
+export async function injectEmail(
+  electronApp: ElectronApplication,
+  payload: InjectEmailPayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'injectEmail', payload);
+  assertTestHookSuccess(response, 'injectEmail');
 }
 
 export async function triggerSync(
   electronApp: ElectronApplication,
   accountId: number,
 ): Promise<void> {
-  const response = await electronApp.evaluate(
-    async (_electronApp, payload: TriggerSyncPayload) => {
-      const testGlobal = globalThis as TestHookGlobal;
-      if (testGlobal.testHooks === undefined) {
-        throw new Error('global.testHooks is not available in the Electron main process.');
-      }
-
-      return await testGlobal.testHooks.triggerSync(payload);
-    },
-    { accountId },
-  ) as TestHookResponse;
-
-  if (!response.success) {
-    throw new Error('triggerSync test hook reported failure.');
-  }
+  const response = await invokeFrontendTestHook<TestHookResponse>(
+    electronApp,
+    'triggerSync',
+    { accountId } satisfies TriggerSyncPayload,
+  );
+  assertTestHookSuccess(response, 'triggerSync');
 }
 
 export function buildRfc822(options: Rfc822MessageOptions): string {
@@ -366,21 +379,40 @@ export async function configureOllama(
   electronApp: ElectronApplication,
   config: ConfigureOllamaPayload,
 ): Promise<void> {
-  const response = await electronApp.evaluate(
-    async (_app, evaluatedConfig: ConfigureOllamaPayload) => {
-      const testGlobal = globalThis as TestHookGlobal;
-      if (testGlobal.testHooks === undefined) {
-        throw new Error('global.testHooks is not available in the Electron main process.');
-      }
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'configureOllama', config);
+  assertTestHookSuccess(response, 'configureOllama');
+}
 
-      return await testGlobal.testHooks.configureOllama(evaluatedConfig);
-    },
-    config,
-  ) as TestHookResponse;
+export async function mockIpc(
+  electronApp: ElectronApplication,
+  payload: MockIpcPayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'mockIpc', payload);
+  assertTestHookSuccess(response, 'mockIpc');
+}
 
-  if (!response.success) {
-    throw new Error('configureOllama test hook reported failure.');
-  }
+export async function clearMockIpc(
+  electronApp: ElectronApplication,
+  channel?: string,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'clearMockIpc', channel);
+  assertTestHookSuccess(response, 'clearMockIpc');
+}
+
+export async function emitRendererEvent(
+  electronApp: ElectronApplication,
+  payload: EmitRendererEventPayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'emitRendererEvent', payload);
+  assertTestHookSuccess(response, 'emitRendererEvent');
+}
+
+export async function seedQueueState(
+  electronApp: ElectronApplication,
+  payload: SeedQueuePayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'seedQueue', payload);
+  assertTestHookSuccess(response, 'seedQueue');
 }
 
 export const TEST_PNG_1X1_BASE64 =
@@ -512,18 +544,8 @@ export async function injectInboxMessageWithAttachments(
 export async function getSmtpCaptured(
   electronApp: ElectronApplication,
 ): Promise<SmtpCapturedResponse> {
-  const response = await electronApp.evaluate(async () => {
-    const testGlobal = globalThis as TestHookGlobal;
-    if (testGlobal.testHooks === undefined) {
-      throw new Error('global.testHooks is not available in the Electron main process.');
-    }
-
-    return await testGlobal.testHooks.getSmtpCaptured();
-  }) as SmtpCapturedResponse;
-
-  if (!response.success) {
-    throw new Error('getSmtpCaptured test hook reported failure.');
-  }
+  const response = await invokeFrontendTestHook<SmtpCapturedResponse>(electronApp, 'getSmtpCaptured');
+  assertTestHookSuccess(response, 'getSmtpCaptured');
 
   return response;
 }

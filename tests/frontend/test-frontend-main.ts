@@ -9,9 +9,12 @@ import { quiesceAndRestore } from '../backend/infrastructure/suite-lifecycle';
 import { TestEventBus } from '../backend/infrastructure/test-event-bus';
 import type {
   ConfigureOllamaPayload,
+  EmitRendererEventPayload,
   InjectEmailPayload,
+  MockIpcPayload,
   ResetDbOptions,
   ResetDbResult,
+  SeedQueuePayload,
   SmtpCapturedResponse,
   TestHookResponse,
   TriggerSyncPayload,
@@ -125,6 +128,11 @@ let mainWindow: BrowserWindow | null = null;
 let bootstrap: BootstrapResult | null = null;
 let tempDirPath: string | null = null;
 let shutdownPromise: Promise<void> | null = null;
+const ipcOverrides = new Map<string, Array<{ response?: unknown; throwMessage?: string; once?: boolean }>>();
+
+(globalThis as {
+  __LATENTMAIL_IPC_OVERRIDES__?: typeof ipcOverrides;
+}).__LATENTMAIL_IPC_OVERRIDES__ = ipcOverrides;
 
 function getAngularEntryPath(): string {
   return path.resolve(__dirname, '../../../dist/latentmail-app/browser/index.html');
@@ -268,6 +276,67 @@ function validateConfigureOllamaPayload(payload: unknown): ConfigureOllamaPayloa
     responses: responses as Record<string, string> | undefined,
     healthy: payload['healthy'] as boolean | undefined,
     enableAiChat: payload['enableAiChat'] as boolean | undefined,
+  };
+}
+
+function validateMockIpcPayload(payload: unknown): MockIpcPayload {
+  if (!isRecord(payload)) {
+    throw new Error('mockIpc payload must be an object.');
+  }
+
+  if (typeof payload['channel'] !== 'string' || payload['channel'].trim().length === 0) {
+    throw new Error('mockIpc payload.channel must be a non-empty string.');
+  }
+
+  if (payload['throwMessage'] !== undefined && typeof payload['throwMessage'] !== 'string') {
+    throw new Error('mockIpc payload.throwMessage must be a string when provided.');
+  }
+
+  if (payload['once'] !== undefined && typeof payload['once'] !== 'boolean') {
+    throw new Error('mockIpc payload.once must be a boolean when provided.');
+  }
+
+  return {
+    channel: payload['channel'].trim(),
+    response: payload['response'],
+    throwMessage: payload['throwMessage'] as string | undefined,
+    once: payload['once'] as boolean | undefined,
+  };
+}
+
+function validateEmitRendererEventPayload(payload: unknown): EmitRendererEventPayload {
+  if (!isRecord(payload)) {
+    throw new Error('emitRendererEvent payload must be an object.');
+  }
+
+  if (typeof payload['channel'] !== 'string' || payload['channel'].trim().length === 0) {
+    throw new Error('emitRendererEvent payload.channel must be a non-empty string.');
+  }
+
+  return {
+    channel: payload['channel'].trim(),
+    payload: payload['payload'],
+  };
+}
+
+function validateSeedQueuePayload(payload: unknown): SeedQueuePayload {
+  if (!isRecord(payload)) {
+    throw new Error('seedQueue payload must be an object.');
+  }
+
+  const items = payload['items'];
+  if (items !== undefined && !Array.isArray(items)) {
+    throw new Error('seedQueue payload.items must be an array when provided.');
+  }
+
+  const bodyFetchItems = payload['bodyFetchItems'];
+  if (bodyFetchItems !== undefined && !Array.isArray(bodyFetchItems)) {
+    throw new Error('seedQueue payload.bodyFetchItems must be an array when provided.');
+  }
+
+  return {
+    items: items as Array<Record<string, unknown>> | undefined,
+    bodyFetchItems: bodyFetchItems as Array<Record<string, unknown>> | undefined,
   };
 }
 
@@ -670,6 +739,7 @@ async function shutdownFrontendHarness(): Promise<void> {
 
   shutdownPromise = (async () => {
     globalThis.testHooks = undefined;
+    ipcOverrides.clear();
 
     try {
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
@@ -740,6 +810,7 @@ function registerTestHooks(): void {
       bootstrapResult.oauthServer.reset();
       bootstrapResult.ollamaServer.reset();
       OllamaService.getInstance().resetForTesting();
+      ipcOverrides.clear();
 
       if (validatedOptions.seedAccount !== false) {
         const seededAccount = seedDefaultTestAccount(bootstrapResult);
@@ -858,6 +929,50 @@ function registerTestHooks(): void {
       await triggerOllamaHealthCheck();
       return { success: true };
     },
+
+    mockIpc: async (payload: MockIpcPayload): Promise<TestHookResponse> => {
+      const validatedPayload = validateMockIpcPayload(payload);
+      const overrides = ipcOverrides.get(validatedPayload.channel) ?? [];
+      overrides.push({
+        response: validatedPayload.response,
+        throwMessage: validatedPayload.throwMessage,
+        once: validatedPayload.once,
+      });
+      ipcOverrides.set(validatedPayload.channel, overrides);
+      return { success: true };
+    },
+
+    clearMockIpc: async (channel?: string): Promise<TestHookResponse> => {
+      if (typeof channel === 'string' && channel.trim().length > 0) {
+        ipcOverrides.delete(channel.trim());
+      } else {
+        ipcOverrides.clear();
+      }
+      return { success: true };
+    },
+
+    emitRendererEvent: async (payload: EmitRendererEventPayload): Promise<TestHookResponse> => {
+      const validatedPayload = validateEmitRendererEventPayload(payload);
+      const window = ensureMainWindow();
+      window.webContents.send(validatedPayload.channel, validatedPayload.payload);
+      return { success: true };
+    },
+
+    seedQueue: async (payload: SeedQueuePayload): Promise<TestHookResponse> => {
+      const validatedPayload = validateSeedQueuePayload(payload);
+      const window = ensureMainWindow();
+
+      for (const item of validatedPayload.items ?? []) {
+        window.webContents.send('queue:update', item);
+      }
+
+      for (const item of validatedPayload.bodyFetchItems ?? []) {
+        window.webContents.send('body-queue:update', item);
+      }
+
+      return { success: true };
+    },
+
   };
 }
 

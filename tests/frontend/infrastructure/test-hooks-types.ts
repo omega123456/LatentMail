@@ -32,6 +32,23 @@ export interface ConfigureOllamaPayload {
   enableAiChat?: boolean;
 }
 
+export interface MockIpcPayload {
+  channel: string;
+  response?: unknown;
+  throwMessage?: string;
+  once?: boolean;
+}
+
+export interface EmitRendererEventPayload {
+  channel: string;
+  payload: unknown;
+}
+
+export interface SeedQueuePayload {
+  items?: Array<Record<string, unknown>>;
+  bodyFetchItems?: Array<Record<string, unknown>>;
+}
+
 export interface TestHookResponse {
   success: boolean;
 }
@@ -48,6 +65,10 @@ export interface FrontendTestHooks {
   triggerSync(payload: TriggerSyncPayload): Promise<TestHookResponse>;
   getSmtpCaptured(): Promise<SmtpCapturedResponse>;
   configureOllama(config: ConfigureOllamaPayload): Promise<TestHookResponse>;
+  mockIpc(payload: MockIpcPayload): Promise<TestHookResponse>;
+  clearMockIpc(channel?: string): Promise<TestHookResponse>;
+  emitRendererEvent(payload: EmitRendererEventPayload): Promise<TestHookResponse>;
+  seedQueue(payload: SeedQueuePayload): Promise<TestHookResponse>;
 }
 
 export interface TestHookGlobal {

@@ -5,11 +5,14 @@ import { test, expect } from '../infrastructure/electron-fixture';
 import {
   buildHtmlRfc822,
   buildRfc822,
+  clearMockIpc,
   discardComposeIfOpen,
   extractSeededAccount,
   injectEmail,
   injectInboxMessage,
   injectInboxMessageWithAttachments,
+  mockIpc,
+  returnToMailShell,
   TEST_PNG_1X1_BASE64,
   TEST_TEXT_FILE_CONTENT,
   triggerSync,
@@ -73,6 +76,10 @@ test.describe('Reading pane advanced', () => {
     ({ accountId, email: seededEmail } = extractSeededAccount(result));
 
     await waitForMailShell(page);
+  });
+
+  test.afterEach(async ({ electronApp }) => {
+    await clearMockIpc(electronApp);
   });
 
   test('open message with attachments → verify attachment section renders with correct count text', async ({
@@ -514,6 +521,100 @@ test.describe('Reading pane advanced', () => {
 
     await page.keyboard.press('Escape');
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+
+  // ── Attachment preview: image/PDF/zip, fallback, download toasts ─────
+
+  test('attachment preview dialog covers preview types, fallback, and download toasts', async ({
+    page,
+    electronApp,
+  }) => {
+    await returnToMailShell(page);
+    await waitForMailShell(page);
+
+    const token = DateTime.utc().toMillis();
+    const imageSubject = `Preview Image ${token}`;
+    const pdfSubject = `Preview Pdf ${token}`;
+    const zipSubject = `Preview Zip ${token}`;
+    const imageContent =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+    const imageMessageIdentity = await injectInboxMessageWithAttachments(electronApp, {
+      from: 'preview@example.com',
+      to: seededEmail,
+      subject: imageSubject,
+      body: 'Image preview coverage message',
+      attachments: [
+        { filename: 'preview.png', mimeType: 'image/png', base64Content: imageContent },
+      ],
+    });
+
+    const pdfMessageIdentity = await injectInboxMessageWithAttachments(electronApp, {
+      from: 'preview@example.com',
+      to: seededEmail,
+      subject: pdfSubject,
+      body: 'Pdf preview coverage message',
+      attachments: [
+        { filename: 'preview.pdf', mimeType: 'application/pdf', base64Content: imageContent },
+      ],
+    });
+
+    const zipMessageIdentity = await injectInboxMessageWithAttachments(electronApp, {
+      from: 'preview@example.com',
+      to: seededEmail,
+      subject: zipSubject,
+      body: 'Zip preview coverage message',
+      attachments: [
+        { filename: 'archive.zip', mimeType: 'application/zip', base64Content: imageContent },
+      ],
+    });
+
+    await triggerSync(electronApp, accountId);
+    await waitForEmailSubject(page, imageSubject);
+    await waitForEmailSubject(page, pdfSubject);
+    await waitForEmailSubject(page, zipSubject);
+
+    await page.getByTestId(`email-item-${imageMessageIdentity.xGmThrid}`).click();
+    await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+
+    await page.getByTestId('message-attachment-item-0').click();
+    let dialog = page.locator('.preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.preview-image')).toBeVisible();
+
+    await mockIpc(electronApp, {
+      channel: 'attachment:download',
+      response: { success: false, error: { code: 'DL_FAIL', message: 'Download failed' } },
+      once: true,
+    });
+    await dialog.getByRole('button', { name: 'Download' }).click();
+    await expect(page.locator('.toast-message').filter({ hasText: 'Download failed' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible({ timeout: 5_000 });
+
+    await page.getByTestId(`email-item-${pdfMessageIdentity.xGmThrid}`).click();
+    await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+    await page.getByTestId('message-attachment-item-0').click();
+    dialog = page.locator('.preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('ng2-pdfjs-viewer')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await page.getByTestId(`email-item-${zipMessageIdentity.xGmThrid}`).click();
+    await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+    await page.getByTestId('message-attachment-item-0').click();
+    dialog = page.locator('.preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.preview-fallback')).toContainText('Preview not available for this file type.');
+
+    await mockIpc(electronApp, {
+      channel: 'attachment:download',
+      response: { success: true, data: {} },
+      once: true,
+    });
+    await dialog.getByRole('button', { name: 'Download' }).click();
+    await expect(page.locator('.toast-message').filter({ hasText: 'Downloaded archive.zip' })).toBeVisible();
+    await page.keyboard.press('Escape');
   });
 
   // ── Phase F: Relative-time pipe coverage ────────────────────────────
