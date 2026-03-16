@@ -73,6 +73,18 @@ yarn test:backend:parallel --check-statements=90 --check-branches=90 --check-fun
 # Run frontend E2E tests (builds Angular + Electron, then Playwright)
 yarn test:frontend
 
+# Filter tests by name (Playwright --grep, regex-capable)
+yarn test:frontend --filter="login"
+
+# Run tests from a specific suite file (substring match, case-insensitive)
+yarn test:frontend --file=auth
+
+# Combine file and name filters
+yarn test:frontend --file=compose --filter="draft"
+
+# List available test suites (no build required)
+yarn test:frontend --list
+
 # Run frontend tests only (assumes build already done; use for quick re-runs)
 yarn test:frontend:run
 
@@ -82,6 +94,9 @@ yarn test:frontend:update-screenshots
 # Frontend tests with coverage collection and threshold check
 yarn test:frontend --coverage
 yarn test:frontend --check-coverage=90
+
+# Per-metric coverage thresholds
+yarn test:frontend --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90
 ```
 
 ### Native Module Rebuilding
