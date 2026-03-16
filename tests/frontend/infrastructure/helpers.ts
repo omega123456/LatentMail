@@ -90,10 +90,16 @@ export async function waitForMailShell(page: Page): Promise<void> {
   await expect(page.getByTestId('email-list-container')).toBeVisible();
 }
 
-export async function waitForEmailSubject(page: Page, subject: string): Promise<void> {
+export async function waitForEmailSubject(
+  page: Page,
+  subject: string,
+  options?: { timeout?: number; exact?: boolean },
+): Promise<void> {
+  const timeout = options?.timeout ?? 5000;
+  const exact = options?.exact ?? true;
   await expect(
-    page.getByTestId('email-list-container').getByText(subject, { exact: true }),
-  ).toBeVisible();
+    page.getByTestId('email-list-container').getByText(subject, { exact }),
+  ).toBeVisible({ timeout });
 }
 
 export async function openCompose(page: Page): Promise<void> {
