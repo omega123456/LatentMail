@@ -2,13 +2,16 @@ import type { Page } from '@playwright/test';
 
 import { test, expect } from '../infrastructure/electron-fixture';
 import {
+  clearMockIpc,
   configureOllama,
   discardComposeIfOpen,
+  emitRendererEvent,
   extractSeededAccount,
   getComposeEditor,
   getSmtpCaptured,
   injectInboxMessage,
   injectLogicalMessage,
+  mockIpc,
   openCompose,
   triggerSync,
   waitForComposeEditor,
@@ -95,6 +98,10 @@ test.describe('Compose', () => {
     ({ accountId, email: seededEmail } = extractSeededAccount(result));
 
     await waitForMailShell(page);
+  });
+
+  test.afterEach(async ({ electronApp }) => {
+    await clearMockIpc(electronApp);
   });
 
   test('compose window opens when compose button is clicked', async ({ page }) => {
@@ -474,7 +481,7 @@ test.describe('Compose', () => {
 
       await page.mouse.move(startX, startY);
       await page.mouse.down();
-      await page.mouse.move(startX, startY - 80, { steps: 10 });
+      await page.mouse.move(startX, startY + 100, { steps: 10 });
       await page.mouse.up();
 
       const finalBox = await composeWindow.boundingBox();
@@ -976,6 +983,7 @@ test.describe('Compose', () => {
       await triggerSync(electronApp, accountId);
 
       await page.getByTestId('folder-item-INBOX').click();
+      await expect(page.getByTestId('email-list-header')).toContainText('Inbox', { timeout: 5000 });
       await page.getByTestId('folder-item-[Gmail]/Drafts').click();
       await expect(page.getByTestId('email-list-header')).toContainText('Drafts');
 
@@ -1000,6 +1008,91 @@ test.describe('Compose', () => {
 
       await expect(page.getByTestId('compose-window')).not.toBeVisible({ timeout: 5000 });
       await expect(discardDraftItem).not.toBeVisible({ timeout: 5000 });
+    });
+
+    test('server draft restore appends fetched attachments when editing an existing draft', async ({ page, electronApp }) => {
+      const restoreDraftIdentity = await injectLogicalMessage(electronApp, {
+        from: seededEmail,
+        to: 'restore-recipient@example.com',
+        subject: 'Draft With Server Attachments',
+        body: 'This draft should restore server attachments.',
+        mailboxes: ['[Gmail]/All Mail', '[Gmail]/Drafts'],
+        xGmLabels: ['\\All', '\\Draft'],
+        flags: ['\\Draft'],
+      });
+
+      await mockIpc(electronApp, {
+        channel: 'attachment:fetch-draft-attachments',
+        response: {
+          success: true,
+          data: [
+            {
+              id: 'server-attachment-1',
+              filename: 'restored-server.txt',
+              mimeType: 'text/plain',
+              size: 21,
+              data: Buffer.from('restored attachment').toString('base64'),
+            },
+          ],
+        },
+        once: true,
+      });
+
+      await triggerSync(electronApp, accountId);
+      await page.getByTestId('folder-item-INBOX').click();
+      await expect(page.getByTestId('email-list-header')).toContainText('Inbox', { timeout: 5000 });
+      await page.getByTestId('folder-item-[Gmail]/Drafts').click();
+      await expect(page.getByTestId('email-list-header')).toContainText('Drafts');
+
+      const draftItem = page.getByTestId(`email-item-${restoreDraftIdentity.xGmThrid}`);
+      await expect(draftItem).toBeVisible({ timeout: 10_000 });
+
+      await draftItem.click();
+      await draftItem.click({ button: 'right' });
+      await page.getByTestId('context-action-edit-draft').click();
+
+      await expect(page.getByTestId('compose-window')).toBeVisible({ timeout: 10_000 });
+      const attachmentList = page.locator('[data-testid="attachment-list"]');
+      await expect(attachmentList.getByText('restored-server.txt')).toBeVisible({ timeout: 10_000 });
+
+      await discardComposeIfOpen(page);
+    });
+
+    test('queue update failure surfaces save error for an auto-saved draft', async ({ page, electronApp }) => {
+      await page.getByTestId('folder-item-INBOX').click();
+      await discardComposeIfOpen(page);
+
+      await page.getByTestId('compose-button').click();
+      await waitForComposeEditor(page);
+
+      await mockIpc(electronApp, {
+        channel: 'queue:enqueue',
+        response: { success: true, data: { queueId: 'draft-failure-queue' } },
+        once: true,
+      });
+
+      const toField = page.getByTestId('recipient-input-field-to');
+      await toField.fill('autosave-failure@example.com');
+      await toField.press('Tab');
+      await page.getByTestId('compose-subject-input').fill('Auto-save failure test');
+
+      const editor = getComposeEditor(page);
+      await editor.click();
+      await page.keyboard.type('This content triggers a failed queue update.');
+
+      await page.waitForTimeout(5500);
+
+      await emitRendererEvent(electronApp, {
+        channel: 'queue:update',
+        payload: {
+          queueId: 'draft-failure-queue',
+          status: 'failed',
+          error: 'Draft queue failed',
+        },
+      });
+
+      await expect(page.getByTestId('compose-error').getByText('Draft queue failed')).toBeVisible({ timeout: 5_000 });
+      await discardComposeIfOpen(page);
     });
   });
 });

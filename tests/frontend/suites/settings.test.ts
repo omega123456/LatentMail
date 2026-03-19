@@ -185,11 +185,12 @@ test.describe('Settings', () => {
     test('AI settings shows available features', async ({ page }) => {
       const content = page.getByTestId('settings-content');
 
-      const hasFeature = await Promise.any([
-        content.getByText('Thread Summary').isVisible().then((v) => v),
-        content.getByText('Smart Reply').isVisible().then((v) => v),
-        content.getByText('AI Compose').isVisible().then((v) => v),
-      ]).catch(() => false);
+      const featureFlags = await Promise.all([
+        content.getByText('Thread Summary').isVisible().then((visible) => visible).catch(() => false),
+        content.getByText('Smart Reply').isVisible().then((visible) => visible).catch(() => false),
+        content.getByText('AI Compose').isVisible().then((visible) => visible).catch(() => false),
+      ]);
+      const hasFeature = featureFlags.some((visible) => visible);
 
       expect(hasFeature).toBe(true);
     });
@@ -1291,7 +1292,106 @@ test.describe('Settings', () => {
       await page.getByTestId('filter-item-5').locator('button[title="Delete"]').click();
       await expect(page.locator('.error-banner')).toContainText('Delete failed');
     });
-  
+
+    test('filter settings shows empty state, opens a new filter editor, and moves a filter up', async ({ page, electronApp }) => {
+      await mockIpc(electronApp, {
+        channel: 'db:get-filters',
+        response: { success: true, data: { filters: [] } },
+        once: true,
+      });
+
+      await navigateToSettings(page, 'general');
+      await navigateToSettings(page, 'filters');
+      await expect(page.locator('.empty-state')).toContainText('No filters yet');
+
+      await page.getByTestId('add-filter-button').click();
+      await expect(page.getByRole('heading', { name: 'New Filter' })).toBeVisible();
+      await page.locator('.editor-overlay').click({ position: { x: 5, y: 5 } });
+      await expect(page.getByRole('heading', { name: 'New Filter' })).not.toBeVisible({ timeout: 5_000 });
+
+      await mockIpc(electronApp, {
+        channel: 'db:get-filters',
+        response: {
+          success: true,
+          data: {
+            filters: [
+              {
+                id: 11,
+                accountId,
+                name: 'Later filter',
+                conditions: JSON.stringify([{ field: 'from', operator: 'contains', value: 'later' }]),
+                actions: JSON.stringify([{ type: 'mark-read' }]),
+                isEnabled: true,
+                isAiGenerated: false,
+                sortOrder: 0,
+              },
+              {
+                id: 12,
+                accountId,
+                name: 'Earlier filter',
+                conditions: JSON.stringify([{ field: 'subject', operator: 'contains', value: 'first' }]),
+                actions: JSON.stringify([{ type: 'move', value: 'Priority' }]),
+                isEnabled: true,
+                isAiGenerated: false,
+                sortOrder: 1,
+              },
+            ],
+          },
+        },
+        once: true,
+      });
+      await navigateToSettings(page, 'general');
+      await navigateToSettings(page, 'filters');
+
+      await mockIpc(electronApp, {
+        channel: 'db:update-filter',
+        response: { success: true, data: {} },
+        once: true,
+      });
+      await mockIpc(electronApp, {
+        channel: 'db:update-filter',
+        response: { success: true, data: {} },
+        once: true,
+      });
+      await mockIpc(electronApp, {
+        channel: 'db:get-filters',
+        response: {
+          success: true,
+          data: {
+            filters: [
+              {
+                id: 12,
+                accountId,
+                name: 'Earlier filter',
+                conditions: JSON.stringify([{ field: 'subject', operator: 'contains', value: 'first' }]),
+                actions: JSON.stringify([{ type: 'move', value: 'Priority' }]),
+                isEnabled: true,
+                isAiGenerated: false,
+                sortOrder: 0,
+              },
+              {
+                id: 11,
+                accountId,
+                name: 'Later filter',
+                conditions: JSON.stringify([{ field: 'from', operator: 'contains', value: 'later' }]),
+                actions: JSON.stringify([{ type: 'mark-read' }]),
+                isEnabled: true,
+                isAiGenerated: false,
+                sortOrder: 1,
+              },
+            ],
+          },
+        },
+        once: true,
+      });
+
+      await page.getByTestId('filter-item-12').locator('button[title="Move up (higher priority)"]').click();
+
+      const filterCards = page.locator('.filter-card');
+      await expect(filterCards.first()).toContainText('Earlier filter');
+      await expect(filterCards.nth(1)).toContainText('Later filter');
+    });
+
     // ── Keyboard settings: render shortcut list ────────────────────────
   
     test('keyboard settings shows shortcut list', async ({ page }) => {

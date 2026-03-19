@@ -7,6 +7,7 @@ import { ZoomIndicatorComponent } from './shared/components/zoom-indicator.compo
 import { CommandPaletteComponent } from './features/command-palette/command-palette.component';
 import { CommandRegistryService } from './core/services/command-registry.service';
 import { ElectronService } from './core/services/electron.service';
+import { ThemeService } from './core/services/theme.service';
 import { QueueStore } from './store/queue.store';
 import { SettingsStore } from './store/settings.store';
 import { AccountsStore } from './store/accounts.store';
@@ -33,6 +34,12 @@ export class AppComponent implements OnInit, OnDestroy {
    * all default commands with KeyboardService.
    */
   private readonly commandRegistry = inject(CommandRegistryService);
+
+  /**
+   * Injected at root so theme effects run on startup (not only when opening Settings).
+   * Otherwise `data-theme` stays at index.html default until GeneralSettings loads.
+   */
+  private readonly themeService = inject(ThemeService);
 
   private readonly settingsStore = inject(SettingsStore);
   private readonly electronService = inject(ElectronService);

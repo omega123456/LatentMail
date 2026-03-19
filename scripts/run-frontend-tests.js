@@ -162,6 +162,7 @@ async function runFrontendCoverageReporting(
     'src/app/core/guards/setup.guard.ts',
     'src/app/features/auth/auth-landing.component.ts',
     'src/app/shared/components/email-actions/email-action.model.ts',
+    'src/app/shared/utils/mime-icon.util.ts',
     'src/typings.d.ts',
   ];
   const reportArgs = [

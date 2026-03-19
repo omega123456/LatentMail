@@ -113,4 +113,33 @@ test.describe('Theme', () => {
       return await readThemeMode(page);
     }).toBe(originalTheme);
   });
+
+  test('saved theme from localStorage is restored after a full window reload', async ({ page, electronApp }) => {
+    await navigateToSettings(page, 'general');
+    await expect(page.getByTestId('setting-theme')).toBeVisible();
+
+    await selectTheme(page, 'dark');
+    await expect.poll(async () => {
+      return await readThemeMode(page);
+    }).toBe('dark');
+
+    await Promise.all([
+      page.waitForEvent('load', { timeout: 60_000 }),
+      electronApp.evaluate(() => {
+        const testGlobal = globalThis as import('../infrastructure/test-hooks-types').TestHookGlobal;
+        return testGlobal.testHooks?.reloadWindow() ?? { success: false };
+      }),
+    ]);
+
+    await waitForMailShell(page);
+    await expect.poll(async () => {
+      return await readThemeMode(page);
+    }).toBe('dark');
+
+    await navigateToSettings(page, 'general');
+    await selectTheme(page, originalTheme);
+    await expect.poll(async () => {
+      return await readThemeMode(page);
+    }).toBe(originalTheme);
+  });
 });

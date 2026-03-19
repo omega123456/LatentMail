@@ -259,6 +259,26 @@ test.describe('Email list', () => {
       await page.keyboard.press('Shift+u');
       await expect(targetItem).toHaveClass(/(^|\s)unread(\s|$)/, { timeout: 5000 });
     });
+
+    test('Enter clears multi-selection and opens the keyboard cursor thread', async ({ page }) => {
+      const firstItem = page.getByTestId(`email-item-${injectedMessages[1].xGmThrid}`);
+      const secondItem = page.getByTestId(`email-item-${injectedMessages[2].xGmThrid}`);
+
+      await firstItem.click();
+      await page.keyboard.down(shortcutModifier);
+      await secondItem.click();
+      await page.keyboard.up(shortcutModifier);
+
+      await expect(firstItem).toHaveClass(/(^|\s)multi-selected(\s|$)/);
+      await expect(secondItem).toHaveClass(/(^|\s)multi-selected(\s|$)/);
+
+      await focusMailShell(page);
+      await page.keyboard.press('Enter');
+
+      await expect(page.getByTestId('reading-pane-content')).toBeVisible({ timeout: 5000 });
+      await expect(firstItem).not.toHaveClass(/(^|\s)multi-selected(\s|$)/, { timeout: 5000 });
+      await expect(secondItem).not.toHaveClass(/(^|\s)multi-selected(\s|$)/, { timeout: 5000 });
+    });
   });
 
   test.describe('Keyboard', () => {
@@ -562,10 +582,10 @@ test.describe('Email list', () => {
       await targetItem.click();
       await expect(targetItem).toHaveClass(/(^|\s)selected(\s|$)/);
 
-      await focusMailShell(page);
       await page.keyboard.press('Shift+j');
 
       await expect(targetItem).not.toBeVisible({ timeout: 5000 });
     });
+
   });
 });

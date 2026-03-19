@@ -2,9 +2,12 @@ import { DateTime } from 'luxon';
 
 import { test, expect } from '../infrastructure/electron-fixture';
 import {
+  clearMockIpc,
   configureOllama,
+  emitRendererEvent,
   extractSeededAccount,
   injectInboxMessage,
+  mockIpc,
   triggerSync,
   waitForEmailSubject,
   waitForMailShell,
@@ -22,6 +25,10 @@ test.describe('Search', () => {
   let searchableSubject: string;
   let nonMatchingSubject: string;
   let searchKeyword: string;
+
+  test.afterEach(async ({ electronApp }) => {
+    await clearMockIpc(electronApp);
+  });
 
   async function reloadWindowWithFreshState(
     electronApp: import('playwright').ElectronApplication,
@@ -118,5 +125,82 @@ test.describe('Search', () => {
 
     await expect(keywordModeButton).toBeVisible({ timeout: 10_000 });
     await expect(semanticModeButton).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('semantic search adopts an early batch token and shows partial results', async ({ electronApp, page }) => {
+    await configureOllama(electronApp, {
+      models: ['llama3', 'nomic-embed-text:latest'],
+      selectedModel: 'llama3',
+      healthy: true,
+      enableAiChat: true,
+    });
+
+    await reloadWindowWithFreshState(electronApp, page);
+    await waitForMailShell(page);
+
+    const semanticModeButton = page.getByTestId('search-mode-semantic');
+    await expect(semanticModeButton).toBeVisible({ timeout: 10_000 });
+    await semanticModeButton.click();
+
+    await mockIpc(electronApp, {
+      channel: 'ai:search',
+      response: { success: true, data: { searchToken: 'semantic-token-1' } },
+      once: true,
+    });
+
+    await mockIpc(electronApp, {
+      channel: 'mail:search-by-msgids',
+      response: {
+        success: true,
+        data: [
+          {
+            id: 501,
+            accountId,
+            xGmThrid: 'semantic-search-thread-1',
+            subject: searchableSubject,
+            fromAddress: 'search-match@example.com',
+            fromName: 'Search Match',
+            snippet: `This email contains the searchable keyword ${searchKeyword}.`,
+            lastMessageDate: DateTime.utc().toISO(),
+            isRead: false,
+            isStarred: false,
+            hasAttachments: false,
+            folder: 'Search Results',
+            folders: ['INBOX'],
+            messageCount: 1,
+          },
+        ],
+      },
+      once: true,
+    });
+
+    const searchInput = page.getByTestId('search-input');
+    await searchInput.fill(searchKeyword);
+
+    const searchPromise = searchInput.press('Enter');
+    await searchPromise;
+
+    await emitRendererEvent(electronApp, {
+      channel: 'ai:search:batch',
+      payload: {
+        searchToken: 'semantic-token-1',
+        msgIds: ['semantic-search-message-1'],
+        phase: 'imap',
+      },
+    });
+
+    await expect(page.locator('.search-stream-count')).toContainText('1 result', { timeout: 10_000 });
+
+    await emitRendererEvent(electronApp, {
+      channel: 'ai:search:complete',
+      payload: {
+        searchToken: 'semantic-token-1',
+        status: 'partial',
+        totalResults: 1,
+      },
+    });
+
+    await expect(page.getByTestId('search-result-folder')).toBeVisible({ timeout: 5_000 });
+    await waitForEmailSubject(page, searchableSubject);
   });
 });

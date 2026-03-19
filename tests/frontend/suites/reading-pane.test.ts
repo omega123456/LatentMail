@@ -26,6 +26,7 @@ import {
 
 const inboxMailboxes = ['[Gmail]/All Mail', 'INBOX'];
 const inboxLabels = ['\\All', '\\Inbox'];
+const testDocxBase64 = 'UEsDBBQAAAAIACawcFzXeYTq8gAAALgBAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH2Qy07DMBBF9/0Ka7aodmCBEIrTBY8lsCgfYNmTxKo9tjxuSP8epYUiIcr6Ps6daTdzDGLCwj6RhmvZgECyyXkaNLxvn9d3ILgaciYkQg0HZNh0q3Z7yMhijoFYw1hrvleK7YjRsEwZaY6hTyWayjKVQWVjd2ZAddM0t8omqkh1XZcO6FZCtI/Ym32o4mmuSKctBQODeDh5F5wGk3Pw1lSfSE3kfoHWXxBZMBw9PPrMV3MMoC5BFvEy4yf6OmEp3qF4M6W+mIga1EcqTrlk9xGpyv+b/lib+t5bPOeXtlySRWZPQwzyrETj6fuKVh0f330CUEsDBBQAAAAIACawcFwgG4bqtgAAAC4BAAALAAAAX3JlbHMvLnJlbHONz7FOxDAQBNA+X7Ha/uIcBUIozjUnpGtR+ADL3iQW9q7l9UHu72koOERBOxq90YynPSf4oKpR2OKxHxCIvYTIq8W3+eXwhKDNcXBJmCzeSPE0deMrJdeisG6xKOw5sVrcWivPxqjfKDvtpRDvOS1Ss2vaS11Ncf7drWQehuHR1J8GTh3AHQuXYLFewhFhvhX6Dy/LEj2dxV8zcftj5VcDYXZ1pWbxU2ow4Tvu95zQTN1o7m5OX1BLAwQUAAAACAAmsHBckJftdcwBAAB/BQAAEQAAAHdvcmQvZG9jdW1lbnQueG1spZRNb9wgEIbv+RWI+64/5LaRZTuHrNrmULVSWqlXFmMbBRgE2Oz211f4c6NK0TZ7wbw288zLDLh4OEmBBmYsB1XiZB9jxBSFmqu2xL9+ft7dY2QdUTURoFiJz8zih+qu8HkNtJdMOXSSQtnca1rizjmdR5GlHZPE7iWnBiw0bk9BRtA0nLLIg6mjNE7icaYNUGYtV+0jUQOxeMbJf2mgmTpJ0YCRxNk9mDaSxLz0ekdBauL4kQvuzlEaxx8XDJS4NyqfEbvVUAjJJ0PzY4kw1+SdQg5zBcaMkWGCOA7Kdlxv23gvTRLXLZDhrU0MUizrvE6y23pwMMRz1W7Aa+zXU5AUk/O3iUl8RUcCYo24xsLrnIsTSbjaEr+rNJfFbW+r7RcDvd5o/Dbak3pZWeFe/gdr7tHl1uxtZp47ohlGkuZPrQJDjoKV2CcZCicSV3cIFT4/Qn0O01HoqvC5CYOrvjIhAB2+P/5G2rCBM19E4X0YzTjqNc4y6n6YSU6g9vkP8uGUJGmaxRj5vCtx8uE+i3H0at03YpDPHegSJ9m00vC2c5s8gnMgNy1Yc/G1Y6RmpsSf0lE2AO5Ctr0b5Zo1+N7cBjUVIMyWX2f1F1BLAQIUABQAAAAIACawcFzXeYTq8gAAALgBAAATAAAAAAAAAAAAAACAAQAAAABbQ29udGVudF9UeXBlc10ueG1sUEsBAhQAFAAAAAgAJrBwXCAbhuq2AAAALgEAAAsAAAAAAAAAAAAAAIABIwEAAF9yZWxzLy5yZWxzUEsBAhQAFAAAAAgAJrBwXJCX7XXMAQAAfwUAABEAAAAAAAAAAAAAAIABAgIAAHdvcmQvZG9jdW1lbnQueG1sUEsFBgAAAAADAAMAuQAAAP0DAAAAAA==';
 
 async function injectAndOpenSingleMessage(
   page: import('@playwright/test').Page,
@@ -774,6 +775,79 @@ test.describe('Reading pane', () => {
       await dialog.getByRole('button', { name: 'Download' }).click();
       await expect(page.locator('.toast-message').filter({ hasText: 'Downloaded archive.zip' })).toBeVisible();
       await page.keyboard.press('Escape');
+    });
+
+    test('DOCX attachment preview renders converted HTML and close button dismisses the dialog', async ({ page, electronApp }) => {
+      await discardComposeIfOpen(page);
+
+      const subject = `Docx Preview ${DateTime.utc().toMillis()}`;
+      const messageIdentity = await injectInboxMessageWithAttachments(electronApp, {
+        from: 'docx-preview@example.com',
+        to: seededEmail,
+        subject,
+        body: 'This message contains a DOCX attachment.',
+        attachments: [
+          {
+            filename: 'preview.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            base64Content: testDocxBase64,
+          },
+        ],
+      });
+
+      await triggerSync(electronApp, accountId);
+      await waitForEmailSubject(page, subject);
+
+      await page.getByTestId(`email-item-${messageIdentity.xGmThrid}`).click();
+      await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+
+      await page.getByTestId('message-attachment-item-0').click();
+
+      const dialog = page.locator('.preview-dialog');
+      await expect(dialog).toBeVisible({ timeout: 15_000 });
+      await expect(dialog.locator('.preview-word')).toContainText('Hello DOCX preview', { timeout: 15_000 });
+
+      await dialog.getByRole('button', { name: 'Close' }).click();
+      await expect(dialog).not.toBeVisible({ timeout: 5_000 });
+    });
+
+    test('attachment preview error state is shown when CSV text content cannot be loaded', async ({ page, electronApp }) => {
+      await discardComposeIfOpen(page);
+
+      const subject = `Csv Error Preview ${DateTime.utc().toMillis()}`;
+      const csvContent = Buffer.from('name,value\nerror,1', 'utf8').toString('base64');
+      const messageIdentity = await injectInboxMessageWithAttachments(electronApp, {
+        from: 'csv-error@example.com',
+        to: seededEmail,
+        subject,
+        body: 'This message contains a CSV attachment for error coverage.',
+        attachments: [
+          {
+            filename: 'broken.csv',
+            mimeType: 'text/csv',
+            base64Content: csvContent,
+          },
+        ],
+      });
+
+      await triggerSync(electronApp, accountId);
+      await waitForEmailSubject(page, subject);
+
+      await mockIpc(electronApp, {
+        channel: 'attachment:get-content-as-text',
+        response: { success: false, error: { code: 'CSV_FAIL', message: 'CSV decode failed' } },
+        once: true,
+      });
+
+      await page.getByTestId(`email-item-${messageIdentity.xGmThrid}`).click();
+      await page.getByTestId('message-attachment-item-0').click();
+
+      const dialog = page.locator('.preview-dialog');
+      await expect(dialog).toBeVisible({ timeout: 15_000 });
+      await expect(dialog.locator('.preview-error')).toContainText('CSV decode failed');
+
+      await page.keyboard.press('Escape');
+      await expect(dialog).not.toBeVisible({ timeout: 5_000 });
     });
 
     test('emails with different dates show different relative-time formats', async ({
