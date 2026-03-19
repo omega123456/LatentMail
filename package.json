@@ -21,7 +21,7 @@
     "test:frontend:run": "ng build --configuration=electron && tsc -p tsconfig.test.json && node -e \"require('fs').cpSync('electron/prompts', 'dist-test/electron/prompts', {recursive: true})\" && node scripts/run-frontend-tests.js",
     "test:frontend:list": "node scripts/run-frontend-tests.js --list",
     "test:frontend:update-screenshots": "yarn test:frontend -- --update-snapshots",
-    "test:full-suite": "yarn test:backend:parallel --check-coverage=90 && yarn test:frontend --check-coverage=50",
+    "test:full-suite": "yarn test:backend:parallel --check-coverage=90 && yarn test:frontend --check-coverage=90",
     "package": "yarn build:all && electron-builder --dir",
     "make": "yarn build:all && electron-builder",
     "build:native": "node -e \"if(process.platform==='win32'){const{execSync}=require('child_process');const ev=require('electron/package.json').version;execSync('node-gyp rebuild --target='+ev+' --arch=x64 --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native/win32-drop-target'})}else{console.log('Skipping native addon build (not Windows)')}\"",

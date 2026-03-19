@@ -28,6 +28,10 @@
  *   yarn test:frontend --check-coverage=80
  *   yarn test:frontend --check-statements=90 --check-lines=90
  *   node scripts/run-frontend-tests.js --list
+ *
+ * Coverage: c8 writes HTML/LCOV to a per-run temp dir (latentmail-frontend-coverage-report-* under
+ * the OS temp directory), then copies the result to coverage/frontend under the repo. Raw Playwright
+ * JSON and the report temp dir are removed when the launcher exits.
  */
 
 const { execSync, spawn } = require('child_process');
@@ -143,6 +147,7 @@ async function rebuildAngularForCoverage() {
 
 async function runFrontendCoverageReporting(
   coverageTempDir,
+  reportsOutDir,
   thresholdCheckEnabled,
   checkStatements,
   checkBranches,
@@ -174,7 +179,7 @@ async function runFrontendCoverageReporting(
     '--reporter=text',
     '--reporter=html',
     '--reporter=lcov',
-    '--reports-dir=coverage/frontend',
+    `--reports-dir=${reportsOutDir}`,
   ];
 
   // Run threshold check in the same process as report so the same Report (with exclude-after-remap)
@@ -402,6 +407,7 @@ async function main() {
   childEnv.LATENTMAIL_TEST_TEMP_DIR = testTempDir;
 
   let coverageTempDir = null;
+  let reportsTempDir = null;
 
   if (coverageEnabled) {
     console.log('[frontend-runner] Coverage collection enabled.');
@@ -433,8 +439,12 @@ async function main() {
         }
       }
 
+      reportsTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-frontend-coverage-report-'));
+      console.log(`[frontend-runner] Coverage report temp dir: ${reportsTempDir}`);
+
       const coverageExitCode = await runFrontendCoverageReporting(
         coverageTempDir,
+        reportsTempDir,
         thresholdCheckEnabled,
         checkStatements,
         checkBranches,
@@ -445,11 +455,33 @@ async function main() {
       if (finalExitCode === 0 && coverageExitCode !== 0) {
         finalExitCode = coverageExitCode;
       }
+
+      if (coverageExitCode === 0 && reportsTempDir !== null) {
+        const coverageFrontendDir = path.join(PROJECT_ROOT, 'coverage', 'frontend');
+        try {
+          fs.rmSync(coverageFrontendDir, { recursive: true, force: true });
+          fs.cpSync(reportsTempDir, coverageFrontendDir, { recursive: true });
+          console.log(`[frontend-runner] Copied coverage report to ${coverageFrontendDir}`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[frontend-runner] Failed to copy coverage report to coverage/frontend: ${message}`);
+          if (finalExitCode === 0) {
+            finalExitCode = 1;
+          }
+        }
+      }
     }
   } finally {
     if (coverageTempDir) {
       try {
         fs.rmSync(coverageTempDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+    if (reportsTempDir) {
+      try {
+        fs.rmSync(reportsTempDir, { recursive: true, force: true });
       } catch {
         // Ignore cleanup errors
       }

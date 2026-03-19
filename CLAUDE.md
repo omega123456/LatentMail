@@ -541,6 +541,10 @@ Each test suite gets a fresh database snapshot via `quiesceAndRestore()`. This e
 - Each suite starts with a known clean state
 - Tests can mutate the DB freely without cleanup
 
+### Coverage
+
+With `--coverage` or `--check-coverage`, V8 writes raw coverage to a per-run temp dir (`latentmail-cov-*` under the OS temp folder). `run-electron-tests.js` and `run-parallel-tests.js` run c8 against that data, emit HTML/LCOV under `latentmail-backend-coverage-report-*` in the temp folder, then copy the report to `coverage/backend/` under the repo; both temp dirs are removed when the launcher exits.
+
 ## Frontend Testing
 
 Frontend tests are **Playwright** E2E tests that launch the real Electron app (main + renderer), load the Angular UI, and assert on DOM and behavior. They live in `tests/frontend/` and are run via `scripts/run-frontend-tests.js`.
@@ -574,7 +578,7 @@ Playwright is configured with `workers: 1`, retries, and long timeouts. The runn
 - **`sharedPage`** / **`page`** — First window of the Electron app; tests interact with the Angular UI in this window.
 - **`resetApp(options?)`** — Resets app state (e.g. database) for isolation. Use in `beforeEach` or at the start of tests that need a clean state. Options and result types are in `test-hooks-types.ts`.
 
-When coverage is requested (`--coverage` or `--check-coverage`), the script rebuilds Angular with the `electron-coverage` config, sets `PLAYWRIGHT_COVERAGE_DIR`, and the fixture starts JS coverage on the first window. After tests, `run-frontend-tests.js` runs c8 report (and optional threshold check) then exits with the combined result.
+When coverage is requested (`--coverage` or `--check-coverage`), the script rebuilds Angular with the `electron-coverage` config, sets `PLAYWRIGHT_COVERAGE_DIR`, and the fixture starts JS coverage on the first window. After tests, `run-frontend-tests.js` runs c8 to a per-run report temp dir, copies the result to `coverage/frontend/`, runs the optional threshold check, then exits with the combined result.
 
 ### Mocking in frontend tests
 
@@ -601,7 +605,7 @@ Use the test Electron main (`test-frontend-main.ts`) or fixtures to inject mocks
 ### Coverage
 
 - Enable with `yarn test:frontend --coverage` or `--check-coverage=N`.
-- Coverage is collected from the renderer (Angular) via Playwright's JS coverage API; c8 produces reports under `coverage/frontend/`.
+- Coverage is collected from the renderer (Angular) via Playwright's JS coverage API; c8 writes to a per-run temp dir under the OS temp folder, then copies the report to `coverage/frontend/` (both temp dirs are removed when the launcher exits).
 - Per-metric thresholds: `--check-statements`, `--check-branches`, `--check-functions`, `--check-lines` (same semantics as backend).
 
 ## Common Gotchas

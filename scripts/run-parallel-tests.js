@@ -1,11 +1,19 @@
 'use strict';
 
+/**
+ * Parallel backend test launcher. With --coverage / --check-coverage, V8 data goes to
+ * latentmail-cov-* under the OS temp dir; c8 writes HTML/LCOV to latentmail-backend-coverage-report-*,
+ * then copies to coverage/backend under the repo. Temp dirs are removed in a finally block.
+ */
+
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const runParallelTests = require('./parallel-test-orchestrator');
+
+const PROJECT_ROOT = path.join(__dirname, '..');
 
 if (process.platform === 'win32') {
   try {
@@ -188,7 +196,12 @@ function buildWorkerEnv(coverageTempDir) {
   return baseEnv;
 }
 
-async function runCoverageReporting(coverageTempDir, coverageThresholds, checkCoverageEnabled) {
+async function runCoverageReporting(
+  coverageTempDir,
+  reportsTempDir,
+  coverageThresholds,
+  checkCoverageEnabled
+) {
   console.log('\n--- Coverage Report ---\n');
 
   let c8BinPath;
@@ -227,20 +240,33 @@ async function runCoverageReporting(coverageTempDir, coverageThresholds, checkCo
     '--reporter=text',
     '--reporter=html',
     '--reporter=lcov',
-    '--reports-dir=coverage/backend',
+    '--reports-dir=' + reportsTempDir,
   ];
+
+  let copyOrReportFailureExitCode = 0;
 
   try {
     const c8ReportExitCode = await spawnAsync(process.execPath, [c8BinPath, 'report', ...reportArgs]);
     if (c8ReportExitCode !== 0) {
       console.warn('[test-runner] Warning: c8 report exited with code', c8ReportExitCode, '— continuing');
+    } else {
+      const coverageBackendDir = path.join(PROJECT_ROOT, 'coverage', 'backend');
+      try {
+        fs.rmSync(coverageBackendDir, { recursive: true, force: true });
+        fs.cpSync(reportsTempDir, coverageBackendDir, { recursive: true });
+        console.log('[run-parallel-tests] Copied coverage report to ' + coverageBackendDir);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[run-parallel-tests] Failed to copy coverage report to coverage/backend: ' + message);
+        copyOrReportFailureExitCode = 1;
+      }
     }
   } catch (error) {
     console.warn('[test-runner] Warning: c8 report spawn failed:', error.message, '— continuing');
   }
 
   if (!checkCoverageEnabled) {
-    return 0;
+    return copyOrReportFailureExitCode;
   }
 
   const checkArgs = [
@@ -251,12 +277,19 @@ async function runCoverageReporting(coverageTempDir, coverageThresholds, checkCo
     '--statements=' + coverageThresholds.statements,
   ];
 
+  let checkExitCode = 0;
   try {
-    return await spawnAsync(process.execPath, [c8BinPath, 'check-coverage', ...checkArgs]);
+    checkExitCode = await spawnAsync(process.execPath, [c8BinPath, 'check-coverage', ...checkArgs]);
   } catch (error) {
     console.warn('[test-runner] Warning: c8 check-coverage spawn failed:', error.message, '— continuing');
-    return 0;
+    return copyOrReportFailureExitCode;
   }
+
+  if (checkExitCode !== 0) {
+    return checkExitCode;
+  }
+
+  return copyOrReportFailureExitCode;
 }
 
 async function main() {
@@ -315,10 +348,13 @@ async function main() {
   }
 
   let coverageTempDir = null;
+  let reportsTempDir = null;
 
   if (coverageEnabled) {
     coverageTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-cov-'));
     console.log('[run-parallel-tests] Coverage collection enabled (temp: ' + coverageTempDir + ')');
+    reportsTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-backend-coverage-report-'));
+    console.log('[run-parallel-tests] Backend coverage report temp dir: ' + reportsTempDir);
   }
 
   const baseEnv = buildWorkerEnv(coverageTempDir);
@@ -343,8 +379,13 @@ async function main() {
 
     let c8CheckExitCode = 0;
 
-    if (coverageEnabled) {
-      c8CheckExitCode = await runCoverageReporting(coverageTempDir, coverageThresholds, checkCoverageEnabled);
+    if (coverageEnabled && coverageTempDir !== null && reportsTempDir !== null) {
+      c8CheckExitCode = await runCoverageReporting(
+        coverageTempDir,
+        reportsTempDir,
+        coverageThresholds,
+        checkCoverageEnabled
+      );
     }
 
     if (anyFailed) {
@@ -358,6 +399,7 @@ async function main() {
     return 0;
   } finally {
     cleanupCoverageTempDir(coverageTempDir);
+    cleanupCoverageTempDir(reportsTempDir);
   }
 }
 

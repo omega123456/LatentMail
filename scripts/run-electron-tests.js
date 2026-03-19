@@ -49,6 +49,12 @@ if (process.platform === 'win32') {
 //   yarn test:backend --check-coverage=80
 //   yarn test:backend --check-statements=90 --check-branches=90 --check-functions=90 --check-lines=90
 //   yarn test:backend --list
+//
+// Coverage: c8 writes HTML/LCOV to a per-run temp dir (latentmail-backend-coverage-report-* under the
+// OS temp directory), then copies the result to coverage/backend under the repo. V8 coverage and
+// report temp dirs are removed when the launcher exits.
+
+const PROJECT_ROOT = path.join(__dirname, '..');
 
 const cliArgs = process.argv.slice(2);
 
@@ -254,8 +260,26 @@ function spawnAsync(command, args) {
 }
 
 async function runCoverageAndExit(electronExitCode) {
+  let reportsTempDir = null;
+
   function cleanup() {
     cleanupCoverageTempDir();
+    if (reportsTempDir !== null) {
+      try {
+        fs.rmSync(reportsTempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 20,
+          retryDelay: 100,
+        });
+      } catch (error) {
+        console.error(
+          '[run-electron-tests] Failed to clean up backend coverage report temp directory:',
+          reportsTempDir,
+          error.message
+        );
+      }
+    }
     cleanupTempDir();
   }
 
@@ -270,6 +294,7 @@ async function runCoverageAndExit(electronExitCode) {
   let c8ReportExitCode = 0;
   let c8CheckExitCode = 0;
   let c8SpawnError = null;
+  let copyFailureExitCode = 0;
 
   try {
     let c8BinPath;
@@ -281,6 +306,9 @@ async function runCoverageAndExit(electronExitCode) {
       c8SpawnError = error;
       return;
     }
+
+    reportsTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latentmail-backend-coverage-report-'));
+    console.log(`[test-runner] Backend coverage report temp dir: ${reportsTempDir}`);
 
     const commonArgs = [
       '--temp-directory=' + coverageTempDir,
@@ -309,7 +337,7 @@ async function runCoverageAndExit(electronExitCode) {
       '--reporter=text',
       '--reporter=html',
       '--reporter=lcov',
-      '--reports-dir=coverage/backend',
+      '--reports-dir=' + reportsTempDir,
     ];
 
     try {
@@ -320,6 +348,17 @@ async function runCoverageAndExit(electronExitCode) {
 
     if (c8ReportExitCode !== 0) {
       console.warn('[test-runner] Warning: c8 report exited with code', c8ReportExitCode, '— continuing');
+    } else {
+      const coverageBackendDir = path.join(PROJECT_ROOT, 'coverage', 'backend');
+      try {
+        fs.rmSync(coverageBackendDir, { recursive: true, force: true });
+        fs.cpSync(reportsTempDir, coverageBackendDir, { recursive: true });
+        console.log(`[run-electron-tests] Copied coverage report to ${coverageBackendDir}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[run-electron-tests] Failed to copy coverage report to coverage/backend: ${message}`);
+        copyFailureExitCode = 1;
+      }
     }
 
     if (checkCoverageEnabled) {
@@ -346,6 +385,8 @@ async function runCoverageAndExit(electronExitCode) {
   } else if (c8SpawnError !== null) {
     // c8 not found — treat as non-fatal warning, preserve test exit code
     process.exit(0);
+  } else if (copyFailureExitCode !== 0) {
+    process.exit(1);
   } else if (c8CheckExitCode !== 0) {
     process.exit(c8CheckExitCode);
   } else {
