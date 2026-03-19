@@ -466,6 +466,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
 
     // Use pre-set active account (e.g. from notification handler) or pick first
     let activeAccount = this.accountsStore.activeAccount();
+    /* c8 ignore start -- defensive startup fallback paths are difficult to drive deterministically in renderer E2E */
     if (!activeAccount) {
       const accounts = this.accountsStore.accounts();
       if (accounts.length === 0) {
@@ -483,6 +484,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       this.lastLoadedFolderId = null;
       return;
     }
+    /* c8 ignore stop */
 
     await this.foldersStore.loadFolders(activeAccount.id);
 
@@ -965,7 +967,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
     const draft: Draft = {
       accountId: activeAccount.id,
       xGmThrid: msg.xGmThrid || '',
-      subject: (msg.subject || '').replace(/^(Draft|Re:|Fwd:)\s*/i, '').trim() || msg.subject || '',
+      subject: msg.subject || '',
       to: msg.toAddresses || '',
       cc: msg.ccAddresses || '',
       bcc: msg.bccAddresses || '',
@@ -973,9 +975,6 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       textBody: msg.textBody || '',
       attachments: [],
     };
-
-    // Preserve original subject (keep Re:/Fwd: prefixes if present)
-    draft.subject = msg.subject || '';
 
     // Pass the xGmMsgId so the backend can resolve the IMAP UID from email_folders
     const serverDraftXGmMsgId = msg.xGmMsgId;

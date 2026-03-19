@@ -13,6 +13,7 @@ import {
   injectLogicalMessage,
   mockIpc,
   openCompose,
+  TEST_PNG_1X1_BASE64,
   triggerSync,
   waitForComposeEditor,
   waitForEmailSubject,
@@ -507,10 +508,7 @@ test.describe('Compose', () => {
       await fileChooser.setFiles({
         name: 'inline-test.png',
         mimeType: 'image/png',
-        buffer: Buffer.from(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
-          'base64',
-        ),
+        buffer: Buffer.from(TEST_PNG_1X1_BASE64, 'base64'),
       });
 
       await expect(editor.locator('img')).toBeVisible({ timeout: 10000 });
@@ -776,6 +774,236 @@ test.describe('Compose', () => {
       await expect(attachmentList.getByText('zone-drop.txt')).toBeVisible({ timeout: 5000 });
     });
 
+    test('attachment upload component covers preview helpers, picker forwarding, and read errors', async ({ page }) => {
+      await discardComposeIfOpen(page);
+      await openCompose(page);
+      await waitForComposeEditor(page);
+
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent('filechooser'),
+        page.getByTestId('compose-attach-button').click(),
+      ]);
+
+      await fileChooser.setFiles({
+        name: 'preview-image.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(TEST_PNG_1X1_BASE64, 'base64'),
+      });
+
+      await expect(page.locator('.attachment-chip .att-thumbnail').first()).toBeVisible({ timeout: 5000 });
+
+      const coverageResult = await page.evaluate(async ({ restoredImageBase64 }) => {
+        interface AngularDebugApi {
+          getComponent(element: unknown): unknown;
+        }
+
+        interface AngularWindow {
+          ng?: AngularDebugApi;
+          __attachmentPickerClicks__?: number;
+          __attachmentToastMessages__?: string[];
+        }
+
+        interface BrowserDocumentLike {
+          querySelector(selector: string): unknown;
+        }
+
+        interface BrowserFileConstructor {
+          new(parts: unknown[], name: string, options: { type: string }): unknown;
+        }
+
+        interface DraftAttachmentLike {
+          id?: string;
+          filename: string;
+          mimeType?: string | null;
+          size: number;
+          data?: string;
+        }
+
+        interface WritableSignalLike<T> {
+          (): T;
+          set(value: T): void;
+        }
+
+        interface AttachmentUploadLike extends Record<string, unknown> {
+          previews: WritableSignalLike<Map<string, string>>;
+          getPreview(attachment: DraftAttachmentLike): string | null;
+          openFilePicker(): void;
+          handleDragOver(event: { preventDefault(): void }): void;
+          onFilesSelected(event: { target: { files: unknown; value: string } }): void;
+          handleDrop(event: { preventDefault(): void; dataTransfer: { files?: unknown } | null }): void;
+        }
+
+        interface ComposeStoreLike {
+          addAttachment(attachment: DraftAttachmentLike): void;
+          removeAttachment(index: number): void;
+          attachments(): DraftAttachmentLike[];
+        }
+
+        interface ComposeWindowLike extends Record<string, unknown> {
+          composeStore: ComposeStoreLike;
+        }
+
+        const browserGlobal = globalThis as unknown as Record<string, unknown>;
+        const browserWindow = browserGlobal as unknown as AngularWindow;
+        const browserDocument = browserGlobal['document'] as BrowserDocumentLike;
+        const attachmentHost = browserDocument.querySelector('app-attachment-upload');
+        const composeWindowHost = browserDocument.querySelector('app-compose-window');
+
+        if (browserWindow.ng === undefined || attachmentHost === null || composeWindowHost === null) {
+          throw new Error('Attachment upload component is not available in the Angular debug tree.');
+        }
+
+        const attachmentComponent = browserWindow.ng.getComponent(attachmentHost) as AttachmentUploadLike;
+        const composeWindowComponent = browserWindow.ng.getComponent(composeWindowHost) as ComposeWindowLike;
+        const originalFileReader = browserGlobal['FileReader'];
+        const originalToastService = attachmentComponent['toastService'] as { error(message: string): void };
+        const originalToastError = originalToastService.error.bind(originalToastService);
+        const originalFileInputRef = attachmentComponent['fileInputRef'] as unknown;
+
+        browserWindow.__attachmentPickerClicks__ = 0;
+        browserWindow.__attachmentToastMessages__ = [];
+
+        try {
+          originalToastService.error = (message: string) => {
+            browserWindow.__attachmentToastMessages__!.push(message);
+          };
+
+          attachmentComponent['fileInputRef'] = () => {
+            return {
+              nativeElement: {
+                click: () => {
+                  browserWindow.__attachmentPickerClicks__ = (browserWindow.__attachmentPickerClicks__ ?? 0) + 1;
+                },
+              },
+            };
+          };
+
+          let dragOverPrevented = false;
+          attachmentComponent.previews.set(new Map([['cached-image', 'data:image/png;base64,cached-value']]));
+          const cachedPreview = attachmentComponent.getPreview({
+            id: 'cached-image',
+            filename: 'cached-image.png',
+            mimeType: 'image/png',
+            size: 10,
+          });
+
+          attachmentComponent.openFilePicker();
+          attachmentComponent.handleDragOver({
+            preventDefault: () => {
+              dragOverPrevented = true;
+            },
+          });
+
+          composeWindowComponent.composeStore.addAttachment({
+            id: 'restored-preview-image',
+            filename: 'restored-preview-image.png',
+            mimeType: 'image/png',
+            size: 68,
+            data: restoredImageBase64,
+          });
+
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              resolve();
+            }, 0);
+          });
+
+          const restoredPreview = attachmentComponent.getPreview({
+            id: 'restored-preview-image',
+            filename: 'restored-preview-image.png',
+            mimeType: 'image/png',
+            size: 68,
+            data: restoredImageBase64,
+          });
+
+          attachmentComponent.previews.set(new Map([
+            ['stale-preview', 'stale'],
+            ['restored-preview-image', 'keep-me'],
+          ]));
+
+          composeWindowComponent.composeStore.removeAttachment(
+            composeWindowComponent.composeStore.attachments().length - 1,
+          );
+
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              resolve();
+            }, 0);
+          });
+
+          const stalePreviewRemoved = attachmentComponent.previews().has('stale-preview') === false;
+
+          class FailingFileReader {
+            onload: (() => unknown) | null = null;
+            onerror: (() => unknown) | null = null;
+            result: string | ArrayBuffer | null = null;
+
+            readAsDataURL(): void {
+              if (this.onerror !== null) {
+                this.onerror();
+              }
+            }
+          }
+
+          Object.defineProperty(globalThis, 'FileReader', {
+            configurable: true,
+            writable: true,
+            value: FailingFileReader,
+          });
+
+          const BrowserFile = browserGlobal['File'] as BrowserFileConstructor;
+
+          const failingInput = {
+            files: [new BrowserFile(['broken'], 'broken-file.txt', { type: 'text/plain' })],
+            value: 'selected',
+          };
+
+          attachmentComponent.onFilesSelected({ target: failingInput });
+          attachmentComponent.onFilesSelected({
+            target: {
+              files: null,
+              value: '',
+            },
+          });
+          attachmentComponent.handleDrop({
+            preventDefault: () => {
+              // no-op
+            },
+            dataTransfer: null,
+          });
+
+          await Promise.resolve();
+
+          return {
+            cachedPreview,
+            restoredPreview,
+            dragOverPrevented,
+            pickerClicks: browserWindow.__attachmentPickerClicks__ ?? 0,
+            stalePreviewRemoved,
+            toastMessages: browserWindow.__attachmentToastMessages__ ?? [],
+          };
+        } finally {
+          Object.defineProperty(globalThis, 'FileReader', {
+            configurable: true,
+            writable: true,
+            value: originalFileReader,
+          });
+
+          originalToastService.error = originalToastError;
+          attachmentComponent['fileInputRef'] = originalFileInputRef;
+        }
+      }, { restoredImageBase64: TEST_PNG_1X1_BASE64 });
+
+      expect(coverageResult.cachedPreview).toContain('cached-value');
+      expect(coverageResult.restoredPreview).toContain(TEST_PNG_1X1_BASE64);
+      expect(coverageResult.dragOverPrevented).toBe(true);
+      expect(coverageResult.pickerClicks).toBe(1);
+      expect(coverageResult.stalePreviewRemoved).toBe(true);
+      expect(coverageResult.toastMessages).toEqual(['Failed to read file: broken-file.txt']);
+
+      await discardComposeIfOpen(page);
+    });
+
     test('recipient chips are added via Enter and last chip removed via Backspace', async ({ page }) => {
       const toField = page.getByTestId('recipient-input-field-to');
       const recipientContainer = page.getByTestId('recipient-input-to');
@@ -886,7 +1114,7 @@ test.describe('Compose', () => {
         to: 'draft-recipient@example.com',
         subject: 'Test Draft Subject',
         body: 'This is draft body content for testing.',
-        mailboxes: ['[Gmail]/Drafts'],
+        mailboxes: ['[Gmail]/All Mail', '[Gmail]/Drafts'],
         xGmLabels: ['\\All', '\\Draft'],
         flags: ['\\Draft'],
       });
@@ -975,7 +1203,7 @@ test.describe('Compose', () => {
         to: 'discard-recipient@example.com',
         subject: 'Draft To Discard',
         body: 'This draft will be discarded.',
-        mailboxes: ['[Gmail]/Drafts'],
+        mailboxes: ['[Gmail]/All Mail', '[Gmail]/Drafts'],
         xGmLabels: ['\\All', '\\Draft'],
         flags: ['\\Draft'],
       });
