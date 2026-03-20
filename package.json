@@ -20,7 +20,7 @@
     "test:frontend": "ng build --configuration=electron && yarn build:electron && tsc -p tsconfig.test.json && node -e \"require('fs').cpSync('electron/prompts', 'dist-test/electron/prompts', {recursive: true})\" && node scripts/run-frontend-tests.js",
     "test:frontend:run": "ng build --configuration=electron && tsc -p tsconfig.test.json && node -e \"require('fs').cpSync('electron/prompts', 'dist-test/electron/prompts', {recursive: true})\" && node scripts/run-frontend-tests.js",
     "test:frontend:list": "node scripts/run-frontend-tests.js --list",
-    "test:frontend:update-screenshots": "yarn test:frontend -- --update-snapshots",
+    "test:frontend:update-screenshots": "yarn test:frontend -- --update-snapshots=all",
     "test:full-suite": "yarn test:backend:parallel --check-coverage=90 && yarn test:frontend --check-coverage=90",
     "package": "yarn build:all && electron-builder --dir",
     "make": "yarn build:all && electron-builder",
