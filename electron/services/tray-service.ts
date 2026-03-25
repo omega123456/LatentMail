@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { LoggerService } from './logger-service';
 import { DatabaseService } from './database-service';
 import { IPC_EVENTS } from '../ipc/ipc-channels';
-import { isMacOS } from '../utils/platform';
+import { isMacOS, isWindows } from '../utils/platform';
 
 const log = LoggerService.getInstance();
 
@@ -25,11 +25,20 @@ export class TrayService {
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private currentUnreadCount = 0;
 
+  /** Whether any account currently needs re-authentication. */
+  private needsReauth = false;
+
   /** Base 32×32 PNG buffer used for compositing badge overlays at runtime. */
   private baseTrayBuffer: Buffer | null = null;
 
-  /** Cached dot-overlay NativeImage (generated once, reused for all non-zero counts). */
+  /** Cached blue dot overlay NativeImage (generated once, reused for all non-zero counts). */
   private dotImage: Electron.NativeImage | null = null;
+
+  /** Cached red dot overlay NativeImage for reauth state (analogous to dotImage). */
+  private redDotImage: Electron.NativeImage | null = null;
+
+  /** Cached 16×16 red circle NativeImage used as Windows taskbar overlay icon. */
+  private overlayImage: Electron.NativeImage | null = null;
 
   private constructor() {}
 
@@ -41,37 +50,43 @@ export class TrayService {
   }
 
   /**
-   * Create the system tray icon and attach it to the given main window.
+   * Create the system tray icon (Windows/Linux) or set up Dock badge polling
+   * (macOS) and attach to the given main window.
    * Call this once, after `createMainWindow()` in main.ts.
    */
   initialize(mainWindow: BrowserWindow): void {
     this.mainWindowRef = mainWindow;
     this.loadBaseTrayBuffer();
 
-    try {
-      const trayIcon = this.loadTrayIconImage('default');
-      this.tray = new Tray(trayIcon);
-    } catch (err) {
-      log.error('TrayService: failed to create tray:', err);
-      return;
+    // On macOS, skip tray icon creation — the Dock badge handles status indication.
+    // On Windows/Linux, create the system tray icon with click handler and context menu.
+    if (!isMacOS()) {
+      try {
+        const trayIcon = this.loadTrayIconImage('default');
+        this.tray = new Tray(trayIcon);
+      } catch (err) {
+        log.error('TrayService: failed to create tray:', err);
+        // Continue without tray — null-checks in downstream methods handle this gracefully
+      }
+
+      if (this.tray) {
+        this.tray.setToolTip('LatentMail');
+        this.buildContextMenu();
+
+        // Left-click: show and focus main window (standard behavior on Windows/Linux).
+        this.tray.on('click', () => {
+          this.showAndFocusMainWindow();
+        });
+      }
     }
 
-    this.tray.setToolTip('LatentMail');
-    this.buildContextMenu();
-
-    // Left-click: show and focus main window (standard behavior on Windows/Linux).
-    // On macOS, left-click opens the context menu by default, which is correct.
-    this.tray.on('click', () => {
-      this.showAndFocusMainWindow();
-    });
-
-    // Query initial unread count
-    this.refreshUnreadCount();
+    // Query initial state (single combined call avoids a double updateBadge)
+    this.refreshAllState();
 
     // Poll every 30 seconds to catch external changes (e.g. read on another device).
     // In-app actions (mark read, move, delete) trigger refreshUnreadCount() immediately.
     this.pollInterval = setInterval(() => {
-      this.refreshUnreadCount();
+      this.refreshAllState();
     }, 30_000);
 
     // Clear the stored reference when the window is destroyed so that
@@ -87,7 +102,7 @@ export class TrayService {
    * Re-query the database for the total unread Inbox thread count across all
    * accounts and update the tray badge/tooltip.
    *
-   * Called on init, on a 60-second poll, and by SyncService after new emails arrive.
+   * Called on init, on a 30-second poll, and by SyncService after new emails arrive.
    */
   refreshUnreadCount(): void {
     try {
@@ -110,7 +125,77 @@ export class TrayService {
   }
 
   /**
-   * Destroy the tray icon and stop polling.
+   * Re-query the database to check whether any account needs re-authentication,
+   * and update the tray badge/overlay/dock immediately.
+   */
+  refreshReauthState(): void {
+    try {
+      const dbService = DatabaseService.getInstance();
+      const accountList = dbService.getAccounts();
+      const anyNeedsReauth = accountList.some((account) => account.needsReauth);
+
+      const previousState = this.needsReauth;
+      this.needsReauth = anyNeedsReauth;
+
+      // Invalidate cached red dot images when transitioning away from reauth
+      if (previousState && !anyNeedsReauth) {
+        this.redDotImage = null;
+        this.overlayImage = null;
+      }
+
+      // Always call updateBadge to apply changes immediately
+      this.updateBadge(this.currentUnreadCount).catch((err) => {
+        log.warn('TrayService: failed to update badge after reauth refresh:', err);
+      });
+    } catch (err) {
+      log.warn('TrayService: failed to refresh reauth state:', err);
+    }
+  }
+
+  /**
+   * Combined refresh of both unread count and reauth state, calling
+   * `updateBadge()` only once at the end. Used by the poll interval and
+   * `initialize()` to avoid a double badge update per cycle.
+   *
+   * The public `refreshUnreadCount()` and `refreshReauthState()` methods
+   * remain available for external callers (SyncService, auth-ipc) that
+   * need to update only one dimension immediately.
+   */
+  private refreshAllState(): void {
+    try {
+      const dbService = DatabaseService.getInstance();
+      const accounts = dbService.getAccounts();
+
+      // Compute unread count across all accounts
+      let totalUnread = 0;
+      for (const account of accounts) {
+        const counts = dbService.getUnreadThreadCountsByFolder(account.id);
+        totalUnread += counts['INBOX'] ?? 0;
+      }
+      this.currentUnreadCount = totalUnread;
+
+      // Compute reauth state
+      const anyNeedsReauth = accounts.some((account) => account.needsReauth);
+      const previousReauthState = this.needsReauth;
+      this.needsReauth = anyNeedsReauth;
+
+      // Invalidate cached red dot images when transitioning away from reauth
+      if (previousReauthState && !anyNeedsReauth) {
+        this.redDotImage = null;
+        this.overlayImage = null;
+      }
+
+      // Single badge update covering both state dimensions
+      this.updateBadge(this.currentUnreadCount).catch((err) => {
+        log.warn('TrayService: failed to update badge:', err);
+      });
+    } catch (err) {
+      log.warn('TrayService: failed to refresh all state:', err);
+    }
+  }
+
+  /**
+   * Destroy the tray icon, stop polling, and clear all platform badge indicators.
    * Call from the app `before-quit` or main window `closed` handler.
    */
   cleanup(): void {
@@ -122,13 +207,30 @@ export class TrayService {
       this.tray.destroy();
       this.tray = null;
     }
-    if (isMacOS()) {
+
+    // Clear cached badge images
+    this.redDotImage = null;
+    this.overlayImage = null;
+
+    // Clear Windows taskbar overlay
+    if (isWindows() && this.mainWindowRef !== null && !this.mainWindowRef.isDestroyed()) {
       try {
+        this.mainWindowRef.setOverlayIcon(null, '');
+      } catch {
+        // Ignore — may fail if window is in process of being destroyed
+      }
+    }
+
+    // Clear macOS Dock badge
+    if (isMacOS() && app.dock) {
+      try {
+        app.dock.setBadge('');
         app.setBadgeCount(0);
       } catch {
         // Ignore — may fail if app is in process of quitting
       }
     }
+
     log.info('TrayService: cleaned up');
   }
 
@@ -207,11 +309,60 @@ export class TrayService {
   }
 
   /**
-   * Composite a small blue dot onto the base tray icon to indicate unread mail.
-   * The result is generated once and cached in `dotImage`.
-   * Returns the plain base icon when sharp is unavailable or count is 0.
+   * Composite a badge dot onto the base tray icon.
+   *
+   * Reauth (red dot, #D32F2F) takes priority over unread (blue dot, #0078D4).
+   * Results are cached in `redDotImage` / `dotImage` respectively.
+   * Returns the plain base icon when sharp is unavailable or no badge is needed.
    */
   private async loadTrayIconWithBadge(count: number): Promise<Electron.NativeImage> {
+    // Reauth red dot takes priority over unread blue dot
+    if (this.needsReauth) {
+      if (!this.baseTrayBuffer || !sharp) {
+        // Graceful degradation: can't composite, fall back to unread icon variant
+        return this.loadTrayIconImage('unread');
+      }
+
+      if (this.redDotImage !== null) {
+        return this.redDotImage;
+      }
+
+      try {
+        const meta = await sharp!(this.baseTrayBuffer).metadata();
+        const size = meta.width ?? 16;
+
+        // Dot: ~25% of icon width, anchored to the top-right corner with 1px inset.
+        const radius = Math.max(2, Math.round(size * 0.25));
+        const centerX = size - radius - 1;
+        const centerY = radius + 1;
+
+        const dotSvg = Buffer.from(
+          `<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">` +
+          `<circle cx="${centerX}" cy="${centerY}" r="${radius}" fill="#D32F2F"/>` +
+          `</svg>`,
+        );
+
+        const composited = await sharp!(this.baseTrayBuffer)
+          .composite([{ input: dotSvg }])
+          .png()
+          .toBuffer();
+
+        const image = nativeImage.createFromBuffer(composited);
+
+        if (isMacOS()) {
+          image.setTemplateImage(false); // dot must stay coloured, not template
+        }
+
+        this.redDotImage = image;
+        log.info('TrayService: generated reauth red dot icon');
+        return image;
+      } catch (err) {
+        log.warn('TrayService: failed to generate red dot icon:', err);
+        return this.loadTrayIconImage('unread');
+      }
+    }
+
+    // Unread blue dot (existing behavior)
     if (count === 0 || !this.baseTrayBuffer || !sharp) {
       return this.loadTrayIconImage(count > 0 ? 'unread' : 'default');
     }
@@ -251,13 +402,71 @@ export class TrayService {
     return image;
   }
 
+  /**
+   * Generate a 16×16 transparent PNG with a red circle for use as the Windows
+   * taskbar overlay icon. Cached in `overlayImage`. Returns null if sharp is
+   * unavailable.
+   */
+  private async generateOverlayImage(): Promise<Electron.NativeImage | null> {
+    if (this.overlayImage !== null) {
+      return this.overlayImage;
+    }
+
+    if (!sharp) {
+      return null;
+    }
+
+    try {
+      const overlaySize = 16;
+      const overlayRadius = 6;
+
+      const overlaySvg = Buffer.from(
+        `<svg width="${overlaySize}" height="${overlaySize}" xmlns="http://www.w3.org/2000/svg">` +
+        `<circle cx="${overlaySize / 2}" cy="${overlaySize / 2}" r="${overlayRadius}" fill="#D32F2F"/>` +
+        `</svg>`,
+      );
+
+      const overlayBuffer = await sharp!(overlaySvg).png().toBuffer();
+      this.overlayImage = nativeImage.createFromBuffer(overlayBuffer);
+      log.info('TrayService: generated overlay icon for taskbar');
+      return this.overlayImage;
+    } catch (err) {
+      log.warn('TrayService: failed to generate overlay icon:', err);
+      return null;
+    }
+  }
+
   private async updateBadge(count: number): Promise<void> {
-    // macOS: update Dock badge count
-    if (isMacOS()) {
+    // macOS Dock badge: reauth "!" takes priority over numeric unread count
+    if (isMacOS() && app.dock) {
       try {
-        app.setBadgeCount(count);
+        if (this.needsReauth) {
+          app.dock.setBadge('!');
+        } else {
+          app.dock.setBadge('');
+          app.setBadgeCount(count);
+        }
       } catch (err) {
-        log.warn('TrayService: failed to set macOS badge count:', err);
+        log.warn('TrayService: failed to set macOS badge:', err);
+      }
+    }
+
+    // Windows taskbar overlay icon: red circle when reauth needed
+    if (isWindows()) {
+      const overlayWindow = this.resolveMainWindow();
+      if (overlayWindow !== null && !overlayWindow.isDestroyed()) {
+        try {
+          if (this.needsReauth) {
+            const overlay = await this.generateOverlayImage();
+            if (overlay) {
+              overlayWindow.setOverlayIcon(overlay, 'Account needs re-authentication');
+            }
+          } else {
+            overlayWindow.setOverlayIcon(null, '');
+          }
+        } catch (err) {
+          log.warn('TrayService: failed to set overlay icon:', err);
+        }
       }
     }
 
@@ -268,9 +477,17 @@ export class TrayService {
     const icon = await this.loadTrayIconWithBadge(count);
     this.tray.setImage(icon);
 
-    const tooltip = count > 0
-      ? `LatentMail — ${count} unread message${count === 1 ? '' : 's'}`
-      : 'LatentMail';
+    // Tooltip: reauth state takes priority over unread-only
+    let tooltip: string;
+    if (this.needsReauth && count > 0) {
+      tooltip = `LatentMail — Account needs re-authentication · ${count} unread`;
+    } else if (this.needsReauth) {
+      tooltip = 'LatentMail — Account needs re-authentication';
+    } else if (count > 0) {
+      tooltip = `LatentMail — ${count} unread message${count === 1 ? '' : 's'}`;
+    } else {
+      tooltip = 'LatentMail';
+    }
     this.tray.setToolTip(tooltip);
     this.buildContextMenu();
   }
@@ -282,7 +499,16 @@ export class TrayService {
 
     const menuTemplate: Electron.MenuItemConstructorOptions[] = [];
 
-    // Show an unread badge row at the top when there are unread messages
+    // Show reauth warning at the top when any account needs re-authentication
+    if (this.needsReauth) {
+      menuTemplate.push({
+        label: '⚠ Account needs re-authentication',
+        click: () => { this.showAndFocusMainWindow(); },
+      });
+      menuTemplate.push({ type: 'separator' });
+    }
+
+    // Show an unread badge row when there are unread messages
     if (this.currentUnreadCount > 0) {
       const unreadLabel = `${this.currentUnreadCount} unread message${this.currentUnreadCount === 1 ? '' : 's'}`;
       menuTemplate.push({ label: unreadLabel, enabled: false });

@@ -9,9 +9,11 @@ import type {
   InjectEmailPayload,
   MockIpcPayload,
   SeedQueuePayload,
+  SetAccountReauthPayload,
   SmtpCapturedResponse,
   TestHookGlobal,
   TestHookResponse,
+  TrayReauthResponse,
   TriggerSyncPayload,
 } from './test-hooks-types';
 
@@ -554,4 +556,21 @@ export async function getSmtpCaptured(
   assertTestHookSuccess(response, 'getSmtpCaptured');
 
   return response;
+}
+
+export async function setAccountReauth(
+  electronApp: ElectronApplication,
+  payload: SetAccountReauthPayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'setAccountReauth', payload);
+  assertTestHookSuccess(response, 'setAccountReauth');
+}
+
+export async function getTrayReauthState(
+  electronApp: ElectronApplication,
+): Promise<boolean> {
+  const response = await invokeFrontendTestHook<TrayReauthResponse>(electronApp, 'getTrayReauthState');
+  assertTestHookSuccess(response, 'getTrayReauthState');
+
+  return response.needsReauth;
 }

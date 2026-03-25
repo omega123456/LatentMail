@@ -10,6 +10,7 @@ import { CredentialService } from './credential-service';
 import { DatabaseService } from './database-service';
 import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from '../secrets';
 import { clearAvatarCacheForAccount, getCachedAvatarUrl } from './avatar-cache-service';
+import { IPC_EVENTS } from '../ipc/ipc-channels';
 
 // Google OAuth2 endpoints — overridable via environment variables for test environments.
 // When env vars are set, they replace the production Google URLs entirely.
@@ -432,6 +433,31 @@ export class OAuthService {
         log.error(`Refresh token revoked for account ${accountId} — needs re-authentication`);
         const db = DatabaseService.getInstance();
         db.setAccountNeedsReauth(Number(accountId));
+
+        // Immediately notify TrayService so badge/overlay updates without waiting for the poll cycle.
+        // Uses lazy require() to avoid circular dependency (OAuthService initializes before TrayService).
+        try {
+          const { TrayService } = require('./tray-service');
+          TrayService.getInstance().refreshReauthState();
+        } catch (trayError) {
+          log.warn('Failed to notify TrayService of reauth state change (continuing):', trayError);
+        }
+
+        // Emit AUTH_REFRESH event to all renderer windows with the global reauth state.
+        try {
+          const { BrowserWindow } = require('electron') as typeof import('electron');
+          const allAccounts = db.getAccounts();
+          const anyAccountNeedsReauth = allAccounts.some((account) => account.needsReauth);
+          const allWindows = BrowserWindow.getAllWindows();
+          for (const window of allWindows) {
+            if (!window.isDestroyed()) {
+              window.webContents.send(IPC_EVENTS.AUTH_REFRESH, { needsReauth: anyAccountNeedsReauth });
+            }
+          }
+        } catch (emitError) {
+          log.warn('Failed to emit AUTH_REFRESH event (continuing):', emitError);
+        }
+
         throw new Error(`Account ${accountId} needs re-authentication`);
       }
 

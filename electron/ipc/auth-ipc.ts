@@ -1,12 +1,40 @@
-import { ipcMain } from 'electron';
+import { ipcMain, BrowserWindow } from 'electron';
 import { LoggerService } from '../services/logger-service';
-import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
+import { IPC_CHANNELS, IPC_EVENTS, ipcSuccess, ipcError } from './ipc-channels';
 
 const log = LoggerService.getInstance();
 import { DatabaseService } from '../services/database-service';
 import { OAuthService } from '../services/oauth-service';
 import { SyncQueueBridge } from '../services/sync-queue-bridge';
 import { getCachedAvatarUrl } from '../services/avatar-cache-service';
+import { TrayService } from '../services/tray-service';
+
+/**
+ * Notify the tray and all renderer windows that the global auth state may have
+ * changed (e.g. after login, logout, or token revocation).
+ *
+ * Module-private helper — consolidates the duplicated side-effect that was
+ * previously inlined in both the login and logout IPC handlers.
+ */
+async function notifyAuthStateChanged(db: DatabaseService): Promise<void> {
+  try {
+    TrayService.getInstance().refreshReauthState();
+  } catch (trayError) {
+    log.warn('[auth-ipc] TrayService notification failed:', trayError);
+  }
+  try {
+    const allAccounts = db.getAccounts();
+    const anyAccountNeedsReauth = allAccounts.some((acct) => acct.needsReauth);
+    const allWindows = BrowserWindow.getAllWindows();
+    for (const window of allWindows) {
+      if (!window.isDestroyed()) {
+        window.webContents.send(IPC_EVENTS.AUTH_REFRESH, { needsReauth: anyAccountNeedsReauth });
+      }
+    }
+  } catch (emitError) {
+    log.warn('[auth-ipc] AUTH_REFRESH event emission failed:', emitError);
+  }
+}
 
 export function registerAuthIpcHandlers(): void {
   // Initiate OAuth login flow (opens system browser)
@@ -15,6 +43,9 @@ export function registerAuthIpcHandlers(): void {
       log.info('OAuth login requested');
       const oauthService = OAuthService.getInstance();
       const account = await oauthService.login();
+
+      // Notify tray badge and all renderer windows of the updated auth state.
+      await notifyAuthStateChanged(DatabaseService.getInstance());
 
       // Trigger initial sync and start IDLE for the new account.
       // Routes through SyncQueueBridge so:
@@ -69,6 +100,10 @@ export function registerAuthIpcHandlers(): void {
       log.info(`Logout requested for account ${accountId}`);
       const oauthService = OAuthService.getInstance();
       await oauthService.logout(accountId);
+
+      // Notify tray badge and all renderer windows of the updated auth state.
+      await notifyAuthStateChanged(DatabaseService.getInstance());
+
       return ipcSuccess(null);
     } catch (err: any) {
       log.error('Failed to logout:', err);

@@ -1008,4 +1008,88 @@ describe('Auth & Account Lifecycle', () => {
     expect(caughtError).to.not.be.null;
     expect(caughtError!.message).to.include('timed out');
   });
+
+  it('emits AUTH_REFRESH event with needsReauth true when token refresh hits invalid_grant', async function () {
+    this.timeout(10_000);
+
+    const seededAccount = seedTestAccount({
+      email: 'auth-refresh-reauth@example.com',
+      accessToken: 'expired-auth-refresh-token',
+      refreshToken: 'refresh-auth-refresh-token',
+      expiresAt: DateTime.now().minus({ hours: 1 }).toMillis(),
+    });
+
+    oauthServer.setErrorConfig({ tokenError: 'invalid_grant' });
+
+    // Set up the event listener BEFORE monkey-patching setTimeout so that the
+    // waitForEvent internal timeout uses the real timer rather than the
+    // accelerated one (which would fire immediately and reject the promise).
+    const authRefreshPromise = waitForEvent('auth:refresh', { timeout: 5_000 });
+
+    const originalSetTimeout = global.setTimeout;
+    const fastSetTimeout = ((callback: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) => {
+      return originalSetTimeout(callback, 0, ...args);
+    }) as typeof setTimeout;
+    global.setTimeout = fastSetTimeout;
+
+    try {
+      let caughtError: Error | null = null;
+      try {
+        await OAuthService.getInstance().refreshAccessToken(String(seededAccount.accountId));
+      } catch (error) {
+        caughtError = error as Error;
+      }
+
+      expect(caughtError).to.not.be.null;
+      expect(caughtError!.message).to.include('needs re-authentication');
+    } finally {
+      global.setTimeout = originalSetTimeout;
+    }
+
+    const eventArgs = await authRefreshPromise;
+    const payload = eventArgs[0] as { needsReauth: boolean };
+    expect(payload).to.exist;
+    expect(payload.needsReauth).to.equal(true);
+  });
+
+  it('emits AUTH_REFRESH event with needsReauth false after successful re-login', async function () {
+    this.timeout(10_000);
+
+    const seededAccount = seedTestAccount({
+      email: 'auth-refresh-relogin@example.com',
+      accessToken: 'relogin-old-access-token',
+      refreshToken: 'relogin-old-refresh-token',
+      expiresAt: DateTime.now().minus({ hours: 1 }).toMillis(),
+    });
+
+    DatabaseService.getInstance().setAccountNeedsReauth(seededAccount.accountId);
+
+    const accountBeforeLogin = DatabaseService.getInstance().getAccountById(seededAccount.accountId);
+    expect(accountBeforeLogin).to.not.be.null;
+    expect(accountBeforeLogin!.needsReauth).to.equal(true);
+
+    oauthServer.setTokenConfig({
+      accessToken: 'relogin-new-access-token',
+      refreshToken: 'relogin-new-refresh-token',
+      expiresIn: 3_600,
+    });
+    oauthServer.setUserInfo({
+      email: 'auth-refresh-relogin@example.com',
+      name: 'Relogin User',
+    });
+
+    const authRefreshPromise = waitForEvent('auth:refresh', { timeout: 5_000 });
+
+    const { loginPromise, authEvent } = await startLoginFlow();
+    await oauthServer.triggerCallback(authEvent.loopbackPort, authEvent.state);
+    const loginResponse = await loginPromise;
+
+    expect(loginResponse.success).to.equal(true);
+    expect(loginResponse.data!.id).to.equal(seededAccount.accountId);
+
+    const eventArgs = await authRefreshPromise;
+    const payload = eventArgs[0] as { needsReauth: boolean };
+    expect(payload).to.exist;
+    expect(payload.needsReauth).to.equal(false);
+  });
 });

@@ -53,6 +53,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly router = inject(Router);
   private readonly cdr = inject(ChangeDetectorRef);
   private syncSub?: Subscription;
+  private authRefreshSub?: Subscription;
   private commandSub?: Subscription;
   private syncSafeguardTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLoadedAccountId: number | null = null;
@@ -146,6 +147,12 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     });
 
+    // Subscribe to auth:refresh events so the reauth banner updates immediately
+    // when the main process detects a token refresh failure or successful re-login.
+    this.authRefreshSub = this.electronService.onEvent<{ needsReauth: boolean }>('auth:refresh').subscribe(() => {
+      this.accountsStore.loadAccounts();
+    });
+
     // Subscribe to command registry events for shell-level actions.
     // Folder navigation (go-inbox/sent/drafts) is handled here when mail-shell
     // is already mounted; the CommandRegistry action also pre-sets the folder so
@@ -158,6 +165,7 @@ export class MailShellComponent implements OnInit, OnDestroy, AfterViewInit {
   ngOnDestroy(): void {
     this.clearSyncSafeguardTimer();
     this.syncSub?.unsubscribe();
+    this.authRefreshSub?.unsubscribe();
     this.commandSub?.unsubscribe();
   }
 

@@ -49,6 +49,15 @@ export interface SeedQueuePayload {
   bodyFetchItems?: Array<Record<string, unknown>>;
 }
 
+export interface SetAccountReauthPayload {
+  accountId: number;
+  needsReauth: boolean;
+}
+
+export interface TrayReauthResponse extends TestHookResponse {
+  needsReauth: boolean;
+}
+
 export interface TestHookResponse {
   success: boolean;
 }
@@ -69,6 +78,8 @@ export interface FrontendTestHooks {
   clearMockIpc(channel?: string): Promise<TestHookResponse>;
   emitRendererEvent(payload: EmitRendererEventPayload): Promise<TestHookResponse>;
   seedQueue(payload: SeedQueuePayload): Promise<TestHookResponse>;
+  setAccountReauth(payload: SetAccountReauthPayload): Promise<TestHookResponse>;
+  getTrayReauthState(): Promise<TrayReauthResponse>;
 }
 
 export interface TestHookGlobal {

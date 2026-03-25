@@ -15,8 +15,10 @@ import type {
   ResetDbOptions,
   ResetDbResult,
   SeedQueuePayload,
+  SetAccountReauthPayload,
   SmtpCapturedResponse,
   TestHookResponse,
+  TrayReauthResponse,
   TriggerSyncPayload,
 } from './infrastructure/test-hooks-types';
 import { initializeBootstrap, type BootstrapResult } from '../shared/test-bootstrap';
@@ -337,6 +339,25 @@ function validateSeedQueuePayload(payload: unknown): SeedQueuePayload {
   return {
     items: items as Array<Record<string, unknown>> | undefined,
     bodyFetchItems: bodyFetchItems as Array<Record<string, unknown>> | undefined,
+  };
+}
+
+function validateSetAccountReauthPayload(payload: unknown): SetAccountReauthPayload {
+  if (!isRecord(payload)) {
+    throw new Error('setAccountReauth payload must be an object.');
+  }
+
+  if (typeof payload['accountId'] !== 'number' || !Number.isFinite(payload['accountId']) || payload['accountId'] <= 0) {
+    throw new Error('setAccountReauth payload.accountId must be a positive number.');
+  }
+
+  if (typeof payload['needsReauth'] !== 'boolean') {
+    throw new Error('setAccountReauth payload.needsReauth must be a boolean.');
+  }
+
+  return {
+    accountId: payload['accountId'],
+    needsReauth: payload['needsReauth'],
   };
 }
 
@@ -971,6 +992,34 @@ function registerTestHooks(): void {
       }
 
       return { success: true };
+    },
+
+    setAccountReauth: async (payload: SetAccountReauthPayload): Promise<TestHookResponse> => {
+      const validatedPayload = validateSetAccountReauthPayload(payload);
+      const { DatabaseService } = require('../../electron/services/database-service') as typeof import('../../electron/services/database-service');
+      const { TrayService } = require('../../electron/services/tray-service') as typeof import('../../electron/services/tray-service');
+
+      const databaseService = DatabaseService.getInstance();
+
+      if (validatedPayload.needsReauth) {
+        databaseService.setAccountNeedsReauth(validatedPayload.accountId);
+      } else {
+        databaseService.getDatabase().prepare(
+          "UPDATE accounts SET needs_reauth = 0, updated_at = datetime('now') WHERE id = :id"
+        ).run({ id: validatedPayload.accountId });
+      }
+
+      TrayService.getInstance().refreshReauthState();
+
+      return { success: true };
+    },
+
+    getTrayReauthState: async (): Promise<TrayReauthResponse> => {
+      const { TrayService } = require('../../electron/services/tray-service') as typeof import('../../electron/services/tray-service');
+      const trayService = TrayService.getInstance();
+      const needsReauth = (trayService as unknown as Record<string, unknown>)['needsReauth'] as boolean;
+
+      return { success: true, needsReauth };
     },
 
   };
