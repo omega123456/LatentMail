@@ -11,6 +11,62 @@ interface IpcResponse<T = unknown> {
 
 type IpcCallback = (event: IpcRendererEvent, ...args: unknown[]) => void;
 
+const validChannels = [
+  'mail:sync',
+  'auth:refresh',
+  'ai:status',
+  'ai:stream',
+  'queue:update',
+  'mail:folder-updated',
+  'mail:new-email',
+  'mail:notification-click',
+  'mail:thread-refresh',
+  'mail:fetch-older-done',
+  'system:notification',
+  'system:tray-action',
+  // OS file drag-and-drop (Win32 native addon — canonical defs in ipc-channels.ts)
+  'os-file:drag-enter',
+  'os-file:drag-leave',
+  'os-file:drop',
+  // Embedding / semantic index progress events
+  'embedding:progress',
+  'embedding:complete',
+  'embedding:error',
+  'embedding:resume',
+  // AI semantic search streaming events
+  'ai:search:batch',
+  'ai:search:complete',
+  // AI chat streaming events
+  'ai:chat:stream',
+  'ai:chat:sources',
+  'ai:chat:done',
+  // Sync pause state changes (CLI pause-sync / resume-sync)
+  'sync:paused-state-changed',
+  // Body-fetch queue push events
+  'body-queue:update',
+] as const;
+
+const bufferedChannels = new Set<string>(['mail:notification-click']);
+const bufferedCallbacks = new Map<string, Set<IpcCallback>>();
+const bufferedEvents = new Map<string, unknown[][]>();
+
+for (const channel of bufferedChannels) {
+  bufferedCallbacks.set(channel, new Set<IpcCallback>());
+  ipcRenderer.on(channel, (event, ...args) => {
+    const listeners = bufferedCallbacks.get(channel);
+    if (listeners && listeners.size > 0) {
+      for (const listener of listeners) {
+        listener(event, ...args);
+      }
+      return;
+    }
+
+    const queuedEvents = bufferedEvents.get(channel) ?? [];
+    queuedEvents.push(args);
+    bufferedEvents.set(channel, queuedEvents);
+  });
+}
+
 const electronAPI = {
   // Mail operations
   mail: {
@@ -211,46 +267,37 @@ const electronAPI = {
 
   // Event listeners (for push events from main process)
   on: (channel: string, callback: IpcCallback) => {
-    const validChannels = [
-      'mail:sync',
-      'auth:refresh',
-      'ai:status',
-      'ai:stream',
-      'queue:update',
-      'mail:folder-updated',
-      'mail:new-email',
-      'mail:notification-click',
-      'mail:thread-refresh',
-      'mail:fetch-older-done',
-      'system:notification',
-      'system:tray-action',
-      // OS file drag-and-drop (Win32 native addon — canonical defs in ipc-channels.ts)
-      'os-file:drag-enter',
-      'os-file:drag-leave',
-      'os-file:drop',
-      // Embedding / semantic index progress events
-      'embedding:progress',
-      'embedding:complete',
-      'embedding:error',
-      'embedding:resume',
-      // AI semantic search streaming events
-      'ai:search:batch',
-      'ai:search:complete',
-      // AI chat streaming events
-      'ai:chat:stream',
-      'ai:chat:sources',
-      'ai:chat:done',
-      // Sync pause state changes (CLI pause-sync / resume-sync)
-      'sync:paused-state-changed',
-      // Body-fetch queue push events
-      'body-queue:update',
-    ];
-    if (validChannels.includes(channel)) {
+    if (validChannels.includes(channel as typeof validChannels[number])) {
+      if (bufferedChannels.has(channel)) {
+        const listeners = bufferedCallbacks.get(channel);
+        listeners?.add(callback);
+
+        const queuedEvents = bufferedEvents.get(channel) ?? [];
+        if (queuedEvents.length > 0) {
+          bufferedEvents.delete(channel);
+          queueMicrotask(() => {
+            const activeListeners = bufferedCallbacks.get(channel);
+            if (!activeListeners || !activeListeners.has(callback)) {
+              return;
+            }
+
+            for (const queuedArgs of queuedEvents) {
+              callback({} as IpcRendererEvent, ...queuedArgs);
+            }
+          });
+        }
+        return;
+      }
+
       ipcRenderer.on(channel, callback);
     }
   },
 
   off: (channel: string, callback: IpcCallback) => {
+    if (bufferedChannels.has(channel)) {
+      bufferedCallbacks.get(channel)?.delete(callback);
+      return;
+    }
     ipcRenderer.removeListener(channel, callback);
   },
 };

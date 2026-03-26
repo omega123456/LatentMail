@@ -8,6 +8,12 @@ import { isMacOS, isWindows } from '../utils/platform';
 
 const log = LoggerService.getInstance();
 
+interface MailNotificationClickPayload {
+  accountId: number;
+  xGmThrid: string;
+  folder: string;
+}
+
 // sharp is loaded lazily so the app still starts if it hasn't been rebuilt
 // for Electron yet. Run `npx @electron/rebuild` to enable badge icons.
 let sharp: typeof import('sharp') | null = null;
@@ -39,6 +45,10 @@ export class TrayService {
 
   /** Cached 16×16 red circle NativeImage used as Windows taskbar overlay icon. */
   private overlayImage: Electron.NativeImage | null = null;
+
+  private pendingMailNotificationClick: MailNotificationClickPayload | null = null;
+
+  private pendingMailNotificationFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {}
 
@@ -93,6 +103,19 @@ export class TrayService {
     // resolveMainWindow() falls back to getAllWindows() correctly.
     mainWindow.on('closed', () => {
       this.mainWindowRef = null;
+      this.pendingMailNotificationClick = null;
+      if (this.pendingMailNotificationFlushTimer !== null) {
+        clearTimeout(this.pendingMailNotificationFlushTimer);
+        this.pendingMailNotificationFlushTimer = null;
+      }
+    });
+
+    mainWindow.webContents.on('did-finish-load', () => {
+      this.schedulePendingMailNotificationFlush(mainWindow);
+    });
+
+    mainWindow.on('show', () => {
+      this.schedulePendingMailNotificationFlush(mainWindow);
     });
 
     log.info('TrayService: initialized');
@@ -556,6 +579,56 @@ export class TrayService {
     }
     win.show();
     win.focus();
+  }
+
+  openMailFromNotification(payload: MailNotificationClickPayload): void {
+    const win = this.resolveMainWindow();
+    if (win === null || win.isDestroyed()) {
+      return;
+    }
+
+    const wasVisible = win.isVisible();
+
+    if (win.isMinimized()) {
+      win.restore();
+    }
+
+    win.show();
+    win.focus();
+
+    if (!wasVisible || win.webContents.isLoading()) {
+      this.pendingMailNotificationClick = payload;
+      this.schedulePendingMailNotificationFlush(win);
+      return;
+    }
+
+    win.webContents.send(IPC_EVENTS.MAIL_NOTIFICATION_CLICK, payload);
+  }
+
+  private schedulePendingMailNotificationFlush(win: BrowserWindow): void {
+    if (this.pendingMailNotificationFlushTimer !== null) {
+      clearTimeout(this.pendingMailNotificationFlushTimer);
+    }
+
+    this.pendingMailNotificationFlushTimer = setTimeout(() => {
+      this.pendingMailNotificationFlushTimer = null;
+      this.flushPendingMailNotificationClick(win);
+    }, 250);
+  }
+
+  private flushPendingMailNotificationClick(win: BrowserWindow): void {
+    if (this.pendingMailNotificationClick === null || win.isDestroyed()) {
+      return;
+    }
+
+    if (!win.isVisible() || win.webContents.isLoading()) {
+      this.schedulePendingMailNotificationFlush(win);
+      return;
+    }
+
+    const payload = this.pendingMailNotificationClick;
+    this.pendingMailNotificationClick = null;
+    win.webContents.send(IPC_EVENTS.MAIL_NOTIFICATION_CLICK, payload);
   }
 
   private emitTrayAction(action: string): void {

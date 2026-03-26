@@ -16,6 +16,7 @@ import type {
   ResetDbResult,
   SeedQueuePayload,
   SetAccountReauthPayload,
+  SimulateNotificationClickPayload,
   SmtpCapturedResponse,
   TestHookResponse,
   TrayReauthResponse,
@@ -318,6 +319,30 @@ function validateEmitRendererEventPayload(payload: unknown): EmitRendererEventPa
   return {
     channel: payload['channel'].trim(),
     payload: payload['payload'],
+  };
+}
+
+function validateSimulateNotificationClickPayload(payload: unknown): SimulateNotificationClickPayload {
+  if (!isRecord(payload)) {
+    throw new Error('simulateNotificationClick payload must be an object.');
+  }
+
+  if (typeof payload['accountId'] !== 'number' || !Number.isFinite(payload['accountId']) || payload['accountId'] <= 0) {
+    throw new Error('simulateNotificationClick payload.accountId must be a positive number.');
+  }
+
+  if (typeof payload['folder'] !== 'string' || payload['folder'].trim().length === 0) {
+    throw new Error('simulateNotificationClick payload.folder must be a non-empty string.');
+  }
+
+  if (payload['xGmThrid'] !== undefined && typeof payload['xGmThrid'] !== 'string') {
+    throw new Error('simulateNotificationClick payload.xGmThrid must be a string when provided.');
+  }
+
+  return {
+    accountId: payload['accountId'],
+    folder: payload['folder'].trim(),
+    ...(typeof payload['xGmThrid'] === 'string' ? { xGmThrid: payload['xGmThrid'].trim() } : {}),
   };
 }
 
@@ -636,9 +661,10 @@ function installWebContentsSendTap(window: BrowserWindow): void {
   }) as typeof window.webContents.send;
 }
 
-async function createMainWindow(): Promise<BrowserWindow> {
+async function createMainWindow(options?: { showOnReady?: boolean }): Promise<BrowserWindow> {
   const preloadPath = path.resolve(__dirname, '../../electron/preload.js');
   const angularEntryPath = getAngularEntryPath();
+  const shouldShowOnReady = options?.showOnReady ?? true;
 
   if (!fs.existsSync(preloadPath)) {
     throw new Error(`Production preload script not found at ${preloadPath}`);
@@ -685,8 +711,29 @@ async function createMainWindow(): Promise<BrowserWindow> {
   await window.loadFile(angularEntryPath);
   await didFinishLoadPromise;
   await window.webContents.insertCSS('*, *::before, *::after { transition: none !important; animation: none !important; }');
-  window.show();
+  if (shouldShowOnReady) {
+    window.show();
+  }
 
+  return window;
+}
+
+async function recreateMainWindow(options?: { showOnReady?: boolean }): Promise<BrowserWindow> {
+  const previousWindow = mainWindow;
+  if (previousWindow !== null && !previousWindow.isDestroyed()) {
+    previousWindow.destroy();
+  }
+
+  const window = await createMainWindow({ showOnReady: options?.showOnReady ?? true });
+  if (options?.showOnReady === false) {
+    window.hide();
+  }
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+  });
+  mainWindow = window;
   return window;
 }
 
@@ -979,6 +1026,51 @@ function registerTestHooks(): void {
       return { success: true };
     },
 
+    simulateNotificationClick: async (payload: SimulateNotificationClickPayload): Promise<TestHookResponse> => {
+      const validatedPayload = validateSimulateNotificationClickPayload(payload);
+      const { TrayService } = require('../../electron/services/tray-service') as typeof import('../../electron/services/tray-service');
+      TrayService.getInstance().openMailFromNotification({
+        accountId: validatedPayload.accountId,
+        xGmThrid: validatedPayload.xGmThrid ?? '',
+        folder: validatedPayload.folder,
+      });
+
+      return { success: true };
+    },
+
+    simulateNotificationClickDuringHiddenReload: async (payload: SimulateNotificationClickPayload): Promise<TestHookResponse> => {
+      const validatedPayload = validateSimulateNotificationClickPayload(payload);
+      const { TrayService } = require('../../electron/services/tray-service') as typeof import('../../electron/services/tray-service');
+      const window = ensureMainWindow();
+      const angularEntryPath = getAngularEntryPath();
+
+      const reloadDonePromise = new Promise<void>((resolve, reject) => {
+        window.webContents.once('did-finish-load', () => {
+          resolve();
+        });
+
+        window.webContents.once('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+          if (!isMainFrame) {
+            return;
+          }
+
+          reject(new Error(`Failed to reload Angular app (${errorCode}) ${errorDescription} at ${validatedUrl}`));
+        });
+      });
+
+      window.hide();
+      void window.loadFile(angularEntryPath);
+      TrayService.getInstance().openMailFromNotification({
+        accountId: validatedPayload.accountId,
+        xGmThrid: validatedPayload.xGmThrid ?? '',
+        folder: validatedPayload.folder,
+      });
+
+      await reloadDonePromise;
+
+      return { success: true };
+    },
+
     seedQueue: async (payload: SeedQueuePayload): Promise<TestHookResponse> => {
       const validatedPayload = validateSeedQueuePayload(payload);
       const window = ensureMainWindow();
@@ -1041,10 +1133,16 @@ app.whenReady().then(async () => {
   registerTestHooks();
   seedDefaultTestAccount(bootstrap);
 
-  mainWindow = await createMainWindow();
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
+  await recreateMainWindow();
+
+  try {
+    const { TrayService } = require('../../electron/services/tray-service') as typeof import('../../electron/services/tray-service');
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      TrayService.getInstance().initialize(mainWindow);
+    }
+  } catch (error) {
+    console.warn('[frontend-test-main] Failed to initialize TrayService:', error);
+  }
 
   registerShutdownHandlers();
 }).catch(async (error: unknown) => {

@@ -1032,8 +1032,8 @@ export const EmailsStore = signalStore(
 
       // Subscribe to mail:notification-click events.
       // Perform store operations first, then navigate cross-view if needed.
-      electronService.onEvent<MailNotificationClickPayload>('mail:notification-click').subscribe(async (event) => {
-        try {
+       electronService.onEvent<MailNotificationClickPayload>('mail:notification-click').subscribe(async (event) => {
+         try {
           // 1. Ensure accounts are loaded
           await accountsStore.loadAccounts();
 
@@ -1049,10 +1049,15 @@ export const EmailsStore = signalStore(
           // 5. Load threads for the target folder
           await store.loadThreads(event.accountId, event.folder);
 
-          // 6. Load the specific thread if provided
-          if (event.xGmThrid) {
-            await store.loadThread(event.accountId, event.xGmThrid);
-          }
+           // 6. Load the specific thread if provided
+           if (event.xGmThrid) {
+             await store.loadThread(event.accountId, event.xGmThrid);
+
+              const openedThread = store.threads().find((thread) => thread.xGmThrid === event.xGmThrid) ?? null;
+              if (openedThread && !openedThread.isRead) {
+                await store.flagEmails(event.accountId, [event.xGmThrid], 'read', true, event.xGmThrid);
+              }
+            }
 
           // 7. Cross-view navigation: only navigate if not already on the mail view
           if (!router.url.startsWith('/mail')) {

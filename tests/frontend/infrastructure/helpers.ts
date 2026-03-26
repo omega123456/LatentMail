@@ -8,6 +8,7 @@ import type {
   FrontendTestHooks,
   InjectEmailPayload,
   MockIpcPayload,
+  SimulateNotificationClickPayload,
   SeedQueuePayload,
   SetAccountReauthPayload,
   SmtpCapturedResponse,
@@ -413,6 +414,22 @@ export async function emitRendererEvent(
 ): Promise<void> {
   const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'emitRendererEvent', payload);
   assertTestHookSuccess(response, 'emitRendererEvent');
+}
+
+export async function simulateNotificationClick(
+  electronApp: ElectronApplication,
+  payload: SimulateNotificationClickPayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'simulateNotificationClick', payload);
+  assertTestHookSuccess(response, 'simulateNotificationClick');
+}
+
+export async function simulateNotificationClickDuringHiddenReload(
+  electronApp: ElectronApplication,
+  payload: SimulateNotificationClickPayload,
+): Promise<void> {
+  const response = await invokeFrontendTestHook<TestHookResponse>(electronApp, 'simulateNotificationClickDuringHiddenReload', payload);
+  assertTestHookSuccess(response, 'simulateNotificationClickDuringHiddenReload');
 }
 
 export async function seedQueueState(

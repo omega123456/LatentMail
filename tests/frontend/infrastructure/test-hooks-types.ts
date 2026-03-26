@@ -44,6 +44,12 @@ export interface EmitRendererEventPayload {
   payload: unknown;
 }
 
+export interface SimulateNotificationClickPayload {
+  accountId: number;
+  folder: string;
+  xGmThrid?: string;
+}
+
 export interface SeedQueuePayload {
   items?: Array<Record<string, unknown>>;
   bodyFetchItems?: Array<Record<string, unknown>>;
@@ -77,6 +83,8 @@ export interface FrontendTestHooks {
   mockIpc(payload: MockIpcPayload): Promise<TestHookResponse>;
   clearMockIpc(channel?: string): Promise<TestHookResponse>;
   emitRendererEvent(payload: EmitRendererEventPayload): Promise<TestHookResponse>;
+  simulateNotificationClick(payload: SimulateNotificationClickPayload): Promise<TestHookResponse>;
+  simulateNotificationClickDuringHiddenReload(payload: SimulateNotificationClickPayload): Promise<TestHookResponse>;
   seedQueue(payload: SeedQueuePayload): Promise<TestHookResponse>;
   setAccountReauth(payload: SetAccountReauthPayload): Promise<TestHookResponse>;
   getTrayReauthState(): Promise<TrayReauthResponse>;
