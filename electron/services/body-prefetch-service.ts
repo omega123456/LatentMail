@@ -125,7 +125,12 @@ export class BodyPrefetchService {
       let fetched: Awaited<ReturnType<typeof imapService.fetchMessageByUid>>;
       try {
         if (dedicatedClient) {
-          fetched = await imapService.fetchMessageByUidWithClient(dedicatedClient, ALL_MAIL_PATH, uid);
+          fetched = await imapService.fetchMessageByUidWithClient(
+            dedicatedClient,
+            ALL_MAIL_PATH,
+            uid,
+            accountId,
+          );
         } else {
           fetched = await imapService.fetchMessageByUid(accountIdStr, ALL_MAIL_PATH, uid);
         }
@@ -157,13 +162,26 @@ export class BodyPrefetchService {
       }
 
       // Step 3: Update only the body fields.
+      log.debug(
+        `[BodyPrefetch] before updateEmailBodyOnly xGmMsgId=${email.xGmMsgId} uid=${uid} accountId=${accountId}`,
+      );
       db.updateEmailBodyOnly(accountId, email.xGmMsgId, fetched.textBody, fetched.htmlBody);
+      log.debug(
+        `[BodyPrefetch] after updateEmailBodyOnly xGmMsgId=${email.xGmMsgId} uid=${uid} accountId=${accountId}`,
+      );
       summary.fetched++;
 
       // Step 4: Persist attachment metadata (independent — failures don't affect body update).
       if (fetched.attachments && fetched.attachments.length > 0) {
+        const attachmentCount = fetched.attachments.length;
+        log.debug(
+          `[BodyPrefetch] before upsertAttachmentsForEmail xGmMsgId=${email.xGmMsgId} accountId=${accountId} attachmentCount=${attachmentCount}`,
+        );
         try {
           db.upsertAttachmentsForEmail(accountId, email.xGmMsgId, fetched.attachments);
+          log.debug(
+            `[BodyPrefetch] after upsertAttachmentsForEmail xGmMsgId=${email.xGmMsgId} accountId=${accountId} attachmentCount=${attachmentCount}`,
+          );
         } catch (attErr) {
           log.warn(
             `[BodyPrefetch] Failed to persist attachment metadata for xGmMsgId=${email.xGmMsgId} (account=${accountId}): ${

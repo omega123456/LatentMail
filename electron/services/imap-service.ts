@@ -1054,15 +1054,17 @@ export class ImapService {
    * The caller is responsible for the client lifecycle (connect, error handling, logout).
    * Used by BodyFetchQueueService which owns a dedicated connection per account.
    *
-   * @param client  An already-connected ImapFlow client.
-   * @param folder  Mailbox path to fetch from (e.g. '[Gmail]/All Mail').
-   * @param uid     UID of the message to fetch.
+   * @param client     An already-connected ImapFlow client.
+   * @param folder     Mailbox path to fetch from (e.g. '[Gmail]/All Mail').
+   * @param uid        UID of the message to fetch.
+   * @param accountId  Optional account id for debug logs (body-fetch correlation).
    * @returns Parsed FetchedEmail or null if the message was not found.
    */
   async fetchMessageByUidWithClient(
     client: ImapFlow,
     folder: string,
     uid: number,
+    accountId?: number,
   ): Promise<FetchedEmail | null> {
     const lock = await client.getMailboxLock(folder);
     try {
@@ -1095,7 +1097,19 @@ export class ImapService {
           const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
             ? fetchMsg.source
             : Buffer.from(fetchMsg.source);
+          log.debug(
+            `[ImapService] fetchMessageByUidWithClient: before simpleParser uid=${uid} folder=${folder}` +
+            (accountId !== undefined ? ` accountId=${accountId}` : '') +
+            ` sourceBytes=${sourceBuffer.length}`,
+          );
           const parsed = await simpleParser(sourceBuffer);
+          const textLen = (parsed.text || '').length;
+          const htmlLen = (parsed.html || '').length;
+          log.debug(
+            `[ImapService] fetchMessageByUidWithClient: after simpleParser uid=${uid} folder=${folder}` +
+            (accountId !== undefined ? ` accountId=${accountId}` : '') +
+            ` textChars=${textLen} htmlChars=${htmlLen}`,
+          );
           const { htmlBody, attachments } = this.resolveInlineImages(
             parsed.html || '',
             parsed.attachments || [],

@@ -533,10 +533,19 @@ export class BodyFetchQueueService {
         // EmbeddingService may not be initialized (e.g. sqlite-vec unavailable) — skip silently
       }
 
+      log.debug(
+        `[BodyFetchQueue] worker: before item.status=completed queueId=${workItem.queueId} accountId=${workItem.accountId}`,
+      );
       item.status = 'completed';
       item.completedAt = DateTime.utc().toISO();
       this.cleanupDedupKey(item);
+      log.debug(
+        `[BodyFetchQueue] worker: before emitUpdate queueId=${workItem.queueId} accountId=${workItem.accountId} status=${item.status}`,
+      );
       this.emitUpdate(item);
+      log.debug(
+        `[BodyFetchQueue] worker: after emitUpdate queueId=${workItem.queueId} accountId=${workItem.accountId}`,
+      );
 
       log.info(`[BodyFetchQueue] Completed body-fetch (${workItem.queueId}) for account ${workItem.accountId}`);
     } catch (err) {
@@ -632,8 +641,11 @@ export class BodyFetchQueueService {
           win.webContents.send(IPC_EVENTS.BODY_QUEUE_UPDATE, itemSnapshot);
         }
       }
-    } catch {
-      // Window may not exist yet during startup
+    } catch (err) {
+      log.warn(
+        `[BodyFetchQueue] emitUpdate failed queueId=${item.queueId} status=${item.status}:`,
+        err,
+      );
     }
   }
 

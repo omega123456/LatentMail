@@ -32,7 +32,10 @@ export async function executeFetchOlder(
   if (!parsedDt.isValid) {
     throw new Error(`Invalid beforeDate: ${beforeDate}`);
   }
-  const parsedDate = parsedDt.toJSDate();
+  // Calendar math (e.g. minus({ days: 1 })) must run in UTC — in a local zone, "minus one
+  // day" around DST changes shifts the UTC instant (e.g. Europe/Berlin on spring-forward).
+  const cursorUtc = parsedDt.toUTC();
+  const parsedDate = cursorUtc.toJSDate();
 
   const sanitizedLimit = Math.max(1, Number(limit) || 50);
 
@@ -149,8 +152,8 @@ export async function executeFetchOlder(
     nextBeforeDate = DateTime.fromMillis(oldestEmailTs).toUTC().toISO();
   }
 
-  if (!nextBeforeDate || DateTime.fromISO(nextBeforeDate).toMillis() >= parsedDt.toMillis()) {
-    nextBeforeDate = parsedDt.minus({ days: 1 }).toUTC().toISO();
+  if (!nextBeforeDate || DateTime.fromISO(nextBeforeDate).toMillis() >= cursorUtc.toMillis()) {
+    nextBeforeDate = cursorUtc.minus({ days: 1 }).toISO();
   }
 
   log.info(

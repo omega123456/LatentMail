@@ -874,7 +874,20 @@ export class EmbeddingService {
     let workerError: string | null = null;
 
     // Quick check: see if there is anything at all to embed before spawning work
-    const hasAny = accounts.some((account) => db.getEmailsNeedingVectorIndexing(account.id, 1).length > 0);
+    let hasAny = false;
+    for (const account of accounts) {
+      log.debug(
+        `[EmbeddingService] runIncrementalLoop: before getEmailsNeedingVectorIndexing accountId=${account.id} limit=1 (probe)`,
+      );
+      const probeRows = db.getEmailsNeedingVectorIndexing(account.id, 1);
+      log.debug(
+        `[EmbeddingService] runIncrementalLoop: after getEmailsNeedingVectorIndexing accountId=${account.id} count=${probeRows.length} (probe)`,
+      );
+      if (probeRows.length > 0) {
+        hasAny = true;
+        break;
+      }
+    }
     if (!hasAny) {
       this.terminateWorker();
       return;
@@ -893,7 +906,13 @@ export class EmbeddingService {
 
       let hasMore = true;
       while (hasMore && this.buildState === 'building') {
+        log.debug(
+          `[EmbeddingService] runIncrementalLoop: before getEmailsNeedingVectorIndexing accountId=${account.id} limit=${EMAIL_BATCH_SIZE}`,
+        );
         const emails = db.getEmailsNeedingVectorIndexing(account.id, EMAIL_BATCH_SIZE);
+        log.debug(
+          `[EmbeddingService] runIncrementalLoop: after getEmailsNeedingVectorIndexing accountId=${account.id} count=${emails.length}`,
+        );
 
         if (emails.length === 0) {
           hasMore = false;
@@ -935,12 +954,19 @@ export class EmbeddingService {
         }
 
         if (batchDoneResults.length > 0) {
+          const insertCount = batchDoneResults.length;
+          log.debug(
+            `[EmbeddingService] runIncrementalLoop: before batchInsertVectorIndexedEmails accountId=${account.id} rowCount=${insertCount}`,
+          );
           db.batchInsertVectorIndexedEmails(
             account.id,
             batchDoneResults.map((result) => ({
               xGmMsgId: result.xGmMsgId,
               embeddingHash: result.hash,
             }))
+          );
+          log.debug(
+            `[EmbeddingService] runIncrementalLoop: after batchInsertVectorIndexedEmails accountId=${account.id} rowCount=${insertCount}`,
           );
           totalIndexed += batchDoneResults.length;
         }
@@ -1142,6 +1168,9 @@ export class EmbeddingService {
     }
 
     // Wait until idle — no mail:* or compose:* IPC activity in the last 30 seconds
+    log.debug(
+      `[EmbeddingService] runIncrementalWhenIdle: entering idle-wait loop (quietWindowMs=${IDLE_THRESHOLD_MS})`,
+    );
     let waitCount = 0;
     while (Date.now() - getLastIpcActivityTimestamp() < IDLE_THRESHOLD_MS) {
       await sleep(5_000);
@@ -1156,6 +1185,9 @@ export class EmbeddingService {
         return;
       }
     }
+    log.debug(
+      `[EmbeddingService] runIncrementalWhenIdle: idle-wait resolved sleepIterations=${waitCount}`,
+    );
 
     const ollama = OllamaService.getInstance();
     const embeddingModel = ollama.getEmbeddingModel();
@@ -1177,7 +1209,13 @@ export class EmbeddingService {
     let hasAnyUnindexed = false;
 
     for (const account of accounts) {
+      log.debug(
+        `[EmbeddingService] runIncrementalWhenIdle: before getEmailsNeedingVectorIndexing accountId=${account.id} limit=1`,
+      );
       const needsIndexing = db.getEmailsNeedingVectorIndexing(account.id, 1);
+      log.debug(
+        `[EmbeddingService] runIncrementalWhenIdle: after getEmailsNeedingVectorIndexing accountId=${account.id} count=${needsIndexing.length}`,
+      );
       if (needsIndexing.length > 0) {
         hasAnyUnindexed = true;
         break;
