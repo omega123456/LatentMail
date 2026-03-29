@@ -126,10 +126,10 @@ async function setupWithAttachmentMessage(
         seeded.accountId,
         emailsNeedingBodies,
       );
-    } catch (prefetchErr) {
+    } catch (prefetchError) {
       // Non-fatal: if prefetch fails, some attachment tests will fail too,
       // but the failure message will be more informative than a silent skip.
-      console.warn('[setupWithAttachmentMessage] Body prefetch failed (non-fatal):', prefetchErr);
+      console.warn('[setupWithAttachmentMessage] Body prefetch failed (non-fatal):', prefetchError);
     }
   }
 }
@@ -291,7 +291,7 @@ describe('Attachments', () => {
       expect(response.data).to.be.an('array');
 
       // multipart-attachment.eml has notes.txt and small.png
-      const filenames = response.data!.map((att) => att.filename);
+      const filenames = response.data!.map((attachment) => attachment.filename);
       expect(filenames).to.include('notes.txt');
       expect(filenames).to.include('small.png');
     });
@@ -390,16 +390,16 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
-      expect(notesTxtAtt).to.not.be.undefined;
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
 
       // notes.txt should not be cached yet (fresh suite)
-      expect(notesTxtAtt!.localPath).to.be.null;
+      expect(notesAttachment!.localPath).to.be.null;
 
       // Request the content — triggers IMAP fetch
       const contentResponse = await callIpc(
         'attachment:get-content',
-        notesTxtAtt!.id,
+        notesAttachment!.id,
       ) as IpcResponse<{ filename: string; mimeType: string; size: number; content: string }>;
 
       expect(contentResponse.success).to.equal(true);
@@ -421,24 +421,24 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const pngAtt = metaResponse.data!.find((att) => att.filename === 'small.png');
-      expect(pngAtt).to.not.be.undefined;
+      const pngAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'small.png');
+      expect(pngAttachment).to.not.be.undefined;
 
       // Fetch the content (may be cached from a previous call, either way is fine)
       const contentResponse = await callIpc(
         'attachment:get-content',
-        pngAtt!.id,
+        pngAttachment!.id,
       ) as IpcResponse<{ filename: string; content: string }>;
 
       expect(contentResponse.success).to.equal(true);
 
       // Verify local_path is now set in the DB
       const db = DatabaseService.getInstance();
-      const updatedAtt = db.getAttachmentById(pngAtt!.id);
-      expect(updatedAtt).to.not.be.null;
-      expect(updatedAtt!.localPath, 'attachment cache path should be persisted after fetch').to.be.a('string');
-      expect(fs.existsSync(updatedAtt!.localPath!)).to.equal(true);
-      expect(fs.readFileSync(updatedAtt!.localPath!).toString('base64')).to.equal(contentResponse.data!.content);
+      const updatedAttachment = db.getAttachmentById(pngAttachment!.id);
+      expect(updatedAttachment).to.not.be.null;
+      expect(updatedAttachment!.localPath, 'attachment cache path should be persisted after fetch').to.be.a('string');
+      expect(fs.existsSync(updatedAttachment!.localPath!)).to.equal(true);
+      expect(fs.readFileSync(updatedAttachment!.localPath!).toString('base64')).to.equal(contentResponse.data!.content);
     });
 
     it('second request returns cached content without IMAP call', async function () {
@@ -453,24 +453,24 @@ describe('Attachments', () => {
         multipartHeaders.xGmMsgId,
       ) as IpcResponse<AttachmentMetadata[]>;
 
-      const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
-      expect(notesTxtAtt).to.not.be.undefined;
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
 
       // First call populates cache
       const firstResponse = await callIpc(
         'attachment:get-content',
-        notesTxtAtt!.id,
+        notesAttachment!.id,
       ) as IpcResponse<{ filename: string; content: string }>;
 
       expect(firstResponse.success).to.equal(true);
 
       // Verify the cache file exists
       const db = DatabaseService.getInstance();
-      const cachedAtt = db.getAttachmentById(notesTxtAtt!.id);
+      const cachedAttachmentRecord = db.getAttachmentById(notesAttachment!.id);
 
-      expect(cachedAtt).to.not.be.null;
-      expect(cachedAtt!.localPath, 'attachment cache path must exist before cache-hit assertion').to.be.a('string');
-      expect(fs.existsSync(cachedAtt!.localPath!)).to.equal(true);
+      expect(cachedAttachmentRecord).to.not.be.null;
+      expect(cachedAttachmentRecord!.localPath, 'attachment cache path must exist before cache-hit assertion').to.be.a('string');
+      expect(fs.existsSync(cachedAttachmentRecord!.localPath!)).to.equal(true);
 
       imapStateInspector.injectCommandError('FETCH', 'cache-hit test should not refetch from IMAP');
 
@@ -478,7 +478,7 @@ describe('Attachments', () => {
         // Second request should read from cache file
         const secondResponse = await callIpc(
           'attachment:get-content',
-          notesTxtAtt!.id,
+          notesAttachment!.id,
         ) as IpcResponse<{ filename: string; content: string }>;
 
         expect(secondResponse.success).to.equal(true);
@@ -563,7 +563,7 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
       expect(notesAttachment).to.not.be.undefined;
 
       const existingAttachment = DatabaseService.getInstance().getAttachmentById(notesAttachment!.id);
@@ -698,17 +698,17 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const pngAttachment = metaResponse.data!.find((att) => att.filename === 'small.png');
-      expect(pngAttachment).to.not.be.undefined;
+      const pngAttachmentachment = metaResponse.data!.find((attachment) => attachment.filename === 'small.png');
+      expect(pngAttachmentachment).to.not.be.undefined;
 
       const databaseService = DatabaseService.getInstance();
-      const cachedAttachment = databaseService.getAttachmentById(pngAttachment!.id);
+      const cachedAttachment = databaseService.getAttachmentById(pngAttachmentachment!.id);
       if (cachedAttachment?.localPath && fs.existsSync(cachedAttachment.localPath)) {
         fs.unlinkSync(cachedAttachment.localPath);
       }
       databaseService.getDatabase().prepare(
         'UPDATE attachments SET local_path = NULL WHERE id = :id'
-      ).run({ id: pngAttachment!.id });
+      ).run({ id: pngAttachmentachment!.id });
 
       const imapServiceModule = require('../../../electron/services/imap-service') as typeof import('../../../electron/services/imap-service');
       const imapService = imapServiceModule.ImapService.getInstance() as unknown as {
@@ -727,7 +727,7 @@ describe('Attachments', () => {
       }) as typeof imapService.connect;
 
       try {
-        const response = await callIpc('attachment:get-content', pngAttachment!.id) as IpcResponse<unknown>;
+        const response = await callIpc('attachment:get-content', pngAttachmentachment!.id) as IpcResponse<unknown>;
         expect(response.success).to.equal(false);
         expect(response.error!.code).to.equal('ATTACHMENT_CONTENT_NOT_FOUND');
       } finally {
@@ -791,7 +791,7 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
       expect(notesAttachment).to.not.be.undefined;
 
       const databaseService = DatabaseService.getInstance();
@@ -855,7 +855,7 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
       expect(notesAttachment).to.not.be.undefined;
 
       await callIpc('attachment:get-content', notesAttachment!.id);
@@ -912,12 +912,12 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
-      expect(notesTxtAtt).to.not.be.undefined;
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
 
       const textResponse = await callIpc(
         'attachment:get-content-as-text',
-        notesTxtAtt!.id,
+        notesAttachment!.id,
       ) as IpcResponse<{ filename: string; mimeType: string; text: string }>;
 
       expect(textResponse.success).to.equal(true);
@@ -949,12 +949,12 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const pngAttachment = metaResponse.data!.find((att) => att.filename === 'small.png');
-      expect(pngAttachment).to.not.be.undefined;
+      const pngAttachmentachment = metaResponse.data!.find((attachment) => attachment.filename === 'small.png');
+      expect(pngAttachmentachment).to.not.be.undefined;
 
       const textResponse = await callIpc(
         'attachment:get-content-as-text',
-        pngAttachment!.id,
+        pngAttachmentachment!.id,
       ) as IpcResponse<{ filename: string; mimeType: string; text: string }>;
 
       expect(textResponse.success).to.equal(true);
@@ -975,7 +975,7 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesAttachment = metaResponse.data!.find((att) => att.filename === 'notes.txt');
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
       expect(notesAttachment).to.not.be.undefined;
 
       await callIpc('attachment:get-content', notesAttachment!.id);
@@ -1172,8 +1172,8 @@ describe('Attachments', () => {
       ) as IpcResponse<AttachmentMetadata[]>;
 
       expect(metaResponse.success).to.equal(true);
-      const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
-      expect(notesTxtAtt).to.not.be.undefined;
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
 
       // Ensure the temp file does not exist yet
       if (fs.existsSync(tempDownloadPath)) {
@@ -1182,7 +1182,7 @@ describe('Attachments', () => {
 
       const downloadResponse = await callIpc(
         'attachment:download',
-        notesTxtAtt!.id,
+        notesAttachment!.id,
       ) as IpcResponse<{ saved: boolean; filePath?: string }>;
 
       expect(downloadResponse.success).to.equal(true);
@@ -1212,12 +1212,12 @@ describe('Attachments', () => {
         multipartHeaders.xGmMsgId,
       ) as IpcResponse<AttachmentMetadata[]>;
 
-      const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
-      expect(notesTxtAtt).to.not.be.undefined;
+      const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
+      expect(notesAttachment).to.not.be.undefined;
 
       const downloadResponse = await callIpc(
         'attachment:download',
-        notesTxtAtt!.id,
+        notesAttachment!.id,
       ) as IpcResponse<{ saved: boolean }>;
 
       expect(downloadResponse.success).to.equal(true);
@@ -1259,12 +1259,12 @@ describe('Attachments', () => {
         ) as IpcResponse<AttachmentMetadata[]>;
 
         expect(metaResponse.success).to.equal(true);
-        const notesTxtAtt = metaResponse.data!.find((att) => att.filename === 'notes.txt');
-        expect(notesTxtAtt).to.not.be.undefined;
+        const notesAttachment = metaResponse.data!.find((attachment) => attachment.filename === 'notes.txt');
+        expect(notesAttachment).to.not.be.undefined;
 
         const downloadResponse = await callIpc(
           'attachment:download',
-          notesTxtAtt!.id,
+          notesAttachment!.id,
         ) as IpcResponse<unknown>;
 
         expect(downloadResponse.success).to.equal(false);
@@ -1415,56 +1415,130 @@ describe('Attachments', () => {
     it('omits CID-only inline parts when restoring draft attachments', async function () {
       this.timeout(30_000);
 
-      const draftXGmMsgId = await createDraftAndGetMsgId(suiteAccountId, {
-        subject: 'Draft with filtered inline restore',
-        to: 'draft-inline-restore@example.com',
-        textBody: 'Inline restore body',
-        description: 'Create draft with inline and file attachment',
-        attachments: [
-          {
-            filename: 'visible.txt',
-            mimeType: 'text/plain',
-            data: Buffer.from('visible draft attachment', 'utf8').toString('base64'),
-          },
-        ],
+      // Build a real multipart MIME message with BOTH an inline image (CID-only,
+      // Content-Disposition: inline) and a regular file attachment (Content-Disposition: attachment).
+      // The draft attachment restoration handler should filter out the CID-only inline part
+      // and return only the regular file attachment.
+      const inlineDraftXGmMsgId = '9990000000000099';
+      const inlineDraftXGmThrid = '9990000000000099';
+
+      const draftEml = Buffer.from([
+        'From: draft-inline-restore@example.com',
+        'To: draft-inline-restore-recipient@example.com',
+        'Subject: Draft with filtered inline restore',
+        'Date: Wed, 03 Jan 2024 12:00:00 +0000',
+        `Message-ID: <draft-inline-restore-${DateTime.now().toMillis()}@example.com>`,
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="==draft_inline_boundary=="',
+        `X-GM-MSGID: ${inlineDraftXGmMsgId}`,
+        `X-GM-THRID: ${inlineDraftXGmThrid}`,
+        '',
+        '--==draft_inline_boundary==',
+        'Content-Type: multipart/related; boundary="==draft_related_boundary=="',
+        '',
+        '--==draft_related_boundary==',
+        'Content-Type: text/plain; charset=UTF-8',
+        '',
+        'Inline restore body',
+        '',
+        '--==draft_related_boundary==',
+        'Content-Type: image/png',
+        'Content-Transfer-Encoding: base64',
+        'Content-Disposition: inline',
+        'Content-ID: <inline-logo@example.com>',
+        '',
+        Buffer.from('abc', 'utf8').toString('base64'),
+        '',
+        '--==draft_related_boundary==--',
+        '',
+        '--==draft_inline_boundary==',
+        'Content-Type: text/plain',
+        'Content-Transfer-Encoding: base64',
+        'Content-Disposition: attachment; filename="visible.txt"',
+        '',
+        Buffer.from('visible draft attachment', 'utf8').toString('base64'),
+        '',
+        '--==draft_inline_boundary==--',
+      ].join('\r\n'));
+
+      // Inject directly into Drafts folder on the fake IMAP server
+      imapStateInspector.injectMessage('[Gmail]/Drafts', draftEml, {
+        xGmMsgId: inlineDraftXGmMsgId,
+        xGmThrid: inlineDraftXGmThrid,
+        xGmLabels: ['\\Draft'],
+        flags: ['\\Draft', '\\Seen'],
       });
 
-      const mailparserModule = require('mailparser') as typeof import('mailparser');
-      const originalSimpleParser = mailparserModule.simpleParser;
-      mailparserModule.simpleParser = ((async () => ({
-        attachments: [
-          {
-            filename: 'inline-logo.png',
-            contentType: 'image/png',
-            size: 3,
-            contentId: '<inline-logo@example.com>',
-            contentDisposition: 'inline',
-            content: Buffer.from('abc', 'utf8'),
-          },
-          {
-            filename: 'visible.txt',
-            contentType: 'text/plain',
-            size: 23,
-            contentDisposition: 'attachment',
-            content: Buffer.from('visible draft attachment', 'utf8'),
-          },
-        ],
-      })) as unknown) as typeof mailparserModule.simpleParser;
+      // Register the message in the DB so the IPC handler can locate it
+      const db = getDatabase();
+      const rawDb = db.getDatabase();
 
-      try {
-        const response = await callIpc(
-          'attachment:fetch-draft-attachments',
-          String(suiteAccountId),
-          draftXGmMsgId,
-        ) as IpcResponse<Array<{ filename: string; mimeType: string; size: number; data: string }>>;
+      // Upsert the email record
+      rawDb.prepare(`
+        INSERT OR REPLACE INTO emails (account_id, x_gm_msgid, x_gm_thrid, message_id, from_address, from_name,
+          to_addresses, cc_addresses, bcc_addresses, subject, text_body, html_body, date, is_read, is_starred,
+          is_important, is_draft, snippet, size, has_attachments, labels)
+        VALUES (:accountId, :xGmMsgId, :xGmThrid, :messageId, :fromAddress, :fromName,
+          :toAddresses, :ccAddresses, :bccAddresses, :subject, :textBody, :htmlBody, :date, :isRead, :isStarred,
+          :isImportant, :isDraft, :snippet, :size, :hasAttachments, :labels)
+      `).run({
+        accountId: suiteAccountId,
+        xGmMsgId: inlineDraftXGmMsgId,
+        xGmThrid: inlineDraftXGmThrid,
+        messageId: '<draft-inline-restore@example.com>',
+        fromAddress: 'draft-inline-restore@example.com',
+        fromName: 'Draft Inline Restore',
+        toAddresses: 'draft-inline-restore-recipient@example.com',
+        ccAddresses: '',
+        bccAddresses: '',
+        subject: 'Draft with filtered inline restore',
+        textBody: 'Inline restore body',
+        htmlBody: '',
+        date: '2024-01-03T12:00:00.000Z',
+        isRead: 1,
+        isStarred: 0,
+        isImportant: 0,
+        isDraft: 1,
+        snippet: 'Draft with filtered inline restore',
+        size: draftEml.length,
+        hasAttachments: 1,
+        labels: '\\Draft',
+      });
 
-        expect(response.success).to.equal(true);
-        expect(response.data).to.be.an('array');
-        expect(response.data!.map((attachment) => attachment.filename)).to.include('visible.txt');
-        expect(response.data!.map((attachment) => attachment.filename)).to.not.include('inline-logo.png');
-      } finally {
-        mailparserModule.simpleParser = originalSimpleParser;
-      }
+      // Get the email ID
+      const emailRow = rawDb.prepare(
+        'SELECT id FROM emails WHERE x_gm_msgid = :xGmMsgId AND account_id = :accountId',
+      ).get({ xGmMsgId: inlineDraftXGmMsgId, accountId: suiteAccountId }) as { id: number } | undefined;
+
+      expect(emailRow).to.not.be.undefined;
+
+      // Register in the email_folders junction table so getFolderUidsForEmail finds it
+      const draftsMessages = imapStateInspector.getMessages('[Gmail]/Drafts');
+      const injectedDraft = draftsMessages.find(
+        (message) => message.xGmMsgId === inlineDraftXGmMsgId,
+      );
+      expect(injectedDraft).to.not.be.undefined;
+
+      rawDb.prepare(`
+        INSERT OR REPLACE INTO email_folders (account_id, x_gm_msgid, folder, uid)
+        VALUES (:accountId, :xGmMsgId, :folder, :uid)
+      `).run({
+        accountId: suiteAccountId,
+        xGmMsgId: inlineDraftXGmMsgId,
+        folder: '[Gmail]/Drafts',
+        uid: injectedDraft!.uid,
+      });
+
+      const response = await callIpc(
+        'attachment:fetch-draft-attachments',
+        String(suiteAccountId),
+        inlineDraftXGmMsgId,
+      ) as IpcResponse<Array<{ filename: string; mimeType: string; size: number; data: string }>>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.be.an('array');
+      expect(response.data!.map((attachment) => attachment.filename)).to.include('visible.txt');
+      expect(response.data!.map((attachment) => attachment.filename)).to.not.include('inline-logo.png');
     });
 
     it('returns ATTACHMENT_DRAFT_FETCH_FAILED when fetching the draft source throws', async function () {

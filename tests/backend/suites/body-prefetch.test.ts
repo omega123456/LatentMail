@@ -895,4 +895,165 @@ describe('Body Prefetch', () => {
       bodyQueue.resume();
     });
   });
+
+  // =========================================================================
+  // Worker-based parse pipeline — verify correct body/attachment results in DB
+  // =========================================================================
+
+  describe('Worker-based parse pipeline — inline images and attachments', () => {
+    before(async function () {
+      this.timeout(35_000);
+
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({
+        email: 'worker-parse-pipeline@example.com',
+        displayName: 'Worker Parse Pipeline Test',
+      });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      // Inject the inline-images fixture — has a CID-referenced inline image
+      const inlineMsg = emlFixtures['inline-images'];
+      imapStateInspector.injectMessage('[Gmail]/All Mail', inlineMsg.raw, {
+        xGmMsgId: inlineMsg.headers.xGmMsgId,
+        xGmThrid: inlineMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', inlineMsg.raw, {
+        xGmMsgId: inlineMsg.headers.xGmMsgId,
+        xGmThrid: inlineMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      // Inject the multipart-attachment fixture — has regular non-inline attachments
+      const multipartMsg = emlFixtures['multipart-attachment'];
+      imapStateInspector.injectMessage('[Gmail]/All Mail', multipartMsg.raw, {
+        xGmMsgId: multipartMsg.headers.xGmMsgId,
+        xGmThrid: multipartMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', multipartMsg.raw, {
+        xGmMsgId: multipartMsg.headers.xGmMsgId,
+        xGmThrid: multipartMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      // Inject a plain-text fixture for simple text body verification
+      const plainMsg = emlFixtures['plain-text'];
+      imapStateInspector.injectMessage('[Gmail]/All Mail', plainMsg.raw, {
+        xGmMsgId: plainMsg.headers.xGmMsgId,
+        xGmThrid: plainMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', plainMsg.raw, {
+        xGmMsgId: plainMsg.headers.xGmMsgId,
+        xGmThrid: plainMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(suiteAccountId, { timeout: 25_000 });
+    });
+
+    it('worker parses inline images into data URIs in the stored HTML body', async function () {
+      this.timeout(30_000);
+
+      const inlineHeaders = emlFixtures['inline-images'].headers;
+      const db = DatabaseService.getInstance();
+      const prefetchService = BodyPrefetchService.getInstance();
+
+      // Clear bodies so we exercise the body fetch pipeline
+      db.getDatabase().prepare(
+        'UPDATE emails SET text_body = NULL, html_body = NULL WHERE x_gm_msgid = :xGmMsgId AND account_id = :accountId',
+      ).run({ xGmMsgId: inlineHeaders.xGmMsgId, accountId: suiteAccountId });
+
+      // Use the prefetch service which calls fetchMessageByUid → parseBodyMode (worker)
+      const summary = await prefetchService.fetchAndStoreBodies(
+        suiteAccountId,
+        [{ xGmMsgId: inlineHeaders.xGmMsgId, xGmThrid: inlineHeaders.xGmThrid }],
+      );
+
+      expect(summary.fetched).to.be.at.least(1);
+
+      // Verify the stored HTML body contains data URIs instead of cid: references
+      const emailAfter = db.getEmailByXGmMsgId(suiteAccountId, inlineHeaders.xGmMsgId);
+      expect(emailAfter).to.not.be.null;
+
+      const htmlBody = String(emailAfter!['htmlBody'] || '');
+      // The inline-images fixture has <img src="cid:logo@example.com"> — after worker
+      // CID resolution, the HTML body should contain a data:image/png;base64 URI
+      expect(htmlBody).to.include('data:image/png;base64,');
+      expect(htmlBody).to.not.include('cid:logo@example.com');
+
+      // Text body should be present
+      const textBody = String(emailAfter!['textBody'] || '');
+      expect(textBody.length).to.be.greaterThan(0);
+    });
+
+    it('worker correctly stores text body for plain-text email via body fetch', async function () {
+      this.timeout(25_000);
+
+      const plainHeaders = emlFixtures['plain-text'].headers;
+      const db = DatabaseService.getInstance();
+      const prefetchService = BodyPrefetchService.getInstance();
+
+      // Clear bodies
+      db.getDatabase().prepare(
+        'UPDATE emails SET text_body = NULL, html_body = NULL WHERE x_gm_msgid = :xGmMsgId AND account_id = :accountId',
+      ).run({ xGmMsgId: plainHeaders.xGmMsgId, accountId: suiteAccountId });
+
+      const summary = await prefetchService.fetchAndStoreBodies(
+        suiteAccountId,
+        [{ xGmMsgId: plainHeaders.xGmMsgId, xGmThrid: plainHeaders.xGmThrid }],
+      );
+
+      expect(summary.fetched + summary.skipped + summary.failed).to.equal(1);
+
+      const emailAfter = db.getEmailByXGmMsgId(suiteAccountId, plainHeaders.xGmMsgId);
+      expect(emailAfter).to.not.be.null;
+      const textBody = String(emailAfter!['textBody'] || '');
+      expect(textBody.length).to.be.greaterThan(0);
+    });
+
+    it('worker persists attachment metadata for multipart email after body fetch', async function () {
+      this.timeout(30_000);
+
+      const multipartHeaders = emlFixtures['multipart-attachment'].headers;
+      const db = DatabaseService.getInstance();
+      const prefetchService = BodyPrefetchService.getInstance();
+
+      // Clear bodies so body-fetch pipeline runs
+      db.getDatabase().prepare(
+        'UPDATE emails SET text_body = NULL, html_body = NULL WHERE x_gm_msgid = :xGmMsgId AND account_id = :accountId',
+      ).run({ xGmMsgId: multipartHeaders.xGmMsgId, accountId: suiteAccountId });
+
+      const summary = await prefetchService.fetchAndStoreBodies(
+        suiteAccountId,
+        [{ xGmMsgId: multipartHeaders.xGmMsgId, xGmThrid: multipartHeaders.xGmThrid }],
+      );
+
+      // Body fetch should have succeeded
+      expect(summary.fetched).to.be.at.least(1);
+
+      // Verify the email now has a body in DB
+      const emailAfter = db.getEmailByXGmMsgId(suiteAccountId, multipartHeaders.xGmMsgId);
+      expect(emailAfter).to.not.be.null;
+      expect(Boolean(emailAfter!['textBody'] || emailAfter!['htmlBody'])).to.equal(true);
+
+      // Verify attachment metadata was persisted
+      const rawDb = db.getDatabase();
+      const attachmentRows = rawDb.prepare(
+        `SELECT a.filename FROM attachments a
+         JOIN emails e ON e.id = a.email_id
+         WHERE e.x_gm_msgid = :xGmMsgId AND e.account_id = :accountId`,
+      ).all({ xGmMsgId: multipartHeaders.xGmMsgId, accountId: suiteAccountId }) as Array<Record<string, unknown>>;
+
+      expect(attachmentRows).to.be.an('array');
+      // The multipart-attachment fixture has 2 attachments (notes.txt and small.png)
+      expect(attachmentRows.length).to.be.at.least(1);
+    });
+  });
 });

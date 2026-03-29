@@ -6,7 +6,7 @@ import { LoggerService } from '../services/logger-service';
 import { IPC_CHANNELS, ipcSuccess, ipcError } from './ipc-channels';
 import { DatabaseService } from '../services/database-service';
 import { ImapService } from '../services/imap-service';
-import { simpleParser } from 'mailparser';
+import { MailParserWorkerService } from '../services/mail-parser-worker-service';
 import { FolderLockManager } from '../services/folder-lock-manager';
 
 const log = LoggerService.getInstance();
@@ -294,8 +294,8 @@ export function registerAttachmentIpcHandlers(): void {
           const fetched = await msg.fetchOne(String(draftsEntry.uid), { source: true }, { uid: true });
           if (fetched && fetched.source) {
             const sourceBuffer = Buffer.isBuffer(fetched.source) ? fetched.source : Buffer.from(fetched.source);
-            const parsed = await simpleParser(sourceBuffer);
-            attachmentData = (parsed.attachments || [])
+            const parsed = await MailParserWorkerService.getInstance().parseFullMode(sourceBuffer);
+            attachmentData = (parsed.fullAttachments || [])
               .filter((att) => !att.contentId || att.contentDisposition === 'attachment')
               .map((att) => ({
                 filename: att.filename || 'attachment',
@@ -355,10 +355,10 @@ async function fetchAttachmentContent(
       }
 
       const sourceBuffer = Buffer.isBuffer(msg.source) ? msg.source : Buffer.from(msg.source);
-      const parsed = await simpleParser(sourceBuffer);
+      const parsed = await MailParserWorkerService.getInstance().parseFullMode(sourceBuffer);
 
       // Find the matching attachment by filename or contentId
-      const matchingAtt = (parsed.attachments || []).find((att) => {
+      const matchingAtt = (parsed.fullAttachments || []).find((att) => {
         if (contentId) {
           const normalizedCid = att.contentId?.replace(/^<|>$/g, '') ?? '';
           if (normalizedCid === contentId) {

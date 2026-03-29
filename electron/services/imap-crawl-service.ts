@@ -12,10 +12,10 @@
  */
 
 import { ImapFlow, FetchMessageObject } from 'imapflow';
-import { simpleParser } from 'mailparser';
 import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
 import { ImapService } from './imap-service';
+import { MailParserWorkerService } from './mail-parser-worker-service';
 
 const log = LoggerService.getInstance();
 
@@ -32,9 +32,9 @@ export interface CrawlFetchResult {
   /** RFC 5322 Message-ID. */
   messageId: string;
   subject: string;
-  /** Plain-text body parsed by simpleParser (empty string if not present). */
+  /** Plain-text body parsed by the mail-parser worker (empty string if not present). */
   textBody: string;
-  /** HTML body parsed by simpleParser (empty string if not present). */
+  /** HTML body parsed by the mail-parser worker (empty string if not present). */
   htmlBody: string;
   /** Raw Gmail labels as folder paths (e.g. '[Gmail]/Spam', '\Important'). */
   rawLabels: string[];
@@ -195,7 +195,7 @@ export class ImapCrawlService {
 
   /**
    * Fetch a batch of emails from [Gmail]/All Mail by UID.
-   * Fetches full source (body), parses via simpleParser, and returns structured results.
+   * Fetches full source (body), parses via the mail-parser worker, and returns structured results.
    * Any UIDs that fail to parse are silently skipped (logged at debug level).
    *
    * @param accountId - Account to fetch from
@@ -373,7 +373,7 @@ export class ImapCrawlService {
 
   /**
    * Parse an ImapFlow message object that includes source (full body).
-   * Uses simpleParser to extract text and HTML bodies.
+   * Uses the mail-parser worker to extract text and HTML bodies.
    * Returns null if the message cannot be parsed (e.g. missing envelope or xGmMsgId).
    */
   private async parseMessageWithBody(msg: FetchMessageObject): Promise<CrawlFetchResult | null> {
@@ -415,11 +415,11 @@ export class ImapCrawlService {
         const sourceBuffer = Buffer.isBuffer(msg.source)
           ? msg.source
           : Buffer.from(msg.source);
-        const parsed = await simpleParser(sourceBuffer);
-        textBody = (parsed.text || '').trim();
-        htmlBody = (parsed.html || '').trim();
+        const parsed = await MailParserWorkerService.getInstance().parseTextOnlyMode(sourceBuffer);
+        textBody = (parsed.textBody || '').trim();
+        htmlBody = (parsed.htmlBody || '').trim();
       } catch (err) {
-        log.debug(`[ImapCrawlService] simpleParser error for ${xGmMsgId}:`, err);
+        log.debug(`[ImapCrawlService] parseTextOnlyMode error for ${xGmMsgId}:`, err);
         // Keep empty textBody/htmlBody — email may still be indexed by subject
       }
     }

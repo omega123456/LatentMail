@@ -75,6 +75,16 @@ export async function quiesceAndRestore(): Promise<void> {
     console.warn('[quiesceAndRestore] Failed to reset BodyFetchQueueService:', error);
   }
 
+  // 2b2. Reset MailParserWorkerService — terminates the worker thread and clears
+  //      all pending requests so no stale parse operations from the previous suite
+  //      can complete after the DB has been restored.
+  try {
+    const { MailParserWorkerService } = require('../../../electron/services/mail-parser-worker-service') as typeof import('../../../electron/services/mail-parser-worker-service');
+    await MailParserWorkerService.getInstance().resetForTesting();
+  } catch (error) {
+    console.warn('[quiesceAndRestore] Failed to reset MailParserWorkerService:', error);
+  }
+
   // 2c. Clear FilterService.processingAccounts.
   //     An in-flight syncAllMail worker (from the previous suite) may have called
   //     filterService.processNewEmails(accountId) and added accountId to

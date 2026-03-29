@@ -17,6 +17,7 @@ import { VectorDbService } from './services/vector-db-service';
 import { EmbeddingService } from './services/embedding-service';
 import { patchIpcMainForActivityTracking } from './ipc/ipc-activity-tracker';
 import { getAvatarCacheDir } from './services/avatar-cache-service';
+import { MailParserWorkerService } from './services/mail-parser-worker-service';
 import { isMacOS, isWindows } from './utils/platform';
 import { setLaunchAtLogin } from './utils/launch-at-login';
 
@@ -452,6 +453,7 @@ app.on('before-quit', async (event) => {
     SyncQueueBridge.getInstance().stop();
     SyncService.getInstance().stopAllIdle().catch(() => {});
     MailQueueService.getInstance().cancelAllRetries();
+    MailParserWorkerService.getInstance().shutdown();
     ImapService.getInstance().disconnectAll().catch(() => {});
     TrayService.getInstance().cleanup();
   } catch {

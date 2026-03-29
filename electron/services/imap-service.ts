@@ -1,13 +1,18 @@
 import { ImapFlow, FetchMessageObject } from 'imapflow';
 import { DateTime } from 'luxon';
 import { LoggerService } from './logger-service';
-import { simpleParser } from 'mailparser';
 
 const log = LoggerService.getInstance();
 import { OAuthService } from './oauth-service';
 import { DatabaseService } from './database-service';
 import { FolderLockManager } from './folder-lock-manager';
 import { formatParticipant } from '../utils/format-participant';
+import { MailParserWorkerService } from './mail-parser-worker-service';
+import { coerceToBuffer } from '../utils/coerce-buffer';
+import { buildGmailThreadWebUrl } from '../utils/gmail-thread-web-url';
+import type { ParsedAttachmentMeta } from '../utils/resolve-inline-images';
+
+export { ParsedAttachmentMeta } from '../utils/resolve-inline-images';
 
 /**
  * RFC 6154 special-use attribute → IMAP mailbox path for SELECT.
@@ -23,14 +28,6 @@ const SPECIAL_USE_TO_PATH: Record<string, string> = {
   '\\Starred': '[Gmail]/Starred',
   '\\Important': '[Gmail]/Important',
 };
-
-/** Parsed attachment metadata from simpleParser (non-inline attachments). */
-export interface ParsedAttachmentMeta {
-  filename: string;
-  mimeType: string | null;
-  size: number | null;
-  contentId: string | null;
-}
 
 export interface FetchedEmail {
   uid: number;
@@ -443,89 +440,42 @@ export class ImapService {
     const client = await this.connect(accountId);
     const lock = await client.getMailboxLock(folder);
     try {
-      const msg = await client.fetchOne(String(uid), {
-        source: true,
-      }, { uid: true });
+      const msg = await client.fetchOne(
+        String(uid),
+        {
+          source: true,
+          threadId: true,
+        } as any,
+        { uid: true },
+      );
 
       if (!msg || !msg.source) {
         return null;
       }
 
-      const sourceBuffer = Buffer.isBuffer(msg.source) ? msg.source : Buffer.from(msg.source);
-      const parsed = await simpleParser(sourceBuffer);
-      const { htmlBody } = this.resolveInlineImages(parsed.html || '', parsed.attachments || []);
+      const sourceBuffer = coerceToBuffer(msg.source);
+      const mailParserWorkerService = MailParserWorkerService.getInstance();
+      const parsed = await mailParserWorkerService.parseBodyMode(sourceBuffer);
+      let textBody = (parsed.textBody || '').trim();
+      let htmlBody = (parsed.htmlBody || '').trim();
+      const threadId = String((msg as unknown as { threadId?: string }).threadId ?? '');
+      const authEmail = DatabaseService.getInstance().getAccountById(Number(accountId))?.email;
+      const withFooter = this.appendTruncatedBodyGmailFooter(
+        textBody,
+        htmlBody,
+        parsed.bodyTruncated,
+        threadId,
+        authEmail,
+      );
+      textBody = withFooter.textBody;
+      htmlBody = withFooter.htmlBody;
       return {
-        textBody: (parsed.text || '').trim(),
-        htmlBody: htmlBody.trim(),
+        textBody,
+        htmlBody,
       };
     } finally {
       lock.release();
     }
-  }
-
-  /**
-   * Resolve inline CID image references in HTML body by replacing cid: URLs with
-   * base64 data URIs, and extract non-inline attachment metadata.
-   *
-   * @param rawHtml - Raw HTML body from simpleParser
-   * @param parsedAttachments - Attachment list from simpleParser
-   * @returns Resolved HTML body and array of non-inline attachment metadata
-   */
-  resolveInlineImages(
-    rawHtml: string,
-    parsedAttachments: Array<{
-      filename?: string;
-      contentType: string;
-      size: number;
-      contentId?: string | null;
-      content: Buffer;
-      contentDisposition?: string | null;
-      headers?: unknown;
-    }>
-  ): { htmlBody: string; attachments: ParsedAttachmentMeta[] } {
-    let htmlBody = rawHtml;
-    const attachments: ParsedAttachmentMeta[] = [];
-
-    // Build a map of contentId → base64 data URI for inline images
-    const cidMap = new Map<string, string>();
-    for (const att of parsedAttachments) {
-      if (att.contentId) {
-        // Normalize: strip angle brackets from content IDs (RFC 2392)
-        const cid = att.contentId.replace(/^<|>$/g, '');
-        if (cid && att.content && att.content.length > 0) {
-          const mimeType = att.contentType || 'application/octet-stream';
-          const base64 = att.content.toString('base64');
-          cidMap.set(cid, `data:${mimeType};base64,${base64}`);
-        }
-      }
-    }
-
-    // Replace cid: references in HTML with data URIs
-    if (cidMap.size > 0 && htmlBody) {
-      htmlBody = htmlBody.replace(/cid:([^\s"'>]+)/gi, (_match, cidRef) => {
-        const resolved = cidMap.get(cidRef);
-        return resolved || `cid:${cidRef}`;
-      });
-    }
-
-    // Collect non-inline attachment metadata
-    for (const att of parsedAttachments) {
-      // Skip inline images that are referenced in the HTML body
-      const isInline = att.contentId && cidMap.has(att.contentId.replace(/^<|>$/g, ''));
-      if (isInline) {
-        continue;
-      }
-      // Skip attachments with no filename (usually inline content-type parts)
-      const filename = att.filename || att.contentType?.split('/').pop() || 'attachment';
-      attachments.push({
-        filename,
-        mimeType: att.contentType || null,
-        size: att.size || (att.content ? att.content.length : null),
-        contentId: att.contentId ? att.contentId.replace(/^<|>$/g, '') : null,
-      });
-    }
-
-    return { htmlBody, attachments };
   }
 
   /**
@@ -564,17 +514,22 @@ export class ImapService {
       // Parse body from source
       if (fetchMsg.source) {
         try {
-          const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
-            ? fetchMsg.source
-            : Buffer.from(fetchMsg.source);
-          const parsed = await simpleParser(sourceBuffer);
-          const { htmlBody, attachments } = this.resolveInlineImages(
-            parsed.html || '',
-            parsed.attachments || []
+          const sourceBuffer = coerceToBuffer(fetchMsg.source);
+          const mailParserWorkerService = MailParserWorkerService.getInstance();
+          const parsed = await mailParserWorkerService.parseBodyMode(sourceBuffer);
+          let textBody = (parsed.textBody || '').trim();
+          let htmlBody = (parsed.htmlBody || '').trim();
+          const authEmail = DatabaseService.getInstance().getAccountById(Number(accountId))?.email;
+          const withFooter = this.appendTruncatedBodyGmailFooter(
+            textBody,
+            htmlBody,
+            parsed.bodyTruncated,
+            email.xGmThrid,
+            authEmail,
           );
-          email.textBody = (parsed.text || '').trim();
-          email.htmlBody = htmlBody.trim();
-          email.attachments = attachments;
+          email.textBody = withFooter.textBody;
+          email.htmlBody = withFooter.htmlBody;
+          email.attachments = parsed.attachments;
         } catch (err) {
           log.warn('fetchMessageByUid: failed to parse message body:', err);
         }
@@ -662,17 +617,22 @@ export class ImapService {
             if (email) {
               if (fetchMsg.source) {
                 try {
-                  const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
-                    ? fetchMsg.source
-                    : Buffer.from(fetchMsg.source);
-                  const parsed = await simpleParser(sourceBuffer);
-                  const { htmlBody, attachments } = this.resolveInlineImages(
-                    parsed.html || '',
-                    parsed.attachments || []
+                  const sourceBuffer = coerceToBuffer(fetchMsg.source);
+                  const mailParserWorkerService = MailParserWorkerService.getInstance();
+                  const parsed = await mailParserWorkerService.parseBodyMode(sourceBuffer);
+                  let textBody = (parsed.textBody || '').trim();
+                  let htmlBody = (parsed.htmlBody || '').trim();
+                  const authEmail = DatabaseService.getInstance().getAccountById(numAccountId)?.email;
+                  const withFooter = this.appendTruncatedBodyGmailFooter(
+                    textBody,
+                    htmlBody,
+                    parsed.bodyTruncated,
+                    email.xGmThrid,
+                    authEmail,
                   );
-                  email.textBody = (parsed.text || '').trim();
-                  email.htmlBody = htmlBody.trim();
-                  email.attachments = attachments;
+                  email.textBody = withFooter.textBody;
+                  email.htmlBody = withFooter.htmlBody;
+                  email.attachments = parsed.attachments;
                 } catch (err) {
                   log.warn('Failed to parse thread message body:', err);
                 }
@@ -1094,29 +1054,37 @@ export class ImapService {
       // Parse body from source
       if (fetchMsg.source) {
         try {
-          const sourceBuffer = Buffer.isBuffer(fetchMsg.source)
-            ? fetchMsg.source
-            : Buffer.from(fetchMsg.source);
+          const sourceBuffer = coerceToBuffer(fetchMsg.source);
           log.debug(
-            `[ImapService] fetchMessageByUidWithClient: before simpleParser uid=${uid} folder=${folder}` +
+            `[ImapService] fetchMessageByUidWithClient: before parseBodyMode uid=${uid} folder=${folder}` +
             (accountId !== undefined ? ` accountId=${accountId}` : '') +
             ` sourceBytes=${sourceBuffer.length}`,
           );
-          const parsed = await simpleParser(sourceBuffer);
-          const textLen = (parsed.text || '').length;
-          const htmlLen = (parsed.html || '').length;
+          const mailParserWorkerService = MailParserWorkerService.getInstance();
+          const parsed = await mailParserWorkerService.parseBodyMode(sourceBuffer);
+          let textBody = (parsed.textBody || '').trim();
+          let htmlBody = (parsed.htmlBody || '').trim();
+          const textLen = textBody.length;
+          const htmlLen = htmlBody.length;
           log.debug(
-            `[ImapService] fetchMessageByUidWithClient: after simpleParser uid=${uid} folder=${folder}` +
+            `[ImapService] fetchMessageByUidWithClient: after parseBodyMode uid=${uid} folder=${folder}` +
             (accountId !== undefined ? ` accountId=${accountId}` : '') +
             ` textChars=${textLen} htmlChars=${htmlLen}`,
           );
-          const { htmlBody, attachments } = this.resolveInlineImages(
-            parsed.html || '',
-            parsed.attachments || [],
+          const authEmail =
+            accountId !== undefined
+              ? DatabaseService.getInstance().getAccountById(accountId)?.email
+              : undefined;
+          const withFooter = this.appendTruncatedBodyGmailFooter(
+            textBody,
+            htmlBody,
+            parsed.bodyTruncated,
+            email.xGmThrid,
+            authEmail,
           );
-          email.textBody = (parsed.text || '').trim();
-          email.htmlBody = htmlBody.trim();
-          email.attachments = attachments;
+          email.textBody = withFooter.textBody;
+          email.htmlBody = withFooter.htmlBody;
+          email.attachments = parsed.attachments;
         } catch (err) {
           log.warn('fetchMessageByUidWithClient: failed to parse message body:', err);
         }
@@ -1555,6 +1523,47 @@ export class ImapService {
   }
 
   // ---- Private parse helpers ----
+
+  /**
+   * Escape a URL for use inside an HTML double-quoted attribute.
+   */
+  private static escapeUrlForHtmlAttribute(url: string): string {
+    return url.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+
+  /**
+   * After display truncation in the mail parser worker, append a link to open the full thread in Gmail.
+   */
+  private appendTruncatedBodyGmailFooter(
+    textBody: string,
+    htmlBody: string,
+    bodyTruncated: boolean,
+    xGmThrid: string,
+    authUserEmail: string | undefined,
+  ): { textBody: string; htmlBody: string } {
+    if (!bodyTruncated) {
+      return { textBody, htmlBody };
+    }
+    const trimmedThrid = xGmThrid.trim();
+    if (!trimmedThrid) {
+      return { textBody, htmlBody };
+    }
+    const url = buildGmailThreadWebUrl(trimmedThrid, authUserEmail?.trim()
+      ? { authUserEmail: authUserEmail.trim() }
+      : undefined);
+    if (!url) {
+      return { textBody, htmlBody };
+    }
+    const safeHref = ImapService.escapeUrlForHtmlAttribute(url);
+    const htmlFooter =
+      `<hr><p><a href="${safeHref}" target="_blank" rel="noopener noreferrer">` +
+      'View entire message in Gmail</a></p>';
+    const textFooter = `\n\nView entire message in Gmail: ${url}`;
+    return {
+      textBody: `${textBody}${textFooter}`,
+      htmlBody: `${htmlBody}${htmlFooter}`,
+    };
+  }
 
   private parseMessage(msg: FetchMessageObject, folder: string): FetchedEmail | null {
     try {
