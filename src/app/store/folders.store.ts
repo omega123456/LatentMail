@@ -103,6 +103,26 @@ function normalizeFolderId(folderId: string): string {
   return normalized;
 }
 
+function resolveActiveFolderId(
+  searchActive: boolean,
+  currentActiveFolderId: string | null,
+  folders: Folder[],
+): string | null {
+  if (searchActive) {
+    return null;
+  }
+
+  const normalizedCurrentActive = currentActiveFolderId ? normalizeFolderId(currentActiveFolderId) : null;
+  const currentFolderStillExists = normalizedCurrentActive !== null
+    && folders.some((folder) => folder.gmailLabelId === normalizedCurrentActive);
+
+  if (currentFolderStillExists) {
+    return normalizedCurrentActive;
+  }
+
+  return 'INBOX';
+}
+
 export const FoldersStore = signalStore(
   { providedIn: 'root' },
   withState(initialState),
@@ -187,12 +207,11 @@ export const FoldersStore = signalStore(
               };
             });
 
-            // Default to INBOX if no active folder or if current is invalid
-            const currentActive = store.activeFolderId();
-            const normalizedCurrentActive = currentActive ? normalizeFolderId(currentActive) : null;
-            const activeId = normalizedCurrentActive && folders.find(f => f.gmailLabelId === normalizedCurrentActive)
-              ? normalizedCurrentActive
-              : 'INBOX';
+            // Preserve the virtual search view during background refreshes.
+            // Search mode intentionally has no real active folder, so reloading the
+            // folder list must not silently fall back to INBOX and replace the
+            // current search results with folder contents.
+            const activeId = resolveActiveFolderId(store.searchActive(), store.activeFolderId(), folders);
 
             // Only update activeFolderId if it actually changed to avoid triggering change detection errors
             if (store.activeFolderId() !== activeId) {

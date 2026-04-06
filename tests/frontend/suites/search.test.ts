@@ -43,6 +43,20 @@ test.describe('Search', () => {
     ]);
   }
 
+  async function runKeywordSearch(page: import('@playwright/test').Page): Promise<void> {
+    const searchInput = page.getByTestId('search-input');
+
+    await searchInput.click();
+    await searchInput.fill(searchKeyword);
+    await searchInput.press('Enter');
+  }
+
+  async function expectSearchResultsVisible(page: import('@playwright/test').Page): Promise<void> {
+    await expect(page.getByTestId('search-result-folder')).toBeVisible();
+    await waitForEmailSubject(page, searchableSubject);
+    await expect(page.getByText(nonMatchingSubject)).not.toBeVisible();
+  }
+
   test.beforeAll(async ({ resetApp, electronApp, page }) => {
     const result = await resetApp({ seedAccount: true });
     ({ accountId, email: seededEmail } = extractSeededAccount(result));
@@ -77,15 +91,40 @@ test.describe('Search', () => {
   });
 
   test('typing in search bar and pressing Enter shows results', async ({ page }) => {
+    await runKeywordSearch(page);
+    await expectSearchResultsVisible(page);
+  });
+
+  test('background sync does not replace active search results with inbox', async ({ electronApp, page }) => {
     const searchInput = page.getByTestId('search-input');
 
-    await searchInput.click();
-    await searchInput.fill(searchKeyword);
-    await searchInput.press('Enter');
+    await runKeywordSearch(page);
+    await expectSearchResultsVisible(page);
+
+    await emitRendererEvent(electronApp, {
+      channel: 'mail:sync',
+      payload: {
+        accountId: String(accountId),
+        progress: 100,
+        status: 'done',
+      },
+    });
+
+    await page.waitForTimeout(300);
+
+    await emitRendererEvent(electronApp, {
+      channel: 'mail:folder-updated',
+      payload: {
+        accountId,
+        folders: ['INBOX'],
+        reason: 'sync',
+        changeType: 'mixed',
+      },
+    });
 
     await expect(page.getByTestId('search-result-folder')).toBeVisible();
-    await waitForEmailSubject(page, searchableSubject);
-    await expect(page.getByText(nonMatchingSubject)).not.toBeVisible();
+    await expect(searchInput).toHaveValue(searchKeyword);
+    await expectSearchResultsVisible(page);
   });
 
   test('clearing search returns to folder view', async ({ page }) => {
