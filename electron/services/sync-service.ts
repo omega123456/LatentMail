@@ -969,40 +969,46 @@ export class SyncService {
 
     // Upsert bodies for fetched messages.
     for (const fetched of fetchedMessages) {
-      if (fetched.htmlBody || fetched.textBody) {
-        db.upsertEmail({
-          accountId: numAccountId,
-          xGmMsgId: fetched.xGmMsgId,
-          xGmThrid: fetched.xGmThrid,
-          folder: fetched.folder,
-          folderUid: fetched.uid,
-          fromAddress: fetched.fromAddress,
-          fromName: fetched.fromName,
-          toAddresses: fetched.toAddresses,
-          ccAddresses: fetched.ccAddresses,
-          bccAddresses: fetched.bccAddresses,
-          subject: fetched.subject,
-          textBody: fetched.textBody,
-          htmlBody: fetched.htmlBody,
-          date: fetched.date,
-          isRead: fetched.isRead,
-          isStarred: fetched.isStarred,
-          isImportant: fetched.isImportant,
-          isDraft: fetched.isDraft,
-          snippet: fetched.snippet,
-          size: fetched.size,
-          hasAttachments: fetched.hasAttachments,
-          labels: fetched.labels,
-          messageId: fetched.messageId,
-        });
+      const attachments = fetched.attachments ?? [];
+      const hasBodyContent = Boolean(fetched.htmlBody || fetched.textBody);
+      const hasAttachmentMetadata = attachments.length > 0;
+      const shouldPersistMessage = hasBodyContent || fetched.hasAttachments || hasAttachmentMetadata;
 
-        // Persist attachment metadata if extracted during body parse
-        if (fetched.attachments && fetched.attachments.length > 0) {
-          try {
-            db.upsertAttachmentsForEmail(numAccountId, fetched.xGmMsgId, fetched.attachments);
-          } catch (attErr) {
-            log.warn(`[SyncService] syncThread: failed to persist attachments for ${fetched.xGmMsgId}:`, attErr);
-          }
+      if (!shouldPersistMessage) {
+        continue;
+      }
+
+      db.upsertEmail({
+        accountId: numAccountId,
+        xGmMsgId: fetched.xGmMsgId,
+        xGmThrid: fetched.xGmThrid,
+        folder: fetched.folder,
+        folderUid: fetched.uid,
+        fromAddress: fetched.fromAddress,
+        fromName: fetched.fromName,
+        toAddresses: fetched.toAddresses,
+        ccAddresses: fetched.ccAddresses,
+        bccAddresses: fetched.bccAddresses,
+        subject: fetched.subject,
+        textBody: fetched.textBody,
+        htmlBody: fetched.htmlBody,
+        date: fetched.date,
+        isRead: fetched.isRead,
+        isStarred: fetched.isStarred,
+        isImportant: fetched.isImportant,
+        isDraft: fetched.isDraft,
+        snippet: fetched.snippet,
+        size: fetched.size,
+        hasAttachments: fetched.hasAttachments || hasAttachmentMetadata,
+        labels: fetched.labels,
+        messageId: fetched.messageId,
+      });
+
+      if (hasAttachmentMetadata) {
+        try {
+          db.upsertAttachmentsForEmail(numAccountId, fetched.xGmMsgId, attachments);
+        } catch (attErr) {
+          log.warn(`[SyncService] syncThread: failed to persist attachments for ${fetched.xGmMsgId}:`, attErr);
         }
       }
     }

@@ -118,10 +118,14 @@ export function resolveInlineImages(
   let htmlBody = rawHtml;
   const attachments: ParsedAttachmentMeta[] = [];
 
-  // Build a map of contentId → base64 data URI for inline images
+  // Build a map of contentId → base64 data URI for inline images.
+  // Skip attachments with Content-Disposition: attachment — many email clients
+  // (Outlook, Apple Mail) set Content-ID on ALL MIME parts including regular
+  // file attachments.  Only true inline images (no disposition, or disposition
+  // "inline") should be resolved as CID references.
   const cidMap = new Map<string, string>();
   for (const att of parsedAttachments) {
-    if (att.contentId) {
+    if (att.contentId && att.contentDisposition !== 'attachment') {
       // Normalize: strip angle brackets from content IDs (RFC 2392)
       const cid = att.contentId.replace(/^<|>$/g, '');
       if (cid && att.content && att.content.length > 0) {

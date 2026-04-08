@@ -85,7 +85,8 @@ export type MessageFixtureName =
   | 'inline-images'
   | 'reply-thread-1'
   | 'reply-thread-2'
-  | 'reply-thread-3';
+  | 'reply-thread-3'
+  | 'attachment-with-content-id';
 
 /**
  * Parsed header metadata extracted from a loaded .eml fixture.
@@ -250,6 +251,7 @@ export const emlFixtures: Readonly<Record<MessageFixtureName, LoadedEml>> = (() 
     'reply-thread-1',
     'reply-thread-2',
     'reply-thread-3',
+    'attachment-with-content-id',
   ];
   const result = {} as Record<MessageFixtureName, LoadedEml>;
   for (const name of names) {

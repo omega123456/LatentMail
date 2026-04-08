@@ -4,6 +4,7 @@ import { DateTime } from 'luxon';
 import { test, expect } from '../infrastructure/electron-fixture';
 import {
   buildHtmlRfc822,
+  buildMultipartRfc822,
   buildRfc822,
   clearMockIpc,
   configureOllama,
@@ -79,6 +80,44 @@ async function injectThreadMessage(
     to: options.to,
     subject: options.subject,
     body: options.body,
+    messageId: options.messageId,
+  });
+
+  for (const mailbox of inboxMailboxes) {
+    await injectEmail(electronApp, {
+      mailbox,
+      rfc822,
+      options: {
+        flags: [],
+        internalDate: options.internalDate,
+        xGmMsgId: options.xGmMsgId,
+        xGmThrid: options.xGmThrid,
+        xGmLabels: inboxLabels,
+      },
+    });
+  }
+}
+
+async function injectThreadMessageWithAttachments(
+  electronApp: ElectronApplication,
+  options: {
+    from: string;
+    to: string;
+    subject: string;
+    body: string;
+    attachments: Array<{ filename: string; mimeType: string; base64Content: string }>;
+    xGmMsgId: string;
+    xGmThrid: string;
+    messageId: string;
+    internalDate: string;
+  },
+): Promise<void> {
+  const rfc822 = buildMultipartRfc822({
+    from: options.from,
+    to: options.to,
+    subject: options.subject,
+    body: options.body,
+    attachments: options.attachments,
     messageId: options.messageId,
   });
 
@@ -445,6 +484,61 @@ test.describe('Reading pane', () => {
       await expect(firstMessageCard).not.toHaveClass(/(^|\s)collapsed(\s|$)/);
       await expect(firstMessageCard).toContainText('First message in the advanced thread test.', {
         timeout: 15000,
+      });
+    });
+
+    test('multi-message thread: latest attachment-only message shows attachments in reading pane', async ({
+      page,
+      electronApp,
+    }) => {
+      await discardComposeIfOpen(page);
+
+      const uniqueToken = String(DateTime.utc().toMillis());
+      const attachmentThreadId = `${uniqueToken}101`;
+      const olderMessageId = `${uniqueToken}102`;
+      const latestAttachmentMessageId = `${uniqueToken}103`;
+      const threadSubject = `Attachment Only Latest Message ${uniqueToken}`;
+
+      await injectThreadMessage(electronApp, {
+        from: 'thread-older@example.com',
+        to: seededEmail,
+        subject: threadSubject,
+        body: 'Earlier message body for attachment-only latest-message coverage.',
+        xGmMsgId: olderMessageId,
+        xGmThrid: attachmentThreadId,
+        messageId: `attachment-only-thread-${olderMessageId}@example.test`,
+        internalDate: DateTime.utc().minus({ minutes: 2 }).toISO() ?? '2026-01-01T00:00:00.000Z',
+      });
+
+      await injectThreadMessageWithAttachments(electronApp, {
+        from: 'thread-latest@example.com',
+        to: seededEmail,
+        subject: threadSubject,
+        body: '',
+        attachments: [
+          {
+            filename: 'latest-attachment.txt',
+            mimeType: 'text/plain',
+            base64Content: Buffer.from('latest attachment content', 'utf8').toString('base64'),
+          },
+        ],
+        xGmMsgId: latestAttachmentMessageId,
+        xGmThrid: attachmentThreadId,
+        messageId: `attachment-only-thread-${latestAttachmentMessageId}@example.test`,
+        internalDate: DateTime.utc().toISO() ?? '2026-01-01T00:00:00.000Z',
+      });
+
+      await triggerSync(electronApp, accountId);
+      await waitForEmailSubject(page, threadSubject);
+
+      await page.getByTestId(`email-item-${attachmentThreadId}`).click();
+      await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+
+      const latestMessageCard = page.getByTestId(`message-card-${latestAttachmentMessageId}`);
+      await expect(latestMessageCard).toBeVisible({ timeout: 15_000 });
+      await expect(latestMessageCard.getByTestId('message-attachments')).toBeVisible({ timeout: 15_000 });
+      await expect(latestMessageCard.locator('.attachment-chip')).toContainText('latest-attachment.txt', {
+        timeout: 15_000,
       });
     });
 

@@ -1,0 +1,57 @@
+From: carol@example.com
+To: dave@example.com
+Subject: Re: Project Discussion - Q4 Planning
+Date: Thu, 04 Jan 2024 15:30:00 +0000
+Message-ID: <attachment-cid-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==mixed_cid_boundary=="
+X-GM-MSGID: 1000000000000099
+X-GM-THRID: 2000000000000099
+X-GM-LABELS: \Inbox
+
+--==mixed_cid_boundary==
+Content-Type: multipart/alternative; boundary="==alt_cid_boundary=="
+
+--==alt_cid_boundary==
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+Hi Dave,
+
+Please see the attached report for Q4 planning.
+
+Best regards,
+Carol
+
+> On Jan 3, 2024, at 10:00 AM, Dave wrote:
+> Can you send me the Q4 planning document?
+
+--==alt_cid_boundary==
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>Hi Dave,</p>
+  <p>Please see the attached report for Q4 planning.</p>
+  <p>Best regards,<br>Carol</p>
+  <hr>
+  <blockquote>
+    <p>On Jan 3, 2024, at 10:00 AM, Dave wrote:</p>
+    <p>Can you send me the Q4 planning document?</p>
+  </blockquote>
+</body>
+</html>
+
+--==alt_cid_boundary==--
+
+--==mixed_cid_boundary==
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="report.txt"
+Content-ID: <part1.ABC123@example.com>
+
+SGVsbG8gV29ybGQhIFRoaXMgaXMgdGhlIFE0IHBsYW5uaW5nIHJlcG9ydC4=
+
+--==mixed_cid_boundary==--

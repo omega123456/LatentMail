@@ -1569,6 +1569,72 @@ describe('Attachments', () => {
   });
 
   // =========================================================================
+  // Content-ID on file attachments (Outlook / Apple Mail behaviour)
+  // =========================================================================
+
+  describe('attachment-with-content-id — file attachment with Content-ID header', () => {
+    before(async function () {
+      this.timeout(35_000);
+      await quiesceAndRestore();
+
+      const seeded = seedTestAccount({ email: 'attachment-cid-file@example.com', displayName: 'CID File Test' });
+      suiteAccountId = seeded.accountId;
+      suiteEmail = seeded.email;
+
+      imapStateInspector.reset();
+      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+
+      const cidAttachmentMsg = emlFixtures['attachment-with-content-id'];
+      imapStateInspector.injectMessage('[Gmail]/All Mail', cidAttachmentMsg.raw, {
+        xGmMsgId: cidAttachmentMsg.headers.xGmMsgId,
+        xGmThrid: cidAttachmentMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', cidAttachmentMsg.raw, {
+        xGmMsgId: cidAttachmentMsg.headers.xGmMsgId,
+        xGmThrid: cidAttachmentMsg.headers.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+
+      await triggerSyncAndWait(seeded.accountId, { timeout: 25_000 });
+
+      // Trigger body prefetch so attachment metadata rows are persisted
+      const db = DatabaseService.getInstance();
+      const emailsNeedingBodies = db.getEmailsNeedingBodies(seeded.accountId, 10);
+      if (emailsNeedingBodies.length > 0) {
+        await BodyPrefetchService.getInstance().fetchAndStoreBodies(
+          seeded.accountId,
+          emailsNeedingBodies,
+        );
+      }
+    });
+
+    it('preserves file attachment metadata even when the attachment has a Content-ID header', async function () {
+      this.timeout(20_000);
+
+      const cidHeaders = emlFixtures['attachment-with-content-id'].headers;
+
+      const response = await callIpc(
+        'attachment:get-for-email',
+        String(suiteAccountId),
+        cidHeaders.xGmMsgId,
+      ) as IpcResponse<AttachmentMetadata[]>;
+
+      expect(response.success).to.equal(true);
+      expect(response.data).to.be.an('array');
+
+      // The bug: attachment-with-content-id.eml has a file attachment (report.txt)
+      // with Content-Disposition: attachment AND Content-ID. The attachment should
+      // NOT be filtered out as an inline image.
+      expect(response.data!.length).to.be.greaterThan(0, 'attachment with Content-ID + Content-Disposition: attachment must not be filtered out');
+
+      const reportAttachment = response.data!.find((attachment) => attachment.filename === 'report.txt');
+      expect(reportAttachment, 'report.txt should be present in attachment metadata').to.not.be.undefined;
+      expect(reportAttachment!.mimeType).to.equal('text/plain');
+    });
+  });
+
+  // =========================================================================
   // Filename sanitization
   // =========================================================================
 
