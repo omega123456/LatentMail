@@ -101,7 +101,7 @@ export abstract class BaseSearchService {
    * @param excludedFolders - Folders to exclude (resolved dynamically for this account)
    * @returns Filtered list preserving the original ordering
    */
-  protected filterExcludedFolders(
+  public static filterExcludedFolders(
     db: DatabaseService,
     accountId: number,
     xGmMsgIds: string[],

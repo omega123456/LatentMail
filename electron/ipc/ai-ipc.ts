@@ -11,9 +11,9 @@ import { DatabaseService } from '../services/database-service';
 import { VectorDbService } from '../services/vector-db-service';
 import { EmbeddingService } from '../services/embedding-service';
 import { SemanticSearchService } from '../services/semantic-search-service';
-import { SearchIntent } from '../utils/search-query-generator';
 import { KeywordSearchService } from '../services/keyword-search-service';
 import { InboxChatService, SourceEmail } from '../services/inbox-chat-service';
+import { VariantSearchService } from '../services/variant-search-service';
 import { MessageIdSearchService } from '../services/message-id-search-service';
 import { ImapCrawlService } from '../services/imap-crawl-service';
 
@@ -83,84 +83,6 @@ function dedupeStrings(values: string[]): string[] {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
-function isValidDateRange(value: unknown): boolean {
-  if (value == null) {
-    return true;
-  }
-  if (typeof value !== 'object') {
-    return false;
-  }
-  const dateRange = value as Record<string, unknown>;
-  if (dateRange['after'] != null && typeof dateRange['after'] !== 'string') {
-    return false;
-  }
-  if (dateRange['before'] != null && typeof dateRange['before'] !== 'string') {
-    return false;
-  }
-  if (dateRange['relative'] != null && typeof dateRange['relative'] !== 'string') {
-    return false;
-  }
-  return true;
-}
-
-function isValidFlags(value: unknown): boolean {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const flags = value as Record<string, unknown>;
-  if (flags['unread'] != null && typeof flags['unread'] !== 'boolean') {
-    return false;
-  }
-  if (flags['starred'] != null && typeof flags['starred'] !== 'boolean') {
-    return false;
-  }
-  if (flags['important'] != null && typeof flags['important'] !== 'boolean') {
-    return false;
-  }
-  if (flags['hasAttachment'] != null && typeof flags['hasAttachment'] !== 'boolean') {
-    return false;
-  }
-  return true;
-}
-
-function isSearchIntent(value: unknown): value is SearchIntent {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  if (!isStringArray(candidate['keywords'])) {
-    return false;
-  }
-  if (!isStringArray(candidate['synonyms'])) {
-    return false;
-  }
-  if (candidate['direction'] !== 'sent' && candidate['direction'] !== 'received' && candidate['direction'] !== 'any') {
-    return false;
-  }
-  if (candidate['folder'] !== null && typeof candidate['folder'] !== 'string') {
-    return false;
-  }
-  if (candidate['sender'] !== null && typeof candidate['sender'] !== 'string') {
-    return false;
-  }
-  if (candidate['recipient'] !== null && typeof candidate['recipient'] !== 'string') {
-    return false;
-  }
-  if (!isValidDateRange(candidate['dateRange'])) {
-    return false;
-  }
-  if (!isValidFlags(candidate['flags'])) {
-    return false;
-  }
-  if (!isStringArray(candidate['exactPhrases'])) {
-    return false;
-  }
-  if (!isStringArray(candidate['negations'])) {
-    return false;
-  }
-  return true;
 }
 
 function buildFolderContext(
@@ -678,10 +600,15 @@ export function registerAiIpcHandlers(): void {
 
   // ---- Inbox Chat (RAG pipeline) handlers ----
 
-  const inboxChatService = new InboxChatService(
+  const variantSearchService = new VariantSearchService(
     DatabaseService.getInstance(),
     OllamaService.getInstance(),
     VectorDbService.getInstance(),
+  );
+
+  const inboxChatService = new InboxChatService(
+    OllamaService.getInstance(),
+    variantSearchService,
   );
 
   ipcMain.handle(IPC_CHANNELS.AI_CHAT, async (event, payload: unknown): Promise<ReturnType<typeof ipcSuccess | typeof ipcError>> => {
@@ -735,9 +662,13 @@ export function registerAiIpcHandlers(): void {
       const account = db.getAccountById(accountId);
       const accountEmail = account !== null ? account.email : '';
 
+      // Build folder context for the chat pipeline (same approach as AI_SEARCH handler)
+      const labels = db.getLabelsByAccount(accountId);
+      const chatFolders = buildFolderContext(undefined, labels, accountId);
+
       // Start the RAG pipeline asynchronously — return requestId immediately so the
       // renderer can start listening for AI_CHAT_STREAM / AI_CHAT_SOURCES / AI_CHAT_DONE events.
-      inboxChatService.chat(requestId, question.trim(), safeHistory, accountId, accountEmail, {
+      inboxChatService.chat(requestId, question.trim(), safeHistory, accountId, accountEmail, chatFolders, {
         onToken: (token: string) => {
           if (!browserWindow.isDestroyed()) {
             browserWindow.webContents.send(IPC_EVENTS.AI_CHAT_STREAM, { requestId, token });

@@ -33,9 +33,14 @@ FIELD DEFINITIONS:
     Example: user says "before December 10, 2024" → dateTo: "2024-12-10" (already exclusive, no adjustment needed — the user's "before" maps directly)
 
   "folder" (string):
-    Set ONLY if the user explicitly mentions a folder or label by name.
-    Use the EXACT folder name from the available folder list below.
-    Do NOT set this for standard system folders mentioned indirectly (e.g. "in my inbox" → omit folder, handle via other signals).
+    Set when the user explicitly mentions a folder or label by name.
+    For standard system folders, use the canonical IMAP folder name:
+      - "in my inbox" / "inbox emails" → folder: "INBOX"
+      - "in my sent" / "in sent mail" / "sent emails" → folder: "[Gmail]/Sent Mail"
+      - "in my drafts" / "draft emails" → folder: "[Gmail]/Drafts"
+      - "in my spam" / "spam emails" → folder: "[Gmail]/Spam"
+      - "in my trash" / "trash emails" / "deleted emails" → folder: "[Gmail]/Trash"
+    For custom labels/folders, use the EXACT folder name from the available folder list below.
 
   "sender" (string):
     Set ONLY if the user says "from X" where X is a person, company, email address, or domain.
@@ -74,7 +79,8 @@ Today's date is {{todayDate}}. Use this to resolve relative date expressions:
 
 AVAILABLE FOLDERS:
 {{folderList}}
-Only use folder names from this list. If the user names a folder not in this list, omit the folder field.
+For custom labels/folders, only use folder names from this list. If the user names a custom folder not in this list, omit the folder field.
+Standard system folders (INBOX, [Gmail]/Sent Mail, [Gmail]/Drafts, [Gmail]/Spam, [Gmail]/Trash) are always valid even if not in the list.
 
 USER EMAIL:
 {{userEmail}}
@@ -109,11 +115,23 @@ Example 6 — Folder filter:
 Input: "newsletters in the Promotions folder"
 Output: {"semanticQuery":"newsletters","filters":{"folder":"Promotions"}}
 
-Example 7 — Boolean flags:
+Example 7 — Inbox folder:
+Input: "unread emails in my inbox from last week"
+Output: {"semanticQuery":"","filters":{"folder":"INBOX","isRead":false,"dateFrom":"<last-week-start-minus-1>","dateTo":"<yesterday-plus-1>"}}
+
+Example 8 — Sent folder:
+Input: "what did I send to the marketing team in sent mail"
+Output: {"semanticQuery":"marketing team","filters":{"folder":"[Gmail]/Sent Mail","sender":"{{userEmail}}"}}
+
+Example 9 — Drafts folder:
+Input: "show me my drafts about the proposal"
+Output: {"semanticQuery":"proposal","filters":{"folder":"[Gmail]/Drafts"}}
+
+Example 10 — Boolean flags:
 Input: "unread emails with attachments"
 Output: {"semanticQuery":"","filters":{"isRead":false,"hasAttachment":true}}
 
-Example 8 — Sent by me:
+Example 11 — Sent by me:
 Input: "emails I sent about the merger"
 Output: {"semanticQuery":"merger","filters":{"sender":"{{userEmail}}"}}
 

@@ -112,6 +112,16 @@ export class FakeOllamaServer {
   private config: FakeOllamaConfig = {};
   private capturedRequests: CapturedRequest[] = [];
 
+  /**
+   * FIFO queue of responses for non-streaming chat calls (`stream === false`).
+   * When a non-streaming chat request arrives, the first element is dequeued
+   * and used as the response content. When the queue is empty, the default
+   * `config.chatResponse` (or the built-in fallback) is used instead.
+   *
+   * Streaming chat calls are NOT affected — they always use `chatStreamChunks`.
+   */
+  private chatResponseQueue: string[] = [];
+
   /** Built-in default model list (used when config.models is not set) */
   private readonly defaultModels: FakeOllamaModel[] = [
     {
@@ -318,7 +328,10 @@ export class FakeOllamaServer {
       response.write(JSON.stringify(finalChunk) + '\n');
       response.end();
     } else {
-      const responseContent = this.config.chatResponse ?? 'Hello world!';
+      // Non-streaming: dequeue from FIFO queue if available, otherwise use default.
+      const responseContent = this.chatResponseQueue.length > 0
+        ? this.chatResponseQueue.shift()!
+        : (this.config.chatResponse ?? 'Hello world!');
       const responseBody = {
         model: modelName,
         message: { role: 'assistant', content: responseContent },
@@ -465,6 +478,39 @@ export class FakeOllamaServer {
   }
 
   /**
+   * Enqueue a single response for non-streaming POST /api/chat requests.
+   * Responses are consumed in FIFO order: the first enqueued response is used
+   * for the first non-streaming chat call, the second for the second call, etc.
+   * When the queue is exhausted, the default `chatResponse` (set via
+   * `setChatResponse()`) is used as a fallback.
+   *
+   * Streaming calls are NOT affected — they always use `chatStreamChunks`.
+   */
+  enqueueChatResponse(response: string): void {
+    this.chatResponseQueue.push(response);
+  }
+
+  /**
+   * Enqueue multiple responses for non-streaming POST /api/chat requests.
+   * Convenience wrapper around `enqueueChatResponse()` — each response is
+   * appended to the FIFO queue in order.
+   */
+  enqueueChatResponses(responses: string[]): void {
+    for (const response of responses) {
+      this.chatResponseQueue.push(response);
+    }
+  }
+
+  /**
+   * Clear the FIFO queue of non-streaming chat responses.
+   * After calling this, all non-streaming chat calls will use the default
+   * `chatResponse` (or the built-in fallback) until new responses are enqueued.
+   */
+  clearChatQueue(): void {
+    this.chatResponseQueue = [];
+  }
+
+  /**
    * Set the full response text returned for non-streaming POST /api/generate requests.
    */
   setGenerateResponse(text: string): void {
@@ -569,6 +615,7 @@ export class FakeOllamaServer {
   reset(): void {
     this.config = {};
     this.capturedRequests = [];
+    this.chatResponseQueue = [];
   }
 
   /**

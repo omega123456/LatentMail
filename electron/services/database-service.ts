@@ -13,6 +13,22 @@ import { ALL_MAIL_PATH } from './sync-service';
 import { formatParticipantList } from '../utils/format-participant';
 import type { SemanticSearchFilters } from '../utils/search-filter-translator';
 
+/**
+ * Result of filterEmailsByMsgIds: separates confirmed matches from uncertain
+ * candidates whose folder/attachment status cannot be reliably determined
+ * locally (All-Mail-only emails indexed via the embedding crawl pipeline).
+ */
+export interface FilterMsgIdsResult {
+  /** Message IDs that passed all DB filters. */
+  matched: Set<string>;
+  /**
+   * Message IDs that exist locally but only have a [Gmail]/All Mail folder
+   * association — folder and attachment filters cannot be reliably evaluated.
+   * These should be sent to IMAP for server-side verification.
+   */
+  uncertain: Set<string>;
+}
+
 export class DatabaseService {
   private static instance: DatabaseService;
   private db: BetterSqlite3.Database | null = null;
@@ -3345,7 +3361,9 @@ export class DatabaseService {
   /**
    * Given a set of x_gm_msgid values and structured filters, returns the
    * subset of those message IDs that match all filter conditions in the local
-   * emails table.
+   * emails table, plus an "uncertain" set of IDs that exist locally but only
+   * have a `[Gmail]/All Mail` folder association — meaning folder/attachment
+   * filters cannot be reliably evaluated locally.
    *
    * Handles large lists by chunking into batches of 500. The JOIN on
    * email_folders is added only when the folder filter is present to avoid
@@ -3357,19 +3375,21 @@ export class DatabaseService {
    * @param accountId  - Account ID to scope the query
    * @param xGmMsgIds  - Candidate message IDs to filter
    * @param filters    - Structured filter constraints to apply
-   * @returns Set of x_gm_msgid values that satisfy all filter conditions
+   * @returns matched: IDs that passed all DB filters;
+   *          uncertain: IDs that exist locally but only have All Mail association
+   *          and could not be reliably filtered for folder/attachment constraints.
    */
   filterEmailsByMsgIds(
     accountId: number,
     xGmMsgIds: string[],
     filters: SemanticSearchFilters
-  ): Set<string> {
+  ): FilterMsgIdsResult {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
 
     if (xGmMsgIds.length === 0) {
-      return new Set<string>();
+      return { matched: new Set<string>(), uncertain: new Set<string>() };
     }
 
     // Note: we no longer short-circuit when no filters are provided, because we
@@ -3442,6 +3462,15 @@ export class DatabaseService {
 
     const filterClausesSql = filterClauses.join('\n     ');
 
+    // Determine whether we need to detect All-Mail-only candidates.
+    // This is only relevant when folder or hasAttachment filters are active,
+    // because those are the filters that cannot be reliably evaluated when the
+    // email's only folder association is [Gmail]/All Mail (written by the
+    // embedding crawl pipeline).
+    const needsUncertainDetection =
+      filters.folder !== undefined || filters.hasAttachment !== undefined;
+    const uncertainIds = new Set<string>();
+
     try {
       for (let offset = 0; offset < xGmMsgIds.length; offset += CHUNK_SIZE) {
         const chunk = xGmMsgIds.slice(offset, offset + CHUNK_SIZE);
@@ -3476,13 +3505,60 @@ export class DatabaseService {
             matchingIds.add(row.x_gm_msgid);
           }
         }
+
+        // Detect All-Mail-only candidates: emails that exist in the input list,
+        // are present in the local DB, but have NO folder association other than
+        // [Gmail]/All Mail and are NOT in Drafts. These candidates cannot be
+        // reliably filtered locally for folder/attachment constraints and should
+        // be sent to IMAP for verification.
+        if (needsUncertainDetection) {
+          const uncertainParams: Record<string, string | number> = {
+            accountId,
+            allMailPath: ALL_MAIL_PATH,
+          };
+          for (let index = 0; index < chunk.length; index++) {
+            uncertainParams[`msgId${offset + index}`] = chunk[index];
+          }
+
+          const uncertainSql = [
+            'SELECT DISTINCT e.x_gm_msgid',
+            'FROM emails e',
+            'WHERE e.account_id = :accountId',
+            `  AND e.x_gm_msgid IN (${placeholders})`,
+            `  AND NOT EXISTS (
+               SELECT 1 FROM email_folders ef_other
+               WHERE ef_other.account_id = e.account_id
+                 AND ef_other.x_gm_msgid = e.x_gm_msgid
+                 AND ef_other.folder != :allMailPath
+             )`,
+            `  AND NOT EXISTS (
+               SELECT 1 FROM email_folders ef_draft
+               WHERE ef_draft.account_id = e.account_id
+                 AND ef_draft.x_gm_msgid = e.x_gm_msgid
+                 AND ef_draft.folder = '[Gmail]/Drafts'
+             )`,
+          ].join('\n');
+
+          const uncertainRows = this.db.prepare(uncertainSql).all(uncertainParams) as Array<{ x_gm_msgid: string }>;
+
+          for (const row of uncertainRows) {
+            if (typeof row.x_gm_msgid === 'string') {
+              uncertainIds.add(row.x_gm_msgid);
+            }
+          }
+        }
       }
     } catch (error) {
       log.error('filterEmailsByMsgIds: query failed', error);
-      return new Set<string>();
+      return { matched: new Set<string>(), uncertain: new Set<string>() };
     }
 
-    return matchingIds;
+    // Remove uncertain IDs from matched — they should not appear in both sets.
+    for (const uncertainId of uncertainIds) {
+      matchingIds.delete(uncertainId);
+    }
+
+    return { matched: matchingIds, uncertain: uncertainIds };
   }
 
   /**

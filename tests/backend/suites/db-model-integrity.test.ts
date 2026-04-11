@@ -2059,14 +2059,16 @@ describe('DB Model Integrity', () => {
   // =========================================================================
 
   describe('Search helper edge cases', () => {
-    it('filterEmailsByMsgIds returns an empty set for an empty candidate list', () => {
+    it('filterEmailsByMsgIds returns an empty result for an empty candidate list', () => {
       const db = getDatabase();
       const accountId = createTestAccount('filter-empty');
 
-      const matchingIds = db.filterEmailsByMsgIds(accountId, [], {});
+      const result = db.filterEmailsByMsgIds(accountId, [], {});
 
-      expect(matchingIds).to.be.instanceOf(Set);
-      expect(matchingIds.size).to.equal(0);
+      expect(result.matched).to.be.instanceOf(Set);
+      expect(result.matched.size).to.equal(0);
+      expect(result.uncertain).to.be.instanceOf(Set);
+      expect(result.uncertain.size).to.equal(0);
     });
 
     it('getEmailDatesByMsgIds returns an empty map for an empty input array', () => {
@@ -2182,7 +2184,7 @@ describe('DB Model Integrity', () => {
         date: '2026-03-12T10:30:00.000Z',
       }));
 
-      const matchingIds = db.filterEmailsByMsgIds(
+      const result = db.filterEmailsByMsgIds(
         accountId,
         [
           matchingEmailId,
@@ -2205,7 +2207,8 @@ describe('DB Model Integrity', () => {
         },
       );
 
-      expect(Array.from(matchingIds)).to.deep.equal([matchingEmailId]);
+      expect(Array.from(result.matched)).to.deep.equal([matchingEmailId]);
+      expect(result.uncertain.size).to.equal(0);
     });
 
     it('getEmailDatesByMsgIds batches more than 500 ids and returns all stored dates', () => {
