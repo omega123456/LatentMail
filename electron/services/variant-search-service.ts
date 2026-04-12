@@ -4,7 +4,7 @@ import { DatabaseService } from './database-service';
 import { OllamaService } from './ollama-service';
 import { VectorDbService, VectorSearchResult } from './vector-db-service';
 import { BaseSearchService } from './base-search-service';
-import { SemanticSearchFilters, hasFilters } from '../utils/search-filter-translator';
+import { SemanticSearchFilters, hasFilters, normalizeFilterDatesForDb } from '../utils/search-filter-translator';
 import { loadPrompt } from '../utils/prompt-loader';
 
 const log = LoggerService.getInstance();
@@ -560,7 +560,7 @@ export class VariantSearchService {
 
     if (hasFilters(variant.filters)) {
       // Normalize local calendar date strings to UTC ISO bounds on a COPY
-      const normalizedFilters = this.normalizeFilterDates(variant.filters);
+      const normalizedFilters = normalizeFilterDatesForDb(variant.filters);
       const uniqueMsgIds = [...new Set(candidateChunks.map(chunk => chunk.xGmMsgId))];
       const filterResult = this.db.filterEmailsByMsgIds(
         accountId,
@@ -831,56 +831,4 @@ export class VariantSearchService {
     }
   }
 
-  /**
-   * Normalizes local calendar date strings in a SemanticSearchFilters object to
-   * UTC ISO timestamp bounds for DB comparison.
-   *
-   * CRITICAL: operates on a COPY of the filters — does NOT mutate the original.
-   *
-   * - `dateFrom` ("YYYY-MM-DD") → start of that local calendar day in UTC
-   * - `dateTo`   ("YYYY-MM-DD") → start of the NEXT local calendar day in UTC (exclusive upper bound)
-   */
-  private normalizeFilterDates(filters: SemanticSearchFilters): SemanticSearchFilters {
-    const normalized: SemanticSearchFilters = { ...filters };
-
-    if (filters.dateFrom !== undefined) {
-      const utcFrom = this.localCalendarDateToUtcIso(filters.dateFrom, false);
-      if (utcFrom !== null) {
-        normalized.dateFrom = utcFrom;
-      } else {
-        delete normalized.dateFrom;
-        log.warn('[VariantSearch] normalizeFilterDates: invalid dateFrom string, filter dropped:', filters.dateFrom);
-      }
-    }
-
-    if (filters.dateTo !== undefined) {
-      const utcTo = this.localCalendarDateToUtcIso(filters.dateTo, true);
-      if (utcTo !== null) {
-        normalized.dateTo = utcTo;
-      } else {
-        delete normalized.dateTo;
-        log.warn('[VariantSearch] normalizeFilterDates: invalid dateTo string, filter dropped:', filters.dateTo);
-      }
-    }
-
-    return normalized;
-  }
-
-  /**
-   * Converts a local calendar date string ("YYYY-MM-DD") to a UTC ISO timestamp.
-   *
-   * @param dateString - Local calendar date in "YYYY-MM-DD" format
-   * @param nextDay    - If true, returns the start of the NEXT calendar day (for exclusive upper bounds)
-   * @returns UTC ISO string, or null if the date string is invalid
-   */
-  private localCalendarDateToUtcIso(dateString: string, nextDay: boolean): string | null {
-    const localDate = DateTime.fromFormat(dateString, 'yyyy-MM-dd', { zone: 'local' });
-
-    if (!localDate.isValid) {
-      return null;
-    }
-
-    const targetDate = nextDay ? localDate.plus({ days: 1 }) : localDate;
-    return targetDate.toUTC().toISO() ?? null;
-  }
 }

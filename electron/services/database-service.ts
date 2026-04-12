@@ -3140,18 +3140,26 @@ export class DatabaseService {
   // ---- On-demand search result resolution ----
 
   /**
-   * Given a list of x_gm_msgid values, return the subset that exist in the
-   * local `emails` table for a given account.
-   * Handles large lists by chunking into batches of 500.
+   * Given a list of x_gm_msgid values, return the subset that can be resolved
+   * fully from the local database for a given account.
    *
-   * Used by SemanticSearchService to identify which search results are already
-   * cached locally and which need to be fetched from IMAP on demand.
+   * A message is considered locally resolvable only when BOTH of these exist:
+   *   1. an `emails` row for the x_gm_msgid
+   *   2. the corresponding `threads` row for that email's x_gm_thrid
+   *
+   * Semantic search streams x_gm_msgid values first, then the renderer resolves
+   * them through `mail:search-by-msgids`, which joins emails → threads. If an
+   * email row exists but its thread row is missing, treating it as "local" would
+   * emit a dead result that later resolves to zero threads in the UI. Such IDs
+   * must therefore be treated as needing IMAP restoration instead.
+   *
+   * Handles large lists by chunking into batches of 500.
    *
    * @param accountId - Account ID to scope the query
    * @param xGmMsgIds - Candidate message IDs to check
-   * @returns Set of x_gm_msgid values that exist in the local emails table
+   * @returns Set of x_gm_msgid values that are fully resolvable locally
    */
-  getEmailsExistingInLocalDb(accountId: number, xGmMsgIds: string[]): Set<string> {
+  getResolvableEmailsExistingInLocalDb(accountId: number, xGmMsgIds: string[]): Set<string> {
     if (!this.db) {
       throw new Error('Database not initialized');
     }
@@ -3173,7 +3181,13 @@ export class DatabaseService {
       }
 
       const rows = this.db.prepare(
-        `SELECT x_gm_msgid FROM emails WHERE account_id = :accountId AND x_gm_msgid IN (${placeholders})`
+        `SELECT e.x_gm_msgid
+         FROM emails e
+         INNER JOIN threads t
+           ON t.account_id = e.account_id
+          AND t.x_gm_thrid = e.x_gm_thrid
+         WHERE e.account_id = :accountId
+           AND e.x_gm_msgid IN (${placeholders})`
       ).all(params) as Array<{ x_gm_msgid: string }>;
 
       for (const row of rows) {

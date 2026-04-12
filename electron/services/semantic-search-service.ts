@@ -37,6 +37,7 @@ import {
   SemanticSearchIntent,
   translateFiltersToGmailQuery,
   hasFilters,
+  normalizeFilterDatesForDb,
 } from '../utils/search-filter-translator';
 import { SearchOptions } from './search-options';
 
@@ -169,7 +170,7 @@ export class SemanticSearchService extends BaseSearchService {
     // means "on or after Jan 1"). Gmail's after:/before: operators are EXCLUSIVE, so we
     // must subtract 1 day from dateFrom and add 1 day to dateTo before translating.
     // This adjustment applies ONLY to the IMAP path — the local DB path uses
-    // normalizeFilterDates() in VariantSearchService which handles conversion separately.
+    // normalizeFilterDatesForDb() which handles conversion separately.
     const effectiveFilters: SemanticSearchFilters = {
       ...intent.filters,
       ...variantResult.filters,
@@ -184,13 +185,19 @@ export class SemanticSearchService extends BaseSearchService {
     );
 
     // Resolve and stream results via filterAndResolve.
-    // Pass filters as undefined to skip DB re-filtering (already done inside VariantSearchService).
-    // Pass imapGmRaw so IMAP SEARCH uses the variant's filter query directly.
+    // Pass the effective filters (normalized for DB comparison) so that local
+    // candidates are re-verified against date/sender/recipient/etc. constraints.
+    // VariantSearchService already applied these filters, but re-applying in
+    // filterAndResolve provides defense-in-depth and ensures consistency between
+    // the local and IMAP code paths (IMAP uses imapGmRaw for the same filtering).
+    const dbNormalizedFilters = hasFilters(effectiveFilters)
+      ? normalizeFilterDatesForDb(effectiveFilters)
+      : undefined;
     const status = await this.filterAndResolve(
       accountId,
       variantResult.allMsgIds,
-      undefined,        // skip DB re-filtering
-      imapGmRaw,        // pre-built Gmail query for IMAP
+      dbNormalizedFilters, // re-filter local candidates with effective filters
+      imapGmRaw,          // pre-built Gmail query for IMAP
       excludedFolders,
       onBatch,
     );
@@ -204,19 +211,19 @@ export class SemanticSearchService extends BaseSearchService {
    * and no-filter paths using a batch-and-iterate algorithm.
    *
    * Upfront work (before the loop):
-   *   - Partition ALL candidates into local vs missing (single DB call).
-   *   - SQL-filter local candidates once (single DB call, only when filters are active).
-   *   - Pre-filter candidates to build eligibleCandidates: removes local items that
-   *     failed the SQL filter so they never consume batch slots during the loop.
+    *   - Partition ALL candidates into locally resolvable vs IMAP-required (single DB call).
+    *   - SQL-filter locally resolvable candidates once (single DB call, only when filters are active).
+    *   - Pre-filter candidates to build eligibleCandidates: removes locally resolvable items that
+    *     failed the SQL filter so they never consume batch slots during the loop.
    *   - Build the X-GM-RAW query string once (filter query + folder exclusions).
-   *   - Open IMAP connection only if missing candidates exist.
+    *   - Open IMAP connection only if any candidates require IMAP verification.
    *   - Emit all locally-confirmed msgIds as a 'local' phase batch via onBatch
    *     (even if empty — signals local phase completion to the receiver).
    *
    * Iterative loop:
-   *   Each round takes a deficit-sized batch (deficit = MAX_RESULTS - confirmed.size)
-   *   from the eligibleCandidates array via a cursor. Items in filteredLocalMsgIds are
-   *   confirmed instantly; missing items are resolved via a single batched IMAP SEARCH
+    *   Each round takes a deficit-sized batch (deficit = MAX_RESULTS - confirmed.size)
+    *   from the eligibleCandidates array via a cursor. Items in filteredLocalMsgIds are
+    *   confirmed instantly; IMAP-required items are resolved via a single batched IMAP SEARCH
    *   that OR's all candidate X-GM-MSGIDs together with the X-GM-RAW filter query.
    *   Surviving UIDs are then FETCHed for envelopes and upserted, all within a single
    *   mailbox lock per round. Confirmed results are merged across rounds. The loop exits
@@ -225,9 +232,9 @@ export class SemanticSearchService extends BaseSearchService {
    *   before the round) are date-sorted and emitted as an 'imap' phase batch via onBatch.
    *
    * @param accountId - Account ID to scope queries
-   * @param candidates - Candidate message IDs (similarity-ordered, already folder-filtered)
+    * @param candidates - Candidate message IDs (similarity-ordered, already folder-filtered)
    * @param filters - Structured filter constraints from LLM intent extraction (may be empty).
-   *                  When undefined, DB filtering is skipped (all candidates pass).
+    *                  When undefined, DB filtering is skipped (all locally resolvable candidates pass).
    * @param imapGmRaw - Pre-built Gmail query string for IMAP X-GM-RAW. When provided, used
    *                    directly in buildGmRawWithExclusions instead of computing from filters.
    *                    When undefined, the query is built from filters via translateFiltersToGmailQuery.
@@ -248,21 +255,21 @@ export class SemanticSearchService extends BaseSearchService {
   ): Promise<'complete' | 'partial' | 'error'> {
     const db = DatabaseService.getInstance();
 
-    // --- Upfront Step 1: Partition candidates into local (in DB) vs missing (not in DB) ---
-    let localCandidateSet: Set<string>;
+    // --- Upfront Step 1: Partition candidates into locally resolvable vs IMAP-required ---
+    let resolvableLocalCandidateSet: Set<string>;
     try {
-      localCandidateSet = db.getEmailsExistingInLocalDb(accountId, candidates);
+      resolvableLocalCandidateSet = db.getResolvableEmailsExistingInLocalDb(accountId, candidates);
     } catch (partitionError) {
       log.warn('[SemanticSearch] filterAndResolve: failed to partition local/missing candidates:', partitionError);
-      localCandidateSet = new Set<string>();
+      resolvableLocalCandidateSet = new Set<string>();
     }
 
-    const localCandidates = candidates.filter((msgId) => localCandidateSet.has(msgId));
-    const missingCount = candidates.length - localCandidates.length;
+    const resolvableLocalCandidates = candidates.filter((msgId) => resolvableLocalCandidateSet.has(msgId));
+    const imapVerificationCount = candidates.length - resolvableLocalCandidates.length;
 
     log.info(
-      `[SemanticSearch] filterAndResolve: ${localCandidates.length} local, ` +
-      `${missingCount} missing candidates`
+      `[SemanticSearch] filterAndResolve: ${resolvableLocalCandidates.length} locally resolvable, ` +
+      `${imapVerificationCount} requiring IMAP verification`
     );
 
     // --- Upfront Step 2: SQL-filter local candidates (single call, only when filters active) ---
@@ -272,28 +279,28 @@ export class SemanticSearchService extends BaseSearchService {
 
     if (filtersActive && filters !== undefined) {
       try {
-        const filterResult = db.filterEmailsByMsgIds(accountId, localCandidates, filters);
+          const filterResult = db.filterEmailsByMsgIds(accountId, resolvableLocalCandidates, filters);
         filteredLocalMsgIds = filterResult.matched;
         uncertainLocalMsgIds = filterResult.uncertain;
       } catch (sqlFilterError) {
         log.warn('[SemanticSearch] filterAndResolve: SQL filter failed, using unfiltered local candidates:', sqlFilterError);
-        filteredLocalMsgIds = localCandidateSet;
+        filteredLocalMsgIds = resolvableLocalCandidateSet;
         uncertainLocalMsgIds = new Set<string>();
       }
     } else {
-      filteredLocalMsgIds = new Set<string>(localCandidates);
+      filteredLocalMsgIds = new Set<string>(resolvableLocalCandidates);
       uncertainLocalMsgIds = new Set<string>();
     }
 
     // --- Upfront Step 3: Build eligible candidates (remove local-but-failed items) ---
-    // Items that are in localCandidateSet but NOT in filteredLocalMsgIds AND NOT in
+    // Items that are in resolvableLocalCandidateSet but NOT in filteredLocalMsgIds AND NOT in
     // uncertainLocalMsgIds failed the SQL filter and should never consume batch slots.
     // The resulting array preserves similarity order.
     const eligibleCandidates = candidates.filter(
       (msgId) =>
         filteredLocalMsgIds.has(msgId) ||
         uncertainLocalMsgIds.has(msgId) ||
-        !localCandidateSet.has(msgId)
+        !resolvableLocalCandidateSet.has(msgId)
     );
 
     // --- Upfront Step 4: Build X-GM-RAW query string once ---
@@ -309,7 +316,7 @@ export class SemanticSearchService extends BaseSearchService {
     let connectionOpened = false;
     let imapAvailable = false;
 
-    const needsImapConnection = missingCount > 0 || uncertainLocalMsgIds.size > 0;
+    const needsImapConnection = imapVerificationCount > 0 || uncertainLocalMsgIds.size > 0;
     if (needsImapConnection) {
       const connection = await this.ensureCrawlConnection(accountIdStr, {
         logContext: 'IMAP resolution',
@@ -327,7 +334,7 @@ export class SemanticSearchService extends BaseSearchService {
     onBatch(sortedLocalBatch, 'local');
 
     // Pre-build list of candidates that need IMAP verification:
-    // - Server-missing candidates (not in local DB at all)
+    // - Candidates not fully resolvable locally (missing email row or missing thread row)
     // - Uncertain-local candidates (in local DB but only have All Mail association)
     const imapEligibleCandidates = eligibleCandidates.filter(
       (msgId) => !filteredLocalMsgIds.has(msgId)
@@ -350,7 +357,7 @@ export class SemanticSearchService extends BaseSearchService {
     let hadImapRoundError = !imapAvailable && imapEligibleCandidates.length > 0;
 
     try {
-      // --- Iterative loop: process IMAP-eligible candidates (missing + uncertain) in deficit-sized rounds ---
+      // --- Iterative loop: process IMAP-eligible candidates (IMAP-required + uncertain) in deficit-sized rounds ---
       while (confirmed.size < this.MAX_RESULTS && imapCursor < imapEligibleCandidates.length) {
         const deficit = this.MAX_RESULTS - confirmed.size;
         const batch = imapEligibleCandidates.slice(imapCursor, imapCursor + deficit);
@@ -361,7 +368,7 @@ export class SemanticSearchService extends BaseSearchService {
         if (batch.length > 0 && imapAvailable) {
           log.info(
             `[SemanticSearch] Round ${roundCounter}: IMAP resolving ` +
-            `${batch.length} candidates (missing + uncertain)`
+            `${batch.length} candidates (IMAP-required + uncertain)`
           );
 
           // Snapshot confirmed set before the lock — used to diff newly confirmed after.
@@ -373,7 +380,7 @@ export class SemanticSearchService extends BaseSearchService {
               this.ALL_MAIL_PATH,
               async (client) => {
                 // Batch SEARCH: OR all candidate emailIds together with the gmRaw filter.
-                // One IMAP command resolves + filters all missing candidates at once.
+                // One IMAP command resolves + filters all IMAP-required candidates at once.
                 const orCriteria = batch.map((msgId) => ({ emailId: msgId }));
                 let survivingUids: number[];
 

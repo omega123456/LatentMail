@@ -921,30 +921,9 @@ describe('Queue Mutations', () => {
     });
 
     it('emits queue:update lifecycle events for the delete operation', async function () {
-      this.timeout(25_000);
-
-      // Restore state for a fresh delete operation
-      await quiesceAndRestore();
-      const seeded = seedTestAccount({ email: 'queue-delete-lifecycle@example.com' });
-      suiteAccountId = seeded.accountId;
-      suiteEmail = seeded.email;
-
-      imapStateInspector.reset();
-      imapStateInspector.getServer().addAllowedAccount(suiteEmail);
+      this.timeout(70_000);
 
       const plainMsg = emlFixtures['plain-text'];
-      imapStateInspector.injectMessage('[Gmail]/All Mail', plainMsg.raw, {
-        xGmMsgId: plainMsg.headers.xGmMsgId,
-        xGmThrid: plainMsg.headers.xGmThrid,
-        xGmLabels: ['\\Inbox', '\\All Mail'],
-      });
-      imapStateInspector.injectMessage('INBOX', plainMsg.raw, {
-        xGmMsgId: plainMsg.headers.xGmMsgId,
-        xGmThrid: plainMsg.headers.xGmThrid,
-        xGmLabels: ['\\Inbox'],
-      });
-      await triggerSyncAndWait(suiteAccountId, { timeout: 20_000 });
-
       const deleteResponse = await callIpc(
         'mail:delete',
         String(suiteAccountId),

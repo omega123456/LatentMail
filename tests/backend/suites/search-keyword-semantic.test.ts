@@ -1840,6 +1840,90 @@ describe('Search (Keyword and Semantic)', () => {
       expect(partialSearch.imapMsgIds).to.deep.equal([]);
       expect(partialSearch.complete.totalResults).to.equal(1);
     });
+
+    it('falls back to IMAP when a semantic result email exists locally but its thread row is missing', async function () {
+      this.timeout(35_000);
+
+      await prepareSemanticPipeline([1, 0, 0, 0]);
+
+      const orphanThreadAccount = seedTestAccount({
+        email: 'semantic-missing-thread@example.com',
+        displayName: 'Semantic Missing Thread',
+      });
+      const orphanThreadEmail = seedLocalEmail({
+        accountId: orphanThreadAccount.accountId,
+        subject: 'semantic missing thread fallback',
+        fromAddress: 'semantic-missing-thread@example.com',
+        textBody: 'This semantic result should rebuild its missing thread row through IMAP.',
+        dateIso: DateTime.utc(2026, 4, 6, 10, 30, 0).toISO()!,
+      });
+
+      insertSemanticChunk(
+        orphanThreadAccount.accountId,
+        orphanThreadEmail.xGmMsgId,
+        'semantic missing thread fallback chunk',
+        [1, 0, 0, 0],
+      );
+
+      const orphanThreadRaw = createServerOnlyRawEmail({
+        from: 'semantic-missing-thread@example.com',
+        to: orphanThreadAccount.email,
+        subject: 'semantic missing thread fallback',
+        body: 'This IMAP copy should restore the missing thread row for semantic search.',
+        xGmMsgId: orphanThreadEmail.xGmMsgId,
+        xGmThrid: orphanThreadEmail.xGmThrid,
+        dateIso: DateTime.utc(2026, 4, 6, 10, 30, 0).toISO()!,
+        labels: ['\\Inbox', '\\All Mail'],
+      });
+      imapStateInspector.injectMessage('INBOX', orphanThreadRaw, {
+        xGmMsgId: orphanThreadEmail.xGmMsgId,
+        xGmThrid: orphanThreadEmail.xGmThrid,
+        xGmLabels: ['\\Inbox'],
+      });
+      imapStateInspector.injectMessage('[Gmail]/All Mail', orphanThreadRaw, {
+        xGmMsgId: orphanThreadEmail.xGmMsgId,
+        xGmThrid: orphanThreadEmail.xGmThrid,
+        xGmLabels: ['\\Inbox', '\\All Mail'],
+      });
+
+      const databaseService = getDatabase();
+      expect(databaseService.getEmailByXGmMsgId(orphanThreadAccount.accountId, orphanThreadEmail.xGmMsgId)).to.not.equal(null);
+      expect(databaseService.getThreadById(orphanThreadAccount.accountId, orphanThreadEmail.xGmThrid)).to.not.equal(null);
+
+      databaseService.getDatabase().prepare(
+        'DELETE FROM threads WHERE account_id = :accountId AND x_gm_thrid = :xGmThrid',
+      ).run({
+        accountId: orphanThreadAccount.accountId,
+        xGmThrid: orphanThreadEmail.xGmThrid,
+      });
+
+      expect(databaseService.getThreadById(orphanThreadAccount.accountId, orphanThreadEmail.xGmThrid)).to.equal(null);
+
+      ollamaServer.setChatResponse(JSON.stringify({
+        semanticQuery: 'semantic missing thread fallback chunk',
+        filters: {},
+      }));
+
+      const searchResult = await runAiSearch(
+        orphanThreadAccount.accountId,
+        'semantic-search-missing-thread-fallback-query',
+        'semantic',
+      );
+
+      expect(searchResult.complete.status).to.equal('complete');
+      expect(searchResult.localMsgIds).to.deep.equal([]);
+      expect(searchResult.imapMsgIds).to.include(orphanThreadEmail.xGmMsgId);
+
+      const resolvedResponse = await callIpc(
+        'mail:search-by-msgids',
+        String(orphanThreadAccount.accountId),
+        [orphanThreadEmail.xGmMsgId],
+      ) as IpcResponse<Array<Record<string, unknown>>>;
+
+      expect(resolvedResponse.success).to.equal(true);
+      expect(resolvedResponse.data).to.have.length(1);
+      expect(resolvedResponse.data![0]!['xGmThrid']).to.equal(orphanThreadEmail.xGmThrid);
+    });
   });
 
   // -------------------------------------------------------------------------

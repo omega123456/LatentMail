@@ -13,6 +13,8 @@
  * date arithmetic is performed here.
  */
 
+import { DateTime } from 'luxon';
+
 /**
  * Structured filter fields extracted from a natural-language search query by
  * the LLM intent-extraction step.
@@ -232,4 +234,47 @@ export function hasFilters(filters: SemanticSearchFilters): boolean {
     filters.isRead !== undefined ||
     filters.isStarred !== undefined
   );
+}
+
+/**
+ * Normalizes local calendar date strings ("YYYY-MM-DD") in a
+ * SemanticSearchFilters object to UTC ISO timestamp bounds suitable for
+ * direct comparison against the `emails.date` column (which stores full
+ * ISO 8601 timestamps in UTC).
+ *
+ * - `dateFrom` ("YYYY-MM-DD") → start of that local calendar day in UTC
+ * - `dateTo`   ("YYYY-MM-DD") → start of the NEXT local calendar day in UTC
+ *   (exclusive upper bound)
+ *
+ * Other filter fields are passed through unchanged. Operates on a COPY of
+ * the input — does NOT mutate the original.
+ *
+ * If a date string is already a full ISO timestamp (contains 'T'), it is
+ * left unchanged — normalization applies only to bare YYYY-MM-DD strings.
+ *
+ * Invalid date strings are silently dropped (the corresponding field is
+ * removed from the returned copy).
+ */
+export function normalizeFilterDatesForDb(filters: SemanticSearchFilters): SemanticSearchFilters {
+  const normalized: SemanticSearchFilters = { ...filters };
+
+  if (filters.dateFrom !== undefined && !filters.dateFrom.includes('T')) {
+    const localDate = DateTime.fromFormat(filters.dateFrom, 'yyyy-MM-dd', { zone: 'local' });
+    if (localDate.isValid) {
+      normalized.dateFrom = localDate.toUTC().toISO() ?? filters.dateFrom;
+    } else {
+      delete normalized.dateFrom;
+    }
+  }
+
+  if (filters.dateTo !== undefined && !filters.dateTo.includes('T')) {
+    const localDate = DateTime.fromFormat(filters.dateTo, 'yyyy-MM-dd', { zone: 'local' });
+    if (localDate.isValid) {
+      normalized.dateTo = localDate.plus({ days: 1 }).toUTC().toISO() ?? filters.dateTo;
+    } else {
+      delete normalized.dateTo;
+    }
+  }
+
+  return normalized;
 }
