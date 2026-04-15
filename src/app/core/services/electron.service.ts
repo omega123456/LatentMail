@@ -105,6 +105,15 @@ export interface TrayActionPayload {
   action: string;
 }
 
+/** Payload for mailto:compose event — parsed fields from an external mailto: URL. */
+export interface MailtoComposePayload {
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  body: string;
+}
+
 /** Payload for ai:search:batch push event — a batch of matching message IDs from one search phase. */
 export interface SearchBatchPayload {
   searchToken: string;
@@ -661,6 +670,11 @@ export class ElectronService {
   /** Fires when the user chooses an action from the system tray context menu (e.g. compose, sync). */
   onTrayAction(): Observable<TrayActionPayload> {
     return this.onEvent<TrayActionPayload>('system:tray-action');
+  }
+
+  /** Fires when the OS hands a mailto: URL to the app (default mail handler). */
+  onMailtoCompose(): Observable<MailtoComposePayload> {
+    return this.onEvent<MailtoComposePayload>('mailto:compose');
   }
 
   /** Fires when a batch of matching message IDs arrives during an AI semantic search (local or IMAP phase). */

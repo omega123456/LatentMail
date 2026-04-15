@@ -304,6 +304,7 @@ export const ComposeStore = signalStore(
       openCompose(context: ComposeContext): void {
         let to = '';
         let cc = '';
+        let bcc = '';
         let subject = '';
         let htmlBody = '';
         let quotedHtml = '';
@@ -311,6 +312,7 @@ export const ComposeStore = signalStore(
         let inReplyTo = '';
         let references = '';
         let showCc = false;
+        let showBcc = false;
 
         if (context.originalMessage && context.mode !== 'new') {
           const msg = context.originalMessage;
@@ -353,8 +355,21 @@ export const ComposeStore = signalStore(
           quotedText = msg.textBody || (msg.htmlBody ? msg.htmlBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '');
         }
 
-        if (context.mode === 'new' && context.to != null && context.to !== '') {
-          to = context.to;
+        if (context.mode === 'new') {
+          if (context.to != null && context.to !== '') {
+            to = context.to;
+          }
+          if (context.cc != null && context.cc !== '') {
+            cc = context.cc;
+            showCc = true;
+          }
+          if (context.bcc != null && context.bcc !== '') {
+            bcc = context.bcc;
+            showBcc = true;
+          }
+          if (context.subject != null && context.subject !== '') {
+            subject = context.subject;
+          }
         }
 
         if (context.draft) {
@@ -425,7 +440,7 @@ export const ComposeStore = signalStore(
           serverXGmMsgId: null,
           to,
           cc,
-          bcc: '',
+          bcc,
           subject,
           htmlBody,
           textBody,
@@ -433,7 +448,7 @@ export const ComposeStore = signalStore(
           references,
           attachments: [],
           showCc,
-          showBcc: false,
+          showBcc,
           error: null,
           lastSavedAt: null,
           activeSignatureId: defaultSig?.id || null,

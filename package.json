@@ -66,6 +66,14 @@
       "**/sqlite-vec-windows-x64/**"
     ],
     "icon": "assets/icons/icon",
+    "protocols": [
+      {
+        "name": "LatentMail Mailto",
+        "schemes": [
+          "mailto"
+        ]
+      }
+    ],
     "win": {
       "target": [
         "nsis"
@@ -80,7 +88,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/nsis-include.nsh"
     },
     "mac": {
       "target": [

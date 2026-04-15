@@ -44,6 +44,8 @@ const validChannels = [
   'sync:paused-state-changed',
   // Body-fetch queue push events
   'body-queue:update',
+  // External mailto: URL received (OS default mail handler)
+  'mailto:compose',
 ] as const;
 
 const bufferedChannels = new Set<string>(['mail:notification-click']);

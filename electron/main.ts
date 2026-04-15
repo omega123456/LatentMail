@@ -16,6 +16,7 @@ import { CliServer } from './cli/cli-server';
 import { VectorDbService } from './services/vector-db-service';
 import { EmbeddingService } from './services/embedding-service';
 import { patchIpcMainForActivityTracking } from './ipc/ipc-activity-tracker';
+import { IPC_EVENTS } from './ipc/ipc-channels';
 import { getAvatarCacheDir } from './services/avatar-cache-service';
 import { MailParserWorkerService } from './services/mail-parser-worker-service';
 import { isMacOS, isWindows } from './utils/platform';
@@ -39,11 +40,62 @@ if (isDev) {
   app.setPath('userData', path.join(app.getPath('home'), 'LatentMail-Dev'));
 }
 
+// Register as the handler for mailto: URLs so the app appears in
+// Windows 11 Settings → Default Apps and macOS Default Mail Client.
+if (!isDev) {
+  app.setAsDefaultProtocolClient('mailto');
+}
+
 // Phase 1: Initialize logging with env-based defaults (no DB dependency yet).
 const logger = LoggerService.getInstance();
 
 let mainWindow: BrowserWindow | null = null;
 let cliServer: CliServer | null = null;
+
+/** Mailto URL received before the renderer was ready (queued for delivery after window loads). */
+let pendingMailtoUrl: string | null = null;
+
+interface MailtoFields {
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  body: string;
+}
+
+function parseMailtoUrl(raw: string): MailtoFields | null {
+  if (!raw.toLowerCase().startsWith('mailto:')) {
+    return null;
+  }
+  try {
+    const withoutScheme = raw.slice('mailto:'.length);
+    const questionIdx = withoutScheme.indexOf('?');
+    const toRaw = questionIdx >= 0 ? withoutScheme.slice(0, questionIdx) : withoutScheme;
+    const queryString = questionIdx >= 0 ? withoutScheme.slice(questionIdx + 1) : '';
+
+    const params = new URLSearchParams(queryString);
+    const to = decodeURIComponent(toRaw).trim();
+    const cc = (params.get('cc') ?? '').trim();
+    const bcc = (params.get('bcc') ?? '').trim();
+    const subject = (params.get('subject') ?? '').trim();
+    const body = (params.get('body') ?? '').trim();
+    return { to, cc, bcc, subject, body };
+  } catch {
+    return null;
+  }
+}
+
+function sendMailtoToRenderer(url: string): void {
+  const fields = parseMailtoUrl(url);
+  if (!fields) {
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC_EVENTS.MAILTO_COMPOSE, fields);
+  } else {
+    pendingMailtoUrl = url;
+  }
+}
 
 // Single instance lock (production only; in dev allow running alongside packaged app)
 let runApp = true;
@@ -57,7 +109,7 @@ if (!isDev) {
 
 if (runApp) {
   if (!isDev) {
-    app.on('second-instance', () => {
+    app.on('second-instance', (_event, argv) => {
       if (mainWindow) {
         if (mainWindow.isMinimized()) {
           mainWindow.restore();
@@ -67,8 +119,22 @@ if (runApp) {
         }
         mainWindow.focus();
       }
+
+      // On Windows the mailto: URL is passed as the last command-line argument.
+      const mailtoArg = argv.find((arg) => arg.toLowerCase().startsWith('mailto:'));
+      if (mailtoArg) {
+        sendMailtoToRenderer(mailtoArg);
+      }
     });
   }
+
+  // macOS delivers protocol URLs via the open-url event.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    if (url.toLowerCase().startsWith('mailto:')) {
+      sendMailtoToRenderer(url);
+    }
+  });
 
   app.whenReady().then(async () => {
     logger.info('LatentMail starting...');
@@ -251,6 +317,13 @@ if (runApp) {
         logger.warn('Failed to initialize TrayService:', err);
       }
     }
+
+    // If the app was launched with a mailto: URL (first instance, e.g. Windows passes it as argv),
+    // queue it for delivery once the renderer is ready.
+    const mailtoFromArgv = process.argv.find((arg) => arg.toLowerCase().startsWith('mailto:'));
+    if (mailtoFromArgv) {
+      sendMailtoToRenderer(mailtoFromArgv);
+    }
   });
 }
 
@@ -313,6 +386,12 @@ function createMainWindow(): void {
       }
     } catch (err) {
       logger.warn('Failed to initialize NativeDropService:', err);
+    }
+
+    // Deliver any mailto: URL that arrived before the renderer was ready.
+    if (pendingMailtoUrl) {
+      sendMailtoToRenderer(pendingMailtoUrl);
+      pendingMailtoUrl = null;
     }
   });
 

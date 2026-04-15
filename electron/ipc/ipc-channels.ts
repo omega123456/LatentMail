@@ -152,6 +152,9 @@ export const IPC_EVENTS = {
 
   // Sync pause state change (fired when pause-sync / resume-sync CLI command runs)
   SYNC_PAUSED_STATE_CHANGED: 'sync:paused-state-changed',
+
+  // External mailto: URL received (OS default mail handler)
+  MAILTO_COMPOSE: 'mailto:compose',
 } as const;
 
 // IPC response envelope

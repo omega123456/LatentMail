@@ -112,4 +112,10 @@ export interface ComposeContext {
   prefillBody?: string;
   /** Pre-fill the TO field when opening a new compose (e.g. from thread view address click) */
   to?: string;
+  /** Pre-fill CC field (e.g. from mailto: URL) */
+  cc?: string;
+  /** Pre-fill BCC field (e.g. from mailto: URL) */
+  bcc?: string;
+  /** Pre-fill Subject field (e.g. from mailto: URL) */
+  subject?: string;
 }

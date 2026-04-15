@@ -48,10 +48,12 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly emailsStore = inject(EmailsStore);
 
   private trayActionSub: Subscription | null = null;
+  private mailtoSub: Subscription | null = null;
 
   ngOnInit(): void {
     this.settingsStore.loadSettings();
     this.subscribeToTrayActions();
+    this.subscribeToMailto();
     this.detectPlatform();
   }
 
@@ -67,6 +69,8 @@ export class AppComponent implements OnInit, OnDestroy {
     /* c8 ignore start -- app component never destroyed in E2E */
     this.trayActionSub?.unsubscribe();
     this.trayActionSub = null;
+    this.mailtoSub?.unsubscribe();
+    this.mailtoSub = null;
     /* c8 ignore stop */
   }
 
@@ -93,6 +97,32 @@ export class AppComponent implements OnInit, OnDestroy {
           void this.emailsStore.syncAccount(account.id);
         }
       }
+    });
+    /* c8 ignore stop */
+  }
+
+  private subscribeToMailto(): void {
+    /* c8 ignore next -- non-Electron */
+    if (!this.electronService.isElectron) {
+      return;
+    }
+    /* c8 ignore start -- requires OS mailto event emission, no test hook */
+    this.mailtoSub = this.electronService.onMailtoCompose().subscribe((payload) => {
+      const account = this.accountsStore.activeAccount();
+      if (!account) {
+        return;
+      }
+      this.composeStore.openCompose({
+        mode: 'new',
+        accountId: account.id,
+        accountEmail: account.email,
+        accountDisplayName: account.displayName,
+        to: payload.to,
+        cc: payload.cc,
+        bcc: payload.bcc,
+        subject: payload.subject,
+        prefillBody: payload.body,
+      });
     });
     /* c8 ignore stop */
   }
