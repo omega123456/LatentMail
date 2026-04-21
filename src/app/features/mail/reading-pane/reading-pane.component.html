@@ -177,7 +177,11 @@
                     <span class="material-symbols-outlined attachment-icon" aria-hidden="true">attach_file</span>
                   </span>
                 }
-                <span class="message-date" data-testid="message-timestamp">{{ message.date | relativeTime }}</span>
+                <span
+                  class="message-date"
+                  data-testid="message-timestamp"
+                  [title]="getExactDateTimeTooltip(message.date)"
+                >{{ message.date | relativeTime }}</span>
               </div>
               <div class="header-bottom">
                 <button

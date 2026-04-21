@@ -1,5 +1,6 @@
 import { Component, computed, inject, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { DateTime } from 'luxon';
 import { Thread } from '../../../core/models/email.model';
 import { RelativeTimePipe } from '../../../shared/pipes/relative-time.pipe';
 import { DensityMode } from '../../../core/services/layout.service';
@@ -156,6 +157,17 @@ export class EmailListItemComponent {
   getInitial(): string {
     const name = this.getSenderName();
     return name.charAt(0).toUpperCase();
+  }
+
+  getExactDateTimeTooltip(value: string | Date | null | undefined): string | null {
+    if (!value) {
+      return null;
+    }
+    const dt = typeof value === 'string' ? DateTime.fromISO(value) : DateTime.fromJSDate(value);
+    if (!dt.isValid) {
+      return null;
+    }
+    return dt.toFormat('dd LLL yyyy, HH:mm:ss');
   }
 
   onClick(event: MouseEvent): void {

@@ -272,6 +272,17 @@ export class ReadingPaneComponent implements OnInit, OnDestroy {
     return '';
   }
 
+  getExactDateTimeTooltip(value: string | Date | null | undefined): string | null {
+    if (!value) {
+      return null;
+    }
+    const dt = typeof value === 'string' ? DateTime.fromISO(value) : DateTime.fromJSDate(value);
+    if (!dt.isValid) {
+      return null;
+    }
+    return dt.toFormat('dd LLL yyyy, HH:mm:ss');
+  }
+
   toggleExpand(messageId: string): void {
     if (this.expandedMessages.has(messageId)) {
       this.expandedMessages.delete(messageId);

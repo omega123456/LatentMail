@@ -1002,6 +1002,59 @@ test.describe('Reading pane', () => {
         const subject = `${subjectPrefix} ${config.label}`;
         await waitForEmailSubject(page, subject, { timeout: 15000, exact: false });
       }
+
+      const yesterdayConfig = dateConfigs.find((config) => config.label === 'yesterday');
+      if (yesterdayConfig) {
+        const yesterdayThreadId = `${uniqueToken}${yesterdayConfig.suffix}`;
+        const yesterdayItem = page.getByTestId(`email-item-${yesterdayThreadId}`);
+        const yesterdayTimestamp = yesterdayItem.getByTestId('email-list-timestamp');
+
+        await expect(yesterdayTimestamp).toHaveText('Yesterday');
+        const yesterdayTooltip = await yesterdayTimestamp.getAttribute('title');
+        expect(yesterdayTooltip).toBeTruthy();
+        expect(yesterdayTooltip).toMatch(/\d{4}/);
+        expect(yesterdayTooltip).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+        expect(yesterdayTooltip).not.toMatch(/\bAM\b|\bPM\b/);
+        expect(yesterdayTooltip).not.toContain('GMT');
+        expect(yesterdayTooltip).not.toContain('UTC');
+
+        await yesterdayItem.click();
+        await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+        const readingYesterdayTooltip = await page.getByTestId('message-timestamp').first().getAttribute('title');
+        expect(readingYesterdayTooltip).toBeTruthy();
+        expect(readingYesterdayTooltip).toMatch(/\d{4}/);
+        expect(readingYesterdayTooltip).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+        expect(readingYesterdayTooltip).not.toMatch(/\bAM\b|\bPM\b/);
+        expect(readingYesterdayTooltip).not.toContain('GMT');
+        expect(readingYesterdayTooltip).not.toContain('UTC');
+      }
+
+      const weekdayConfig = dateConfigs.find((config) => config.label === '3days');
+      if (weekdayConfig) {
+        const weekdayThreadId = `${uniqueToken}${weekdayConfig.suffix}`;
+        const expectedWeekdayLabel = DateTime.fromRFC2822(weekdayConfig.date).toFormat('ccc');
+        const weekdayItem = page.getByTestId(`email-item-${weekdayThreadId}`);
+        const weekdayTimestamp = weekdayItem.getByTestId('email-list-timestamp');
+
+        await expect(weekdayTimestamp).toHaveText(expectedWeekdayLabel);
+        const weekdayTooltip = await weekdayTimestamp.getAttribute('title');
+        expect(weekdayTooltip).toBeTruthy();
+        expect(weekdayTooltip).toMatch(/\d{4}/);
+        expect(weekdayTooltip).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+        expect(weekdayTooltip).not.toMatch(/\bAM\b|\bPM\b/);
+        expect(weekdayTooltip).not.toContain('GMT');
+        expect(weekdayTooltip).not.toContain('UTC');
+
+        await weekdayItem.click();
+        await expect(page.getByTestId('reading-pane-content')).toBeVisible();
+        const readingWeekdayTooltip = await page.getByTestId('message-timestamp').first().getAttribute('title');
+        expect(readingWeekdayTooltip).toBeTruthy();
+        expect(readingWeekdayTooltip).toMatch(/\d{4}/);
+        expect(readingWeekdayTooltip).toMatch(/\d{1,2}:\d{2}:\d{2}/);
+        expect(readingWeekdayTooltip).not.toMatch(/\bAM\b|\bPM\b/);
+        expect(readingWeekdayTooltip).not.toContain('GMT');
+        expect(readingWeekdayTooltip).not.toContain('UTC');
+      }
     });
 
     test('diverse MIME type attachments (zip, xlsx, mp4) for icon coverage', async ({
