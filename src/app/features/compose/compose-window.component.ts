@@ -12,6 +12,8 @@ import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import Underline from '@tiptap/extension-underline';
 import Image from '@tiptap/extension-image';
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import { common, createLowlight } from 'lowlight';
 import { ComposeStore } from '../../store/compose.store';
 import { AccountsStore } from '../../store/accounts.store';
 import { ElectronService, OsFileDropPayload } from '../../core/services/electron.service';
@@ -21,11 +23,14 @@ import { AttachmentUploadComponent } from './attachment-upload.component';
 import { SignatureSelectorComponent } from './signature-selector.component';
 import { DraftAttachment } from '../../core/models/email.model';
 
+const lowlight = createLowlight(common);
+
 const MIN_COMPOSE_WIDTH = 400;
 const MAX_COMPOSE_WIDTH = 1200;
 const MIN_COMPOSE_HEIGHT = 320;
 const DEFAULT_COMPOSE_WIDTH = 865;
 const DEFAULT_COMPOSE_HEIGHT = 700;
+const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
 
 type ResizeEdge = 'north' | 'west' | 'northwest';
 
@@ -73,6 +78,7 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
   @ViewChild('linkUrlInputRef') linkUrlInputRef?: ElementRef<HTMLInputElement>;
 
   editor: Editor | null = null;
+  private readonly pendingEditorFocusPosition = signal<'start' | 'end' | null>(null);
   private resizeState: ResizeState | null = null;
   private readonly osDropSubscriptions = new Subscription();
   private readonly viewInitialized = signal(false);
@@ -155,6 +161,10 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
         extensions: [
           StarterKit.configure({
             heading: { levels: [1, 2, 3] },
+            blockquote: {
+              HTMLAttributes: { class: 'compose-blockquote' },
+            },
+            codeBlock: false,
           }),
           Link.configure({
             openOnClick: false,
@@ -162,6 +172,13 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
           }),
           Underline,
           Image,
+          CodeBlockLowlight.configure({
+            lowlight,
+            defaultLanguage: 'javascript',
+            enableTabIndentation: true,
+            tabSize: 2,
+            HTMLAttributes: { class: 'compose-code-block' },
+          }),
           Placeholder.configure({
             placeholder: 'Write your message...',
           }),
@@ -237,6 +254,12 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
     if (!editor) {
       return;
     }
+    const pendingPosition = this.pendingEditorFocusPosition();
+    if (pendingPosition !== null) {
+      editor.chain().focus(pendingPosition).run();
+      this.pendingEditorFocusPosition.set(null);
+      return;
+    }
     // When click was on the container (e.g. padding), put caret at end; otherwise do nothing so content click selection is kept
     const targetIsContainer = clickEvent?.target === this.editorContainer?.nativeElement;
     if (targetIsContainer) {
@@ -246,9 +269,14 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
     }
   }
 
+  preparePendingEditorFocus(position: 'start' | 'end'): void {
+    this.pendingEditorFocusPosition.set(position);
+  }
+
   private destroyEditor(): void {
     this.closeEditorContextMenu();
     this.closeLinkUrlDialog();
+    this.pendingEditorFocusPosition.set(null);
     if (this.editor) {
       this.editor.destroy();
       this.editor = null;
@@ -294,6 +322,32 @@ export class ComposeWindowComponent implements OnInit, AfterViewInit, OnDestroy 
       link: editor.isActive('link'),
     });
     this.showEditorContextMenu.set(true);
+    setTimeout(() => {
+      this.repositionEditorContextMenu(event.clientX, event.clientY);
+    }, 0);
+  }
+
+  private repositionEditorContextMenu(rawX: number, rawY: number): void {
+    const menuElement = document.querySelector('.editor-context-menu') as HTMLElement | null;
+    if (!menuElement) {
+      return;
+    }
+
+    const bounds = menuElement.getBoundingClientRect();
+    const maxX = Math.max(
+      CONTEXT_MENU_VIEWPORT_MARGIN,
+      window.innerWidth - bounds.width - CONTEXT_MENU_VIEWPORT_MARGIN,
+    );
+    const maxY = Math.max(
+      CONTEXT_MENU_VIEWPORT_MARGIN,
+      window.innerHeight - bounds.height - CONTEXT_MENU_VIEWPORT_MARGIN,
+    );
+    const clampedX = Math.min(Math.max(CONTEXT_MENU_VIEWPORT_MARGIN, rawX), maxX);
+    const clampedY = Math.min(Math.max(CONTEXT_MENU_VIEWPORT_MARGIN, rawY), maxY);
+
+    this.contextMenuX.set(clampedX);
+    this.contextMenuY.set(clampedY);
+    this.cdr.markForCheck();
   }
 
   /** True when the stored selection is non-empty (for Cut/Copy). */

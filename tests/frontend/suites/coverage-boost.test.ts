@@ -1,5 +1,6 @@
 import { test, expect } from '../infrastructure/electron-fixture';
 import {
+  closeCommandPaletteIfOpen,
   extractSeededAccount,
   focusMailShell,
   getShortcutModifier,
@@ -7,11 +8,25 @@ import {
   triggerSync,
   waitForEmailSubject,
   waitForMailShell,
+  openCommandPalette,
   navigateToSettings,
   returnToMailShell,
   configureOllama,
   discardComposeIfOpen,
 } from '../infrastructure/helpers';
+
+async function executePaletteCommand(
+  page: import('@playwright/test').Page,
+  modifier: 'Meta' | 'Control',
+  query: string,
+): Promise<void> {
+  await closeCommandPaletteIfOpen(page);
+  await focusMailShell(page);
+  await openCommandPalette(page, modifier);
+  await page.getByTestId('command-palette-input').fill(query);
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('command-palette')).toBeHidden({ timeout: 5000 });
+}
 
 test.describe('Coverage boost', () => {
   test.describe.configure({ mode: 'serial' });
@@ -285,5 +300,80 @@ test.describe('Coverage boost', () => {
       await expect(item1).toHaveClass(/(^|\s)selected(\s|$)/, { timeout: 3000 });
       await expect(item2).not.toHaveClass(/(^|\s)multi-selected(\s|$)/, { timeout: 3000 });
     }
+  });
+
+  test('command palette executes safe global commands', async ({ page }) => {
+    await returnToMailShell(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'toggle sidebar');
+    await expect(page.getByTestId('sidebar')).toHaveClass(/(^|\s)collapsed(\s|$)/, { timeout: 3000 });
+
+    await executePaletteCommand(page, shortcutModifier, 'toggle sidebar');
+    await expect(page.getByTestId('sidebar')).not.toHaveClass(/(^|\s)collapsed(\s|$)/, { timeout: 3000 });
+
+    await executePaletteCommand(page, shortcutModifier, 'toggle reading pane');
+    await executePaletteCommand(page, shortcutModifier, 'toggle reading pane');
+
+    await executePaletteCommand(page, shortcutModifier, 'zoom in');
+    await executePaletteCommand(page, shortcutModifier, 'zoom out');
+    await executePaletteCommand(page, shortcutModifier, 'reset zoom');
+
+    await executePaletteCommand(page, shortcutModifier, 'search emails');
+    await expect(page.getByTestId('search-input')).toBeFocused({ timeout: 3000 });
+  });
+
+  test('command palette executes folder navigation commands', async ({ page }) => {
+    await executePaletteCommand(page, shortcutModifier, 'go to sent');
+    await waitForMailShell(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'go to drafts');
+    await waitForMailShell(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'go to inbox');
+    await waitForMailShell(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'open settings');
+    await expect(page.getByTestId('settings-content')).toBeVisible({ timeout: 5000 });
+
+    await returnToMailShell(page);
+  });
+
+  test('command palette executes email-list commands', async ({ page }) => {
+    await returnToMailShell(page);
+    const items = page.locator('[data-testid^="email-item-"]');
+    await expect(items.first()).toBeVisible({ timeout: 5000 });
+
+    await executePaletteCommand(page, shortcutModifier, 'next email');
+    await executePaletteCommand(page, shortcutModifier, 'previous email');
+    await executePaletteCommand(page, shortcutModifier, 'open thread');
+    await expect(page.getByTestId('reading-pane-content')).toBeVisible({ timeout: 10000 });
+
+    await executePaletteCommand(page, shortcutModifier, 'select all');
+    await expect(items.first()).toHaveClass(/(^|\s)multi-selected(\s|$)|(^|\s)selected(\s|$)/, { timeout: 3000 });
+  });
+
+  test('command palette executes selected-email commands', async ({ page }) => {
+    await returnToMailShell(page);
+    const firstItem = page.locator('[data-testid^="email-item-"]').first();
+    await expect(firstItem).toBeVisible({ timeout: 5000 });
+    await firstItem.click();
+    await expect(page.getByTestId('reading-pane-content')).toBeVisible({ timeout: 10000 });
+
+    await executePaletteCommand(page, shortcutModifier, 'reply');
+    await expect(page.getByTestId('compose-window')).toBeVisible({ timeout: 5000 });
+    await discardComposeIfOpen(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'reply all');
+    await expect(page.getByTestId('compose-window')).toBeVisible({ timeout: 5000 });
+    await discardComposeIfOpen(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'forward');
+    await expect(page.getByTestId('compose-window')).toBeVisible({ timeout: 5000 });
+    await discardComposeIfOpen(page);
+
+    await executePaletteCommand(page, shortcutModifier, 'star');
+    await executePaletteCommand(page, shortcutModifier, 'mark read');
+    await executePaletteCommand(page, shortcutModifier, 'mark unread');
+    await executePaletteCommand(page, shortcutModifier, 'ai summarize');
   });
 });

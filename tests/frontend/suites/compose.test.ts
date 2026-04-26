@@ -249,6 +249,103 @@ test.describe('Compose', () => {
       }
     });
 
+    test('Quote toolbar button applies to text typed immediately after clicking it from the initial compose focus state', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      const quoteButton = toolbarButton(page, 'Quote');
+
+      await quoteButton.click();
+      await page.keyboard.type('quote before focus');
+
+      await expect(editor.locator('blockquote')).toContainText('quote before focus');
+    });
+
+    test('Quote toolbar button wraps selected editor text', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      await editor.click();
+      await page.keyboard.type('selected quote text');
+      await page.keyboard.press('Control+a');
+
+      await toolbarButton(page, 'Quote').click();
+
+      await expect(editor.locator('blockquote')).toContainText('selected quote text');
+    });
+
+    test('Quote toolbar button keeps typing inside the quote after the user clicks back into the editor', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      const quoteButton = toolbarButton(page, 'Quote');
+
+      await quoteButton.click();
+      await editor.click();
+      await page.keyboard.type('quote after editor click');
+
+      await expect(editor.locator('blockquote')).toContainText('quote after editor click');
+    });
+
+    test('Code Block toolbar button applies to text typed immediately after clicking it from the initial compose focus state', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      const codeBlockButton = toolbarButton(page, 'Code Block');
+
+      await codeBlockButton.click();
+      await page.keyboard.type('before focus code');
+
+      await expect(editor.locator('pre code')).toContainText('before focus code');
+    });
+
+    test('Code Block toolbar button wraps selected editor text and applies highlighting', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      await editor.click();
+      await page.keyboard.type('const answer = 42;');
+      await page.keyboard.press('Control+a');
+
+      await toolbarButton(page, 'Code Block').click();
+
+      await expect(editor.locator('pre code')).toContainText('const answer = 42;');
+      await expect(editor.locator('.hljs-keyword')).toContainText('const');
+      await expect(editor.locator('.hljs-number')).toContainText('42');
+    });
+
+    test('Code Block toolbar button wraps selected multi-line editor text in one block', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      await editor.click();
+      await page.keyboard.type('const first = 1;');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('const second = 2;');
+      await page.keyboard.press('Control+a');
+
+      await toolbarButton(page, 'Code Block').click();
+
+      await expect(editor.locator('pre')).toHaveCount(1);
+      await expect(editor.locator('pre code')).toContainText('const first = 1;');
+      await expect(editor.locator('pre code')).toContainText('const second = 2;');
+      await expect(editor.locator('.hljs-keyword')).toHaveCount(2);
+      await expect(editor.locator('.hljs-number')).toHaveCount(2);
+    });
+
+    test('Code Block toolbar button keeps typing inside the code block after the user clicks back into the editor', async ({ page }) => {
+      await openComposeWindow(page);
+
+      const editor = getComposeEditor(page);
+      const codeBlockButton = toolbarButton(page, 'Code Block');
+
+      await codeBlockButton.click();
+      await editor.click();
+      await page.keyboard.type('code after editor click');
+
+      await expect(editor.locator('pre code')).toContainText('code after editor click');
+    });
+
     test('Undo button reverts editor content', async ({ page }) => {
       await openComposeWindow(page);
 

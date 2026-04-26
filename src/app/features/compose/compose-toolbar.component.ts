@@ -4,6 +4,19 @@ import { FormsModule } from '@angular/forms';
 import type { Editor } from '@tiptap/core';
 import { AiStore } from '../../store/ai.store';
 
+type ToolbarCommand =
+  | 'toggleBold'
+  | 'toggleItalic'
+  | 'toggleUnderline'
+  | 'toggleStrike'
+  | 'toggleBulletList'
+  | 'toggleOrderedList'
+  | 'toggleBlockquote'
+  | 'toggleCodeBlock'
+  | 'setHorizontalRule'
+  | 'undo'
+  | 'redo';
+
 @Component({
   selector: 'app-compose-toolbar',
   standalone: true,
@@ -14,6 +27,7 @@ import { AiStore } from '../../store/ai.store';
 export class ComposeToolbarComponent {
   readonly editor = input<Editor | null>(null);
   readonly aiStore = inject(AiStore);
+  readonly editorFocusRequest = output<'start' | 'end'>();
 
   /** Emitted when the user requests to insert an inline image (parent opens file picker). */
   readonly insertImageRequest = output<void>();
@@ -30,16 +44,60 @@ export class ComposeToolbarComponent {
     return this.editor()?.isActive(name) ?? false;
   }
 
-  exec(command: string): void {
+  preserveEditorSelection(event: MouseEvent): void {
+    event.preventDefault();
+  }
+
+  exec(command: ToolbarCommand): void {
     const ed = this.editor();
     if (!ed) {
       return;
     }
+
+    if (command === 'toggleBlockquote' || command === 'toggleCodeBlock') {
+      const hasSelection = !ed.state.selection.empty;
+      const isEditorFocused = ed.isFocused;
+      if (!isEditorFocused && !hasSelection) {
+        this.editorFocusRequest.emit('start');
+      }
+    }
+
+    if (command === 'toggleBlockquote') {
+      ed.chain().focus().toggleBlockquote().run();
+      return;
+    }
+
+    if (command === 'toggleCodeBlock') {
+      if (this.wrapSelectionInSingleCodeBlock(ed)) {
+        return;
+      }
+      ed.chain().focus().toggleCodeBlock({ language: 'javascript' }).run();
+      return;
+    }
+
     const chain = ed.chain().focus();
     // Use indexing since TipTap commands are dynamic
     if (typeof (chain as Record<string, unknown>)[command] === 'function') {
       ((chain as Record<string, unknown>)[command] as () => { run: () => void })().run();
     }
+  }
+
+  private wrapSelectionInSingleCodeBlock(ed: Editor): boolean {
+    const { from, to, empty } = ed.state.selection;
+    if (empty || ed.isActive('codeBlock')) {
+      return false;
+    }
+
+    const selectedText = ed.state.doc.textBetween(from, to, '\n');
+    if (!selectedText) {
+      return false;
+    }
+
+    return ed.chain().focus().deleteSelection().insertContent({
+      type: 'codeBlock',
+      attrs: { language: 'javascript' },
+      content: [{ type: 'text', text: selectedText }],
+    }).run();
   }
 
   insertLink(): void {

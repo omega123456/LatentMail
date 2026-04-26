@@ -87,6 +87,7 @@
           [editor]="editor"
           (insertImageRequest)="openInlineImagePicker()"
           (openLinkDialogRequest)="handleLinkRequest()"
+          (editorFocusRequest)="preparePendingEditorFocus($event)"
         />
       }
 
