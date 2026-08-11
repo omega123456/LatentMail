@@ -1,0 +1,19 @@
+[[permission]]
+identifier = "allow-star-thread"
+description = "Enables starring a conversation."
+commands.allow = ["star_thread"]
+
+[[permission]]
+identifier = "allow-unstar-thread"
+description = "Enables unstarring a conversation."
+commands.allow = ["unstar_thread"]
+
+[[permission]]
+identifier = "allow-mark-thread-read"
+description = "Enables marking every message in a conversation read."
+commands.allow = ["mark_thread_read"]
+
+[[permission]]
+identifier = "allow-mark-thread-unread"
+description = "Enables marking every message in a conversation unread."
+commands.allow = ["mark_thread_unread"]

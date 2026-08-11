@@ -1,0 +1,67 @@
+[
+  {
+    "name": "plain",
+    "expectPlain": "plain",
+    "payload": { "mimeType": "text/plain", "body": { "data": "cGxhaW4" } }
+  },
+  {
+    "name": "html",
+    "expectHtml": "<b>html</b>",
+    "payload": { "mimeType": "text/html", "body": { "data": "PGI-aHRtbDwvYj4" } }
+  },
+  {
+    "name": "alternative",
+    "expectPlain": "plain",
+    "expectHtml": "<i>html</i>",
+    "payload": {
+      "mimeType": "multipart/alternative",
+      "parts": [
+        { "mimeType": "text/plain", "body": { "data": "cGxhaW4" } },
+        { "mimeType": "text/html", "body": { "data": "PGk-aHRtbDwvaT4" } }
+      ]
+    }
+  },
+  {
+    "name": "mixed_attachment",
+    "expectPlain": "body",
+    "attachment": true,
+    "payload": {
+      "mimeType": "multipart/mixed",
+      "parts": [
+        { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
+        { "mimeType": "application/pdf", "filename": "file.pdf", "body": { "data": "cGRm" } }
+      ]
+    }
+  },
+  {
+    "name": "related_cid",
+    "expectHtml": "<img src=\"cid:image@cid\">",
+    "inline": "image@cid",
+    "payload": {
+      "mimeType": "multipart/related",
+      "parts": [
+        { "mimeType": "text/html", "body": { "data": "PGltZyBzcmM9ImNpZDppbWFnZUBjaWQiPg" } },
+        {
+          "mimeType": "image/png",
+          "headers": [{ "name": "Content-ID", "value": "<image@cid>" }],
+          "body": { "data": "aW1n" }
+        }
+      ]
+    }
+  },
+  {
+    "name": "non_utf8",
+    "expectPlain": "� text",
+    "payload": { "mimeType": "text/plain; charset=iso-8859-1", "body": { "data": "_yB0ZXh0" } }
+  },
+  {
+    "name": "missing_headers",
+    "expectPlain": "body",
+    "payload": { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } }
+  },
+  {
+    "name": "oversized",
+    "expectPlain": "xxxxxxxx",
+    "payload": { "mimeType": "text/plain", "body": { "data": "eHh4eHh4eHg" } }
+  }
+]

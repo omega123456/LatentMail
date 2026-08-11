@@ -1,0 +1,33 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main window.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-health-check",
+    "allow-open-external-url",
+    "allow-write-frontend-log",
+    "allow-read-settings",
+    "allow-write-setting",
+    "allow-pause-queue",
+    "allow-resume-queue",
+    "allow-read-queue-summary",
+    "allow-list-accounts",
+    "allow-begin-sign-in",
+    "allow-begin-reauthentication",
+    "allow-list-labels",
+    "allow-list-threads",
+    "allow-load-conversation",
+    "allow-trigger-sync",
+    "allow-read-sync-status",
+    "allow-star-thread",
+    "allow-unstar-thread",
+    "allow-mark-thread-read",
+    "allow-mark-thread-unread",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
+  ]
+}

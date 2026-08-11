@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-list-accounts"
+description = "Enables listing configured accounts."
+commands.allow = ["list_accounts"]
+
+[[permission]]
+identifier = "allow-begin-sign-in"
+description = "Enables starting Google sign-in."
+commands.allow = ["begin_sign_in"]
+
+[[permission]]
+identifier = "allow-begin-reauthentication"
+description = "Enables repairing one Google account."
+commands.allow = ["begin_reauthentication"]

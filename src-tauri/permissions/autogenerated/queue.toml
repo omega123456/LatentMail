@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-pause-queue"
+description = "Enables pausing the operation queue."
+commands.allow = ["pause_queue"]
+
+[[permission]]
+identifier = "allow-resume-queue"
+description = "Enables resuming the operation queue."
+commands.allow = ["resume_queue"]
+
+[[permission]]
+identifier = "allow-read-queue-summary"
+description = "Enables reading the operation queue summary."
+commands.allow = ["read_queue_summary"]

@@ -1,0 +1,50 @@
+[package]
+name = "latentmail"
+version = "0.1.0"
+description = "LatentMail desktop Gmail client"
+authors = ["LatentMail"]
+edition = "2021"
+rust-version = "1.85"
+
+[lib]
+name = "latentmail_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "latentmail"
+test = false
+required-features = ["app"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ammonia = "4"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+oauth2 = "5"
+refinery = { version = "0.8", features = ["rusqlite"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["test"] }
+tauri-plugin-opener = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+# Adds the "unstable" tauri feature (window-fetching APIs) for integration
+# tests only; resolver v2 keeps this out of the shipped app/lib build.
+tauri = { version = "2", features = ["test", "unstable"] }
+
+[features]
+default = ["app"]
+app = []
+test-utils = []

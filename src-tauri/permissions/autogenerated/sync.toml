@@ -1,0 +1,24 @@
+[[permission]]
+identifier = "allow-list-labels"
+description = "Enables listing an account's labels with their message/unread counts."
+commands.allow = ["list_labels"]
+
+[[permission]]
+identifier = "allow-list-threads"
+description = "Enables listing paginated threads for a mailbox."
+commands.allow = ["list_threads"]
+
+[[permission]]
+identifier = "allow-load-conversation"
+description = "Enables loading a thread's sanitized message bodies."
+commands.allow = ["load_conversation"]
+
+[[permission]]
+identifier = "allow-trigger-sync"
+description = "Enables triggering initial/incremental sync for an account."
+commands.allow = ["trigger_sync"]
+
+[[permission]]
+identifier = "allow-read-sync-status"
+description = "Enables reading an account's current sync status."
+commands.allow = ["read_sync_status"]

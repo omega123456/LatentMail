@@ -1,0 +1,21 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-settings"
+description = "Enables the read_settings command without any pre-configured scope."
+commands.allow = ["read_settings"]
+
+[[permission]]
+identifier = "deny-read-settings"
+description = "Denies the read_settings command without any pre-configured scope."
+commands.deny = ["read_settings"]
+
+[[permission]]
+identifier = "allow-write-setting"
+description = "Enables the write_setting command without any pre-configured scope."
+commands.allow = ["write_setting"]
+
+[[permission]]
+identifier = "deny-write-setting"
+description = "Denies the write_setting command without any pre-configured scope."
+commands.deny = ["write_setting"]

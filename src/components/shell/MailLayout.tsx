@@ -1,0 +1,293 @@
+import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { ReauthBanner } from '@/components/auth/ReauthBanner';
+import { ConversationListContainer } from '@/components/list/ConversationList';
+import { ListHeader } from '@/components/list/ListHeader';
+import { useLabelsQuery } from '@/lib/query/hooks';
+import { mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
+import { useLayoutStore } from '@/stores/layout';
+import { useSelectionStore } from '@/stores/selection';
+import type { Account } from '@/lib/types/ipc';
+import { AccountSwitcher } from '@/components/sidebar/AccountSwitcher';
+import { CollapsedRail } from '@/components/sidebar/CollapsedRail';
+import { FolderList } from '@/components/sidebar/FolderList';
+import { LabelList } from '@/components/sidebar/LabelList';
+import {
+  Archive,
+  Mail,
+  PanelLeftClose,
+  Pencil,
+  RefreshCw,
+  Search,
+  Settings,
+  Trash2,
+} from 'lucide-react';
+import { ResizeHandle } from './ResizeHandle';
+import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
+import { StatusBar } from '@/components/statusbar/StatusBar';
+
+const navItem =
+  'flex items-center gap-3 rounded px-3 py-2 text-body-md text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
+const barIcon =
+  'rounded-full p-stack-gap-sm text-secondary hover:bg-surface-container-highest focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high';
+
+export function MailLayout({ accounts }: { accounts: Account[] }) {
+  const shell = useRef<HTMLDivElement>(null);
+  const {
+    layout,
+    density,
+    sidebarCollapsed,
+    sidebarWidth,
+    listWidth,
+    readerHeight,
+    showUnreadCounts,
+    setSidebarCollapsed,
+    setSidebarWidth,
+    setListWidth,
+    setReaderHeight,
+  } = useLayoutStore();
+  const {
+    activeThreadId,
+    activeMailboxId,
+    activeAccountId,
+    setActiveMailboxId,
+    setActiveAccountId,
+    clearSelection,
+  } = useSelectionStore();
+  const flaggedAccount = accounts.find((account) => account.needsReauthentication);
+  const hasReader =
+    layout === 'three-column' || (layout === 'bottom-preview' && activeThreadId !== null);
+  const setPane = (
+    key: '--sidebar-w' | '--list-w' | '--reader-h',
+    value: number,
+    update: (value: number) => void,
+  ) => {
+    shell.current?.style.setProperty(key, key === '--reader-h' ? `${value}%` : `${value}px`);
+    update(value);
+  };
+  const labelsQuery = useLabelsQuery(activeAccountId);
+  const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
+  const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
+  const selectMailbox = (id: string) => setActiveMailboxId(id);
+  // Sync status is re-seeded by `StatusBar`'s own effect whenever the
+  // `accountId` prop it's handed here changes — a single source of truth
+  // instead of a second hydrate call racing it.
+  const selectAccount = useCallback(
+    (id: string) => {
+      setActiveAccountId(id);
+      setActiveMailboxId('INBOX');
+      clearSelection();
+    },
+    [setActiveAccountId, setActiveMailboxId, clearSelection],
+  );
+  // Fresh launch selects the first account and Inbox; neither is restored
+  // across launches (selection is Zustand/UI-origin state, never persisted).
+  useEffect(() => {
+    if (activeAccountId === null && accounts.length > 0) selectAccount(accounts[0].id);
+  }, [accounts, activeAccountId, selectAccount]);
+  const openSettings = () => useLayoutStore.getState().setRoute('settings');
+  const sidebar = sidebarCollapsed ? (
+    <CollapsedRail
+      accounts={accounts}
+      activeAccountId={activeAccountId}
+      activeMailboxId={activeMailboxId ?? 'INBOX'}
+      mailboxes={mailboxes}
+      onSelectAccount={selectAccount}
+      onSelectMailbox={selectMailbox}
+      onExpand={() => setSidebarCollapsed(false)}
+      onSettings={openSettings}
+    />
+  ) : (
+    <aside
+      data-testid="sidebar-slot"
+      className="flex min-h-0 min-w-0 flex-col border-r border-outline-variant bg-background p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-background"
+    >
+      <div className="mb-8 flex items-center gap-3 px-2 text-primary dark:text-dark-primary">
+        <Mail aria-hidden="true" size={30} />
+        <span className="text-headline-md">LatentMail</span>
+      </div>
+      <button
+        type="button"
+        disabled
+        title="Compose is not yet available"
+        className="mb-8 flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-label-md text-on-primary shadow-sm disabled:cursor-not-allowed disabled:opacity-100 dark:bg-dark-primary dark:text-dark-on-primary"
+      >
+        <Pencil aria-hidden="true" size={20} />
+        Compose
+      </button>
+      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+        <FolderList
+          activeMailboxId={activeMailboxId ?? 'INBOX'}
+          mailboxes={mailboxes}
+          showUnreadCounts={showUnreadCounts}
+          onSelect={selectMailbox}
+        />
+        <LabelList
+          activeMailboxId={activeMailboxId}
+          labels={labels}
+          showUnreadCounts={showUnreadCounts}
+          onSelect={selectMailbox}
+        />
+        <button
+          type="button"
+          aria-label="Collapse sidebar"
+          onClick={() => setSidebarCollapsed(true)}
+          className={`mt-auto ${navItem}`}
+        >
+          <PanelLeftClose aria-hidden="true" size={20} />
+          Collapse
+        </button>
+        <button type="button" onClick={openSettings} className={navItem}>
+          <Settings aria-hidden="true" size={20} />
+          Settings
+        </button>
+      </div>
+      <div className="mt-4 border-t border-outline-variant pt-4 dark:border-dark-outline-variant">
+        <AccountSwitcher
+          accounts={accounts}
+          activeAccountId={activeAccountId}
+          collapsed={false}
+          onSelect={selectAccount}
+        />
+      </div>
+    </aside>
+  );
+  const topBar = (
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface">
+      <div className="flex h-full items-end gap-6">
+        <span className="flex h-full items-center border-b-2 border-primary px-2 pb-1 text-title-lg text-primary dark:border-dark-primary dark:text-dark-primary">
+          All Mail
+        </span>
+        <span className="flex h-full items-center border-b-2 border-transparent px-2 pb-1 text-title-lg text-secondary dark:text-dark-secondary">
+          Unread
+        </span>
+        <span className="flex h-full items-center border-b-2 border-transparent px-2 pb-1 text-title-lg text-secondary dark:text-dark-secondary">
+          Starred
+        </span>
+      </div>
+      <div className="ml-auto flex items-center gap-4">
+        <div className="mr-2 flex h-8 w-64 items-center gap-2 rounded-full bg-surface-container-low pl-3 pr-4 text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
+          <Search aria-hidden="true" size={20} />
+          <span className="text-body-sm">Search mail...</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button type="button" aria-label="Refresh mail" className={barIcon}>
+            <RefreshCw aria-hidden="true" size={20} />
+          </button>
+          <button
+            type="button"
+            aria-label="Archive"
+            disabled
+            className={`${barIcon} disabled:opacity-100`}
+          >
+            <Archive aria-hidden="true" size={20} />
+          </button>
+          <button
+            type="button"
+            aria-label="Delete"
+            disabled
+            className={`${barIcon} disabled:opacity-100`}
+          >
+            <Trash2 aria-hidden="true" size={20} />
+          </button>
+        </div>
+        <button
+          type="button"
+          disabled
+          title="Sync is not yet available"
+          className="ml-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-1.5 text-label-md text-primary shadow-sm disabled:opacity-100 dark:border-dark-outline-variant dark:bg-dark-surface-container dark:text-dark-primary"
+        >
+          Sync
+        </button>
+      </div>
+    </header>
+  );
+  const list = (
+    <section
+      data-testid="list-slot"
+      className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-outline-variant/40 bg-surface dark:border-dark-outline-variant dark:bg-dark-surface-container"
+    >
+      {flaggedAccount && <ReauthBanner accountId={flaggedAccount.id} />}
+      <ListHeader />
+      <ConversationListContainer />
+    </section>
+  );
+  const reader = (
+    <section
+      data-testid="reader-slot"
+      className="min-h-0 min-w-0 overflow-hidden bg-surface-bright dark:bg-dark-surface-container-high"
+    >
+      <ReadingPaneContainer threadId={activeThreadId} />
+    </section>
+  );
+  const readerResize = (offset: number) =>
+    setPane(
+      '--reader-h',
+      readerHeight + (offset / (shell.current?.clientHeight || 1)) * 100,
+      setReaderHeight,
+    );
+  const body: ReactNode =
+    layout === 'three-column' ? (
+      <main
+        className="grid min-h-0 flex-1"
+        style={{ gridTemplateColumns: 'var(--list-w) auto 1fr' }}
+      >
+        {list}
+        <ResizeHandle
+          ariaLabel="Resize conversation list"
+          orientation="vertical"
+          onResize={(offset) => setPane('--list-w', listWidth + offset, setListWidth)}
+        />
+        {reader}
+      </main>
+    ) : layout === 'bottom-preview' && hasReader ? (
+      <main
+        className="grid min-h-0 flex-1"
+        style={{ gridTemplateRows: '1fr auto var(--reader-h)' }}
+      >
+        {list}
+        <ResizeHandle ariaLabel="Resize reader" orientation="horizontal" onResize={readerResize} />
+        {reader}
+      </main>
+    ) : (
+      <main className="flex min-h-0 flex-1 flex-col">{list}</main>
+    );
+  return (
+    <div
+      ref={shell}
+      data-testid="mail-layout"
+      data-layout={layout}
+      data-density={density}
+      style={
+        {
+          '--sidebar-w': sidebarCollapsed ? '56px' : `${sidebarWidth}px`,
+          '--list-w': `${listWidth}px`,
+          '--reader-h': `${readerHeight}%`,
+        } as CSSProperties
+      }
+      className="grid h-screen grid-rows-app-shell overflow-hidden bg-surface dark:bg-dark-surface"
+    >
+      <div
+        className="grid min-h-0"
+        style={{
+          gridTemplateColumns: sidebarCollapsed
+            ? 'var(--sidebar-w) 1fr'
+            : 'var(--sidebar-w) auto 1fr',
+        }}
+      >
+        {sidebar}
+        {!sidebarCollapsed && (
+          <ResizeHandle
+            ariaLabel="Resize sidebar"
+            orientation="vertical"
+            onResize={(offset) => setPane('--sidebar-w', sidebarWidth + offset, setSidebarWidth)}
+          />
+        )}
+        <div className="flex min-h-0 min-w-0 flex-col">
+          {topBar}
+          {body}
+        </div>
+      </div>
+      <StatusBar accountCount={accounts.length} accountId={activeAccountId} />
+    </div>
+  );
+}

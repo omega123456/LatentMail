@@ -1,0 +1,61 @@
+import type { IpcCommandMap } from '@/lib/types/ipc';
+
+export const sidebarAccounts = [
+  {
+    id: 'account-1',
+    email: 'alex@example.com',
+    displayName: 'Alex Morgan',
+    avatarUrl: null,
+    needsReauthentication: false,
+  },
+  {
+    id: 'account-2',
+    email: 'reauth@example.com',
+    displayName: 'Reauth Account',
+    avatarUrl: null,
+    needsReauthentication: true,
+  },
+] satisfies IpcCommandMap['list_accounts']['result'];
+
+export const sidebarMailboxes = [
+  { id: 'INBOX', name: 'Inbox', unreadCount: 3 },
+  { id: 'STARRED', name: 'Starred', unreadCount: 0 },
+  { id: 'DRAFT', name: 'Drafts', unreadCount: 1 },
+  { id: 'SENT', name: 'Sent', unreadCount: 0 },
+  { id: 'SPAM', name: 'Spam', unreadCount: 0 },
+  { id: 'TRASH', name: 'Trash', unreadCount: 0 },
+];
+
+export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result'] } = {
+  health_check: { status: 'ok' },
+  open_external_url: undefined,
+  write_frontend_log: undefined,
+  read_settings: {
+    theme: 'system',
+    layout: 'three-column',
+    density: 'comfortable',
+    sidebarCollapsed: false,
+    sidebarWidth: 260,
+    listWidth: 350,
+    readerHeight: 40,
+    syncOnStartup: true,
+    showUnreadCounts: true,
+    syncIntervalMinutes: 5,
+  },
+  write_setting: undefined,
+  pause_queue: { pending: 0, active: 0, failed: 0, done: 0, paused: true },
+  resume_queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false },
+  read_queue_summary: { pending: 0, active: 0, failed: 0, done: 0, paused: false },
+  list_accounts: [],
+  begin_sign_in: undefined,
+  begin_reauthentication: undefined,
+  list_labels: [],
+  list_threads: { items: [], nextCursor: null },
+  load_conversation: { threadId: '', subject: '', messages: [] },
+  trigger_sync: { accountId: '', state: 'idle', lastSyncedAt: null, lastError: null },
+  read_sync_status: { accountId: '', state: 'idle', lastSyncedAt: null, lastError: null },
+  star_thread: undefined,
+  unstar_thread: undefined,
+  mark_thread_read: undefined,
+  mark_thread_unread: undefined,
+};
