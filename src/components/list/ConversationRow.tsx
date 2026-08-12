@@ -81,8 +81,14 @@ export function ConversationRow({
             <span
               key={label}
               title={label}
-              className="size-chip-dot rounded-full bg-tertiary-container dark:bg-dark-tertiary-container"
-            />
+              className={
+                spacious
+                  ? 'rounded-sm bg-tertiary-container px-2 py-0.5 text-label-sm text-on-tertiary-container dark:bg-dark-tertiary-container dark:text-dark-on-tertiary-container'
+                  : 'size-chip-dot rounded-full bg-tertiary-container dark:bg-dark-tertiary-container'
+              }
+            >
+              {spacious ? label : null}
+            </span>
           ))}
         </span>
       )}

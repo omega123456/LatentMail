@@ -31,9 +31,10 @@ use tokio::sync::{oneshot, watch, Mutex as AsyncMutex};
 
 use crate::{
     auth::AuthService,
-    gmail::{GmailClient, GmailError, GmailLabel, GmailMessage},
+    gmail::{GmailClient, GmailError, GmailLabel, GmailMessage, GmailRateLimiters},
     queue::{
-        Executor, Lane, OperationFuture, OperationKind, QueueEngine, QueueError, QueueOperation,
+        Executor, Lane, OperationFuture, OperationKind, QueueEngine, QueueError, QueueEventSink,
+        QueueOperation,
     },
     settings::SettingsService,
     storage::{
@@ -96,6 +97,15 @@ pub fn create_queue_engine(
     burst: u32,
     registry: Arc<WorkRegistry>,
 ) -> Arc<QueueEngine> {
+    create_queue_engine_with_events(rate_per_second, burst, registry, Arc::new(|_, _| {}))
+}
+
+pub fn create_queue_engine_with_events(
+    rate_per_second: u32,
+    burst: u32,
+    registry: Arc<WorkRegistry>,
+    events: QueueEventSink,
+) -> Arc<QueueEngine> {
     let executor: Executor = Arc::new(move |operation: QueueOperation| -> OperationFuture {
         let registry = Arc::clone(&registry);
         Box::pin(async move {
@@ -105,7 +115,7 @@ pub fn create_queue_engine(
             }
         })
     });
-    QueueEngine::new(rate_per_second, burst, executor)
+    QueueEngine::new_with_events(rate_per_second, burst, executor, events)
 }
 
 /// Submits `future` as a single background-lane operation for `account_id`
@@ -154,7 +164,7 @@ where
         // token bucket; this queue-level cost only paces *concurrent sync
         // runs*, so a nominal value is sufficient. Revisit if per-request
         // queue-level pacing is ever required.
-        cost: 5,
+        cost: 0,
         attempts: 0,
     };
     queue
@@ -174,6 +184,9 @@ pub enum SyncError {
     Storage(StorageError),
     QueueStopped,
     UnknownAccount,
+    /// A failure fanned out to every waiter of a coalesced batch, kept as a
+    /// string because `GmailError`/`StorageError` are not `Clone`.
+    Failed(String),
 }
 
 impl std::fmt::Display for SyncError {
@@ -183,6 +196,7 @@ impl std::fmt::Display for SyncError {
             Self::Storage(error) => write!(f, "storage error: {error}"),
             Self::QueueStopped => write!(f, "sync queue is no longer accepting work"),
             Self::UnknownAccount => write!(f, "unknown account"),
+            Self::Failed(message) => write!(f, "{message}"),
         }
     }
 }
@@ -273,6 +287,10 @@ pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
 // Engine
 // ---------------------------------------------------------------------
 
+/// Pending label mutations grouped by `(account, label, present)`.
+type MutationBatches =
+    std::collections::HashMap<(String, &'static str, bool), Vec<PendingMutation>>;
+
 pub struct SyncEngine {
     storage: Storage,
     queue: Arc<QueueEngine>,
@@ -280,8 +298,8 @@ pub struct SyncEngine {
     events: EventSink,
     status: AsyncMutex<std::collections::HashMap<String, AccountStatus>>,
     op_counter: AtomicU64,
-    mutation_batches:
-        AsyncMutex<std::collections::HashMap<(String, &'static str, bool), Vec<PendingMutation>>>,
+    mutation_batches: AsyncMutex<MutationBatches>,
+    gmail_limiters: GmailRateLimiters,
 }
 
 impl SyncEngine {
@@ -299,7 +317,17 @@ impl SyncEngine {
             status: AsyncMutex::new(std::collections::HashMap::new()),
             op_counter: AtomicU64::new(0),
             mutation_batches: AsyncMutex::new(std::collections::HashMap::new()),
+            gmail_limiters: GmailRateLimiters::default(),
         })
+    }
+
+    pub async fn gmail_client(
+        &self,
+        account_id: &str,
+        token: String,
+        base_url: String,
+    ) -> GmailClient {
+        GmailClient::for_account(account_id, token, base_url, &self.gmail_limiters).await
     }
 
     fn next_op_id(&self, account_id: &str) -> String {
@@ -342,7 +370,9 @@ impl SyncEngine {
         if !leader {
             return result.await.map_err(|_| SyncError::QueueStopped)?;
         }
-        tokio::task::yield_now().await;
+        // A tiny coalescing window lets concurrently dispatched UI mutations
+        // join this Gmail batch; tests drive it with Tokio's mock clock.
+        tokio::time::sleep(Duration::from_millis(1)).await;
         let pending = self
             .mutation_batches
             .lock()
@@ -378,7 +408,23 @@ impl SyncEngine {
                             .flat_map(|request| request.messages.iter())
                             .map(|message| message.id.clone())
                             .collect::<Vec<_>>();
-                        client.batch_modify(&ids, &add, &remove).await?;
+                        // Gmail accepts at most 1,000 message IDs per batch request.
+                        for ids in ids.chunks(1_000) {
+                            if let Err(error) = client.batch_modify(ids, &add, &remove).await {
+                                // Every waiter in the batch has to hear the real
+                                // error: returning early instead would drop their
+                                // reply channels, and each caller would see the
+                                // misleading `QueueStopped` message.
+                                let message = SyncError::from(error).to_string();
+                                for request in pending {
+                                    let _ = request
+                                        .reply
+                                        .send(Err(SyncError::Failed(message.clone())));
+                                }
+                                return Err(SyncError::Failed(message));
+                            }
+                        }
+                        let mut write_failed = false;
                         for request in pending {
                             let mutation_result = async {
                                 for message in request.messages {
@@ -391,7 +437,7 @@ impl SyncEngine {
                                             MessageRepository::write_mutation_history(
                                                 connection,
                                                 &account,
-                                                &[id.clone()],
+                                                std::slice::from_ref(&id),
                                                 updated.history_id,
                                             )?;
                                             MessageRepository::set_label_membership(
@@ -406,17 +452,23 @@ impl SyncEngine {
                                 Ok::<(), SyncError>(())
                             }
                             .await;
+                            write_failed |= mutation_result.is_err();
                             let _ = request.reply.send(mutation_result);
                         }
-                        Ok::<(), SyncError>(())
+                        if write_failed {
+                            // Each waiter already got its own error above; this
+                            // only marks the queue operation as failed.
+                            Err(SyncError::Failed("mutation write failed".into()))
+                        } else {
+                            Ok::<(), SyncError>(())
+                        }
                     }
                     .await;
-                    let outcome = if result.is_ok() {
+                    if result.is_ok() {
                         Ok(())
                     } else {
                         Err(QueueError::Permanent)
-                    };
-                    outcome
+                    }
                 })
             }),
         );
@@ -432,7 +484,7 @@ impl SyncEngine {
                     _ => OperationKind::MarkRead,
                 },
                 entity_key: format!("mutation-batch:{account_id}"),
-                cost: 5,
+                cost: 0,
                 attempts: 0,
             })
             .await
@@ -446,7 +498,7 @@ impl SyncEngine {
         SyncStatusDto {
             account_id: account_id.to_owned(),
             state: account.state.unwrap_or(SyncState::Idle),
-            last_synced_at: account.last_synced_at,
+            last_synced_at: account.last_synced_at.map(dto::to_millis),
             last_error: account.last_error,
         }
     }
@@ -922,13 +974,9 @@ impl SyncScheduler {
 /// from `lib.rs` after `auth::initialize`/`settings::initialize`, which this
 /// depends on for the `AuthService`/`SettingsService` state it reads.
 ///
-/// Deviation from a fully live "interval changes take effect instantly in
-/// the running app": `SyncScheduler::set_interval` (tested directly in
-/// `sync_history_integration.rs`) is the primitive that makes this true.
-/// Wiring the `write_setting` command to call it is deferred to Phase 18,
-/// which already owns bridging Rust-side preference changes into running
-/// UI/back-end state; this phase reads the interval once at startup, which
-/// is sufficient for every acceptance criterion checked here.
+/// The interval is read once here; later changes reach the running scheduler
+/// through `settings::write_setting`, which resolves the managed
+/// `Arc<SyncScheduler>` and calls `set_interval`.
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app
         .path()
@@ -938,11 +986,16 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let storage =
         Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?;
     let registry = WorkRegistry::new();
-    let queue = create_queue_engine(250, 250, Arc::clone(&registry));
     let handle_for_events = app.clone();
     let events: EventSink = Arc::new(move |event, payload| {
         let _ = handle_for_events.emit(event, payload);
     });
+    let queue =
+        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::clone(&events));
+    // The read commands (`list_labels`, `list_threads`, `load_conversation`)
+    // resolve `State<Storage>`, so it has to be managed and not just buried
+    // inside the engine.
+    app.manage(storage.clone());
     let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, events);
     app.manage(queue);
     app.manage(Arc::clone(&engine));
@@ -973,10 +1026,9 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                     let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
                         continue;
                     };
-                    let client = match std::env::var("LATENTMAIL_GMAIL_BASE_URL") {
-                        Ok(base_url) => GmailClient::with_base_url(token, base_url),
-                        Err(_) => GmailClient::new(token),
-                    };
+                    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
+                        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+                    let client = engine.gmail_client(&account.id, token, base_url).await;
                     let _ = engine.run_sync(&account.id, client).await;
                 }
             }

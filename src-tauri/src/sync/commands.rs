@@ -7,7 +7,6 @@ use tauri::{AppHandle, Runtime};
 
 use crate::{
     auth::AuthService,
-    gmail::GmailClient,
     sanitize::{self, CidPart},
     storage::{LabelRepository, MessageRepository, Storage, ThreadRepository},
 };
@@ -62,10 +61,20 @@ pub async fn list_threads(
     } else {
         None
     };
-    Ok(ThreadPage {
-        items: threads.into_iter().map(ThreadDto::from).collect(),
-        next_cursor,
-    })
+    let items = storage
+        .run(move |connection| {
+            threads
+                .into_iter()
+                .map(|thread| {
+                    let (snippet, labels) =
+                        ThreadRepository::row_details(connection, &thread.account_id, &thread.id)?;
+                    Ok(ThreadDto::from(thread).with_row_details(snippet, labels))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(ThreadPage { items, next_cursor })
 }
 
 #[tauri::command]
@@ -97,7 +106,7 @@ pub async fn load_conversation(
             })
             .await
             .map_err(|error| error.to_string())?;
-        let sanitized_html = match &message.html_body {
+        let (sanitized_html, remote_images_blocked) = match &message.html_body {
             Some(html) => {
                 let inline_parts = storage
                     .run(move |connection| {
@@ -121,11 +130,17 @@ pub async fn load_conversation(
                         )
                     })
                     .collect();
-                Some(sanitize::sanitize(html, &cid_map).html)
+                let sanitized = sanitize::sanitize(html, &cid_map);
+                (Some(sanitized.html), sanitized.remote_images_blocked)
             }
-            None => None,
+            None => (None, false),
         };
-        message_dtos.push(message_dto(message, label_ids, sanitized_html));
+        message_dtos.push(message_dto(
+            message,
+            label_ids,
+            sanitized_html,
+            remote_images_blocked,
+        ));
     }
 
     Ok(ConversationDto {
@@ -145,10 +160,9 @@ async fn mutate_thread<R: Runtime>(
     present: bool,
 ) -> Result<(), String> {
     let token = auth.refresh_access_token(&app, &account_id).await?;
-    let client = match std::env::var("LATENTMAIL_GMAIL_BASE_URL") {
-        Ok(url) => GmailClient::with_base_url(token, url),
-        Err(_) => GmailClient::new(token),
-    };
+    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
+        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let client = engine.gmail_client(&account_id, token, base_url).await;
     engine
         .mutate_thread(&account_id, client, thread_id, label_id, present)
         .await
@@ -206,10 +220,9 @@ pub async fn trigger_sync<R: Runtime>(
     // Mirrors the `LATENTMAIL_GOOGLE_TOKEN_URL`-style override in `auth`:
     // lets integration tests point this at a local fake Gmail server
     // instead of the real API.
-    let client = match std::env::var("LATENTMAIL_GMAIL_BASE_URL") {
-        Ok(base_url) => GmailClient::with_base_url(token, base_url),
-        Err(_) => GmailClient::new(token),
-    };
+    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
+        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let client = engine.gmail_client(&account_id, token, base_url).await;
     let engine = Arc::clone(&engine);
     let result = engine.run_sync(&account_id, client).await;
     let status = engine.status(&account_id).await;

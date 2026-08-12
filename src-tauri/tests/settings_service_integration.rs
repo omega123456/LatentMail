@@ -31,9 +31,14 @@ async fn read_and_write_setting_commands_round_trip_through_the_service() {
     let defaults = read_settings(app.state()).await.unwrap();
     assert_eq!(defaults, Settings::default());
 
-    write_setting(app.state(), "theme".into(), serde_json::json!("dark"))
-        .await
-        .unwrap();
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "theme".into(),
+        serde_json::json!("dark"),
+    )
+    .await
+    .unwrap();
 
     let updated = read_settings(app.state()).await.unwrap();
     assert_eq!(
@@ -42,6 +47,7 @@ async fn read_and_write_setting_commands_round_trip_through_the_service() {
     );
 
     let error = write_setting(
+        app.handle().clone(),
         app.state(),
         "not-a-real-key".into(),
         serde_json::json!(true),
@@ -129,4 +135,27 @@ fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window(
     initialize(app.handle()).unwrap();
 
     assert!(app.try_state::<SettingsService>().is_some());
+}
+
+/// The sync-interval preference has to reach the scheduler that is already
+/// running, otherwise it only takes effect after a restart.
+#[tokio::test]
+async fn writing_the_sync_interval_reaches_a_running_scheduler() {
+    let (app, _directory) = app_with_service();
+    app.manage(latentmail_lib::sync::SyncScheduler::start(
+        std::time::Duration::from_secs(300),
+        false,
+        || async {},
+    ));
+
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "syncIntervalMinutes".into(),
+        serde_json::json!(15),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(read_settings(app.state()).await.unwrap().sync_interval_minutes, 15);
 }

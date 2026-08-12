@@ -58,6 +58,7 @@ describe('ConversationList', () => {
       'spacious',
     );
     expect(screen.getByText(/finalized slides/)).toBeInTheDocument();
+    expect(screen.getByText('Marketing')).toBeInTheDocument();
   });
 
   it('opens and marks rows read with keyboard navigation, including clamps', () => {
@@ -84,6 +85,11 @@ describe('ConversationList', () => {
     rerender(<ConversationList state="error" onRetry={retry} />);
     await user.click(screen.getByText('Retry'));
     expect(retry).toHaveBeenCalledOnce();
+
+    // The reason Rust gave is shown inline — a bare "Couldn't load" is not
+    // something a user (or a developer) can act on.
+    rerender(<ConversationList state="error" errorMessage="no such column: snippet" />);
+    expect(screen.getByText('no such column: snippet')).toBeInTheDocument();
   });
 
   it('loads the next fixture page at the bottom and preserves the scroll anchor across prepends', () => {

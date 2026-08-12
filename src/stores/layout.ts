@@ -30,6 +30,12 @@ type LayoutState = Pick<
 
 let hydration: Promise<void> | undefined;
 
+// Drag offsets are fractional pixels/percentages; the Rust settings are `u32`
+// and reject anything else, so every pane size is rounded before it is stored.
+function clampSize(value: number, min: number, max: number) {
+  return Math.round(Math.min(max, Math.max(min, value)));
+}
+
 function persist<K extends keyof Settings>(key: K, value: Settings[K]) {
   void invoke('write_setting', { key, value }).catch(() => undefined);
 }
@@ -85,17 +91,17 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     persist('sidebarCollapsed', sidebarCollapsed);
   },
   setSidebarWidth: (sidebarWidth) => {
-    sidebarWidth = Math.min(400, Math.max(180, sidebarWidth));
+    sidebarWidth = clampSize(sidebarWidth, 180, 400);
     set({ sidebarWidth });
     persist('sidebarWidth', sidebarWidth);
   },
   setListWidth: (listWidth) => {
-    listWidth = Math.min(600, Math.max(240, listWidth));
+    listWidth = clampSize(listWidth, 240, 600);
     set({ listWidth });
     persist('listWidth', listWidth);
   },
   setReaderHeight: (readerHeight) => {
-    readerHeight = Math.min(80, Math.max(20, readerHeight));
+    readerHeight = clampSize(readerHeight, 20, 80);
     set({ readerHeight });
     persist('readerHeight', readerHeight);
   },

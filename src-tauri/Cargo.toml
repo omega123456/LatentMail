@@ -16,6 +16,7 @@ test = false
 required-features = ["app"]
 
 [build-dependencies]
+serde_json = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]

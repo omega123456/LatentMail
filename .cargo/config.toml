@@ -1,3 +1,11 @@
 [alias]
 gm-test-integration = "nextest run --features test-utils --test mutations_star_integration --test ipc_contract_integration --test storage_schema_integration --test storage_history_gate_integration --test settings_persistence_integration --test settings_service_integration --test queue_lanes_integration --test queue_retry_integration --test queue_persistence_integration --test logging_writer_integration --test sanitize_allowlist_integration --test sanitize_images_integration --test auth_service_integration --test gmail_client_integration --test gmail_payload_mapping_integration --test gmail_backoff_integration --test sync_initial_integration --test sync_history_integration --test sync_resync_integration --test sync_threads_integration"
 gm-llvm-cov = "llvm-cov nextest --features test-utils --test mutations_star_integration --test ipc_contract_integration --test storage_schema_integration --test storage_history_gate_integration --test settings_persistence_integration --test settings_service_integration --test queue_lanes_integration --test queue_retry_integration --test queue_persistence_integration --test logging_writer_integration --test sanitize_allowlist_integration --test sanitize_images_integration --test auth_service_integration --test gmail_client_integration --test gmail_payload_mapping_integration --test gmail_backoff_integration --test sync_initial_integration --test sync_history_integration --test sync_resync_integration --test sync_threads_integration --fail-under-lines 90 --fail-under-functions 90 --fail-under-regions 80"
+
+# Sign every locally run binary with a stable identity — see scripts/codesign-dev.sh.
+# macOS only; Windows and CI never see this section.
+[target.aarch64-apple-darwin]
+runner = "scripts/codesign-dev.sh"
+
+[target.x86_64-apple-darwin]
+runner = "scripts/codesign-dev.sh"

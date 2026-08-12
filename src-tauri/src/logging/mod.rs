@@ -2,7 +2,7 @@ use chrono::{Duration, NaiveDate, Utc};
 use std::{fs, path::Path};
 use tracing::Dispatch;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::{filter::LevelFilter, fmt::writer::MakeWriterExt};
 
 pub const DEFAULT_LEVEL: LevelFilter = LevelFilter::INFO;
 const FILE_PREFIX: &str = "latentmail.log.";
@@ -24,8 +24,10 @@ pub fn subscriber(
         directory,
         "latentmail.log",
     ));
+    // Tee to stdout as well as the rolling file so `pnpm dev` shows logs in the
+    // terminal; a bundled app has no console attached and simply discards them.
     let subscriber = tracing_subscriber::fmt()
-        .with_writer(writer)
+        .with_writer(writer.and(std::io::stdout))
         .with_max_level(level)
         .with_ansi(false)
         .finish();

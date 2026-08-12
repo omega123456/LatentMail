@@ -62,11 +62,14 @@ for (const theme of ['light', 'dark'] as const) {
       { list_accounts: [playwrightMailAccount] },
       undefined,
       undefined,
-      ['star_thread'],
+      // The fixture thread is already starred, so the row's control toggles
+      // *un*star — rejecting only `star_thread` left the click succeeding and
+      // the assertion passing off an unrelated toast.
+      ['star_thread', 'unstar_thread'],
     );
     await page.goto('/');
     await toggleTheme(page, theme);
-    await page.getByLabel('Star Q3 Marketing Strategy Review').click();
+    await page.getByLabel('Unstar Q3 Marketing Strategy Review', { exact: true }).click();
     await expect(page.getByRole('alert')).toHaveScreenshot(`mutation-error-toast-${theme}.png`);
     await page.getByLabel('Dismiss error').click();
   });

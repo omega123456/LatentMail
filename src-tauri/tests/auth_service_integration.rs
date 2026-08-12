@@ -38,12 +38,20 @@ async fn accounts_lists_what_is_persisted() {
     let (service, _directory) = service_with_storage();
     assert_eq!(service.accounts().await.unwrap(), Vec::new());
 
-    service
+    // The returned account is what `start()` announces on `account://state`,
+    // which is the only thing that moves the UI off the sign-in screen.
+    let saved = service
         .save_account("me@example.com".into(), "refresh-token".into(), None)
         .await
         .unwrap();
+    assert_eq!(saved.email, "me@example.com");
+    assert!(!saved.needs_reauthentication);
+    // Gmail gives us no display name, so the local part stands in — an empty
+    // one renders a blank account-switcher row and a blank avatar initial.
+    assert_eq!(saved.display_name, "me");
 
     let accounts = service.accounts().await.unwrap();
+    assert_eq!(accounts, vec![saved]);
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].email, "me@example.com");
     assert!(!accounts[0].needs_reauthentication);
@@ -204,6 +212,30 @@ async fn refresh_access_token_marks_reauthentication_after_three_consecutive_fai
         .await
         .is_err());
     assert!(service.accounts().await.unwrap()[0].needs_reauthentication);
+}
+
+#[test]
+fn client_id_prefers_the_runtime_override_and_rejects_an_empty_one() {
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "runtime-client");
+    assert_eq!(auth::client_id().unwrap(), "runtime-client");
+
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "");
+    assert_eq!(
+        auth::client_id().unwrap_err(),
+        "LATENTMAIL_GOOGLE_CLIENT_ID is not configured"
+    );
+}
+
+#[test]
+fn client_secret_is_optional_and_ignores_an_empty_value() {
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "runtime-secret");
+    assert_eq!(
+        auth::client_secret().map(|secret| secret.secret().to_owned()),
+        Some("runtime-secret".to_owned())
+    );
+
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "");
+    assert!(auth::client_secret().is_none());
 }
 
 #[tokio::test]

@@ -78,6 +78,7 @@ impl QueueError {
 
 pub type OperationFuture = Pin<Box<dyn Future<Output = Result<(), QueueError>> + Send>>;
 pub type Executor = Arc<dyn Fn(QueueOperation) -> OperationFuture + Send + Sync>;
+pub type QueueEventSink = Arc<dyn Fn(&'static str, serde_json::Value) + Send + Sync>;
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,13 +103,11 @@ struct AccountQueue {
     background: mpsc::Sender<QueueOperation>,
 }
 
-/// A small token bucket; callers supply Gmail's endpoint cost rather than the queue knowing it.
 struct TokenBucket {
     tokens: Mutex<(f64, Instant)>,
     rate: f64,
     capacity: f64,
 }
-
 impl TokenBucket {
     fn new(rate: u32, capacity: u32) -> Self {
         Self {
@@ -117,7 +116,6 @@ impl TokenBucket {
             capacity: capacity as f64,
         }
     }
-
     async fn acquire(&self, cost: u32) {
         let cost = cost as f64;
         loop {
@@ -133,9 +131,10 @@ impl TokenBucket {
                     Some(Duration::from_secs_f64((cost - state.0) / self.rate))
                 }
             };
-            match wait {
-                Some(wait) => tokio::time::sleep(wait).await,
-                None => return,
+            if let Some(wait) = wait {
+                tokio::time::sleep(wait).await;
+            } else {
+                return;
             }
         }
     }
@@ -149,21 +148,40 @@ pub struct QueueEngine {
     entity_locks: EntityLocks,
     paused: AtomicBool,
     resumed: Notify,
+    interactive_pending: Mutex<HashMap<String, usize>>,
+    interactive_drained: Notify,
+    buckets: Mutex<HashMap<String, Arc<TokenBucket>>>,
+    rate_per_second: u32,
+    burst: u32,
     counters: Counters,
-    bucket: TokenBucket,
     executor: Executor,
+    events: QueueEventSink,
 }
 
 impl QueueEngine {
     pub fn new(rate_per_second: u32, burst: u32, executor: Executor) -> Arc<Self> {
+        Self::new_with_events(rate_per_second, burst, executor, Arc::new(|_, _| {}))
+    }
+
+    pub fn new_with_events(
+        rate_per_second: u32,
+        burst: u32,
+        executor: Executor,
+        events: QueueEventSink,
+    ) -> Arc<Self> {
         Arc::new(Self {
             accounts: Mutex::new(HashMap::new()),
             entity_locks: Mutex::new(HashMap::new()),
             paused: AtomicBool::new(false),
             resumed: Notify::new(),
+            interactive_pending: Mutex::new(HashMap::new()),
+            interactive_drained: Notify::new(),
+            buckets: Mutex::new(HashMap::new()),
+            rate_per_second,
+            burst,
             counters: Counters::default(),
-            bucket: TokenBucket::new(rate_per_second, burst),
             executor,
+            events,
         })
     }
 
@@ -173,13 +191,30 @@ impl QueueEngine {
 
     pub async fn enqueue(self: &Arc<Self>, operation: QueueOperation) -> Result<(), &'static str> {
         let lane = operation.lane;
+        let account_id = operation.account_id.clone();
         let queue = self.account_queue(&operation.account_id).await;
+        if lane == Lane::Interactive {
+            *self
+                .interactive_pending
+                .lock()
+                .await
+                .entry(account_id.clone())
+                .or_default() += 1;
+        }
         self.counters.pending.fetch_add(1, Ordering::Relaxed);
         let sender = match lane {
             Lane::Interactive => queue.interactive,
             Lane::Background => queue.background,
         };
-        sender.send(operation).await.map_err(|_| "queue stopped")
+        let id = operation.id.clone();
+        if sender.send(operation).await.is_err() {
+            if lane == Lane::Interactive {
+                self.finish_interactive(&account_id).await;
+            }
+            return Err("queue stopped");
+        }
+        self.emit(&id, "queued");
+        Ok(())
     }
 
     pub fn pause(&self) {
@@ -188,6 +223,17 @@ impl QueueEngine {
     pub fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.resumed.notify_waiters();
+    }
+
+    fn emit(&self, id: &str, status: &'static str) {
+        (self.events)(
+            "queue://item",
+            serde_json::json!({ "id": id, "status": status }),
+        );
+        (self.events)(
+            "queue://summary",
+            serde_json::to_value(self.summary()).expect("QueueSummary serializes"),
+        );
     }
     pub fn summary(&self) -> QueueSummary {
         QueueSummary {
@@ -249,14 +295,24 @@ impl QueueEngine {
         let _permit = permits.acquire().await.expect("semaphore remains open");
         loop {
             self.wait_until_resumed().await;
-            self.bucket.acquire(operation.cost).await;
+            self.wait_for_interactive(&operation).await;
+            self.bucket_for(&operation.account_id)
+                .await
+                .acquire(operation.cost)
+                .await;
             self.counters.pending.fetch_sub(1, Ordering::Relaxed);
             self.counters.active.fetch_add(1, Ordering::Relaxed);
+            self.emit(&operation.id, "active");
+            if operation.lane == Lane::Interactive {
+                self.finish_interactive(&operation.account_id).await;
+                self.interactive_drained.notify_waiters();
+            }
             let result = (self.executor)(operation.clone()).await;
             self.counters.active.fetch_sub(1, Ordering::Relaxed);
             match result {
                 Ok(()) => {
                     self.counters.done.fetch_add(1, Ordering::Relaxed);
+                    self.emit(&operation.id, "done");
                     return;
                 }
                 Err(error)
@@ -266,10 +322,12 @@ impl QueueEngine {
                 {
                     operation.attempts += 1;
                     self.counters.pending.fetch_add(1, Ordering::Relaxed);
+                    self.emit(&operation.id, "retrying");
                     tokio::time::sleep(retry_delay(operation.attempts)).await;
                 }
                 Err(_) => {
                     self.counters.failed.fetch_add(1, Ordering::Relaxed);
+                    self.emit(&operation.id, "failed");
                     return;
                 }
             }
@@ -281,10 +339,48 @@ impl QueueEngine {
             self.resumed.notified().await;
         }
     }
+
+    async fn wait_for_interactive(&self, operation: &QueueOperation) {
+        while operation.lane == Lane::Background
+            && self.has_interactive(&operation.account_id).await
+        {
+            self.interactive_drained.notified().await;
+        }
+    }
+
+    async fn bucket_for(&self, account_id: &str) -> Arc<TokenBucket> {
+        let mut buckets = self.buckets.lock().await;
+        Arc::clone(
+            buckets
+                .entry(account_id.to_owned())
+                .or_insert_with(|| Arc::new(TokenBucket::new(self.rate_per_second, self.burst))),
+        )
+    }
+
+    async fn has_interactive(&self, account_id: &str) -> bool {
+        self.interactive_pending
+            .lock()
+            .await
+            .get(account_id)
+            .copied()
+            .unwrap_or(0)
+            > 0
+    }
+
+    async fn finish_interactive(&self, account_id: &str) {
+        let mut pending = self.interactive_pending.lock().await;
+        if let Some(count) = pending.get_mut(account_id) {
+            *count -= 1;
+            if *count == 0 {
+                pending.remove(account_id);
+            }
+        }
+        self.interactive_drained.notify_waiters();
+    }
 }
 
 pub fn retry_delay(attempt: u8) -> Duration {
-    Duration::from_secs(1_u64 << attempt.saturating_sub(1).min(5))
+    Duration::from_secs((1_u64 << attempt.saturating_sub(1).min(6)).min(60))
 }
 
 /// Startup recovery reads the durable subset once; the queue never polls SQLite for work.

@@ -1,4 +1,4 @@
-import { formatDistanceToNowStrict, format } from 'date-fns';
+import { formatDistanceToNowStrict, format, formatISO } from 'date-fns';
 import { formatParticipants, type Participant } from '@/lib/format/participants';
 
 export type MessageSender = Participant;
@@ -42,7 +42,7 @@ export function MessageHeader({
       <time
         title={format(sentAt, 'PPpp')}
         className="shrink-0 text-body-sm text-secondary dark:text-dark-secondary"
-        dateTime={sentAt.toISOString()}
+        dateTime={formatISO(sentAt)}
       >
         {timestamp}
       </time>

@@ -108,7 +108,10 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     assert!(invoke(
         &webview,
         "write_frontend_log",
-        serde_json::json!({ "record": { "level": "info", "message": "from ipc" } })
+        // Exactly the payload `IpcCommandMap['write_frontend_log']` sends —
+        // wrapping it in a `record` key here is what hid the argument-name
+        // mismatch that silently dropped every frontend log.
+        serde_json::json!({ "level": "info", "message": "from ipc" })
     )
     .is_ok());
     assert_eq!(

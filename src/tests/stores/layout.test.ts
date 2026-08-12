@@ -73,4 +73,26 @@ describe('layout store', () => {
       { key: 'readerHeight', value: 60 },
     ]);
   });
+
+  it('persists whole-pixel pane sizes from fractional drag offsets', async () => {
+    const store = await loadStore();
+    const writes: Array<{ key: string; value: unknown }> = [];
+    ipc.override('write_setting', (args) => {
+      writes.push(args);
+    });
+
+    // Pointer deltas are fractional; `write_setting` rejects a non-integer
+    // with "Unknown or invalid setting" because the Rust settings are `u32`.
+    store.getState().setSidebarWidth(300.4);
+    store.getState().setListWidth(420.6);
+    store.getState().setReaderHeight(60.5);
+    await Promise.resolve();
+
+    expect(writes).toEqual([
+      { key: 'sidebarWidth', value: 300 },
+      { key: 'listWidth', value: 421 },
+      { key: 'readerHeight', value: 61 },
+    ]);
+    expect(store.getState()).toMatchObject({ sidebarWidth: 300, listWidth: 421, readerHeight: 61 });
+  });
 });

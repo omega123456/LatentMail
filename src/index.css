@@ -151,14 +151,14 @@
   --spacing-stack-gap-sm: 8px;
   --spacing-stack-gap-md: 16px;
   --spacing-rail-width: 56px;
-  --spacing-row-compact: 40px;
-  --spacing-row-comfortable: 62px;
-  --spacing-row-spacious: 84px;
+  --spacing-row-compact: 44px;
+  --spacing-row-comfortable: 56px;
+  --spacing-row-spacious: 72px;
   --spacing-chip-dot: 6px;
   --spacing-handle-hit: 8px;
   --spacing-body-frame-max: 1600px;
   --sidebar-w: 260px;
   --list-w: 350px;
-  --reader-h: 50%;
+  --reader-h: 40%;
   --grid-template-rows-app-shell: 1fr auto;
 }

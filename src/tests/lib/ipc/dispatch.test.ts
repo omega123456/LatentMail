@@ -71,7 +71,11 @@ describe('IPC dispatch', () => {
     delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
     const { invoke } = await import('@/lib/ipc/commands');
 
-    expect(() => invoke('health_check', {})).toThrow('Playwright IPC router is not installed');
+    // `invoke` reports every failure as a rejection, including the ones
+    // `dispatchInvoke` raises synchronously, so callers only need one path.
+    await expect(invoke('health_check', {})).rejects.toThrow(
+      'Playwright IPC router is not installed',
+    );
     vi.unstubAllEnvs();
   });
 });

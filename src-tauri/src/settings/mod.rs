@@ -156,12 +156,31 @@ pub async fn read_settings(service: tauri::State<'_, SettingsService>) -> Result
 }
 
 #[tauri::command]
-pub async fn write_setting(
+pub async fn write_setting<R: Runtime>(
+    app: AppHandle<R>,
     service: tauri::State<'_, SettingsService>,
     key: String,
     value: Value,
 ) -> Result<(), String> {
-    service.write(key, value).await
+    service.write(key.clone(), value.clone()).await?;
+    apply_live(&app, &key, &value);
+    Ok(())
+}
+
+/// Pushes the settings that a running subsystem holds a copy of, so the
+/// preference takes effect without a restart. Currently only the sync
+/// interval qualifies; everything else is read on demand.
+fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
+    if key != "syncIntervalMinutes" {
+        return;
+    }
+    let (Some(minutes), Some(scheduler)) = (
+        value.as_u64(),
+        app.try_state::<std::sync::Arc<crate::sync::SyncScheduler>>(),
+    ) else {
+        return;
+    };
+    scheduler.set_interval(std::time::Duration::from_secs(minutes.max(1) * 60));
 }
 
 pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsService) {

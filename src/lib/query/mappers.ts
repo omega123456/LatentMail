@@ -14,16 +14,14 @@ export function mapThreadToRow(thread: MailThread): Conversation {
     id: thread.id,
     sender: thread.participants.join(', ') || '(No sender)',
     subject: thread.subject || '(No subject)',
-    // ThreadDto carries no snippet field (Phase 17's IPC surface) — the
-    // spacious-density snippet line renders blank for real data until a
-    // future phase extends the DTO.
-    snippet: '',
+    snippet: thread.snippet ?? '',
     date: new Date(thread.latestAt),
     unread: thread.isUnread,
     starred: thread.isStarred,
     hasAttachment: thread.hasAttachments,
     messageCount: thread.messageCount,
     draft: thread.hasDraft,
+    labels: thread.labelIndicators ?? [],
   };
 }
 
@@ -66,6 +64,7 @@ export function mapConversation(
       labels: message.labelIds
         .map((id) => labelNamesById.get(id))
         .filter((name): name is string => Boolean(name)),
+      remoteImagesBlocked: message.remoteImagesBlocked,
     })),
   };
 }

@@ -44,7 +44,10 @@ async fn retries_only_retryable_errors_with_exponential_backoff() {
     tokio::task::yield_now().await;
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(queue.summary().done, 1);
-    assert_eq!(retry_delay(10).as_secs(), 32);
+    // Doubling per attempt, capped at the planned 60s ceiling.
+    assert_eq!(retry_delay(6).as_secs(), 32);
+    assert_eq!(retry_delay(7).as_secs(), 60);
+    assert_eq!(retry_delay(10).as_secs(), 60);
 }
 
 #[tokio::test(start_paused = true)]

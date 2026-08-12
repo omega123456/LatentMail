@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
@@ -102,6 +102,21 @@ pub enum GmailError {
 struct Bucket {
     state: Mutex<(f64, Instant)>,
 }
+
+#[derive(Default)]
+pub struct GmailRateLimiters {
+    buckets: Mutex<HashMap<String, Arc<Bucket>>>,
+}
+impl GmailRateLimiters {
+    async fn for_account(&self, account_id: &str) -> Arc<Bucket> {
+        let mut buckets = self.buckets.lock().await;
+        Arc::clone(
+            buckets
+                .entry(account_id.to_owned())
+                .or_insert_with(|| Arc::new(Bucket::new())),
+        )
+    }
+}
 impl Bucket {
     fn new() -> Self {
         Self {
@@ -135,7 +150,7 @@ pub struct GmailClient {
     http: Client,
     base_url: String,
     access_token: String,
-    bucket: Bucket,
+    bucket: Arc<Bucket>,
 }
 impl GmailClient {
     pub fn new(access_token: impl Into<String>) -> Self {
@@ -146,8 +161,18 @@ impl GmailClient {
             http: Client::new(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             access_token: access_token.into(),
-            bucket: Bucket::new(),
+            bucket: Arc::new(Bucket::new()),
         }
+    }
+    pub async fn for_account(
+        account_id: &str,
+        access_token: impl Into<String>,
+        base_url: impl Into<String>,
+        limiters: &GmailRateLimiters,
+    ) -> Self {
+        let mut client = Self::with_base_url(access_token, base_url);
+        client.bucket = limiters.for_account(account_id).await;
+        client
     }
     pub async fn profile(&self) -> Result<Profile, GmailError> {
         let raw: RawProfile = self
@@ -378,7 +403,12 @@ impl GmailClient {
             }
             match request.send().await {
                 Ok(response) if response.status().is_success() => {
-                    return Ok(response.json().await?)
+                    // Write endpoints (`batchModify`) answer 204 with an empty
+                    // body, which is not valid JSON — read it as `null` so the
+                    // caller's `T` still deserializes.
+                    let raw = response.bytes().await?;
+                    let body: &[u8] = if raw.is_empty() { b"null" } else { &raw };
+                    return Ok(serde_json::from_slice(body)?);
                 }
                 Ok(response) => {
                     let status = response.status();
@@ -517,7 +547,8 @@ struct RawLabelChange {
 }
 
 fn map_message(raw: RawMessage) -> GmailMessage {
-    let headers = headers(raw.payload.headers.as_deref().unwrap_or_default());
+    let raw_headers = raw.payload.headers.as_deref().unwrap_or_default();
+    let headers = headers(raw_headers);
     let mut content = Content::default();
     collect_part(&raw.payload, &mut content);
     GmailMessage {
@@ -526,11 +557,15 @@ fn map_message(raw: RawMessage) -> GmailMessage {
         history_id: number(&raw.history_id),
         label_ids: raw.label_ids.unwrap_or_default(),
         snippet: raw.snippet.unwrap_or_default(),
-        sent_at: raw
-            .internal_date
-            .as_deref()
-            .and_then(|value| value.parse::<i64>().ok())
-            .map(|value| value / 1000)
+        sent_at: received_at(raw_headers)
+            .or_else(|| {
+                raw.internal_date
+                    .as_deref()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    // `internalDate` is epoch milliseconds; storage keeps seconds.
+                    .and_then(DateTime::from_timestamp_millis)
+                    .map(|value| value.timestamp())
+            })
             .or_else(|| {
                 headers
                     .get("date")
@@ -606,6 +641,21 @@ fn decode(value: &str) -> Option<Vec<u8>> {
 fn bytes_to_text(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
+/// When Gmail's own MX accepted the message — the timestamp after the final
+/// `;` of the *topmost* `Received:` hop. This is what Gmail's list shows, and
+/// it is the only field that stays right for delayed mail: `internalDate` can
+/// carry the sender's `Date:` instead, which a queued or clock-skewed sender
+/// puts hours out (a bounce queued overnight showed as the previous evening).
+fn received_at(values: &[RawHeader]) -> Option<i64> {
+    let hop = values
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("received"))?;
+    let (_, stamp) = hop.value.rsplit_once(';')?;
+    DateTime::parse_from_rfc2822(stamp.trim())
+        .ok()
+        .map(|value| value.timestamp())
+}
+
 fn headers(values: &[RawHeader]) -> HashMap<String, String> {
     values
         .iter()

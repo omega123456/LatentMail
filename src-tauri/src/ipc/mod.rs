@@ -36,19 +36,17 @@ pub enum FrontendLogLevel {
     Error,
 }
 
-#[derive(serde::Deserialize)]
-pub struct FrontendLogRecord {
-    pub level: FrontendLogLevel,
-    pub message: String,
-}
-
+/// Takes the record's fields as separate parameters on purpose: Tauri maps
+/// invoke arguments by parameter name, so a single `record` parameter would
+/// require the frontend to send `{ record: { level, message } }` — it sends
+/// `{ level, message }`, and the mismatch silently dropped every frontend log.
 #[tauri::command]
-pub fn write_frontend_log(record: FrontendLogRecord) {
-    match record.level {
-        FrontendLogLevel::Debug => tracing::debug!(target: "frontend", "{}", record.message),
-        FrontendLogLevel::Info => tracing::info!(target: "frontend", "{}", record.message),
-        FrontendLogLevel::Warn => tracing::warn!(target: "frontend", "{}", record.message),
-        FrontendLogLevel::Error => tracing::error!(target: "frontend", "{}", record.message),
+pub fn write_frontend_log(level: FrontendLogLevel, message: String) {
+    match level {
+        FrontendLogLevel::Debug => tracing::debug!(target: "frontend", "{}", message),
+        FrontendLogLevel::Info => tracing::info!(target: "frontend", "{}", message),
+        FrontendLogLevel::Warn => tracing::warn!(target: "frontend", "{}", message),
+        FrontendLogLevel::Error => tracing::error!(target: "frontend", "{}", message),
     }
 }
 

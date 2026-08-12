@@ -6,8 +6,8 @@ use std::{
 };
 
 use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
+    basic::BasicClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -26,6 +26,30 @@ const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profil
 /// server instead of the real Google endpoints.
 fn oauth_endpoint(env_key: &str, default: &str) -> String {
     std::env::var(env_key).unwrap_or_else(|_| default.to_owned())
+}
+
+/// Resolves the Google OAuth client ID. A runtime `LATENTMAIL_GOOGLE_CLIENT_ID`
+/// wins (tests and one-off overrides); otherwise the value `build.rs` baked in
+/// from `src-tauri/secrets.json`.
+pub fn client_id() -> Result<String, String> {
+    std::env::var("LATENTMAIL_GOOGLE_CLIENT_ID")
+        .ok()
+        .or_else(|| option_env!("LATENTMAIL_GOOGLE_CLIENT_ID").map(str::to_owned))
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "LATENTMAIL_GOOGLE_CLIENT_ID is not configured".to_owned())
+}
+
+/// Resolves the Google OAuth client secret, same precedence as [`client_id`].
+/// Google's token endpoint rejects a desktop client that omits it
+/// (`invalid_request: client_secret is missing`), so it is sent despite being
+/// a public, non-confidential client — PKCE remains the actual protection.
+/// Optional so tests can exchange codes against a mock endpoint without one.
+pub fn client_secret() -> Option<ClientSecret> {
+    std::env::var("LATENTMAIL_GOOGLE_CLIENT_SECRET")
+        .ok()
+        .or_else(|| option_env!("LATENTMAIL_GOOGLE_CLIENT_SECRET").map(str::to_owned))
+        .filter(|secret| !secret.is_empty())
+        .map(ClientSecret::new)
 }
 #[cfg(not(feature = "test-utils"))]
 const KEYCHAIN_SERVICE: &str = "com.latentmail.refresh-token";
@@ -80,39 +104,50 @@ impl AuthService {
         app: AppHandle<R>,
         account_id: Option<String>,
     ) -> Result<(), String> {
-        let client_id = std::env::var("LATENTMAIL_GOOGLE_CLIENT_ID")
-            .map_err(|_| "LATENTMAIL_GOOGLE_CLIENT_ID is not configured".to_owned())?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let redirect = format!("http://127.0.0.1:{port}");
-        let authorization = authorization(&client_id, &redirect)?;
-        open_consent(&app, &authorization.url)?;
-        let code = receive_code(listener, &authorization.state).await?;
-        let token = exchange_code(&client_id, &redirect, code, authorization.verifier).await?;
-        let profile = profile(token.access_token().secret()).await?;
-        let refresh = token
-            .refresh_token()
-            .ok_or_else(|| "Google did not return a refresh token".to_owned())?;
-        self.save_account(
-            profile.email_address,
-            refresh.secret().to_owned(),
-            account_id,
-        )
-        .await?;
-        Ok(())
+        async {
+            let client_id = client_id()?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|e| e.to_string())?;
+            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            let redirect = format!("http://127.0.0.1:{port}");
+            tracing::info!(target: "auth", "sign-in listening on {redirect}");
+            let authorization = authorization(&client_id, &redirect)?;
+            open_consent(&app, &authorization.url)?;
+            let code = receive_code(listener, &authorization.state).await?;
+            tracing::info!(target: "auth", "sign-in received callback, exchanging code");
+            let token = exchange_code(&client_id, &redirect, code, authorization.verifier).await?;
+            let profile = profile(token.access_token().secret()).await?;
+            let refresh = token
+                .refresh_token()
+                .ok_or_else(|| "Google did not return a refresh token".to_owned())?;
+            let account = self
+                .save_account(
+                    profile.email_address,
+                    refresh.secret().to_owned(),
+                    account_id,
+                )
+                .await?;
+            // The accounts query only refetches off this event, so without it
+            // a successful sign-in leaves the UI on the sign-in screen.
+            app.emit("account://state", account)
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        .await
+        .inspect_err(|error: &String| tracing::error!(target: "auth", "sign-in failed: {error}"))
     }
 
     /// Persists (or updates) the account discovered by a completed OAuth
-    /// exchange. Public so it can be exercised directly by integration
-    /// tests without driving the full browser-based `start()` flow.
+    /// exchange and returns it, so the caller can announce it on
+    /// `account://state`. Public so it can be exercised directly by
+    /// integration tests without driving the full browser-based `start()` flow.
     pub async fn save_account(
         &self,
         email: String,
         refresh_token: String,
         target: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<AccountDto, String> {
         let now = chrono::Utc::now().timestamp();
         let email_for_db = email.clone();
         let account = self
@@ -132,10 +167,19 @@ impl AuthService {
                 let id = existing
                     .as_ref()
                     .map_or_else(|| email_for_db.clone(), |account| account.id.clone());
+                // Gmail's profile endpoint returns only the address, and no
+                // userinfo scope is requested, so the local part is the best
+                // available name — an empty one renders a blank switcher row
+                // and a blank avatar initial.
+                let display_name = existing
+                    .as_ref()
+                    .map(|account| account.display_name.clone())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| local_part(&email_for_db));
                 let account = Account {
                     id,
                     email: email_for_db,
-                    display_name: String::new(),
+                    display_name,
                     avatar_url: None,
                     history_id: existing.as_ref().and_then(|value| value.history_id),
                     needs_reauthentication: false,
@@ -148,7 +192,7 @@ impl AuthService {
             .await
             .map_err(|error| error.to_string())?;
         save_refresh_token(&account.id, &refresh_token)?;
-        Ok(())
+        Ok(account_dto(account))
     }
 
     pub async fn mark_needs_reauthentication<R: Runtime>(
@@ -180,12 +224,15 @@ impl AuthService {
         account_id: &str,
     ) -> Result<String, String> {
         let result = async {
-            let client_id = std::env::var("LATENTMAIL_GOOGLE_CLIENT_ID")
-                .map_err(|_| "LATENTMAIL_GOOGLE_CLIENT_ID is not configured".to_owned())?;
-            let client = BasicClient::new(ClientId::new(client_id)).set_token_uri(
-                TokenUrl::new(oauth_endpoint("LATENTMAIL_GOOGLE_TOKEN_URL", TOKEN_URL))
-                    .map_err(|e| e.to_string())?,
-            );
+            let mut client = BasicClient::new(ClientId::new(client_id()?))
+                .set_auth_type(AuthType::RequestBody)
+                .set_token_uri(
+                    TokenUrl::new(oauth_endpoint("LATENTMAIL_GOOGLE_TOKEN_URL", TOKEN_URL))
+                        .map_err(|e| e.to_string())?,
+                );
+            if let Some(secret) = client_secret() {
+                client = client.set_client_secret(secret);
+            }
             let token = client
                 .exchange_refresh_token(&RefreshToken::new(load_refresh_token(account_id)?))
                 .request_async(&reqwest::Client::new())
@@ -314,12 +361,16 @@ pub async fn exchange_code(
     oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
     String,
 > {
-    let client = BasicClient::new(ClientId::new(client_id.to_owned()))
+    let mut client = BasicClient::new(ClientId::new(client_id.to_owned()))
+        .set_auth_type(AuthType::RequestBody)
         .set_token_uri(
             TokenUrl::new(oauth_endpoint("LATENTMAIL_GOOGLE_TOKEN_URL", TOKEN_URL))
                 .map_err(|e| e.to_string())?,
         )
         .set_redirect_uri(RedirectUrl::new(redirect.to_owned()).map_err(|e| e.to_string())?);
+    if let Some(secret) = client_secret() {
+        client = client.set_client_secret(secret);
+    }
     client
         .exchange_code(code)
         .set_pkce_verifier(verifier)
@@ -412,6 +463,12 @@ pub async fn begin_reauthentication<R: Runtime>(
     account_id: String,
 ) -> Result<(), String> {
     service.start(app, Some(account_id)).await
+}
+
+/// `alex.morgan@gmail.com` → `alex.morgan`. Falls back to the whole value if
+/// there is no `@`, so a malformed address still yields something readable.
+fn local_part(email: &str) -> String {
+    email.split('@').next().unwrap_or(email).to_owned()
 }
 
 fn account_dto(account: Account) -> AccountDto {

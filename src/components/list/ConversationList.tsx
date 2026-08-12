@@ -30,11 +30,15 @@ export function ConversationList({
   onRetry,
   onLoadMore,
   onThreadMutation,
+  errorMessage,
 }: {
   threads?: Conversation[];
   pages?: Conversation[][];
   state?: ListState;
   onRetry?: () => void;
+  /** What Rust actually said, shown under the error copy so a failure is
+   * diagnosable without opening the devtools console. */
+  errorMessage?: string;
   /** Real (Query-driven) usage fetches pages lazily instead of slicing an
    * already-loaded `pages` array — the container passes this instead. */
   onLoadMore?: () => void;
@@ -49,14 +53,14 @@ export function ConversationList({
   const cursor = useSelectionStore((value) => value.keyboardCursor);
   const setCursor = useSelectionStore((value) => value.setKeyboardCursor);
   const setThread = useSelectionStore((value) => value.setActiveThreadId);
-  const [page, setPage] = useState(0);
-  const [rows, setRows] = useState(() => pages?.[0] ?? threads);
+  // Only fixture pagination is local. Rust-sourced rows remain owned by Query.
+  const [fixturePage, setFixturePage] = useState(0);
   const [source, setSource] = useState(() => ({ pages, threads, mailboxId }));
   if (source.pages !== pages || source.threads !== threads || source.mailboxId !== mailboxId) {
     setSource({ pages, threads, mailboxId });
-    setPage(0);
-    setRows(pages?.[0] ?? threads);
+    setFixturePage(0);
   }
+  const rows = pages ? pages.slice(0, fixturePage + 1).flat() : threads;
   useLayoutEffect(() => {
     const parent = parentRef.current;
     if (
@@ -70,7 +74,7 @@ export function ConversationList({
     previousRows.current = rows;
     previousHeight.current = parent?.scrollHeight ?? 0;
   }, [rows]);
-  const rowHeight = density === 'compact' ? 44 : density === 'comfortable' ? 66 : 88;
+  const rowHeight = density === 'compact' ? 44 : density === 'comfortable' ? 56 : 72;
   const virtualizer = useMailVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -87,9 +91,6 @@ export function ConversationList({
       setCursor(index);
       setThread(row.id);
       if (row.unread) onThreadMutation?.(row.id, 'read');
-      setRows((current) =>
-        current.map((item, itemIndex) => (itemIndex === index ? { ...item, unread: false } : item)),
-      );
     },
     [onThreadMutation, rows, setCursor, setThread],
   );
@@ -135,6 +136,7 @@ export function ConversationList({
           >
             Retry
           </button>
+          {errorMessage && <span className="block text-body-sm">{errorMessage}</span>}
         </ErrorState>
       );
     const items = virtualizer.getVirtualItems();
@@ -159,18 +161,13 @@ export function ConversationList({
                 onStar={() => {
                   const row = rows[item.index];
                   onThreadMutation?.(row.id, row.starred ? 'unstar' : 'star');
-                  setRows((current) =>
-                    current.map((currentRow, index) =>
-                      index === item.index ? { ...currentRow, starred: !currentRow.starred } : currentRow,
-                    ),
-                  );
                 }}
               />
             </div>
           ))}
         </div>
         <p className="p-stack-gap-sm text-center text-label-sm text-secondary dark:text-dark-secondary">
-          {pages && page < pages.length - 1
+          {pages && fixturePage < pages.length - 1
             ? 'Loading more conversations…'
             : 'End of conversations'}
         </p>
@@ -178,9 +175,8 @@ export function ConversationList({
     );
   })();
   const loadNextPage = () => {
-    if (!pages || page >= pages.length - 1) return;
-    setRows((current) => [...current, ...pages[page + 1]]);
-    setPage((current) => current + 1);
+    if (!pages || fixturePage >= pages.length - 1) return;
+    setFixturePage((current) => current + 1);
   };
   return (
     <div
@@ -234,6 +230,7 @@ export function ConversationListContainer() {
     <ConversationList
       threads={rows}
       state={state}
+      errorMessage={query.error ? query.error.message : undefined}
       onRetry={() => void query.refetch()}
       onLoadMore={() => {
         if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage();

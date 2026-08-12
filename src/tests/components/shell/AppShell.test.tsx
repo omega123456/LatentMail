@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import App from '@/App';
 import { ipc } from '@/tests/ipc-mock';
+import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
 import { useSyncStore } from '@/stores/sync';
 
@@ -79,6 +80,7 @@ const conversationOne = {
       isUnread: true,
       isStarred: false,
       labelIds: ['Label_1'],
+      remoteImagesBlocked: false,
     },
   ],
 };
@@ -150,6 +152,23 @@ describe('AppShell wired to real data', () => {
     await waitFor(() =>
       expect(screen.getByText('Your Inbox is clear.')).toBeInTheDocument(),
     );
+  });
+
+  it('leaves the sign-in screen for the mail layout when sign-in announces the new account', async () => {
+    // Regression: a completed OAuth flow that emits nothing leaves the user
+    // staring at a stuck "Signing in…" button forever.
+    let accounts: (typeof accountOne)[] = [];
+    ipc.override('list_accounts', () => accounts);
+    overrideAccount('account-1', []);
+    act(() => useLayoutStore.setState({ route: 'auth' }));
+
+    render(<App />);
+    await screen.findByTestId('sign-in-screen');
+
+    accounts = [accountOne];
+    act(() => ipc.emit('account://state', accountOne));
+
+    expect(await screen.findByTestId('mail-layout')).toBeInTheDocument();
   });
 
   it('makes the reauth banner appear live from an account://state event, without any other user action', async () => {

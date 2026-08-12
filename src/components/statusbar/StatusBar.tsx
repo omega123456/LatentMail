@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { differenceInMinutes } from 'date-fns';
 import { ListChecks, Loader2, Pause, Play, RefreshCw } from 'lucide-react';
 import { exactTime } from '@/lib/format/relative-time';
 import { invoke } from '@/lib/ipc/commands';
@@ -7,7 +8,7 @@ import { useSyncStore } from '@/stores/sync';
 
 function elapsed(date: Date | null, now: Date) {
   if (!date) return 'Not yet synced';
-  const minutes = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 60_000));
+  const minutes = Math.max(0, differenceInMinutes(now, date));
   return minutes === 0 ? 'Synced just now' : `Synced ${minutes}m ago`;
 }
 

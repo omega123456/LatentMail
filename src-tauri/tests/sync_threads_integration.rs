@@ -296,3 +296,113 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
         .unwrap();
     assert_eq!(account.history_id, Some(1));
 }
+
+/// The read commands (`list_labels`, `list_threads`, `load_conversation`)
+/// resolve `State<Storage>`, which no test that manages state by hand can
+/// prove is wired: a missing `manage` only shows up at runtime as
+/// "state not managed for field `storage`".
+#[tokio::test]
+async fn initialize_manages_the_storage_the_read_commands_resolve() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    // Redirects the OS per-user data directory at an isolated temp dir so the
+    // test never touches the real machine, as in the other initialize tests.
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    std::env::set_var("APPDATA", home.path());
+    std::env::set_var("XDG_DATA_HOME", home.path());
+
+    let application = app();
+    // `settings::initialize` restores window geometry, so it needs the main
+    // window to exist.
+    tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
+        .visible(false)
+        .build()
+        .unwrap();
+    let handle = application.handle();
+    latentmail_lib::settings::initialize(handle).unwrap();
+    latentmail_lib::auth::initialize(handle).unwrap();
+
+    latentmail_lib::sync::initialize(handle).unwrap();
+
+    assert!(application.try_state::<Storage>().is_some());
+}
+
+/// Storage holds epoch seconds, but the frontend hands these straight to
+/// `new Date(...)`, which reads milliseconds — the mismatch rendered every
+/// row as January 1970.
+#[tokio::test]
+async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
+    let seconds = 1_755_000_000;
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    LabelRepository::upsert(
+        &connection,
+        &Label {
+            account_id: "account".into(),
+            id: "INBOX".into(),
+            name: "Inbox".into(),
+            kind: "system".into(),
+            color: None,
+            message_count: 1,
+            unread_count: 0,
+        },
+    )
+    .unwrap();
+    ThreadRepository::upsert(&connection, &thread("t1", seconds, false)).unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: "account".into(),
+            id: "m1".into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: "alice@example.com".into(),
+            recipients: "me@example.com".into(),
+            subject: "Subject t1".into(),
+            sent_at: seconds,
+            snippet: "hi".into(),
+            html_body: None,
+            plain_body: Some("hi".into()),
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let page = list_threads(
+        application.state(),
+        "account".into(),
+        Some("INBOX".into()),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let conversation = load_conversation(application.state(), "account".into(), "t1".into())
+        .await
+        .unwrap();
+
+    assert_eq!(page.items[0].latest_at, seconds * 1000);
+    assert_eq!(conversation.messages[0].sent_at, seconds * 1000);
+    // The cursor still travels in the storage unit — it is compared against
+    // the `latest_at` column, not turned into a Date.
+    assert_eq!(page.next_cursor.map(|cursor| cursor.latest_at), None);
+}

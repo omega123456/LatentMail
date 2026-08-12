@@ -24,12 +24,16 @@ fn resolves_cid_images_and_rewrites_remote_images() {
     assert!(result.html.contains("data:image/gif;base64"));
     assert!(!result.html.contains("tracker.example"));
     assert!(!result.html.contains("data:text"));
+    // The reader renders its "Remote images are blocked" notice off this
+    // flag; without it a real message shows placeholder gifs unexplained.
+    assert!(result.remote_images_blocked);
 }
 
 #[test]
 fn passes_through_an_already_inlined_data_image_uri_unchanged() {
     let result = sanitize(r#"<img src="data:image/png;base64,AQID">"#, &HashMap::new());
     assert!(result.html.contains("data:image/png;base64,AQID"));
+    assert!(!result.remote_images_blocked, "nothing was rewritten");
 }
 
 #[test]

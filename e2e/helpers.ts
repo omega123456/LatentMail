@@ -22,12 +22,17 @@ export async function installPlaywrightIpc(
       }
     : {};
   await page.addInitScript(
-    ({ fixtures, overrides: supplied, readerState: state, rejectedCommands }) => {
+    ({ fixtures, overrides: supplied, readerState: state, rejectedCommands, voidCommands }) => {
       const responses = { ...fixtures, ...supplied } as Record<string, unknown>;
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
         invoke: async (command) => {
           if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (command in responses) return responses[command];
+          // Serializing the fixture map into the page drops every key whose
+          // value is `undefined`, so the void-result commands (mutations,
+          // write_setting, …) arrive here looking unmocked. Their names are
+          // passed separately for exactly that reason.
+          if (voidCommands.includes(command)) return undefined;
           throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
         },
         listen: async () => () => undefined,
@@ -39,6 +44,7 @@ export async function installPlaywrightIpc(
       overrides: { ...overrides, ...syncOverride },
       readerState,
       rejectedCommands,
+      voidCommands: Object.keys(playwrightIpcFixtures),
     },
   );
 }

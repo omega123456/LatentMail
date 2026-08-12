@@ -252,6 +252,24 @@ pub struct Thread {
 }
 pub struct ThreadRepository;
 impl ThreadRepository {
+    pub fn row_details(
+        connection: &Connection,
+        account_id: &str,
+        thread_id: &str,
+    ) -> Result<(String, Vec<String>)> {
+        let snippet = connection.query_row(
+            "SELECT snippet FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at DESC, id DESC LIMIT 1",
+            params![account_id, thread_id],
+            |row| row.get(0),
+        ).optional()?.unwrap_or_default();
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT l.name FROM labels l JOIN message_labels ml ON ml.account_id=l.account_id AND ml.label_id=l.id JOIN messages m ON m.account_id=ml.account_id AND m.id=ml.message_id WHERE m.account_id=?1 AND m.thread_id=?2 AND l.kind='user' ORDER BY l.name",
+        )?;
+        let label_indicators = statement
+            .query_map(params![account_id, thread_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>>>()?;
+        Ok((snippet, label_indicators))
+    }
     pub fn upsert(connection: &Connection, thread: &Thread) -> Result<()> {
         connection.execute("INSERT INTO threads (account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(account_id,id) DO UPDATE SET subject=excluded.subject,participants=excluded.participants,latest_at=excluded.latest_at,message_count=excluded.message_count,is_unread=excluded.is_unread,is_starred=excluded.is_starred,has_attachments=excluded.has_attachments,has_draft=excluded.has_draft", params![thread.account_id,thread.id,thread.subject,thread.participants,thread.latest_at,thread.message_count,thread.is_unread,thread.is_starred,thread.has_attachments,thread.has_draft])?;
         Ok(())

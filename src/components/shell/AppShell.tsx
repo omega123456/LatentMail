@@ -3,6 +3,7 @@ import { useAccountsQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import { SignInScreen } from '@/components/auth/SignInScreen';
 import { MailLayout } from './MailLayout';
+import { Toast } from '@/components/states/Toast';
 
 export function AppShell() {
   const route = useLayoutStore((state) => state.route);
@@ -20,12 +21,14 @@ export function AppShell() {
     ((route === 'mail' || route === 'settings') && !configured)
   )
     return null;
-  if (route === 'auth') return <SignInScreen />;
-  if (route === 'settings')
-    return (
+  const content = route === 'auth' ? (
+    <SignInScreen />
+  ) : route === 'settings' ? (
       <main className="min-h-screen bg-surface p-container-padding text-headline-sm dark:bg-dark-surface">
         Settings are not yet implemented.
       </main>
-    );
-  return <MailLayout accounts={accounts ?? []} />;
+  ) : (
+    <MailLayout accounts={accounts ?? []} />
+  );
+  return <>{content}<Toast /></>;
 }

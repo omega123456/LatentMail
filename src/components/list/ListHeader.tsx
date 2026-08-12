@@ -1,7 +1,7 @@
-import { ChevronDown, LayoutPanelLeft, Rows3 } from 'lucide-react';
+import { LayoutPanelLeft, Rows3 } from 'lucide-react';
 import { useLayoutStore } from '@/stores/layout';
 
-export function ListHeader() {
+export function ListHeader({ mailboxName }: { mailboxName?: string }) {
   const cycleDensity = useLayoutStore((state) => state.cycleDensity);
   const cycleLayout = useLayoutStore((state) => state.cycleLayout);
   return (
@@ -9,16 +9,8 @@ export function ListHeader() {
       data-testid="list-header"
       className="flex items-center justify-between border-b border-outline-variant/20 bg-surface-bright/50 p-stack-gap-md backdrop-blur-sm dark:border-dark-outline-variant/40 dark:bg-dark-surface-container-high/50"
     >
+      <span className="text-title-sm">{mailboxName}</span>
       <span className="flex items-center gap-2">
-        <span className="size-4 rounded-sm border border-outline-variant bg-surface dark:border-dark-outline-variant dark:bg-dark-surface" />
-        <ChevronDown
-          aria-hidden="true"
-          size={16}
-          className="text-secondary dark:text-dark-secondary"
-        />
-      </span>
-      <span className="flex items-center gap-2">
-        <span className="text-label-sm text-secondary dark:text-dark-secondary">1-50 of 2,431</span>
         <button
           aria-label="Cycle conversation density"
           onClick={cycleDensity}

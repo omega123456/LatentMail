@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use latentmail_lib::ipc::{write_frontend_log, FrontendLogLevel, FrontendLogRecord};
+use latentmail_lib::ipc::{write_frontend_log, FrontendLogLevel};
 use latentmail_lib::logging::{cleanup, subscriber};
 use std::fs;
 use tracing::Level;
@@ -11,22 +11,10 @@ fn writer_records_frontend_messages_but_filters_debug() {
     let (subscriber, guard) = subscriber(directory.path(), LevelFilter::INFO).unwrap();
 
     tracing::dispatcher::with_default(&subscriber, || {
-        write_frontend_log(FrontendLogRecord {
-            level: FrontendLogLevel::Debug,
-            message: "filtered record".into(),
-        });
-        write_frontend_log(FrontendLogRecord {
-            level: FrontendLogLevel::Info,
-            message: "info record".into(),
-        });
-        write_frontend_log(FrontendLogRecord {
-            level: FrontendLogLevel::Warn,
-            message: "warn record".into(),
-        });
-        write_frontend_log(FrontendLogRecord {
-            level: FrontendLogLevel::Error,
-            message: "error record".into(),
-        });
+        write_frontend_log(FrontendLogLevel::Debug, "filtered record".into());
+        write_frontend_log(FrontendLogLevel::Info, "info record".into());
+        write_frontend_log(FrontendLogLevel::Warn, "warn record".into());
+        write_frontend_log(FrontendLogLevel::Error, "error record".into());
         tracing::event!(Level::DEBUG, "filtered record");
     });
     // `WorkerGuard` has no `flush()` method; its `Drop` impl blocks until all

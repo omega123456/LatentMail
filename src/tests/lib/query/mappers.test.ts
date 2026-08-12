@@ -83,6 +83,7 @@ describe('mapConversation', () => {
           isUnread: false,
           isStarred: false,
           labelIds: ['Label_1', 'INBOX'],
+          remoteImagesBlocked: true,
         },
       ],
     };
@@ -93,6 +94,7 @@ describe('mapConversation', () => {
       html: '<p>Attached slides</p>',
       text: null,
       labels: ['Work'],
+      remoteImagesBlocked: true,
     });
   });
 });

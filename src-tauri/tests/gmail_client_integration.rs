@@ -77,3 +77,55 @@ async fn client_round_trips_every_slice_endpoint_and_paginates() {
         "a"
     );
 }
+
+/// A bounce the sending host queued overnight: Gmail accepted it on Jul 23,
+/// but `internalDate` carries the sender's Jul 22 `Date:` instead. Gmail's own
+/// list shows the receipt time, so the topmost `Received:` hop wins. Values are
+/// the real ones observed against the live API.
+#[tokio::test]
+async fn message_dates_from_the_received_hop_when_internal_date_lags_behind() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/a"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "a", "threadId": "t", "historyId": "10", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "1784747859000",
+            "payload": { "headers": [
+                { "name": "Received", "value": "by 2002:a05:0000:0000:b0:123::with SMTP id x1csp1;\r\n        Thu, 23 Jul 2026 03:37:39 -0700 (PDT)" },
+                { "name": "Received", "value": "from raspberrypi.local (host.example) by mx.google.com;\r\n        Wed, 22 Jul 2026 12:17:40 -0700 (PDT)" },
+                { "name": "Date", "value": "Wed, 22 Jul 2026 20:17:39 +0100 (BST)" }
+            ] }
+        })))
+        .mount(&server)
+        .await;
+
+    let message = GmailClient::with_base_url("token", server.uri())
+        .message("a")
+        .await
+        .unwrap();
+
+    assert_eq!(message.sent_at, 1_784_803_059);
+}
+
+/// Without a `Received:` hop to read, `internalDate` still beats a divergent
+/// `Date:` header.
+#[tokio::test]
+async fn message_prefers_internal_date_over_a_divergent_date_header() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/a"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "a", "threadId": "t", "historyId": "10", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "1753267059743",
+            "payload": { "headers": [{ "name": "Date", "value": "Wed, 22 Jul 2026 19:17:39 +0000" }] }
+        })))
+        .mount(&server)
+        .await;
+
+    let message = GmailClient::with_base_url("token", server.uri())
+        .message("a")
+        .await
+        .unwrap();
+
+    assert_eq!(message.sent_at, 1_753_267_059);
+}

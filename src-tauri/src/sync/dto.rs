@@ -43,6 +43,8 @@ pub struct ThreadDto {
     pub is_starred: bool,
     pub has_attachments: bool,
     pub has_draft: bool,
+    pub snippet: String,
+    pub label_indicators: Vec<String>,
 }
 
 impl From<Thread> for ThreadDto {
@@ -51,13 +53,23 @@ impl From<Thread> for ThreadDto {
             id: thread.id,
             subject: thread.subject,
             participants: split_list(&thread.participants),
-            latest_at: thread.latest_at,
+            latest_at: to_millis(thread.latest_at),
             message_count: thread.message_count,
             is_unread: thread.is_unread,
             is_starred: thread.is_starred,
             has_attachments: thread.has_attachments,
             has_draft: thread.has_draft,
+            snippet: String::new(),
+            label_indicators: Vec::new(),
         }
+    }
+}
+
+impl ThreadDto {
+    pub fn with_row_details(mut self, snippet: String, label_indicators: Vec<String>) -> Self {
+        self.snippet = snippet;
+        self.label_indicators = label_indicators;
+        self
     }
 }
 
@@ -90,19 +102,21 @@ pub struct MessageDto {
     pub is_unread: bool,
     pub is_starred: bool,
     pub label_ids: Vec<String>,
+    pub remote_images_blocked: bool,
 }
 
 pub fn message_dto(
     message: Message,
     label_ids: Vec<String>,
     html_body: Option<String>,
+    remote_images_blocked: bool,
 ) -> MessageDto {
     MessageDto {
         id: message.id,
         sender: message.sender,
         recipients: split_list(&message.recipients),
         subject: message.subject,
-        sent_at: message.sent_at,
+        sent_at: to_millis(message.sent_at),
         snippet: message.snippet,
         html_body,
         plain_body: message.plain_body,
@@ -110,6 +124,7 @@ pub fn message_dto(
         is_unread: message.is_unread,
         is_starred: message.is_starred,
         label_ids,
+        remote_images_blocked,
     }
 }
 
@@ -128,6 +143,14 @@ pub struct SyncStatusDto {
     pub state: SyncState,
     pub last_synced_at: Option<i64>,
     pub last_error: Option<String>,
+}
+
+/// Storage keeps epoch **seconds** (the thread cursor compares against that
+/// column), but every timestamp crossing IPC is fed straight into JavaScript's
+/// `new Date(...)`, which expects **milliseconds** — without this every row
+/// renders as January 1970.
+pub(crate) fn to_millis(seconds: i64) -> i64 {
+    chrono::DateTime::from_timestamp(seconds, 0).map_or(0, |value| value.timestamp_millis())
 }
 
 fn split_list(value: &str) -> Vec<String> {

@@ -11,6 +11,8 @@ export const playwrightThreads: MailThread[] = [
     isStarred: true,
     hasAttachments: true,
     hasDraft: false,
+    snippet: "I've attached the finalized slides for tomorrow's presentation.",
+    labelIndicators: ['Work'],
   },
   {
     id: 'thread-2',
@@ -22,6 +24,8 @@ export const playwrightThreads: MailThread[] = [
     isStarred: false,
     hasAttachments: false,
     hasDraft: false,
+    snippet: 'Updated token names and contrast notes are ready for review.',
+    labelIndicators: ['Work'],
   },
   {
     id: 'thread-3',
@@ -33,6 +37,8 @@ export const playwrightThreads: MailThread[] = [
     isStarred: false,
     hasAttachments: false,
     hasDraft: false,
+    snippet: 'Please complete setup before the end of the week.',
+    labelIndicators: ['Personal'],
   },
   {
     id: 'thread-4',
@@ -44,6 +50,8 @@ export const playwrightThreads: MailThread[] = [
     isStarred: false,
     hasAttachments: false,
     hasDraft: false,
+    snippet: 'Are you free next Tuesday?',
+    labelIndicators: ['Personal'],
   },
 ];
 

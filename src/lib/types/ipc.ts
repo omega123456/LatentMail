@@ -89,6 +89,8 @@ export interface MailThread {
   isStarred: boolean;
   hasAttachments: boolean;
   hasDraft: boolean;
+  snippet?: string;
+  labelIndicators?: string[];
 }
 
 export interface ThreadCursor {
@@ -114,6 +116,7 @@ export interface ConversationMessage {
   isUnread: boolean;
   isStarred: boolean;
   labelIds: string[];
+  remoteImagesBlocked: boolean;
 }
 
 export interface Conversation {
