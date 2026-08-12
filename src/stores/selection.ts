@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useMultiSelectStore } from './multi-select';
 
 type SelectionState = {
   activeAccountId: string | null;
@@ -17,10 +18,22 @@ export const useSelectionStore = create<SelectionState>((set) => ({
   activeMailboxId: null,
   activeThreadId: null,
   keyboardCursor: null,
-  setActiveAccountId: (activeAccountId) => set({ activeAccountId }),
-  setActiveMailboxId: (activeMailboxId) =>
-    set({ activeMailboxId, activeThreadId: null, keyboardCursor: null }),
-  setActiveThreadId: (activeThreadId) => set({ activeThreadId }),
+  // Switching accounts or mailboxes, and plainly opening a conversation, are
+  // all "start fresh" actions the multi-selection store doesn't otherwise
+  // know about — clearing it here, in one place, keeps every caller (click,
+  // keyboard nav, account switcher) correct without each having to remember.
+  setActiveAccountId: (activeAccountId) => {
+    useMultiSelectStore.getState().clear();
+    set({ activeAccountId });
+  },
+  setActiveMailboxId: (activeMailboxId) => {
+    useMultiSelectStore.getState().clear();
+    set({ activeMailboxId, activeThreadId: null, keyboardCursor: null });
+  },
+  setActiveThreadId: (activeThreadId) => {
+    if (activeThreadId !== null) useMultiSelectStore.getState().clear();
+    set({ activeThreadId });
+  },
   setKeyboardCursor: (keyboardCursor) => set({ keyboardCursor }),
   clearSelection: () => set({ activeThreadId: null, keyboardCursor: null }),
 }));

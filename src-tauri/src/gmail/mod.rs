@@ -14,9 +14,27 @@ pub const MESSAGES_GET_COST: u32 = 5;
 pub const MESSAGES_MODIFY_COST: u32 = 5;
 pub const MESSAGES_BATCH_MODIFY_COST: u32 = 50;
 pub const HISTORY_LIST_COST: u32 = 2;
+// Label lifecycle and draft-deletion endpoint costs (Phase 3). Declared
+// here alongside the rest so `gmail::labels` references, rather than
+// duplicates, a single source of truth — matching every write endpoint
+// above at Gmail's standard per-write cost.
+pub const LABELS_CREATE_COST: u32 = 5;
+pub const LABELS_UPDATE_COST: u32 = 5;
+pub const LABELS_DELETE_COST: u32 = 5;
+pub const DRAFTS_DELETE_COST: u32 = 5;
+/// Cost of `GET /users/me/drafts` — used to resolve a message id to Gmail's
+/// own, distinct draft id (see [`GmailClient::list_draft_ids`]).
+pub const DRAFTS_LIST_COST: u32 = 5;
 
-const LIST_FIELDS: &str = "messages(id,threadId),nextPageToken,resultSizeEstimate";
+/// Gmail's own default listing page size — applies whenever a caller
+/// doesn't request one explicitly. The maximum is 500.
+pub const DEFAULT_PAGE_SIZE: u32 = 100;
+pub const MAX_PAGE_SIZE: u32 = 500;
+
+const LIST_FIELDS: &str = "messages(id,threadId),nextPageToken";
 const MESSAGE_FIELDS: &str = "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers,body,parts,filename,mimeType,partId)";
+
+pub mod labels;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
@@ -25,6 +43,14 @@ pub struct Profile {
     pub threads_total: i64,
     pub history_id: i64,
 }
+/// Gmail's text/background colour pair for a user label (D10). The palette
+/// of valid pairs lives in [`labels::LABEL_PALETTE`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LabelColorPair {
+    pub text_color: String,
+    pub background_color: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GmailLabel {
     pub id: String,
@@ -32,7 +58,7 @@ pub struct GmailLabel {
     pub kind: String,
     pub message_count: i64,
     pub unread_count: i64,
-    pub color: Option<String>,
+    pub color: Option<LabelColorPair>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageRef {
@@ -43,6 +69,24 @@ pub struct MessageRef {
 pub struct Page<T> {
     pub items: Vec<T>,
     pub next_page_token: Option<String>,
+}
+/// Listing options every enumeration call now takes explicitly (Phase 3):
+/// whether to include Spam and Trash (excluded by default) and the page
+/// size to request (Gmail defaults to 100, capped at [`MAX_PAGE_SIZE`]).
+/// Backfill/reconciliation (Phase 4/5) always set both; ordinary listing
+/// keeps [`ListOptions::default`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListOptions {
+    pub include_spam_and_trash: bool,
+    pub page_size: u32,
+}
+impl Default for ListOptions {
+    fn default() -> Self {
+        Self {
+            include_spam_and_trash: false,
+            page_size: DEFAULT_PAGE_SIZE,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InlinePart {
@@ -99,42 +143,56 @@ pub enum GmailError {
     Response(#[from] serde_json::Error),
 }
 
-struct Bucket {
-    state: Mutex<(f64, Instant)>,
+/// The account-wide sustained Gmail quota, conservatively calibrated per
+/// D9: Google's published per-user limit disagrees across sources (6,000 or
+/// 15,000 units/minute), so pacing takes the lower, conservative figure —
+/// under-consuming costs throughput, over-consuming produces sustained
+/// rate-limit responses. Replaces the previous hard-coded 250/sec.
+pub const ACCOUNT_RATE_PER_SECOND: f64 = 100.0;
+
+/// The fixed share of the account's quota available to traversal-class work
+/// (whole-mailbox backfill/reconciliation). Traversal is capped at this
+/// share so a saturating traversal can never starve non-traversal work —
+/// interactive actions, polling and body fetches — which stays uncapped and
+/// draws from the whole account budget (see D4).
+pub const TRAVERSAL_SHARE: f64 = 0.4;
+
+/// Which quota class a [`GmailClient`] draws from. Traversal-class requests
+/// additionally pass through a capped, class-scoped bucket before drawing
+/// from the same account-wide bucket every other request uses — see
+/// [`GmailClient::traversal_scoped`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuotaClass {
+    Standard,
+    Traversal,
 }
 
-#[derive(Default)]
-pub struct GmailRateLimiters {
-    buckets: Mutex<HashMap<String, Arc<Bucket>>>,
-}
-impl GmailRateLimiters {
-    async fn for_account(&self, account_id: &str) -> Arc<Bucket> {
-        let mut buckets = self.buckets.lock().await;
-        Arc::clone(
-            buckets
-                .entry(account_id.to_owned())
-                .or_insert_with(|| Arc::new(Bucket::new())),
-        )
-    }
+struct Bucket {
+    state: Mutex<(f64, Instant)>,
+    rate: f64,
+    capacity: f64,
 }
 impl Bucket {
-    fn new() -> Self {
+    fn new(rate: f64, capacity: f64) -> Self {
         Self {
-            state: Mutex::new((250.0, Instant::now())),
+            state: Mutex::new((capacity, Instant::now())),
+            rate,
+            capacity,
         }
     }
     async fn acquire(&self, cost: u32) {
+        let cost = cost as f64;
         loop {
             let wait = {
                 let mut state = self.state.lock().await;
                 let now = Instant::now();
-                state.0 = (state.0 + (now - state.1).as_secs_f64() * 250.0).min(250.0);
+                state.0 = (state.0 + (now - state.1).as_secs_f64() * self.rate).min(self.capacity);
                 state.1 = now;
-                if state.0 >= cost as f64 {
-                    state.0 -= cost as f64;
+                if state.0 >= cost {
+                    state.0 -= cost;
                     None
                 } else {
-                    Some(Duration::from_secs_f64((cost as f64 - state.0) / 250.0))
+                    Some(Duration::from_secs_f64((cost - state.0) / self.rate))
                 }
             };
             if let Some(wait) = wait {
@@ -146,11 +204,48 @@ impl Bucket {
     }
 }
 
+/// Per-account bucket pair: `shared` paces every request against the whole
+/// account budget; `traversal` additionally paces traversal-class requests
+/// against their capped share. Traversal always draws from both, so its
+/// consumption is still accounted against the shared total.
+struct AccountBuckets {
+    shared: Bucket,
+    traversal: Bucket,
+}
+impl AccountBuckets {
+    fn new() -> Self {
+        Self {
+            shared: Bucket::new(ACCOUNT_RATE_PER_SECOND, ACCOUNT_RATE_PER_SECOND),
+            traversal: Bucket::new(
+                ACCOUNT_RATE_PER_SECOND * TRAVERSAL_SHARE,
+                ACCOUNT_RATE_PER_SECOND * TRAVERSAL_SHARE,
+            ),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct GmailRateLimiters {
+    accounts: Mutex<HashMap<String, Arc<AccountBuckets>>>,
+}
+impl GmailRateLimiters {
+    async fn for_account(&self, account_id: &str) -> Arc<AccountBuckets> {
+        let mut accounts = self.accounts.lock().await;
+        Arc::clone(
+            accounts
+                .entry(account_id.to_owned())
+                .or_insert_with(|| Arc::new(AccountBuckets::new())),
+        )
+    }
+}
+
+#[derive(Clone)]
 pub struct GmailClient {
     http: Client,
     base_url: String,
     access_token: String,
-    bucket: Arc<Bucket>,
+    buckets: Arc<AccountBuckets>,
+    quota_class: QuotaClass,
 }
 impl GmailClient {
     pub fn new(access_token: impl Into<String>) -> Self {
@@ -161,7 +256,8 @@ impl GmailClient {
             http: Client::new(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             access_token: access_token.into(),
-            bucket: Arc::new(Bucket::new()),
+            buckets: Arc::new(AccountBuckets::new()),
+            quota_class: QuotaClass::Standard,
         }
     }
     pub async fn for_account(
@@ -171,8 +267,24 @@ impl GmailClient {
         limiters: &GmailRateLimiters,
     ) -> Self {
         let mut client = Self::with_base_url(access_token, base_url);
-        client.bucket = limiters.for_account(account_id).await;
+        client.buckets = limiters.for_account(account_id).await;
         client
+    }
+    /// A client that shares this one's account-wide limiter (existing call
+    /// sites are unchanged — see D4) but is tagged traversal-class, so its
+    /// requests are additionally capped at [`TRAVERSAL_SHARE`] of the
+    /// account's rate. Non-traversal work never calls this and stays
+    /// uncapped.
+    pub fn traversal_scoped(&self) -> Self {
+        let mut client = self.clone();
+        client.quota_class = QuotaClass::Traversal;
+        client
+    }
+    async fn acquire(&self, cost: u32) {
+        if self.quota_class == QuotaClass::Traversal {
+            self.buckets.traversal.acquire(cost).await;
+        }
+        self.buckets.shared.acquire(cost).await;
     }
     pub async fn profile(&self) -> Result<Profile, GmailError> {
         let raw: RawProfile = self
@@ -201,7 +313,15 @@ impl GmailClient {
                     .to_ascii_lowercase(),
                 message_count: label.messages_total.unwrap_or(0),
                 unread_count: label.messages_unread.unwrap_or(0),
-                color: label.color.and_then(|value| value.background_color),
+                color: label.color.and_then(|value| {
+                    match (value.text_color, value.background_color) {
+                        (Some(text_color), Some(background_color)) => Some(LabelColorPair {
+                            text_color,
+                            background_color,
+                        }),
+                        _ => None,
+                    }
+                }),
             })
             .collect())
     }
@@ -210,23 +330,32 @@ impl GmailClient {
         label_ids: &[String],
         page_token: Option<&str>,
     ) -> Result<Page<MessageRef>, GmailError> {
-        self.list_messages_page_matching(label_ids, None, page_token)
-            .await
+        self.list_messages_page_matching(
+            label_ids,
+            None,
+            page_token,
+            ListOptions::default(),
+        )
+        .await
     }
     pub async fn list_all_messages(
         &self,
         label_ids: &[String],
     ) -> Result<Vec<MessageRef>, GmailError> {
-        self.list_all_messages_matching(label_ids, None).await
+        self.list_all_messages_matching(label_ids, None, ListOptions::default())
+            .await
     }
     /// Same as [`Self::list_messages_page`] but with an optional Gmail
     /// search `q` filter (e.g. `newer_than:30d`), used by initial/full sync
-    /// to bound the first fetch to roughly the last 30 days.
+    /// to bound the first fetch to roughly the last 30 days, plus explicit
+    /// [`ListOptions`] — Spam/Trash inclusion and an explicit page size
+    /// (Gmail defaults to 100 and excludes Spam/Trash unless asked).
     pub async fn list_messages_page_matching(
         &self,
         label_ids: &[String],
         query_filter: Option<&str>,
         page_token: Option<&str>,
+        options: ListOptions,
     ) -> Result<Page<MessageRef>, GmailError> {
         let mut query = vec![("fields".to_owned(), LIST_FIELDS.to_owned())];
         for label in label_ids {
@@ -238,6 +367,13 @@ impl GmailClient {
         if let Some(token) = page_token {
             query.push(("pageToken".to_owned(), token.into()));
         }
+        if options.include_spam_and_trash {
+            query.push(("includeSpamTrash".to_owned(), "true".to_owned()));
+        }
+        query.push((
+            "maxResults".to_owned(),
+            options.page_size.min(MAX_PAGE_SIZE).to_string(),
+        ));
         let raw: RawMessageList = self
             .get("/users/me/messages", &query, MESSAGES_LIST_COST, false)
             .await?;
@@ -258,12 +394,13 @@ impl GmailClient {
         &self,
         label_ids: &[String],
         query_filter: Option<&str>,
+        options: ListOptions,
     ) -> Result<Vec<MessageRef>, GmailError> {
         let mut all = Vec::new();
         let mut token = None;
         loop {
             let page = self
-                .list_messages_page_matching(label_ids, query_filter, token.as_deref())
+                .list_messages_page_matching(label_ids, query_filter, token.as_deref(), options)
                 .await?;
             all.extend(page.items);
             if page.next_page_token.is_none() {
@@ -324,6 +461,35 @@ impl GmailClient {
             .await?;
         Ok(())
     }
+    /// Resolves every draft's Gmail message id to its own, *distinct* draft
+    /// id (`GET /users/me/drafts/{id}` is a different resource from
+    /// `GET /users/me/messages/{id}` — nothing about a message id is a valid
+    /// draft id). Callers that need the draft id for exactly one message
+    /// still have to page through the whole list — Gmail's API offers no
+    /// "look up the draft for this message id" endpoint.
+    pub async fn list_draft_ids(&self) -> Result<HashMap<String, String>, GmailError> {
+        let mut mapping = HashMap::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut query = vec![(
+                "fields".to_owned(),
+                "drafts(id,message/id),nextPageToken".to_owned(),
+            )];
+            if let Some(token) = &token {
+                query.push(("pageToken".to_owned(), token.clone()));
+            }
+            let raw: RawDraftList = self
+                .get("/users/me/drafts", &query, DRAFTS_LIST_COST, false)
+                .await?;
+            for draft in raw.drafts.unwrap_or_default() {
+                mapping.insert(draft.message.id, draft.id);
+            }
+            if raw.next_page_token.is_none() {
+                return Ok(mapping);
+            }
+            token = raw.next_page_token;
+        }
+    }
     pub async fn history_page(
         &self,
         start_history_id: i64,
@@ -354,7 +520,7 @@ impl GmailClient {
         cost: u32,
         history: bool,
     ) -> Result<T, GmailError> {
-        self.bucket.acquire(cost).await;
+        self.acquire(cost).await;
         self.request(
             reqwest::Method::GET,
             path,
@@ -374,7 +540,7 @@ impl GmailClient {
         cost: u32,
         history: bool,
     ) -> Result<T, GmailError> {
-        self.bucket.acquire(cost).await;
+        self.acquire(cost).await;
         self.request(method, path, std::iter::empty(), Some(body), history)
             .await
     }
@@ -463,6 +629,7 @@ struct RawLabel {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawColor {
+    text_color: Option<String>,
     background_color: Option<String>,
 }
 #[derive(Deserialize)]
@@ -518,6 +685,17 @@ struct BatchModifyRequest<'a> {
     ids: &'a [String],
     add_label_ids: &'a [String],
     remove_label_ids: &'a [String],
+}
+#[derive(Deserialize)]
+struct RawDraftList {
+    drafts: Option<Vec<RawDraft>>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
+}
+#[derive(Deserialize)]
+struct RawDraft {
+    id: String,
+    message: RawRef,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

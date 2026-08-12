@@ -14,6 +14,11 @@ description = "Enables loading a thread's sanitized message bodies."
 commands.allow = ["load_conversation"]
 
 [[permission]]
+identifier = "allow-fetch-message-body"
+description = "Enables fetching and caching a message body on demand."
+commands.allow = ["fetch_message_body"]
+
+[[permission]]
 identifier = "allow-trigger-sync"
 description = "Enables triggering initial/incremental sync for an account."
 commands.allow = ["trigger_sync"]

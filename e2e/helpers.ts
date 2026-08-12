@@ -7,6 +7,7 @@ export async function installPlaywrightIpc(
   readerState?: 'loading' | 'error',
   syncStatus?: { state: 'idle' | 'syncing' | 'error'; lastSynced: string; error?: string },
   rejectedCommands: string[] = [],
+  pendingCommands: string[] = [],
 ) {
   // `syncStatus` feeds the same `read_sync_status`/`trigger_sync` commands
   // real usage calls through `useSyncStore.hydrateSync` — a single source
@@ -22,11 +23,19 @@ export async function installPlaywrightIpc(
       }
     : {};
   await page.addInitScript(
-    ({ fixtures, overrides: supplied, readerState: state, rejectedCommands, voidCommands }) => {
+    ({
+      fixtures,
+      overrides: supplied,
+      readerState: state,
+      rejectedCommands,
+      pendingCommands,
+      voidCommands,
+    }) => {
       const responses = { ...fixtures, ...supplied } as Record<string, unknown>;
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
         invoke: async (command) => {
           if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
+          if (pendingCommands.includes(command)) return new Promise(() => undefined);
           if (command in responses) return responses[command];
           // Serializing the fixture map into the page drops every key whose
           // value is `undefined`, so the void-result commands (mutations,
@@ -44,6 +53,7 @@ export async function installPlaywrightIpc(
       overrides: { ...overrides, ...syncOverride },
       readerState,
       rejectedCommands,
+      pendingCommands,
       voidCommands: Object.keys(playwrightIpcFixtures),
     },
   );

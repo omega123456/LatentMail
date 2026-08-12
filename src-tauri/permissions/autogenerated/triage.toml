@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-mutate-threads"
+description = "Enables the generalized triage mutation (delete, move, spam, star, read/unread, labels) over a set of threads."
+commands.allow = ["mutate_threads"]
+
+[[permission]]
+identifier = "allow-mutate-messages"
+description = "Enables message-scoped triage mutation."
+commands.allow = ["mutate_messages"]
+
+[[permission]]
+identifier = "allow-delete-draft"
+description = "Enables deleting a draft through Gmail's dedicated drafts endpoint."
+commands.allow = ["delete_draft"]

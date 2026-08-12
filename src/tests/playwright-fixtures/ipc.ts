@@ -3,10 +3,11 @@
 // fixture data inline here — extend the relevant domain file instead.
 import type { IpcCommandMap } from '@/lib/types/ipc';
 import { playwrightSidebarAccounts } from './accounts';
-import { playwrightLabels } from './labels';
+import { playwrightCreatedLabel, playwrightLabels, playwrightMutationResults } from './labels';
 import { playwrightThreadPage } from './threads';
 import { playwrightConversation } from './conversations';
 import { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
+import { playwrightTraversalStatus } from './traversal';
 import { playwrightSettings } from './settings';
 import {
   playwrightPausedQueueSummary,
@@ -29,12 +30,21 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   list_labels: playwrightLabels,
   list_threads: playwrightThreadPage,
   load_conversation: playwrightConversation,
+  fetch_message_body: undefined,
   trigger_sync: playwrightTriggerSyncResult,
   read_sync_status: playwrightSyncStatus,
   star_thread: undefined,
   unstar_thread: undefined,
   mark_thread_read: undefined,
   mark_thread_unread: undefined,
+  mutate_threads: playwrightMutationResults,
+  mutate_messages: undefined,
+  delete_draft: undefined,
+  create_label: playwrightCreatedLabel,
+  rename_label: playwrightCreatedLabel,
+  recolor_label: playwrightCreatedLabel,
+  delete_label: undefined,
+  read_traversal_status: playwrightTraversalStatus,
 };
 
 export { playwrightSidebarAccounts };

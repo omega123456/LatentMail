@@ -27,12 +27,36 @@ export interface IpcCommandMap {
     args: { accountId: string; threadId: string };
     result: Conversation;
   };
+  fetch_message_body: { args: { accountId: string; messageId: string }; result: void };
   trigger_sync: { args: { accountId: string }; result: SyncStatus };
   read_sync_status: { args: { accountId: string }; result: SyncStatus };
   star_thread: { args: { accountId: string; threadId: string }; result: void };
   unstar_thread: { args: { accountId: string; threadId: string }; result: void };
   mark_thread_read: { args: { accountId: string; threadId: string }; result: void };
   mark_thread_unread: { args: { accountId: string; threadId: string }; result: void };
+  mutate_threads: {
+    args: { accountId: string; threadIds: string[]; add: string[]; remove: string[] };
+    result: MutationResult[];
+  };
+  mutate_messages: {
+    args: { accountId: string; messageIds: string[]; add: string[]; remove: string[] };
+    result: void;
+  };
+  delete_draft: { args: { accountId: string; messageId: string }; result: void };
+  create_label: {
+    args: { accountId: string; name: string; colorId?: string | null };
+    result: MailLabel;
+  };
+  rename_label: {
+    args: { accountId: string; labelId: string; name: string };
+    result: MailLabel;
+  };
+  recolor_label: {
+    args: { accountId: string; labelId: string; colorId: string };
+    result: MailLabel;
+  };
+  delete_label: { args: { accountId: string; labelId: string }; result: void };
+  read_traversal_status: { args: { accountId: string }; result: TraversalStatus };
 }
 
 export interface QueueSummary {
@@ -70,13 +94,45 @@ export interface Settings {
 export type SettingKey = keyof Settings;
 export type SettingValue = Settings[SettingKey];
 
+/** A label's real Gmail text/background colour pair (D10) — replaces the
+ * fabricated 3-colour cycle `mappers.ts` used to apply client-side. Present
+ * only on user labels. */
+export interface MailLabelColor {
+  text: string;
+  background: string;
+}
+
 export interface MailLabel {
   id: string;
   name: string;
   kind: string;
-  color: string | null;
+  color: MailLabelColor | null;
   messageCount: number;
   unreadCount: number;
+}
+
+export type MutationOutcome = 'applied' | 'superseded';
+
+export interface MutationResult {
+  threadId: string;
+  outcome: MutationOutcome;
+}
+
+export type TraversalKind = 'backfill' | 'reconciliation';
+
+/** D11: always a count, never a percentage or estimate. */
+export type TraversalState = 'notStarted' | 'backfilling' | 'reconciling' | 'complete';
+
+export interface TraversalStatus {
+  accountId: string;
+  state: TraversalState;
+  kind: TraversalKind | null;
+  discoveredCount: number;
+  persistedCount: number;
+  lastAdvancedAt: number | null;
+  /** True when the traversal is continuing from a saved checkpoint rather
+   * than starting fresh from the first page. */
+  isResumed: boolean;
 }
 
 export interface MailThread {
@@ -111,6 +167,7 @@ export interface ConversationMessage {
   sentAt: number;
   snippet: string;
   htmlBody: string | null;
+  htmlPresence: 'neverFetched' | 'present' | 'absent';
   plainBody: string | null;
   hasAttachments: boolean;
   isUnread: boolean;
@@ -150,6 +207,14 @@ export interface NewMailEvent {
   threadIds: string[];
 }
 
+export interface TraversalProgressEvent {
+  accountId: string;
+  kind: TraversalKind;
+  discoveredCount: number;
+  persistedCount: number;
+  completed: boolean;
+}
+
 export interface IpcEventMap {
   'system://health': { status: 'ok' };
   'queue://item': { id: string; status: string };
@@ -158,4 +223,5 @@ export interface IpcEventMap {
   'sync://progress': SyncProgressEvent;
   'sync://complete': SyncCompleteEvent;
   'mail://new': NewMailEvent;
+  'sync://traversal': TraversalProgressEvent;
 }

@@ -3,6 +3,7 @@ import { differenceInMinutes } from 'date-fns';
 import { ListChecks, Loader2, Pause, Play, RefreshCw } from 'lucide-react';
 import { exactTime } from '@/lib/format/relative-time';
 import { invoke } from '@/lib/ipc/commands';
+import { useTraversalStatusQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import { useSyncStore } from '@/stores/sync';
 
@@ -66,8 +67,26 @@ function LeftZone({ accountId }: { accountId: string | null }) {
   );
 }
 
-function ProgressZone() {
+function ProgressZone({ accountId }: { accountId: string | null }) {
   const syncing = useSyncStore((state) => state.syncState === 'syncing');
+  const traversal = useTraversalStatusQuery(accountId);
+  const status = traversal.data;
+  if (status?.state === 'backfilling') {
+    const verb = status.isResumed ? 'Resuming backfill' : 'Backfilling';
+    return (
+      <div className="flex items-center gap-stack-gap-sm tabular-nums">
+        <Loader2 aria-hidden="true" size={16} className="animate-spin" />
+        <span>{`${verb} · ${status.persistedCount.toLocaleString()} / ${status.discoveredCount.toLocaleString()}`}</span>
+      </div>
+    );
+  }
+  if (status?.state === 'reconciling')
+    return (
+      <div className="flex items-center gap-stack-gap-sm tabular-nums">
+        <Loader2 aria-hidden="true" size={16} className="animate-spin" />
+        <span>{`Reconciling · ${status.persistedCount.toLocaleString()} / ${status.discoveredCount.toLocaleString()}`}</span>
+      </div>
+    );
   return syncing ? (
     <div className="flex items-center gap-stack-gap-sm">
       <Loader2 aria-hidden="true" size={16} className="animate-spin" />
@@ -115,7 +134,7 @@ export function StatusBar({
     >
       <LeftZone accountId={accountId} />
       <div className="justify-self-center">
-        <ProgressZone />
+        <ProgressZone accountId={accountId} />
       </div>
       <div className="justify-self-end">
         <RightZone accountCount={accountCount} />

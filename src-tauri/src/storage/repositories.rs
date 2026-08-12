@@ -1,4 +1,7 @@
+use std::collections::HashSet;
+
 use rusqlite::{params, Connection, OptionalExtension, Result};
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
@@ -41,26 +44,66 @@ impl AccountRepository {
     }
 }
 
+/// A label's Gmail text/background colour pair (D10). Present only on user
+/// labels, never on system labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelColor {
+    pub text: String,
+    pub background: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     pub account_id: String,
     pub id: String,
     pub name: String,
     pub kind: String,
-    pub color: Option<String>,
+    pub color: Option<LabelColor>,
     pub message_count: i64,
     pub unread_count: i64,
 }
+
+/// Reserved system-label names a user label may not collide with, checked
+/// case-insensitively. Gmail's own category labels share this prefix.
+const RESERVED_LABEL_PREFIX: &str = "CATEGORY_";
+const RESERVED_LABEL_NAMES: &[&str] = &[
+    "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "UNREAD", "IMPORTANT", "CHAT",
+];
+
+/// Every rule a label name can fail is reported distinctly (Phase 3 AC6) —
+/// a single generic "invalid name" error would leave the caller unable to
+/// say *why* to the user.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum LabelNameError {
+    #[error("label name cannot be empty")]
+    Empty,
+    #[error("label name must be 100 characters or fewer")]
+    TooLong,
+    #[error("label name cannot start with a reserved system prefix")]
+    ReservedPrefix,
+    #[error("label name cannot contain \\, *, or %")]
+    ForbiddenCharacters,
+    #[error("a label with this name already exists")]
+    Duplicate,
+}
+
 pub struct LabelRepository;
 impl LabelRepository {
     pub fn upsert(connection: &Connection, label: &Label) -> Result<()> {
-        connection.execute("INSERT INTO labels (account_id,id,name,kind,color,message_count,unread_count) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,kind=excluded.kind,color=excluded.color,message_count=excluded.message_count,unread_count=excluded.unread_count", params![label.account_id,label.id,label.name,label.kind,label.color,label.message_count,label.unread_count])?;
+        let (color_text, color_background) = match &label.color {
+            Some(color) => (Some(color.text.as_str()), Some(color.background.as_str())),
+            None => (None, None),
+        };
+        connection.execute("INSERT INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,kind=excluded.kind,color_text=excluded.color_text,color_background=excluded.color_background,message_count=excluded.message_count,unread_count=excluded.unread_count", params![label.account_id,label.id,label.name,label.kind,color_text,color_background,label.message_count,label.unread_count])?;
         Ok(())
     }
     pub fn list(connection: &Connection, account_id: &str) -> Result<Vec<Label>> {
-        let mut statement = connection.prepare("SELECT account_id,id,name,kind,color,message_count,unread_count FROM labels WHERE account_id=?1 ORDER BY name")?;
+        let mut statement = connection.prepare("SELECT account_id,id,name,kind,color_text,color_background,message_count,unread_count FROM labels WHERE account_id=?1 ORDER BY name")?;
         let labels = statement.query_map([account_id], label)?.collect();
         labels
+    }
+    pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Label>> {
+        connection.query_row("SELECT account_id,id,name,kind,color_text,color_background,message_count,unread_count FROM labels WHERE account_id=?1 AND id=?2", params![account_id, id], label).optional()
     }
     /// Inserts a minimal placeholder row for `id` if one doesn't already
     /// exist. `message_labels` has a foreign key onto `labels`, and Gmail
@@ -72,11 +115,148 @@ impl LabelRepository {
     /// this placeholder.
     pub fn ensure_placeholder(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
         connection.execute(
-            "INSERT OR IGNORE INTO labels (account_id,id,name,kind,color,message_count,unread_count) VALUES (?1,?2,?2,'system',NULL,0,0)",
+            "INSERT OR IGNORE INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?2,'system',NULL,NULL,0,0)",
             params![account_id, id],
         )?;
         Ok(())
     }
+    /// Trims and validates a candidate label name against every rule in one
+    /// pass, checking case-insensitive uniqueness within the account
+    /// (excluding `exclude_id`, so renaming a label to its own current name
+    /// succeeds). Returns the trimmed name on success — callers should
+    /// persist that, not the raw input.
+    pub fn validate_name(
+        connection: &Connection,
+        account_id: &str,
+        name: &str,
+        exclude_id: Option<&str>,
+    ) -> Result<String, LabelNameError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(LabelNameError::Empty);
+        }
+        if trimmed.chars().count() > 100 {
+            return Err(LabelNameError::TooLong);
+        }
+        if trimmed.contains(['\\', '*', '%']) {
+            return Err(LabelNameError::ForbiddenCharacters);
+        }
+        let upper = trimmed.to_ascii_uppercase();
+        if upper.starts_with(RESERVED_LABEL_PREFIX)
+            || RESERVED_LABEL_NAMES.contains(&upper.as_str())
+        {
+            return Err(LabelNameError::ReservedPrefix);
+        }
+        let existing: Vec<String> = Self::list(connection, account_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|existing| Some(existing.id.as_str()) != exclude_id)
+            .map(|existing| existing.name)
+            .collect();
+        if existing
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(trimmed))
+        {
+            return Err(LabelNameError::Duplicate);
+        }
+        Ok(trimmed.to_owned())
+    }
+    pub fn rename(connection: &Connection, account_id: &str, id: &str, name: &str) -> Result<()> {
+        connection.execute(
+            "UPDATE labels SET name=?1 WHERE account_id=?2 AND id=?3",
+            params![name, account_id, id],
+        )?;
+        Ok(())
+    }
+    pub fn set_color(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+        color: Option<&LabelColor>,
+    ) -> Result<()> {
+        let (color_text, color_background) = match color {
+            Some(color) => (Some(color.text.as_str()), Some(color.background.as_str())),
+            None => (None, None),
+        };
+        connection.execute(
+            "UPDATE labels SET color_text=?1, color_background=?2 WHERE account_id=?3 AND id=?4",
+            params![color_text, color_background, account_id, id],
+        )?;
+        Ok(())
+    }
+    /// Removes the label and, via `ON DELETE CASCADE`, every message's
+    /// membership in it. Never touches the messages themselves.
+    pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
+        connection.execute(
+            "DELETE FROM labels WHERE account_id=?1 AND id=?2",
+            params![account_id, id],
+        )?;
+        Ok(())
+    }
+}
+
+/// The HTML-presence marker's three states (Phase 3): whether a message's
+/// full HTML body has ever been fetched, and if so whether Gmail actually
+/// had one to give. Plain `Option<String>` nullability on `html_body` alone
+/// cannot distinguish "never fetched" (the normal state of a backfilled
+/// message, which must trigger a fetch) from "fetched and genuinely empty"
+/// (which must not) — see the plan's Data Models section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlPresence {
+    NeverFetched,
+    Present,
+    Absent,
+}
+impl HtmlPresence {
+    fn as_db_str(self) -> &'static str {
+        match self {
+            Self::NeverFetched => "never_fetched",
+            Self::Present => "present",
+            Self::Absent => "absent",
+        }
+    }
+    fn from_db_str(value: &str) -> Self {
+        match value {
+            "present" => Self::Present,
+            "absent" => Self::Absent,
+            _ => Self::NeverFetched,
+        }
+    }
+    /// Derives presence from whether a just-fetched message carried an HTML
+    /// part — used by every code path that fetches a message in full
+    /// (`format` always includes `payload`, so presence is always known at
+    /// that point, never "never fetched").
+    pub fn from_fetched_body(html_body: Option<&str>) -> Self {
+        if html_body.is_some() {
+            Self::Present
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+/// Caps plain text at 10,000 characters (D1), preferring the `text/plain`
+/// part and falling back to tag-stripped HTML only when no plain-text part
+/// exists. A pure function so it's testable independent of any Gmail fetch
+/// or storage write.
+pub fn truncate_body(plain: Option<&str>, html: Option<&str>) -> Option<String> {
+    const MAX_CHARS: usize = 10_000;
+    let source = plain.map(str::to_owned).or_else(|| html.map(strip_tags))?;
+    Some(source.chars().take(MAX_CHARS).collect())
+}
+
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,26 +276,168 @@ pub struct Message {
     pub is_unread: bool,
     pub is_starred: bool,
     pub history_id: i64,
+    pub truncated_body: Option<String>,
+    pub html_presence: HtmlPresence,
 }
 pub struct MessageRepository;
 impl MessageRepository {
     pub fn write_full_state(connection: &Connection, message: &Message) -> Result<bool> {
-        let changed = connection.execute("INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(account_id,id) DO UPDATE SET thread_id=excluded.thread_id,rfc_message_id=excluded.rfc_message_id,sender=excluded.sender,recipients=excluded.recipients,subject=excluded.subject,sent_at=excluded.sent_at,snippet=excluded.snippet,html_body=excluded.html_body,plain_body=excluded.plain_body,has_attachments=excluded.has_attachments,is_unread=excluded.is_unread,is_starred=excluded.is_starred,history_id=excluded.history_id WHERE excluded.history_id > messages.history_id", params![message.account_id,message.id,message.thread_id,message.rfc_message_id,message.sender,message.recipients,message.subject,message.sent_at,message.snippet,message.html_body,message.plain_body,message.has_attachments,message.is_unread,message.is_starred,message.history_id])?;
+        let changed = connection.execute("INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(account_id,id) DO UPDATE SET thread_id=excluded.thread_id,rfc_message_id=excluded.rfc_message_id,sender=excluded.sender,recipients=excluded.recipients,subject=excluded.subject,sent_at=excluded.sent_at,snippet=excluded.snippet,html_body=excluded.html_body,plain_body=excluded.plain_body,has_attachments=excluded.has_attachments,is_unread=excluded.is_unread,is_starred=excluded.is_starred,history_id=excluded.history_id,truncated_body=excluded.truncated_body,html_presence=excluded.html_presence WHERE excluded.history_id > messages.history_id", params![message.account_id,message.id,message.thread_id,message.rfc_message_id,message.sender,message.recipients,message.subject,message.sent_at,message.snippet,message.html_body,message.plain_body,message.has_attachments,message.is_unread,message.is_starred,message.history_id,message.truncated_body,message.html_presence.as_db_str()])?;
         Ok(changed == 1)
     }
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Message>> {
-        connection.query_row("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id FROM messages WHERE account_id=?1 AND id=?2", params![account_id,id], message).optional()
+        connection.query_row("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND id=?2", params![account_id,id], message).optional()
     }
     pub fn list_by_thread(
         connection: &Connection,
         account_id: &str,
         thread_id: &str,
     ) -> Result<Vec<Message>> {
-        let mut statement = connection.prepare("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at")?;
+        let mut statement = connection.prepare("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at")?;
         let messages = statement
             .query_map(params![account_id, thread_id], message)?
             .collect();
         messages
+    }
+    /// Every locally stored message id for an account — the universe
+    /// reconciliation's server-diff (Phase 5) compares against. No existing
+    /// method provided this: the old expired-checkpoint path deleted
+    /// unconditionally and never needed to know what it already had.
+    pub fn all_ids(connection: &Connection, account_id: &str) -> Result<Vec<String>> {
+        let mut statement =
+            connection.prepare("SELECT id FROM messages WHERE account_id=?1 ORDER BY id")?;
+        let ids = statement
+            .query_map([account_id], |row| row.get(0))?
+            .collect();
+        ids
+    }
+    /// Traversal's own upsert (D1/Phase 4): writes the metadata and
+    /// truncated body a whole-mailbox backfill/reconciliation fetch
+    /// discovers for a message. Unlike [`Self::write_full_state`], this
+    /// **never touches `html_body`, `plain_body` or `html_presence` on a
+    /// row that already exists** — those columns may already hold real
+    /// content fetched by initial/incremental sync or the lazy open-time
+    /// fetch (Phase 6), and a whole-mailbox traversal re-encountering that
+    /// same message (which it always will, for every message initial sync
+    /// already pulled into Inbox) must never downgrade it back to
+    /// truncated-only. A brand-new row is inserted with the caller's
+    /// `html_presence` (always [`HtmlPresence::NeverFetched`] for a
+    /// traversal-only fetch), which is the normal state of a message
+    /// backfill alone has ever seen. Gated by the same strict
+    /// `history_id`-freshness rule as every other write path.
+    pub fn write_traversal_state(connection: &Connection, message: &Message) -> Result<bool> {
+        let changed = connection.execute(
+            "INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,NULL,?10,?11,?12,?13,?14,?15)
+             ON CONFLICT(account_id,id) DO UPDATE SET
+               thread_id=excluded.thread_id,
+               rfc_message_id=excluded.rfc_message_id,
+               sender=excluded.sender,
+               recipients=excluded.recipients,
+               subject=excluded.subject,
+               sent_at=excluded.sent_at,
+               snippet=excluded.snippet,
+               has_attachments=excluded.has_attachments,
+               is_unread=excluded.is_unread,
+               is_starred=excluded.is_starred,
+               history_id=excluded.history_id,
+               truncated_body=excluded.truncated_body
+             WHERE excluded.history_id > messages.history_id",
+            params![
+                message.account_id,
+                message.id,
+                message.thread_id,
+                message.rfc_message_id,
+                message.sender,
+                message.recipients,
+                message.subject,
+                message.sent_at,
+                message.snippet,
+                message.has_attachments,
+                message.is_unread,
+                message.is_starred,
+                message.history_id,
+                message.truncated_body,
+                message.html_presence.as_db_str()
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+    /// The Gmail draft id resolved and cached for this message (V5), if any
+    /// — distinct from the message's own id, and only ever set for a
+    /// message carrying the `DRAFT` label. See
+    /// [`Self::set_draft_id`]/`sync::mutations::delete_draft` for how it's
+    /// populated and consumed.
+    pub fn draft_id(connection: &Connection, account_id: &str, id: &str) -> Result<Option<String>> {
+        connection
+            .query_row(
+                "SELECT draft_id FROM messages WHERE account_id=?1 AND id=?2",
+                params![account_id, id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map(Option::flatten)
+    }
+    pub fn set_draft_id(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+        draft_id: &str,
+    ) -> Result<()> {
+        connection.execute(
+            "UPDATE messages SET draft_id=?1 WHERE account_id=?2 AND id=?3",
+            params![draft_id, account_id, id],
+        )?;
+        Ok(())
+    }
+    pub fn set_truncated_body(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+        truncated_body: Option<&str>,
+    ) -> Result<()> {
+        connection.execute(
+            "UPDATE messages SET truncated_body=?1 WHERE account_id=?2 AND id=?3",
+            params![truncated_body, account_id, id],
+        )?;
+        Ok(())
+    }
+    pub fn set_html_body(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+        html_body: Option<&str>,
+        presence: HtmlPresence,
+    ) -> Result<()> {
+        connection.execute(
+            "UPDATE messages SET html_body=?1, html_presence=?2 WHERE account_id=?3 AND id=?4",
+            params![html_body, presence.as_db_str(), account_id, id],
+        )?;
+        Ok(())
+    }
+    /// Replaces a message's entire label membership set with exactly
+    /// `label_ids`, maintaining the denormalised `is_unread`/`is_starred`
+    /// columns via the same [`Self::set_label_membership`] every other
+    /// mutation path uses — so bulk reconciliation overwrite (Phase 5) and
+    /// thread recomputation never drift from actual membership (Phase 3
+    /// AC5).
+    pub fn overwrite_membership(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+        label_ids: &[String],
+    ) -> Result<()> {
+        let current: HashSet<String> = Self::label_ids(connection, account_id, message_id)?
+            .into_iter()
+            .collect();
+        let desired: HashSet<String> = label_ids.iter().cloned().collect();
+        for label in current.difference(&desired) {
+            Self::set_label_membership(connection, account_id, message_id, label, false)?;
+        }
+        for label in desired.difference(&current) {
+            Self::set_label_membership(connection, account_id, message_id, label, true)?;
+        }
+        Ok(())
     }
     pub fn write_mutation_history(
         connection: &Connection,
@@ -426,6 +748,105 @@ impl SettingRepository {
     }
 }
 
+/// Which whole-mailbox traversal produced a cursor row. Fully defined here
+/// (including `Reconciliation`) even though reconciliation itself doesn't
+/// exist yet (Phase 5) — Phase 6 needs to render reconciliation wording
+/// without depending on that phase landing first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraversalKind {
+    Backfill,
+    Reconciliation,
+}
+impl TraversalKind {
+    fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Backfill => "backfill",
+            Self::Reconciliation => "reconciliation",
+        }
+    }
+    fn from_db_str(value: &str) -> Self {
+        match value {
+            "reconciliation" => Self::Reconciliation,
+            _ => Self::Backfill,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraversalCursor {
+    pub account_id: String,
+    pub kind: TraversalKind,
+    pub position: Option<String>,
+    pub discovered_count: i64,
+    pub persisted_count: i64,
+    pub completed: bool,
+    pub last_advanced_at: i64,
+    /// Snapshotted once per logical run (migration
+    /// `V6__traversal_cursor_resumed_flag`) — whether this row already had a
+    /// saved checkpoint `position` at the moment the current run began, not
+    /// whether `position` happens to be non-null right now. See
+    /// `sync::traversal::run_backfill_step`'s documentation.
+    pub resumed: bool,
+}
+
+/// Backfill and reconciliation each own an independent row, keyed by
+/// `(account_id, kind)` — see migration `V4__traversal_cursor_composite_key`.
+/// A reconciliation pass's checkpoint writes can therefore never clobber an
+/// in-progress backfill's `position`/counts (or vice versa); the two
+/// traversals remain mutually exclusive only via the queue's per-account
+/// entity lock (`traversal::traversal_entity_key`, D3), not via this table.
+pub struct TraversalCursorRepository;
+impl TraversalCursorRepository {
+    pub fn upsert(connection: &Connection, cursor: &TraversalCursor) -> Result<()> {
+        connection.execute(
+            "INSERT INTO traversal_cursors (account_id,kind,position,discovered_count,persisted_count,completed,last_advanced_at,resumed) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(account_id,kind) DO UPDATE SET position=excluded.position,discovered_count=excluded.discovered_count,persisted_count=excluded.persisted_count,completed=excluded.completed,last_advanced_at=excluded.last_advanced_at,resumed=excluded.resumed",
+            params![
+                cursor.account_id,
+                cursor.kind.as_db_str(),
+                cursor.position,
+                cursor.discovered_count,
+                cursor.persisted_count,
+                cursor.completed,
+                cursor.last_advanced_at,
+                cursor.resumed
+            ],
+        )?;
+        Ok(())
+    }
+    pub fn get(
+        connection: &Connection,
+        account_id: &str,
+        kind: TraversalKind,
+    ) -> Result<Option<TraversalCursor>> {
+        connection
+            .query_row(
+                "SELECT account_id,kind,position,discovered_count,persisted_count,completed,last_advanced_at,resumed FROM traversal_cursors WHERE account_id=?1 AND kind=?2",
+                params![account_id, kind.as_db_str()],
+                |row| {
+                    let kind: String = row.get(1)?;
+                    Ok(TraversalCursor {
+                        account_id: row.get(0)?,
+                        kind: TraversalKind::from_db_str(&kind),
+                        position: row.get(2)?,
+                        discovered_count: row.get(3)?,
+                        persisted_count: row.get(4)?,
+                        completed: row.get(5)?,
+                        last_advanced_at: row.get(6)?,
+                        resumed: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+    }
+    pub fn delete(connection: &Connection, account_id: &str, kind: TraversalKind) -> Result<()> {
+        connection.execute(
+            "DELETE FROM traversal_cursors WHERE account_id=?1 AND kind=?2",
+            params![account_id, kind.as_db_str()],
+        )?;
+        Ok(())
+    }
+}
+
 fn account(row: &rusqlite::Row<'_>) -> Result<Account> {
     Ok(Account {
         id: row.get(0)?,
@@ -439,17 +860,24 @@ fn account(row: &rusqlite::Row<'_>) -> Result<Account> {
     })
 }
 fn label(row: &rusqlite::Row<'_>) -> Result<Label> {
+    let color_text: Option<String> = row.get(4)?;
+    let color_background: Option<String> = row.get(5)?;
+    let color = match (color_text, color_background) {
+        (Some(text), Some(background)) => Some(LabelColor { text, background }),
+        _ => None,
+    };
     Ok(Label {
         account_id: row.get(0)?,
         id: row.get(1)?,
         name: row.get(2)?,
         kind: row.get(3)?,
-        color: row.get(4)?,
-        message_count: row.get(5)?,
-        unread_count: row.get(6)?,
+        color,
+        message_count: row.get(6)?,
+        unread_count: row.get(7)?,
     })
 }
 fn message(row: &rusqlite::Row<'_>) -> Result<Message> {
+    let html_presence: String = row.get(16)?;
     Ok(Message {
         account_id: row.get(0)?,
         id: row.get(1)?,
@@ -466,6 +894,8 @@ fn message(row: &rusqlite::Row<'_>) -> Result<Message> {
         is_unread: row.get(12)?,
         is_starred: row.get(13)?,
         history_id: row.get(14)?,
+        truncated_body: row.get(15)?,
+        html_presence: HtmlPresence::from_db_str(&html_presence),
     })
 }
 fn thread(row: &rusqlite::Row<'_>) -> Result<Thread> {

@@ -3,11 +3,18 @@
 // (src/lib/types/conversation.ts, src/components/reader/ReadingPane.tsx).
 // Kept separate from the fetching hooks so both stay easy to unit test.
 import { parseParticipant } from '@/lib/format/participants';
+import { LABEL_COLOR_PALETTE, resolveLabelColorSwatch } from '@/lib/labels/palette';
 import type { Conversation as IpcConversation, MailLabel, MailThread } from '@/lib/types/ipc';
 import type { Conversation } from '@/lib/types/conversation';
 import type { ReaderConversation } from '@/components/reader/ReadingPane';
 import type { Mailbox } from '@/components/sidebar/FolderList';
 import type { Label } from '@/components/sidebar/LabelList';
+import type { LabelMenuEntry, LabelMembership } from '@/components/actions/LabelsMenu';
+
+// A label whose colour Gmail hasn't set yet (or set to a pair outside this
+// app's curated palette — see `lib/labels/palette.ts`) falls back to the
+// first swatch rather than rendering colourless.
+const FALLBACK_SWATCH = LABEL_COLOR_PALETTE[0];
 
 export function mapThreadToRow(thread: MailThread): Conversation {
   return {
@@ -25,8 +32,6 @@ export function mapThreadToRow(thread: MailThread): Conversation {
   };
 }
 
-const labelColors: Label['color'][] = ['blue', 'green', 'orange'];
-
 export function mapLabelsToMailboxes(labels: MailLabel[]): Mailbox[] {
   return labels.map((label) => ({
     id: label.id,
@@ -38,12 +43,41 @@ export function mapLabelsToMailboxes(labels: MailLabel[]): Mailbox[] {
 export function mapLabelsToUserLabels(labels: MailLabel[]): Label[] {
   return labels
     .filter((label) => label.kind === 'user')
-    .map((label, index) => ({
+    .map((label) => ({
       id: label.id,
       name: label.name,
       unreadCount: label.unreadCount,
-      color: labelColors[index % labelColors.length],
+      color: (resolveLabelColorSwatch(label.color) ?? FALLBACK_SWATCH).id,
     }));
+}
+
+/** Union-based thread-level membership (FR "Labels menu semantics"): a
+ * label on every message is `checked`, on none is `unchecked`, and on some
+ * but not all is `indeterminate` — the tri-state the staged `LabelsMenu`
+ * exposes as `aria-checked="mixed"`. `messagesLabelIds` is empty only for a
+ * thread with no messages yet loaded, in which case everything renders
+ * `unchecked` rather than throwing on an empty reduce. */
+export function computeThreadLabelMembership(
+  labels: MailLabel[],
+  messagesLabelIds: string[][],
+): LabelMenuEntry[] {
+  return labels
+    .filter((label) => label.kind === 'user')
+    .map((label) => {
+      const presentCount = messagesLabelIds.filter((ids) => ids.includes(label.id)).length;
+      const membership: LabelMembership =
+        messagesLabelIds.length === 0 || presentCount === 0
+          ? 'unchecked'
+          : presentCount === messagesLabelIds.length
+            ? 'checked'
+            : 'indeterminate';
+      return {
+        id: label.id,
+        name: label.name,
+        color: (resolveLabelColorSwatch(label.color) ?? FALLBACK_SWATCH).id,
+        membership,
+      };
+    });
 }
 
 export function mapConversation(
@@ -60,10 +94,14 @@ export function mapConversation(
       sentAt: new Date(message.sentAt),
       snippet: message.snippet,
       html: message.htmlBody,
+      htmlPresence: message.htmlPresence,
       text: message.plainBody,
       labels: message.labelIds
         .map((id) => labelNamesById.get(id))
         .filter((name): name is string => Boolean(name)),
+      labelIds: message.labelIds,
+      unread: message.isUnread,
+      starred: message.isStarred,
       remoteImagesBlocked: message.remoteImagesBlocked,
     })),
   };

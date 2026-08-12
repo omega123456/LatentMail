@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-read-traversal-status"
+description = "Enables reading an account's whole-mailbox backfill/reconciliation traversal status."
+commands.allow = ["read_traversal_status"]

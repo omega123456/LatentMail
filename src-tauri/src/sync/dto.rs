@@ -3,9 +3,20 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::storage::{Label, Message, Thread};
+use crate::storage::{
+    HtmlPresence, Label, Message, Thread, TraversalCursor, TraversalKind as StorageTraversalKind,
+};
 
 use super::SyncState;
+
+/// The IPC-facing shape of a label's Gmail colour pair (D10), replacing the
+/// fabricated 3-colour cycle `mappers.ts` used to apply client-side.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelColorDto {
+    pub text: String,
+    pub background: String,
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -13,7 +24,7 @@ pub struct LabelDto {
     pub id: String,
     pub name: String,
     pub kind: String,
-    pub color: Option<String>,
+    pub color: Option<LabelColorDto>,
     pub message_count: i64,
     pub unread_count: i64,
 }
@@ -24,9 +35,131 @@ impl From<Label> for LabelDto {
             id: label.id,
             name: label.name,
             kind: label.kind,
-            color: label.color,
+            color: label.color.map(|color| LabelColorDto {
+                text: color.text,
+                background: color.background,
+            }),
             message_count: label.message_count,
             unread_count: label.unread_count,
+        }
+    }
+}
+
+/// Which whole-mailbox traversal is running — mirrors
+/// [`crate::storage::TraversalKind`], fully defined (including the
+/// reconciliation variant) even though reconciliation itself is Phase 5,
+/// so Phase 6 can render reconciliation wording without depending on it.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TraversalKind {
+    Backfill,
+    Reconciliation,
+}
+impl From<StorageTraversalKind> for TraversalKind {
+    fn from(kind: StorageTraversalKind) -> Self {
+        match kind {
+            StorageTraversalKind::Backfill => Self::Backfill,
+            StorageTraversalKind::Reconciliation => Self::Reconciliation,
+        }
+    }
+}
+
+/// Traversal progress is always a count, never a percentage or estimate
+/// (D11).
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TraversalState {
+    NotStarted,
+    Backfilling,
+    Reconciling,
+    Complete,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraversalStatusDto {
+    pub account_id: String,
+    pub state: TraversalState,
+    pub kind: Option<TraversalKind>,
+    pub discovered_count: i64,
+    pub persisted_count: i64,
+    pub last_advanced_at: Option<i64>,
+    /// True when the *current run* started from an already-saved checkpoint
+    /// position — i.e. this traversal is picking back up after a previous
+    /// process/run was interrupted, not starting fresh from page one.
+    ///
+    /// Sourced from [`TraversalCursor::resumed`], a flag snapshotted once
+    /// when a run begins (see `sync::traversal::run_backfill_step`) —
+    /// deliberately *not* re-derived from `position.is_some()` on every
+    /// read, because backfill writes a non-null `position` on every
+    /// committed page. Deriving this live would make an uninterrupted run's
+    /// status flip to "resumed" from page 2 onward, even though nothing was
+    /// ever interrupted.
+    pub is_resumed: bool,
+}
+
+impl TraversalStatusDto {
+    /// No cursor row exists yet — a mailbox that has never started a
+    /// backfill or reconciliation pass.
+    pub fn not_started(account_id: String) -> Self {
+        Self {
+            account_id,
+            state: TraversalState::NotStarted,
+            kind: None,
+            discovered_count: 0,
+            persisted_count: 0,
+            last_advanced_at: None,
+            is_resumed: false,
+        }
+    }
+}
+
+impl TraversalStatusDto {
+    /// Backfill and reconciliation now keep independent cursor rows
+    /// (`(account_id, kind)`, migration `V4__traversal_cursor_composite_key`),
+    /// so `read_traversal_status` has two rows to reconcile into one status
+    /// rather than one. The queue's per-account entity lock (D3) means at
+    /// most one of the two traversals is ever actually running at a time,
+    /// so whichever cursor advanced most recently is the current/last
+    /// activity worth surfacing to the UI.
+    pub fn most_recent(
+        account_id: String,
+        backfill: Option<TraversalCursor>,
+        reconciliation: Option<TraversalCursor>,
+    ) -> Self {
+        match (backfill, reconciliation) {
+            (None, None) => Self::not_started(account_id),
+            (Some(cursor), None) | (None, Some(cursor)) => Self::from(cursor),
+            (Some(backfill), Some(reconciliation)) => {
+                if reconciliation.last_advanced_at >= backfill.last_advanced_at {
+                    Self::from(reconciliation)
+                } else {
+                    Self::from(backfill)
+                }
+            }
+        }
+    }
+}
+
+impl From<TraversalCursor> for TraversalStatusDto {
+    fn from(cursor: TraversalCursor) -> Self {
+        let kind: TraversalKind = cursor.kind.into();
+        let state = if cursor.completed {
+            TraversalState::Complete
+        } else {
+            match kind {
+                TraversalKind::Backfill => TraversalState::Backfilling,
+                TraversalKind::Reconciliation => TraversalState::Reconciling,
+            }
+        };
+        Self {
+            account_id: cursor.account_id,
+            state,
+            kind: Some(kind),
+            discovered_count: cursor.discovered_count,
+            persisted_count: cursor.persisted_count,
+            last_advanced_at: Some(to_millis(cursor.last_advanced_at)),
+            is_resumed: cursor.resumed,
         }
     }
 }
@@ -97,12 +230,31 @@ pub struct MessageDto {
     pub sent_at: i64,
     pub snippet: String,
     pub html_body: Option<String>,
+    pub html_presence: HtmlPresenceDto,
     pub plain_body: Option<String>,
     pub has_attachments: bool,
     pub is_unread: bool,
     pub is_starred: bool,
     pub label_ids: Vec<String>,
     pub remote_images_blocked: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum HtmlPresenceDto {
+    NeverFetched,
+    Present,
+    Absent,
+}
+
+impl From<HtmlPresence> for HtmlPresenceDto {
+    fn from(value: HtmlPresence) -> Self {
+        match value {
+            HtmlPresence::NeverFetched => Self::NeverFetched,
+            HtmlPresence::Present => Self::Present,
+            HtmlPresence::Absent => Self::Absent,
+        }
+    }
 }
 
 pub fn message_dto(
@@ -119,6 +271,7 @@ pub fn message_dto(
         sent_at: to_millis(message.sent_at),
         snippet: message.snippet,
         html_body,
+        html_presence: message.html_presence.into(),
         plain_body: message.plain_body,
         has_attachments: message.has_attachments,
         is_unread: message.is_unread,
@@ -134,6 +287,30 @@ pub struct ConversationDto {
     pub thread_id: String,
     pub subject: String,
     pub messages: Vec<MessageDto>,
+}
+
+/// The per-thread outcome of a `mutate_threads` request — mirrors
+/// [`super::MutationOutcome`], serialized for IPC.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationResultDto {
+    pub thread_id: String,
+    pub outcome: MutationOutcomeDto,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MutationOutcomeDto {
+    Applied,
+    Superseded,
+}
+impl From<super::MutationOutcome> for MutationOutcomeDto {
+    fn from(outcome: super::MutationOutcome) -> Self {
+        match outcome {
+            super::MutationOutcome::Applied => Self::Applied,
+            super::MutationOutcome::Superseded => Self::Superseded,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

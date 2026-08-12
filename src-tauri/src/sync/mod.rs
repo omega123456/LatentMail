@@ -38,17 +38,23 @@ use crate::{
     },
     settings::SettingsService,
     storage::{
-        AccountRepository, InlinePart, Label, LabelRepository, Message, MessageRepository, Storage,
-        StorageError, ThreadRepository,
+        AccountRepository, HtmlPresence, InlinePart, Label, LabelColor, LabelRepository, Message,
+        MessageRepository, Storage, StorageError, ThreadRepository,
     },
 };
 
 pub mod commands;
 mod dto;
+mod mutations;
+mod reconcile;
+pub mod traversal;
 
 pub use dto::{
-    ConversationDto, LabelDto, MessageDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage,
+    ConversationDto, LabelColorDto, LabelDto, MessageDto, MutationOutcomeDto, MutationResultDto,
+    SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, TraversalKind, TraversalState,
+    TraversalStatusDto,
 };
+pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 
 // ---------------------------------------------------------------------
 // Queue wiring
@@ -57,10 +63,10 @@ pub use dto::{
 type BoxFuture = Pin<Box<dyn Future<Output = Result<(), QueueError>> + Send>>;
 type OneShotWork = Box<dyn FnOnce() -> BoxFuture + Send>;
 
-struct PendingMutation {
-    thread_id: String,
-    messages: Vec<Message>,
-    reply: oneshot::Sender<Result<(), SyncError>>,
+struct QueueRoute {
+    lane: Lane,
+    kind: OperationKind,
+    entity_key: String,
 }
 
 /// Holds pending sync work keyed by the `QueueOperation::id` that was
@@ -134,6 +140,62 @@ where
     F: Future<Output = Result<T, SyncError>> + Send + 'static,
     T: Send + 'static,
 {
+    run_via_queue_on(
+        queue,
+        registry,
+        account_id,
+        op_id,
+        QueueRoute {
+            lane: Lane::Background,
+            kind: OperationKind::Sync,
+            entity_key: format!("sync:{account_id}"),
+        },
+        future,
+    )
+    .await
+}
+
+/// Like [`run_via_queue`], but for a traversal task which must share
+/// backfill's lane and entity key. Kept separate from the ordinary sync
+/// route so initial and incremental sync retain their established routing.
+async fn run_via_traversal_queue<F, T>(
+    queue: &Arc<QueueEngine>,
+    registry: &Arc<WorkRegistry>,
+    account_id: &str,
+    op_id: String,
+    future: F,
+) -> Result<T, SyncError>
+where
+    F: Future<Output = Result<T, SyncError>> + Send + 'static,
+    T: Send + 'static,
+{
+    run_via_queue_on(
+        queue,
+        registry,
+        account_id,
+        op_id,
+        QueueRoute {
+            lane: Lane::Traversal,
+            kind: OperationKind::Traversal,
+            entity_key: traversal::traversal_entity_key(account_id),
+        },
+        future,
+    )
+    .await
+}
+
+async fn run_via_queue_on<F, T>(
+    queue: &Arc<QueueEngine>,
+    registry: &Arc<WorkRegistry>,
+    account_id: &str,
+    op_id: String,
+    route: QueueRoute,
+    future: F,
+) -> Result<T, SyncError>
+where
+    F: Future<Output = Result<T, SyncError>> + Send + 'static,
+    T: Send + 'static,
+{
     let (tx, rx) = oneshot::channel::<Result<T, SyncError>>();
     registry.register(
         op_id.clone(),
@@ -153,12 +215,9 @@ where
     let operation = QueueOperation {
         id: op_id,
         account_id: account_id.to_owned(),
-        lane: Lane::Background,
-        kind: OperationKind::Sync,
-        // Shared across every sync op kind for this account so the queue's
-        // entity lock serializes initial/incremental/resync runs — see the
-        // module doc.
-        entity_key: format!("sync:{account_id}"),
+        lane: route.lane,
+        kind: route.kind,
+        entity_key: route.entity_key,
         // ponytail: a flat cost stand-in for the whole sync run — Gmail's
         // own per-request quota pacing already lives inside `GmailClient`'s
         // token bucket; this queue-level cost only paces *concurrent sync
@@ -172,6 +231,36 @@ where
         .await
         .map_err(|_| SyncError::QueueStopped)?;
     rx.await.map_err(|_| SyncError::QueueStopped)?
+}
+
+/// Best-effort classification of a mutation request's `OperationKind`,
+/// used only for the enqueued flush operation's retry bookkeeping. A flush
+/// now carries heterogeneous deltas once entities are grouped by
+/// `sync::mutations`, so a single label-shaped kind can no longer be
+/// authoritative for the whole flush — every branch here retries
+/// identically regardless (`OperationKind::retries`), so this is purely
+/// informational. Kept here (sync's own star/read vocabulary) rather than
+/// in the generic delta-map machinery in `sync::mutations`.
+fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> OperationKind {
+    if add.contains("STARRED") {
+        OperationKind::Star
+    } else if remove.contains("STARRED") {
+        OperationKind::Unstar
+    } else if remove.contains("UNREAD") {
+        OperationKind::MarkRead
+    } else if add.contains("UNREAD") {
+        OperationKind::MarkUnread
+    } else if add.contains("TRASH") {
+        OperationKind::Delete
+    } else if add.contains("SPAM") {
+        OperationKind::Spam
+    } else if remove.contains("SPAM") {
+        OperationKind::NotSpam
+    } else if !add.is_empty() && !remove.is_empty() {
+        OperationKind::Move
+    } else {
+        OperationKind::LabelMutation
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -287,19 +376,28 @@ pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
 // Engine
 // ---------------------------------------------------------------------
 
-/// Pending label mutations grouped by `(account, label, present)`.
-type MutationBatches =
-    std::collections::HashMap<(String, &'static str, bool), Vec<PendingMutation>>;
-
 pub struct SyncEngine {
     storage: Storage,
     queue: Arc<QueueEngine>,
     registry: Arc<WorkRegistry>,
     events: EventSink,
     status: AsyncMutex<std::collections::HashMap<String, AccountStatus>>,
-    op_counter: AtomicU64,
-    mutation_batches: AsyncMutex<MutationBatches>,
+    op_counter: Arc<AtomicU64>,
+    /// The per-account, per-entity pending mutation delta map (D5) — see
+    /// `sync::mutations` for the coalescing/flush mechanism built on top of
+    /// it.
+    pending: AsyncMutex<mutations::PendingMutations>,
     gmail_limiters: GmailRateLimiters,
+    /// Account ids with a backfill chain currently live (enqueued but not
+    /// yet terminal). Guards [`SyncEngine::enqueue_backfill`] against
+    /// starting a second concurrent chain for the same account — the
+    /// scheduler calls it unconditionally on every tick, and a fresh
+    /// backfill routinely spans more than one `sync_interval_minutes`
+    /// window. This is *in addition to* the queue's own entity-lock
+    /// serialization (`queue::mod`), not a replacement for it: that lock
+    /// only serializes operations once they run, it does not stop a second
+    /// chain from being kicked off and interleaved with the first.
+    active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
 }
 
 impl SyncEngine {
@@ -315,9 +413,10 @@ impl SyncEngine {
             registry,
             events,
             status: AsyncMutex::new(std::collections::HashMap::new()),
-            op_counter: AtomicU64::new(0),
-            mutation_batches: AsyncMutex::new(std::collections::HashMap::new()),
+            op_counter: Arc::new(AtomicU64::new(0)),
+            pending: AsyncMutex::new(std::collections::HashMap::new()),
             gmail_limiters: GmailRateLimiters::default(),
+            active_backfills: Arc::new(AsyncMutex::new(std::collections::HashSet::new())),
         })
     }
 
@@ -333,163 +432,6 @@ impl SyncEngine {
     fn next_op_id(&self, account_id: &str) -> String {
         let n = self.op_counter.fetch_add(1, Ordering::Relaxed);
         format!("sync:{account_id}:{n}")
-    }
-
-    pub async fn mutate_thread(
-        &self,
-        account_id: &str,
-        client: GmailClient,
-        thread_id: String,
-        label_id: &'static str,
-        present: bool,
-    ) -> Result<(), SyncError> {
-        let account = account_id.to_owned();
-        let messages = self
-            .storage
-            .run({
-                let account = account.clone();
-                let thread_id = thread_id.clone();
-                move |connection| {
-                    MessageRepository::list_by_thread(connection, &account, &thread_id)
-                }
-            })
-            .await?;
-        let key = (account_id.to_owned(), label_id, present);
-        let (reply, result) = oneshot::channel();
-        let leader = {
-            let mut batches = self.mutation_batches.lock().await;
-            let batch = batches.entry(key.clone()).or_default();
-            let leader = batch.is_empty();
-            batch.push(PendingMutation {
-                thread_id,
-                messages,
-                reply,
-            });
-            leader
-        };
-        if !leader {
-            return result.await.map_err(|_| SyncError::QueueStopped)?;
-        }
-        // A tiny coalescing window lets concurrently dispatched UI mutations
-        // join this Gmail batch; tests drive it with Tokio's mock clock.
-        tokio::time::sleep(Duration::from_millis(1)).await;
-        let pending = self
-            .mutation_batches
-            .lock()
-            .await
-            .remove(&key)
-            .unwrap_or_default();
-        let storage = self.storage.clone();
-        let op_id = format!(
-            "mutation:{account_id}:{}",
-            self.op_counter.fetch_add(1, Ordering::Relaxed)
-        );
-        self.registry.register(
-            op_id.clone(),
-            Box::new(move || {
-                Box::pin(async move {
-                    let result = async {
-                        let add = if present {
-                            vec![label_id.to_owned()]
-                        } else {
-                            Vec::new()
-                        };
-                        let remove = if present {
-                            Vec::new()
-                        } else {
-                            vec![label_id.to_owned()]
-                        };
-                        // Gmail's batch endpoint returns an empty response, so re-read each
-                        // affected message before persisting the mutation. That is the
-                        // smallest way to coalesce the label write without losing the
-                        // returned historyId required by the strict stale-read gate.
-                        let ids = pending
-                            .iter()
-                            .flat_map(|request| request.messages.iter())
-                            .map(|message| message.id.clone())
-                            .collect::<Vec<_>>();
-                        // Gmail accepts at most 1,000 message IDs per batch request.
-                        for ids in ids.chunks(1_000) {
-                            if let Err(error) = client.batch_modify(ids, &add, &remove).await {
-                                // Every waiter in the batch has to hear the real
-                                // error: returning early instead would drop their
-                                // reply channels, and each caller would see the
-                                // misleading `QueueStopped` message.
-                                let message = SyncError::from(error).to_string();
-                                for request in pending {
-                                    let _ = request
-                                        .reply
-                                        .send(Err(SyncError::Failed(message.clone())));
-                                }
-                                return Err(SyncError::Failed(message));
-                            }
-                        }
-                        let mut write_failed = false;
-                        for request in pending {
-                            let mutation_result = async {
-                                for message in request.messages {
-                                    let updated = client.message(&message.id).await?;
-                                    let account = account.clone();
-                                    let id = message.id.clone();
-                                    let thread = request.thread_id.clone();
-                                    storage
-                                        .run(move |connection| {
-                                            MessageRepository::write_mutation_history(
-                                                connection,
-                                                &account,
-                                                std::slice::from_ref(&id),
-                                                updated.history_id,
-                                            )?;
-                                            MessageRepository::set_label_membership(
-                                                connection, &account, &id, label_id, present,
-                                            )?;
-                                            ThreadRepository::recompute(
-                                                connection, &account, &thread,
-                                            )
-                                        })
-                                        .await?;
-                                }
-                                Ok::<(), SyncError>(())
-                            }
-                            .await;
-                            write_failed |= mutation_result.is_err();
-                            let _ = request.reply.send(mutation_result);
-                        }
-                        if write_failed {
-                            // Each waiter already got its own error above; this
-                            // only marks the queue operation as failed.
-                            Err(SyncError::Failed("mutation write failed".into()))
-                        } else {
-                            Ok::<(), SyncError>(())
-                        }
-                    }
-                    .await;
-                    if result.is_ok() {
-                        Ok(())
-                    } else {
-                        Err(QueueError::Permanent)
-                    }
-                })
-            }),
-        );
-        self.queue
-            .enqueue(QueueOperation {
-                id: op_id,
-                account_id: account_id.to_owned(),
-                lane: Lane::Interactive,
-                kind: match (label_id, present) {
-                    ("STARRED", true) => OperationKind::Star,
-                    ("STARRED", false) => OperationKind::Unstar,
-                    ("UNREAD", true) => OperationKind::MarkUnread,
-                    _ => OperationKind::MarkRead,
-                },
-                entity_key: format!("mutation-batch:{account_id}"),
-                cost: 0,
-                attempts: 0,
-            })
-            .await
-            .map_err(|_| SyncError::QueueStopped)?;
-        result.await.map_err(|_| SyncError::QueueStopped)?
     }
 
     pub async fn status(&self, account_id: &str) -> SyncStatusDto {
@@ -571,11 +513,102 @@ impl SyncEngine {
         let op_id = self.next_op_id(account_id);
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
+        // Cloned before `client` moves into the queued closure below — kept
+        // around purely to hand to `enqueue_backfill` afterward.
+        // `full_sync_body` itself is untouched by any of this (Phase 4 AC5).
+        let backfill_client = client.clone();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
             full_sync_body(&storage, &client, &account_owned).await
         })
         .await;
-        self.finish(account_id, outcome).await
+        let result = self.finish(account_id, outcome).await;
+        if result.is_ok() {
+            // Whole-mailbox backfill begins only once initial sync has
+            // produced its full-body Inbox (Functional Requirements /
+            // D1) — never in parallel with it, and never in place of it.
+            self.enqueue_backfill(account_id, backfill_client).await;
+        }
+        result
+    }
+
+    /// Enqueues whole-mailbox backfill's first discrete unit of work — one
+    /// page — as a traversal-lane operation under the entity key backfill
+    /// and reconciliation (Phase 5) share ([`traversal::traversal_entity_key`],
+    /// D3), so the queue's per-account entity lock keeps the two mutually
+    /// exclusive. Called right after initial sync completes, and again from
+    /// every scheduler tick (see `start_scheduler`) as the resumption path
+    /// for an app restart that lands mid-backfill: once the account already
+    /// has a checkpoint, every later `run_sync` takes the `incremental_sync`
+    /// branch, which never calls this — the scheduler is what re-offers
+    /// backfill a chance to finish. Cheap to call unconditionally either
+    /// way: [`traversal::run_backfill_step`] itself detects an
+    /// already-complete cursor and returns immediately without any Gmail
+    /// request.
+    ///
+    /// Plan-adherence audit item 5 fix: each call to this only enqueues
+    /// *one page's* worth of work rather than the whole multi-hour backfill
+    /// as a single operation. Once that page's step completes, the
+    /// registered closure re-enqueues the next step as a brand-new queue
+    /// operation before returning — so the traversal lane permit and the
+    /// account's entity lock are released between every page, exactly the
+    /// "every unit of work is a discrete operation" requirement, and every
+    /// page automatically gets the queue's own per-operation
+    /// `wait_until_resumed`/`wait_for_interactive` checks (previously only
+    /// evaluated once, before the whole backfill started). Fire-and-forget
+    /// — nothing here awaits backfill's own completion, so this never
+    /// lengthens a sync run it's called after.
+    pub async fn enqueue_backfill(&self, account_id: &str, client: GmailClient) {
+        // Guard against a second concurrent chain: the scheduler calls this
+        // unconditionally every tick, and a fresh backfill routinely
+        // outlives one `sync_interval_minutes` window. If a chain is
+        // already live for this account, skip — the live chain's own
+        // recursive `enqueue_backfill_step` calls will keep resuming until
+        // it's done. See `active_backfills`'s doc comment.
+        {
+            let mut active = self.active_backfills.lock().await;
+            if !active.insert(account_id.to_owned()) {
+                return;
+            }
+        }
+        // Snapshotted once, right here, at the moment this logical backfill
+        // run begins — *not* re-derived from the cursor's `position` on
+        // every later page. `position` becomes non-null the instant this
+        // very run's own first page commits, so deriving "resumed" from it
+        // live would make an uninterrupted run's status bar read "Resuming
+        // backfill" from page 2 onward. `resumed` is true only when this
+        // run is genuinely picking up a checkpoint a *previous* process/run
+        // left behind — exactly what a non-null `position` here, before
+        // this run has written anything of its own, means.
+        let resumed = self
+            .storage
+            .run({
+                let account = account_id.to_owned();
+                move |connection| {
+                    crate::storage::TraversalCursorRepository::get(
+                        connection,
+                        &account,
+                        crate::storage::TraversalKind::Backfill,
+                    )
+                }
+            })
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|cursor| cursor.position.is_some());
+        enqueue_backfill_step(
+            BackfillHandles {
+                queue: Arc::clone(&self.queue),
+                registry: Arc::clone(&self.registry),
+                storage: self.storage.clone(),
+                events: Arc::clone(&self.events),
+                op_counter: Arc::clone(&self.op_counter),
+                active_backfills: Arc::clone(&self.active_backfills),
+            },
+            account_id.to_owned(),
+            client,
+            resumed,
+        )
+        .await;
     }
 
     /// Polls history from `checkpoint` and applies deltas. On an expired
@@ -592,6 +625,9 @@ impl SyncEngine {
         self.set_syncing(account_id).await;
         let op_id = self.next_op_id(account_id);
         let storage = self.storage.clone();
+        let traversal_queue = Arc::clone(&self.queue);
+        let traversal_registry = Arc::clone(&self.registry);
+        let reconciliation_events = Arc::clone(&self.events);
         let account_owned = account_id.to_owned();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
             match incremental_body(&storage, &client, &account_owned, checkpoint).await? {
@@ -605,7 +641,45 @@ impl SyncEngine {
                     thread_ids,
                 }),
                 IncrementalOutcome::Expired => {
-                    full_sync_body(&storage, &client, &account_owned).await
+                    // ponytail: this still enqueues reconciliation onto the
+                    // traversal lane from *inside* the current background-lane
+                    // operation and awaits it here — if backfill is mid-run and
+                    // holding the traversal entity lock, this await blocks
+                    // until backfill yields that lock, pinning a background-
+                    // lane permit for however long that takes (plan-adherence
+                    // audit item 5, second half; not fully fixed this phase).
+                    // The blast radius is now much smaller than before backfill
+                    // was split into discrete per-page operations (this phase's
+                    // main item 5 fix): the longest a background permit can be
+                    // pinned is one backfill page, not the whole multi-hour
+                    // run. Upgrade path: give incremental sync's expired-
+                    // checkpoint branch its own fire-and-forget enqueue (mirroring
+                    // `enqueue_backfill`) instead of awaiting reconciliation
+                    // inline, if this ever proves to still starve background
+                    // work in practice.
+                    let reconciliation_client = client.traversal_scoped();
+                    let reconciliation_storage = storage.clone();
+                    let reconciliation_account = account_owned.clone();
+                    run_via_traversal_queue(
+                        &traversal_queue,
+                        &traversal_registry,
+                        &account_owned,
+                        format!("reconcile:{account_owned}:{checkpoint}"),
+                        {
+                            let reconciliation_queue = Arc::clone(&traversal_queue);
+                            async move {
+                            reconcile::run(
+                                &reconciliation_storage,
+                                &reconciliation_client,
+                                &reconciliation_account,
+                                &reconciliation_events,
+                                Some(&reconciliation_queue),
+                            )
+                            .await
+                            }
+                        },
+                    )
+                    .await
                 }
             }
         })
@@ -672,11 +746,154 @@ impl SyncEngine {
     }
 }
 
+/// Enqueues exactly one traversal-lane [`traversal::run_backfill_step`] as
+/// its own `QueueOperation`, and — once that step's closure runs and
+/// reports backfill isn't finished yet — enqueues the *next* step the same
+/// way before the closure returns. A free function (not a `SyncEngine`
+/// method) because the registered closure is `'static` and needs its own
+/// owned/`Arc`'d handles rather than a borrow of `&self`; recursion needs
+/// boxing since `async fn` can't otherwise refer to itself. See
+/// [`SyncEngine::enqueue_backfill`]'s documentation for why this exists.
+///
+/// `resumed` is fixed for the whole logical run this call chain drives — it
+/// is computed exactly once, by [`SyncEngine::enqueue_backfill`], before the
+/// first step, and every recursive call here simply forwards the same value
+/// unchanged. See [`traversal::run_backfill_step`]'s documentation for why
+/// it must *not* be recomputed per page.
+///
+/// `handles` bundles the `'static`, `Arc`'d/cloneable state every step
+/// needs (kept as one struct rather than five loose parameters purely to
+/// stay under clippy's argument-count lint — there's no other reason these
+/// five are grouped).
+fn enqueue_backfill_step(
+    handles: BackfillHandles,
+    account_id: String,
+    client: GmailClient,
+    resumed: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        let BackfillHandles {
+            queue,
+            registry,
+            storage,
+            events,
+            op_counter,
+            active_backfills,
+        } = handles;
+        let op_id = format!(
+            "traversal:{account_id}:{}",
+            op_counter.fetch_add(1, Ordering::Relaxed)
+        );
+        let step_storage = storage.clone();
+        let step_events = Arc::clone(&events);
+        let step_account = account_id.clone();
+        let step_client = client.clone();
+        let (step_queue, step_registry, step_op_counter, step_active_backfills) = (
+            Arc::clone(&queue),
+            Arc::clone(&registry),
+            Arc::clone(&op_counter),
+            Arc::clone(&active_backfills),
+        );
+        registry.register(
+            op_id.clone(),
+            Box::new(move || {
+                Box::pin(async move {
+                    let traversal_client = step_client.traversal_scoped();
+                    let step_result = traversal::run_backfill_step(
+                        &step_storage,
+                        &traversal_client,
+                        &step_account,
+                        &step_events,
+                        resumed,
+                    )
+                    .await;
+                    let completed = match step_result {
+                        Ok(completed) => completed,
+                        Err(_) => {
+                            // Terminal (permanent failure): no next step
+                            // will be enqueued, so this account's chain is
+                            // no longer live.
+                            step_active_backfills.lock().await.remove(&step_account);
+                            return Err(QueueError::Permanent);
+                        }
+                    };
+                    if completed {
+                        // Terminal (finished): clear before returning so a
+                        // later scheduler tick's `enqueue_backfill` is free
+                        // to start a brand-new chain (e.g. after new mail
+                        // extends the mailbox again).
+                        step_active_backfills.lock().await.remove(&step_account);
+                    } else {
+                        // Enqueuing the next step here — *before* this
+                        // operation's own closure returns — is what keeps
+                        // each page a genuinely discrete unit: the queue
+                        // only releases this operation's traversal-lane
+                        // permit and the account's entity lock once this
+                        // future resolves, and the next page's operation
+                        // then has to re-acquire both from scratch rather
+                        // than the same operation just looping internally.
+                        // The guard stays set — the chain is still live.
+                        enqueue_backfill_step(
+                            BackfillHandles {
+                                queue: step_queue,
+                                registry: step_registry,
+                                storage: step_storage,
+                                events: step_events,
+                                op_counter: step_op_counter,
+                                active_backfills: step_active_backfills,
+                            },
+                            step_account,
+                            step_client,
+                            resumed,
+                        )
+                        .await;
+                    }
+                    Ok(())
+                })
+            }),
+        );
+        let enqueue_result = queue
+            .enqueue(QueueOperation {
+                id: op_id,
+                account_id: account_id.clone(),
+                lane: Lane::Traversal,
+                kind: OperationKind::Traversal,
+                entity_key: traversal::traversal_entity_key(&account_id),
+                cost: 0,
+                attempts: 0,
+            })
+            .await;
+        if enqueue_result.is_err() {
+            // The registered closure above will never run (the queue
+            // rejected/dropped this step outright), so it will never get a
+            // chance to clear the guard itself — do it here instead, or a
+            // permanently stopped queue would wedge this account's backfill
+            // out forever.
+            active_backfills.lock().await.remove(&account_id);
+        }
+    })
+}
+
+/// The `'static`, cloneable handles [`enqueue_backfill_step`] threads
+/// through its recursive queue-operation chain.
+struct BackfillHandles {
+    queue: Arc<QueueEngine>,
+    registry: Arc<WorkRegistry>,
+    storage: Storage,
+    events: EventSink,
+    op_counter: Arc<AtomicU64>,
+    /// Cleared of this account's id the moment the chain this handles bundle
+    /// belongs to reaches a terminal state (completed, permanently failed,
+    /// or fails to enqueue its next step) — see
+    /// [`SyncEngine::active_backfills`].
+    active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
+}
+
 // ---------------------------------------------------------------------
 // Full sync (initial sync + the D13 full re-sync fallback share this body)
 // ---------------------------------------------------------------------
 
-struct FullSyncOutcome {
+pub(crate) struct FullSyncOutcome {
     history_id: i64,
     added_count: u32,
     thread_ids: Vec<String>,
@@ -690,7 +907,11 @@ async fn full_sync_body(
     let profile = client.profile().await?;
     let gmail_labels = client.labels().await?;
     let refs = client
-        .list_all_messages_matching(&["INBOX".to_owned()], Some("newer_than:30d"))
+        .list_all_messages_matching(
+            &["INBOX".to_owned()],
+            Some("newer_than:30d"),
+            crate::gmail::ListOptions::default(),
+        )
         .await?;
     let mut messages = Vec::with_capacity(refs.len());
     for message_ref in &refs {
@@ -854,13 +1075,24 @@ async fn incremental_body(
 // Gmail -> storage mapping
 // ---------------------------------------------------------------------
 
-fn to_label(account_id: &str, label: &GmailLabel) -> Label {
+pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
+    // Colour is a user-label-only concept (D10) — Gmail generally never
+    // sends one for a system label, but a defensive kind check keeps that
+    // invariant true regardless.
+    let color = if label.kind == "user" {
+        label.color.as_ref().map(|pair| LabelColor {
+            text: pair.text_color.clone(),
+            background: pair.background_color.clone(),
+        })
+    } else {
+        None
+    };
     Label {
         account_id: account_id.to_owned(),
         id: label.id.clone(),
         name: label.name.clone(),
         kind: label.kind.clone(),
-        color: label.color.clone(),
+        color,
         message_count: label.message_count,
         unread_count: label.unread_count,
     }
@@ -883,6 +1115,13 @@ fn to_message(account_id: &str, message: &GmailMessage) -> Message {
         is_unread: message.label_ids.iter().any(|id| id == "UNREAD"),
         is_starred: message.label_ids.iter().any(|id| id == "STARRED"),
         history_id: message.history_id,
+        // Initial/incremental sync always fetches a message in full (the
+        // client's `MESSAGE_FIELDS` always includes `payload`), so presence
+        // is already known and never "never fetched" on this path. The
+        // truncated body is a whole-mailbox-backfill concept (Phase 4);
+        // a fully fetched message doesn't need one.
+        truncated_body: None,
+        html_presence: HtmlPresence::from_fetched_body(message.html_body.as_deref()),
     }
 }
 
@@ -1029,7 +1268,18 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                     let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
                         .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
                     let client = engine.gmail_client(&account.id, token, base_url).await;
-                    let _ = engine.run_sync(&account.id, client).await;
+                    if engine.run_sync(&account.id, client.clone()).await.is_ok() {
+                        // Restart-resumption safety net (Phase 4 scope: wire
+                        // traversal into scheduling): an app restart mid-
+                        // backfill re-enters through `incremental_sync`
+                        // (the account already has a checkpoint), which
+                        // never calls `enqueue_backfill` itself — every
+                        // scheduler tick gets its own chance to resume an
+                        // incomplete cursor instead. See
+                        // `SyncEngine::enqueue_backfill` for why this is
+                        // cheap to call unconditionally.
+                        engine.enqueue_backfill(&account.id, client).await;
+                    }
                 }
             }
         });

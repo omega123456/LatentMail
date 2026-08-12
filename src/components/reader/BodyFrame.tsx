@@ -19,7 +19,7 @@ export function BodyFrame({ html, text }: { html: string | null; text: string | 
       </pre>
     );
   const dark = document.documentElement.classList.contains('dark');
-  const srcDoc = `<style>body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
+  const srcDoc = `<style>body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
   return (
     <iframe
       aria-label="Message body"

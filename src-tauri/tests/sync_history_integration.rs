@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
-    Account, AccountRepository, Label, LabelRepository, Message, MessageRepository, Storage,
-    ThreadRepository,
+    Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
+    Storage, ThreadRepository,
 };
 use latentmail_lib::sync::{EventSink, SyncEngine, SyncScheduler, WorkRegistry};
 use wiremock::{
@@ -34,6 +34,8 @@ fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Messag
         is_unread: unread,
         is_starred: false,
         history_id: 1,
+        truncated_body: None,
+        html_presence: HtmlPresence::Absent,
     }
 }
 

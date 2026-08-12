@@ -16,7 +16,7 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
 }
 
 #[tokio::test(start_paused = true)]
-async fn pause_halts_work_and_resume_dispatches_both_lanes() {
+async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
     let (started, mut receiver) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation| {
         let started = started.clone();
@@ -35,11 +35,27 @@ async fn pause_halts_work_and_resume_dispatches_both_lanes() {
         .enqueue(operation("interactive", Lane::Interactive, "two"))
         .await
         .unwrap();
+    queue
+        .enqueue(operation("traversal", Lane::Traversal, "three"))
+        .await
+        .unwrap();
     tokio::task::yield_now().await;
     assert!(receiver.try_recv().is_err());
     queue.resume();
-    assert_eq!(receiver.recv().await.as_deref(), Some("interactive"));
-    assert_eq!(receiver.recv().await.as_deref(), Some("background"));
+    let mut dispatched = vec![
+        receiver.recv().await.unwrap(),
+        receiver.recv().await.unwrap(),
+        receiver.recv().await.unwrap(),
+    ];
+    // Interactive always goes first (it's what every other lane yields to);
+    // background and traversal are independent lanes with no dispatch-order
+    // guarantee between them.
+    assert_eq!(dispatched.remove(0), "interactive");
+    dispatched.sort();
+    assert_eq!(
+        dispatched,
+        vec!["background".to_owned(), "traversal".to_owned()]
+    );
 }
 
 #[tokio::test]

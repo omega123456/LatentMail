@@ -14,6 +14,8 @@ export function EventBridge() {
   useEffect(() => {
     let disposed = false;
     const unlistens: Array<() => void | Promise<void>> = [];
+    const traversalAccounts = new Set<string>();
+    let traversalTimer: number | undefined;
     const subscribe = <E extends keyof IpcEventMap>(
       event: E,
       handler: (payload: IpcEventMap[E]) => void,
@@ -32,6 +34,20 @@ export function EventBridge() {
       useSyncStore.setState({ syncState: progress.state });
     });
 
+    subscribe('sync://traversal', (progress) => {
+      traversalAccounts.add(progress.accountId);
+      if (traversalTimer !== undefined) return;
+      traversalTimer = window.setTimeout(() => {
+        traversalAccounts.forEach((accountId) => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.traversalStatus(accountId) });
+        });
+        traversalAccounts.clear();
+        traversalTimer = undefined;
+      }, 250);
+    });
+
     subscribe('sync://complete', (event) => {
       useSyncStore.setState({ syncState: 'idle', lastSynced: new Date(), error: undefined });
       // Threads, label counts and the seeded sync status all changed —
@@ -47,6 +63,12 @@ export function EventBridge() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
     });
 
+    subscribe('queue://item', (item) => {
+      if (!item.id.startsWith('mutation:')) return;
+      const accountId = item.id.split(':')[1];
+      if (accountId) void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+    });
+
     subscribe('account://state', () => {
       // Without this, the reauth banner (which renders off the accounts
       // query) would not appear live until something else happened to
@@ -57,6 +79,7 @@ export function EventBridge() {
 
     return () => {
       disposed = true;
+      if (traversalTimer !== undefined) window.clearTimeout(traversalTimer);
       unlistens.forEach((remove) => void remove());
     };
   }, [queryClient]);

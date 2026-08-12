@@ -23,6 +23,11 @@ const MAX_ATTEMPTS: u8 = 10;
 pub enum Lane {
     Interactive,
     Background,
+    /// Whole-mailbox enumeration (backfill/reconciliation). Independent
+    /// concurrency from `Background`, so a saturating traversal can never
+    /// delay background work, and — like `Background` — yields to
+    /// `Interactive` before taking tokens.
+    Traversal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +45,13 @@ pub enum OperationKind {
     Unstar,
     MarkRead,
     MarkUnread,
+    Delete,
+    Move,
+    Spam,
+    NotSpam,
+    /// A unit of whole-mailbox traversal work (backfill or reconciliation),
+    /// dispatched on `Lane::Traversal`.
+    Traversal,
 }
 
 impl OperationKind {
@@ -48,7 +60,18 @@ impl OperationKind {
     }
 
     fn retries(self) -> bool {
-        !matches!(self, Self::Send | Self::Sync)
+        // `Sync` and `Traversal` are both dispatched through `sync`'s
+        // one-shot `WorkRegistry` (a `FnOnce` consumed on first invocation —
+        // see `sync::create_queue_engine`/`SyncEngine::enqueue_backfill`).
+        // A queue-level retry would find nothing registered on the second
+        // attempt and the executor's `None => Ok(())` fallback would report
+        // a silent, spurious success without doing any of the retried work.
+        // Both kinds already get their own retry policy at a different
+        // layer: the Gmail client's internal 429/5xx backoff, and — for a
+        // fully failed run — the next scheduler tick / traversal
+        // (re)enqueue picking a fresh operation id back up from the
+        // persisted checkpoint.
+        !matches!(self, Self::Send | Self::Sync | Self::Traversal)
     }
 }
 
@@ -101,6 +124,7 @@ struct Counters {
 struct AccountQueue {
     interactive: mpsc::Sender<QueueOperation>,
     background: mpsc::Sender<QueueOperation>,
+    traversal: mpsc::Sender<QueueOperation>,
 }
 
 struct TokenBucket {
@@ -205,6 +229,7 @@ impl QueueEngine {
         let sender = match lane {
             Lane::Interactive => queue.interactive,
             Lane::Background => queue.background,
+            Lane::Traversal => queue.traversal,
         };
         let id = operation.id.clone();
         if sender.send(operation).await.is_err() {
@@ -250,13 +275,19 @@ impl QueueEngine {
         if !accounts.contains_key(account_id) {
             let (interactive, interactive_rx) = mpsc::channel(LANE_CAPACITY);
             let (background, background_rx) = mpsc::channel(LANE_CAPACITY);
+            let (traversal, traversal_rx) = mpsc::channel(LANE_CAPACITY);
             self.spawn_lane(interactive_rx, 4);
             self.spawn_lane(background_rx, 2);
+            // Traversal gets its own, independent concurrency permit pool —
+            // its cap on throughput is what keeps it from ever delaying
+            // background work (see D4 and Lane::Traversal).
+            self.spawn_lane(traversal_rx, 1);
             accounts.insert(
                 account_id.to_owned(),
                 AccountQueue {
                     interactive,
                     background,
+                    traversal,
                 },
             );
         }
@@ -264,6 +295,7 @@ impl QueueEngine {
         AccountQueue {
             interactive: queue.interactive.clone(),
             background: queue.background.clone(),
+            traversal: queue.traversal.clone(),
         }
     }
 
@@ -334,17 +366,33 @@ impl QueueEngine {
         }
     }
 
-    async fn wait_until_resumed(&self) {
-        while self.paused.load(Ordering::Acquire) {
-            self.resumed.notified().await;
+    /// Cooperative checkpoint for long-running operations. Queue admission
+    /// alone cannot stop an operation already executing, so traversal calls
+    /// this between persisted batches.
+    pub async fn wait_until_resumed(&self) {
+        loop {
+            // Register before observing the flag: otherwise `resume` can
+            // notify in the gap between the load and `notified`, leaving a
+            // paused traversal asleep forever.
+            let notified = self.resumed.notified();
+            if !self.paused.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
         }
     }
 
     async fn wait_for_interactive(&self, operation: &QueueOperation) {
-        while operation.lane == Lane::Background
-            && self.has_interactive(&operation.account_id).await
-        {
-            self.interactive_drained.notified().await;
+        if matches!(operation.lane, Lane::Background | Lane::Traversal) {
+            loop {
+            // As with pause/resume, subscribe before checking to avoid
+            // missing the final interactive completion in between.
+            let notified = self.interactive_drained.notified();
+            if !self.has_interactive(&operation.account_id).await {
+                return;
+            }
+            notified.await;
+            }
         }
     }
 

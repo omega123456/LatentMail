@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } fr
 import { ReauthBanner } from '@/components/auth/ReauthBanner';
 import { ConversationListContainer } from '@/components/list/ConversationList';
 import { ListHeader } from '@/components/list/ListHeader';
-import { useLabelsQuery } from '@/lib/query/hooks';
+import {
+  useCreateLabelMutation,
+  useDeleteLabelMutation,
+  useLabelsQuery,
+  useRecolorLabelMutation,
+  useRenameLabelMutation,
+} from '@/lib/query/hooks';
 import { mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
 import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
@@ -60,6 +66,10 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const labelsQuery = useLabelsQuery(activeAccountId);
   const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
   const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
+  const createLabelMutation = useCreateLabelMutation(activeAccountId);
+  const renameLabelMutation = useRenameLabelMutation(activeAccountId);
+  const recolorLabelMutation = useRecolorLabelMutation(activeAccountId);
+  const deleteLabelMutation = useDeleteLabelMutation(activeAccountId);
   const activeMailbox = activeMailboxId ?? 'INBOX';
   // System mailboxes carry the display name the sidebar shows; a user label
   // falls back to its own name, and an unknown id to the raw value.
@@ -126,6 +136,14 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           labels={labels}
           showUnreadCounts={showUnreadCounts}
           onSelect={selectMailbox}
+          onCreateLabel={({ name, colorId }) =>
+            createLabelMutation.mutateAsync({ name, colorId })
+          }
+          onRenameLabel={({ id, name }) => renameLabelMutation.mutateAsync({ labelId: id, name })}
+          onRecolorLabel={({ id, colorId }) =>
+            recolorLabelMutation.mutateAsync({ labelId: id, colorId })
+          }
+          onDeleteLabel={(id) => deleteLabelMutation.mutateAsync({ labelId: id })}
         />
         <button
           type="button"

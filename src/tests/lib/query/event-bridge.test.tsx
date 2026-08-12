@@ -98,4 +98,28 @@ describe('EventBridge', () => {
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
   });
+
+  it('coalesces a large traversal into one bounded invalidation burst', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('sync://traversal', expect.any(Function)),
+    );
+    vi.useFakeTimers();
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() => {
+      for (let count = 0; count < 100; count += 1)
+        ipc.emit('sync://traversal', {
+          accountId: 'account-1', kind: 'backfill', discoveredCount: count, persistedCount: count, completed: false,
+        });
+      vi.advanceTimersByTime(250);
+    });
+    expect(invalidate).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
 });

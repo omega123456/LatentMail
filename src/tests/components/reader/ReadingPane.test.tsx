@@ -23,6 +23,10 @@ describe('ReadingPane', () => {
       'srcdoc',
       expect.stringContaining('Q3 Marketing Strategy presentation'),
     );
+    expect(screen.getByLabelText('Message body')).toHaveAttribute(
+      'srcdoc',
+      expect.stringContaining('body{max-width:42rem;margin:0 auto'),
+    );
     await user.click(screen.getByRole('button', { name: 'Expand message from Elena Rodriguez' }));
     expect(screen.getAllByLabelText('Message body')).toHaveLength(2);
     expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
@@ -50,5 +54,21 @@ describe('ReadingPane', () => {
     conversation.messages[1].text = null;
     rerender(<ReadingPane threadId="thread-1" conversation={conversation} />);
     expect(screen.getByText('This message has no content.')).toBeInTheDocument();
+  });
+
+  it('mounts the thread ActionRibbon and a per-message ribbon', async () => {
+    const user = userEvent.setup();
+    render(<ReadingPane threadId="thread-1" mailboxId="INBOX" />);
+    expect(screen.getByRole('toolbar', { name: 'Conversation actions' })).toBeInTheDocument();
+    expect(screen.getAllByRole('toolbar', { name: 'Message actions' })).toHaveLength(2);
+    // The stubbed handlers are deliberate no-ops until Phase 8 wires real
+    // dispatch — clicking exercises that they don't throw.
+    await user.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+  });
+
+  it('substitutes the bulk selection panel when a multi-selection is active', () => {
+    render(<ReadingPane threadId={null} mailboxId="INBOX" selectedCount={3} />);
+    expect(screen.getByTestId('bulk-selection-panel')).toBeInTheDocument();
+    expect(screen.getByText('3 conversations selected')).toBeInTheDocument();
   });
 });

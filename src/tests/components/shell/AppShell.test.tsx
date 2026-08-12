@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import App from '@/App';
+import type { IpcCommandMap } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
@@ -46,7 +47,7 @@ const workLabel = {
   id: 'Label_1',
   name: 'Work',
   kind: 'user',
-  color: '#000',
+  color: { text: '#ffffff', background: '#4a86e8' },
   messageCount: 1,
   unreadCount: 0,
 };
@@ -75,6 +76,7 @@ const conversationOne = {
       sentAt: Date.parse('2026-08-10T09:00:00Z'),
       snippet: 'Attached slides',
       htmlBody: '<p>Attached slides</p>',
+      htmlPresence: 'present',
       plainBody: null,
       hasAttachments: false,
       isUnread: true,
@@ -83,7 +85,7 @@ const conversationOne = {
       remoteImagesBlocked: false,
     },
   ],
-};
+} satisfies IpcCommandMap['load_conversation']['result'];
 
 function overrideAccount(id: string, threads: (typeof threadOne)[]) {
   ipc.override('list_labels', ({ accountId }) =>

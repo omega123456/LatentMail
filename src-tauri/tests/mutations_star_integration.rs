@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -8,9 +9,13 @@ use latentmail_lib::{
     gmail::GmailClient,
     queue::{Executor, Lane, OperationKind, QueueEngine, QueueOperation},
     storage::{
-        Account, AccountRepository, Label, LabelRepository, Message, MessageRepository, Storage,
+        Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
+        Storage,
     },
-    sync::{create_queue_engine_with_events, noop_event_sink, SyncEngine, WorkRegistry},
+    sync::{
+        create_queue_engine_with_events, noop_event_sink, MutationOutcome, SyncEngine,
+        WorkRegistry,
+    },
 };
 use wiremock::{
     matchers::{method, path},
@@ -84,6 +89,8 @@ fn seed_two_threads() -> (Storage, tempfile::TempDir) {
                 is_unread: true,
                 is_starred: false,
                 history_id: 1,
+                truncated_body: None,
+                html_presence: HtmlPresence::Absent,
             },
         )
         .unwrap();
@@ -166,6 +173,8 @@ fn mutation_history_write_back_rejects_an_older_full_state() {
         is_unread: true,
         is_starred: false,
         history_id,
+        truncated_body: None,
+        html_presence: HtmlPresence::Absent,
     };
     assert!(MessageRepository::write_full_state(&connection, &message(10)).unwrap());
     MessageRepository::write_mutation_history(&connection, "account", &["message".into()], 20)
@@ -209,18 +218,18 @@ async fn rapid_distinct_thread_stars_coalesce_into_one_batch_modify_request() {
         let base_url = server.uri();
         tokio::spawn(async move {
             engine
-                .mutate_thread(
+                .mutate(
                     "account",
                     GmailClient::with_base_url("token", base_url),
                     thread_id.into(),
-                    "STARRED",
-                    true,
+                    HashSet::from(["STARRED".to_owned()]),
+                    HashSet::new(),
                 )
                 .await
         })
     });
     for star in stars {
-        star.await.unwrap().unwrap();
+        assert_eq!(star.await.unwrap().unwrap(), MutationOutcome::Applied);
     }
 
     let batches = server
@@ -296,12 +305,12 @@ async fn sync_engine_star_preempts_500_background_operations_and_coalesces_threa
     let first_server = server.uri();
     let first = tokio::spawn(async move {
         first_engine
-            .mutate_thread(
+            .mutate(
                 "account",
                 GmailClient::with_base_url("token", first_server),
                 "thread-a".into(),
-                "STARRED",
-                true,
+                HashSet::from(["STARRED".to_owned()]),
+                HashSet::new(),
             )
             .await
     });
@@ -382,16 +391,19 @@ async fn star_succeeds_when_batch_modify_returns_204_with_no_body() {
         noop_event_sink(),
     );
 
-    engine
-        .mutate_thread(
-            "account",
-            GmailClient::with_base_url("token", server.uri()),
-            "thread-a".into(),
-            "STARRED",
-            true,
-        )
-        .await
-        .unwrap();
+    assert_eq!(
+        engine
+            .mutate(
+                "account",
+                GmailClient::with_base_url("token", server.uri()),
+                "thread-a".into(),
+                HashSet::from(["STARRED".to_owned()]),
+                HashSet::new(),
+            )
+            .await
+            .unwrap(),
+        MutationOutcome::Applied
+    );
 
     let connection = storage.connection().unwrap();
     let message = &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
@@ -425,12 +437,12 @@ async fn rejected_batch_modify_reports_the_gmail_error_to_every_waiter() {
         let base_url = server.uri();
         tokio::spawn(async move {
             engine
-                .mutate_thread(
+                .mutate(
                     "account",
                     GmailClient::with_base_url("token", base_url),
                     thread_id.into(),
-                    "STARRED",
-                    true,
+                    HashSet::from(["STARRED".to_owned()]),
+                    HashSet::new(),
                 )
                 .await
         })
@@ -439,4 +451,147 @@ async fn rejected_batch_modify_reports_the_gmail_error_to_every_waiter() {
         let error = star.await.unwrap().unwrap_err().to_string();
         assert!(error.contains("403"), "unexpected error: {error}");
     }
+}
+
+/// D5: opposing mutations on the *same* thread inside the coalescing
+/// window resolve to the later value, and the superseded request hears so
+/// explicitly rather than seeing a dropped reply channel (AC5, AC7b).
+#[tokio::test(start_paused = true)]
+async fn star_then_unstar_on_the_same_thread_resolves_to_unstarred_and_supersedes_the_star() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/users/me/messages/batchModify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/message-a"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "message-a", "threadId": "thread-a", "historyId": "20",
+            "labelIds": ["INBOX"], "snippet": "updated",
+            "internalDate": "1", "payload": { "headers": [] }
+        })))
+        .mount(&server)
+        .await;
+    let (storage, _directory) = seed_two_threads();
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine_with_events(
+        1_000,
+        1_000,
+        Arc::clone(&registry),
+        Arc::new(|_event, _payload| {}),
+    );
+    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+
+    let star_engine = Arc::clone(&engine);
+    let star_server = server.uri();
+    let star = tokio::spawn(async move {
+        star_engine
+            .mutate(
+                "account",
+                GmailClient::with_base_url("token", star_server),
+                "thread-a".into(),
+                HashSet::from(["STARRED".to_owned()]),
+                HashSet::new(),
+            )
+            .await
+    });
+    // Give the star request time to become the window's leader before the
+    // unstar joins it, without depending on real scheduling order.
+    tokio::task::yield_now().await;
+    let unstar = engine
+        .mutate(
+            "account",
+            GmailClient::with_base_url("token", server.uri()),
+            "thread-a".into(),
+            HashSet::new(),
+            HashSet::from(["STARRED".to_owned()]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(unstar, MutationOutcome::Applied);
+    assert_eq!(star.await.unwrap().unwrap(), MutationOutcome::Superseded);
+
+    let requests = server.received_requests().await.unwrap();
+    let batches = requests
+        .iter()
+        .filter(|request| request.url.path() == "/users/me/messages/batchModify")
+        .collect::<Vec<_>>();
+    assert_eq!(batches.len(), 1, "the superseded star must never reach Gmail");
+    let body = batches[0].body_json::<serde_json::Value>().unwrap();
+    assert_eq!(body["removeLabelIds"], serde_json::json!(["STARRED"]));
+
+    let connection = storage.connection().unwrap();
+    let message = &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
+    assert!(!message.is_starred, "must resolve to the later, unstarred value");
+}
+
+/// D5: opposing mutations for *different* threads inside the same window
+/// each receive their own direction — the delta map never leaks one
+/// entity's mutation onto another's messages (AC6).
+#[tokio::test(start_paused = true)]
+async fn opposing_mutations_on_different_threads_each_receive_their_own_direction() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/users/me/messages/batchModify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    for (id, thread_id) in [("message-a", "thread-a"), ("message-b", "thread-b")] {
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id, "threadId": thread_id, "historyId": "20",
+                "labelIds": ["INBOX"], "snippet": "updated",
+                "internalDate": "1", "payload": { "headers": [] }
+            })))
+            .mount(&server)
+            .await;
+    }
+    let (storage, _directory) = seed_two_threads();
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine_with_events(
+        1_000,
+        1_000,
+        Arc::clone(&registry),
+        Arc::new(|_event, _payload| {}),
+    );
+    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+
+    let star_engine = Arc::clone(&engine);
+    let star_server = server.uri();
+    let star = tokio::spawn(async move {
+        star_engine
+            .mutate(
+                "account",
+                GmailClient::with_base_url("token", star_server),
+                "thread-a".into(),
+                HashSet::from(["STARRED".to_owned()]),
+                HashSet::new(),
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+    let unstar = engine
+        .mutate(
+            "account",
+            GmailClient::with_base_url("token", server.uri()),
+            "thread-b".into(),
+            HashSet::new(),
+            HashSet::from(["STARRED".to_owned()]),
+        )
+        .await;
+
+    assert_eq!(unstar.unwrap(), MutationOutcome::Applied);
+    assert_eq!(star.await.unwrap().unwrap(), MutationOutcome::Applied);
+
+    let connection = storage.connection().unwrap();
+    let message_a =
+        &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
+    let message_b =
+        &MessageRepository::list_by_thread(&connection, "account", "thread-b").unwrap()[0];
+    assert!(message_a.is_starred, "thread-a's own star must not leak away");
+    assert!(!message_b.is_starred, "thread-b's own unstar must not be overridden");
 }

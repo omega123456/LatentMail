@@ -1,6 +1,43 @@
 import type { ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
 
-export function EmptyState({ children }: { children: ReactNode }) {
+type EmptyStateProps = {
+  children: ReactNode;
+  /** `syncing` is visually distinct from the plain empty state (spinner +
+   * progress count) — a mailbox with nothing loaded yet because backfill
+   * hasn't reached it is not the same thing as a genuinely empty mailbox. */
+  variant?: 'plain' | 'syncing';
+  /** Traversal progress counts shown as "n of total so far" — only rendered
+   * together, and only for the `syncing` variant. */
+  persistedCount?: number;
+  discoveredCount?: number;
+};
+
+export function EmptyState({
+  children,
+  variant = 'plain',
+  persistedCount,
+  discoveredCount,
+}: EmptyStateProps) {
+  if (variant === 'syncing')
+    return (
+      <div
+        data-testid="empty-state-syncing"
+        className="flex flex-col items-center gap-stack-gap-sm p-container-padding text-center text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant"
+      >
+        <Loader2
+          aria-hidden="true"
+          size={24}
+          className="animate-spin text-primary dark:text-dark-primary"
+        />
+        <p>{children}</p>
+        {persistedCount !== undefined && discoveredCount !== undefined && (
+          <p className="tabular-nums text-label-sm">
+            {persistedCount.toLocaleString()} of {discoveredCount.toLocaleString()} so far
+          </p>
+        )}
+      </div>
+    );
   return (
     <div className="p-container-padding text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
       {children}

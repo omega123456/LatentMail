@@ -1,9 +1,11 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationList } from '@/components/list/ConversationList';
 import { ListHeader } from '@/components/list/ListHeader';
+import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { useLayoutStore } from '@/stores/layout';
+import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
 
 const nextPage = [
@@ -36,6 +38,7 @@ beforeEach(() => {
     activeThreadId: null,
     keyboardCursor: null,
   });
+  useMultiSelectStore.setState({ selectedIds: new Set(), anchorId: null });
 });
 
 describe('ConversationList', () => {
@@ -92,6 +95,18 @@ describe('ConversationList', () => {
     expect(screen.getByText('no such column: snippet')).toBeInTheDocument();
   });
 
+  it('renders the still-syncing empty state with a spinner and n/total progress counts', () => {
+    render(
+      <ConversationList
+        state="syncing"
+        syncProgress={{ persistedCount: 12400, discoveredCount: 50000 }}
+      />,
+    );
+    expect(screen.getByTestId('empty-state-syncing')).toBeInTheDocument();
+    expect(screen.getByText('Older mail is still arriving')).toBeInTheDocument();
+    expect(screen.getByText('12,400 of 50,000 so far')).toBeInTheDocument();
+  });
+
   it('loads the next fixture page at the bottom and preserves the scroll anchor across prepends', () => {
     const { rerender } = render(
       <ConversationList
@@ -122,5 +137,118 @@ describe('ConversationList', () => {
     Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 200 });
     rerender(<ConversationList threads={[...prepended, ...nextPage]} />);
     expect(list.scrollTop).toBeGreaterThan(30);
+  });
+
+  it('shows a label already on the row as checked in the row context menu and lets it be removed', async () => {
+    const user = userEvent.setup();
+    const onTriage = vi.fn();
+    const allLabels: LabelMenuEntry[] = [
+      { id: 'Label_1', name: 'Marketing', color: 'blue', membership: 'unchecked' },
+    ];
+    render(<ConversationList allLabels={allLabels} onTriage={onTriage} />);
+    const row = screen.getAllByTestId('conversation-row')[0];
+    await user.pointer({ keys: '[MouseRight]', target: row });
+    await user.hover(await screen.findByText('Labels'));
+    const entry = await screen.findByRole('menuitemcheckbox', { name: /Marketing/ });
+    expect(entry).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(entry);
+    expect(onTriage).toHaveBeenCalledWith(['thread-1'], { add: [], remove: ['Label_1'] });
+  });
+});
+
+describe('ConversationList multi-selection', () => {
+  it('Cmd/Ctrl-click toggles a row into and out of the selection without opening it', () => {
+    render(<ConversationList />);
+    const rows = screen.getAllByTestId('conversation-row');
+
+    fireEvent.click(screen.getByLabelText('Open Updates to Color Tokens'), { ctrlKey: true });
+    expect(rows[1]).toHaveAttribute('data-selected', 'true');
+    expect(useSelectionStore.getState().activeThreadId).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Open Updates to Color Tokens'), { metaKey: true });
+    expect(rows[1]).not.toHaveAttribute('data-selected');
+  });
+
+  it('includes the focused row when the first Cmd/Ctrl-click starts a multi-selection', () => {
+    render(<ConversationList />);
+    const rows = screen.getAllByTestId('conversation-row');
+
+    fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'));
+    fireEvent.click(screen.getByLabelText('Open Updates to Color Tokens'), { ctrlKey: true });
+
+    expect(rows[0]).toHaveAttribute('data-selected', 'true');
+    expect(rows[1]).toHaveAttribute('data-selected', 'true');
+  });
+
+  it('Shift-click selects a contiguous range from the focused row', () => {
+    render(<ConversationList />);
+    const rows = screen.getAllByTestId('conversation-row');
+
+    fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'));
+    fireEvent.click(screen.getByLabelText('Open Action Required: 2FA Setup'), { shiftKey: true });
+
+    expect(rows[0]).toHaveAttribute('data-selected', 'true');
+    expect(rows[1]).toHaveAttribute('data-selected', 'true');
+    expect(rows[2]).toHaveAttribute('data-selected', 'true');
+    expect(rows[3]).not.toHaveAttribute('data-selected');
+  });
+
+  it('Cmd/Ctrl-A selects exactly the loaded rows', () => {
+    render(<ConversationList />);
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true })));
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(4);
+    for (const row of screen.getAllByTestId('conversation-row'))
+      expect(row).toHaveAttribute('data-selected', 'true');
+  });
+
+  it('a plain click clears the multi-selection and opens the row', async () => {
+    const user = userEvent.setup();
+    render(<ConversationList />);
+    fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), {
+      ctrlKey: true,
+    });
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(1);
+
+    await user.click(screen.getByLabelText('Open Updates to Color Tokens'));
+
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(0);
+    expect(useSelectionStore.getState().activeThreadId).toBe('thread-2');
+  });
+
+  it('Escape clears an active multi-selection before it ever touches the open conversation', () => {
+    render(<ConversationList />);
+    fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), {
+      ctrlKey: true,
+    });
+
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(0);
+  });
+
+  it('no single-active-row highlight renders while more than one row is selected', () => {
+    render(<ConversationList />);
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
+    expect(useSelectionStore.getState().keyboardCursor).toBe(0);
+
+    fireEvent.click(screen.getByLabelText('Open Updates to Color Tokens'), { ctrlKey: true });
+    fireEvent.click(screen.getByLabelText('Open Action Required: 2FA Setup'), { ctrlKey: true });
+
+    for (const row of screen.getAllByTestId('conversation-row'))
+      expect(row).not.toHaveAttribute('data-active');
+  });
+});
+
+describe('ConversationList triage shortcuts', () => {
+  it('uses the registry bindings for selected conversations and ignores focused inputs', () => {
+    const onTriage = vi.fn();
+    render(<><input aria-label="filter" /><ConversationList onTriage={onTriage} /></>);
+    fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), { ctrlKey: true });
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'I', shiftKey: true })));
+    expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], { add: [], remove: ['UNREAD'] });
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'J', ctrlKey: true, shiftKey: true })));
+    expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], { add: [], remove: ['SPAM'] });
+    screen.getByLabelText('filter').focus();
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })));
+    expect(onTriage).toHaveBeenCalledTimes(2);
   });
 });

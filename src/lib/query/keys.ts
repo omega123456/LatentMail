@@ -9,5 +9,12 @@ export const queryKeys = {
   threadsForAccount: (accountId: string) => ['threads', accountId] as const,
   conversation: (accountId: string, threadId: string) =>
     ['conversation', accountId, threadId] as const,
+  /** Prefix matching every conversation query for `accountId`, regardless of
+   * `threadId` — `['conversation', accountId, '']` is NOT a prefix of
+   * `['conversation', accountId, 'thread-1']` under TanStack's array-key
+   * matching, so invalidations that mean "every open conversation for this
+   * account" must use this instead. */
+  conversationsForAccount: (accountId: string) => ['conversation', accountId] as const,
   syncStatus: (accountId: string) => ['syncStatus', accountId] as const,
+  traversalStatus: (accountId: string) => ['traversalStatus', accountId] as const,
 };

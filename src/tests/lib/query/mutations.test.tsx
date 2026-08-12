@@ -6,6 +6,7 @@ import { ConversationListContainer } from '@/components/list/ConversationList';
 import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
+import { queryKeys } from '@/lib/query/keys';
 
 const thread = {
   id: 'thread-1', subject: 'Mutation', participants: ['A'], latestAt: 0, messageCount: 1,
@@ -26,7 +27,7 @@ describe('thread mutations', () => {
   it('optimistically stars a conversation', async () => {
     const user = userEvent.setup();
     let resolve!: () => void;
-    ipc.override('star_thread', () => new Promise<void>((done) => { resolve = done; }));
+    ipc.override('mutate_threads', () => new Promise((done) => { resolve = () => done([]); }));
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     expect(screen.getByLabelText('Unstar Mutation')).toBeInTheDocument();
@@ -35,10 +36,39 @@ describe('thread mutations', () => {
 
   it('rolls a failed star back and shows an error toast', async () => {
     const user = userEvent.setup();
-    ipc.override('star_thread', () => Promise.reject(new Error('offline')));
+    ipc.override('mutate_threads', () => Promise.reject(new Error('offline')));
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     await waitFor(() => expect(screen.getByLabelText('Star Mutation')).toBeInTheDocument());
     expect(useToastStore.getState().toast?.message).toMatch(/couldn’t update/i);
+  });
+
+  it('invalidates every open conversation for the account once a thread-level triage settles', async () => {
+    const user = userEvent.setup();
+    ipc.override('mutate_threads', []);
+    ipc.override('load_conversation', {
+      threadId: 'thread-9',
+      subject: 'A different open conversation',
+      messages: [],
+    });
+    const client = new QueryClient();
+    // Seed a real conversation query for a *different* thread than the one
+    // being triaged — this is exactly the case the old `('account', '')` key
+    // could never match, since it isn't a prefix of `('account', 'thread-9')`.
+    await client.fetchQuery({
+      queryKey: queryKeys.conversation('account', 'thread-9'),
+      queryFn: () => ipc.tauriInvoke('load_conversation', { accountId: 'account', threadId: 'thread-9' }),
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationListContainer />
+      </QueryClientProvider>,
+    );
+    await user.click(await screen.findByLabelText('Star Mutation'));
+    await waitFor(() =>
+      expect(
+        client.getQueryState(queryKeys.conversation('account', 'thread-9'))?.isInvalidated,
+      ).toBe(true),
+    );
   });
 });

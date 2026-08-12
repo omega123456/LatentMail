@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, InlinePart, Label, LabelRepository, Message, MessageRepository,
-    Storage, Thread, ThreadRepository,
+    Account, AccountRepository, HtmlPresence, InlinePart, Label, LabelRepository, Message,
+    MessageRepository, Storage, Thread, ThreadRepository,
 };
 use latentmail_lib::sync::commands::{
     list_labels, list_threads, load_conversation, read_sync_status, trigger_sync,
@@ -182,6 +182,8 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
             is_unread: false,
             is_starred: false,
             history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
         },
     )
     .unwrap();
@@ -379,6 +381,8 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
             is_unread: false,
             is_starred: false,
             history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
         },
     )
     .unwrap();

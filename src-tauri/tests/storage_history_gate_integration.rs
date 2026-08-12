@@ -1,4 +1,4 @@
-use latentmail_lib::storage::{Account, AccountRepository, Message, MessageRepository, Storage};
+use latentmail_lib::storage::{Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage};
 
 fn message(history_id: i64, subject: &str) -> Message {
     Message {
@@ -17,6 +17,8 @@ fn message(history_id: i64, subject: &str) -> Message {
         is_unread: false,
         is_starred: false,
         history_id,
+        truncated_body: None,
+        html_presence: HtmlPresence::Absent,
     }
 }
 fn connection() -> rusqlite::Connection {

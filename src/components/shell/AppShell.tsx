@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useAccountsQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import { SignInScreen } from '@/components/auth/SignInScreen';
+import { CommandProvider } from '@/providers/CommandProvider';
 import { MailLayout } from './MailLayout';
 import { Toast } from '@/components/states/Toast';
 
@@ -21,14 +22,20 @@ export function AppShell() {
     ((route === 'mail' || route === 'settings') && !configured)
   )
     return null;
-  const content = route === 'auth' ? (
-    <SignInScreen />
-  ) : route === 'settings' ? (
+  const content =
+    route === 'auth' ? (
+      <SignInScreen />
+    ) : route === 'settings' ? (
       <main className="min-h-screen bg-surface p-container-padding text-headline-sm dark:bg-dark-surface">
         Settings are not yet implemented.
       </main>
-  ) : (
-    <MailLayout accounts={accounts ?? []} />
+    ) : (
+      <MailLayout accounts={accounts ?? []} />
+    );
+  return (
+    <CommandProvider>
+      {content}
+      <Toast />
+    </CommandProvider>
   );
-  return <>{content}<Toast /></>;
 }

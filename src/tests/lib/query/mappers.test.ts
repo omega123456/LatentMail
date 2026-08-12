@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeThreadLabelMembership,
   mapConversation,
   mapLabelsToMailboxes,
   mapLabelsToUserLabels,
@@ -21,7 +22,14 @@ const thread: MailThread = {
 
 const labels: MailLabel[] = [
   { id: 'INBOX', name: 'Inbox', kind: 'system', color: null, messageCount: 5, unreadCount: 2 },
-  { id: 'Label_1', name: 'Work', kind: 'user', color: '#000', messageCount: 3, unreadCount: 1 },
+  {
+    id: 'Label_1',
+    name: 'Work',
+    kind: 'user',
+    color: { text: '#ffffff', background: '#4a86e8' },
+    messageCount: 3,
+    unreadCount: 1,
+  },
   { id: 'Label_2', name: 'Personal', kind: 'user', color: null, messageCount: 0, unreadCount: 0 },
 ];
 
@@ -56,10 +64,12 @@ describe('mapLabelsToMailboxes / mapLabelsToUserLabels', () => {
     ]);
   });
 
-  it('keeps only user-kind labels for the sidebar label list, cycling colors', () => {
+  it('keeps only user-kind labels for the sidebar label list, resolving the real Gmail colour', () => {
     expect(mapLabelsToUserLabels(labels)).toEqual([
       { id: 'Label_1', name: 'Work', unreadCount: 1, color: 'blue' },
-      { id: 'Label_2', name: 'Personal', unreadCount: 0, color: 'green' },
+      // No colour set yet (or off the curated palette) falls back to the
+      // first swatch rather than a fabricated cycle.
+      { id: 'Label_2', name: 'Personal', unreadCount: 0, color: 'black' },
     ]);
   });
 });
@@ -78,6 +88,7 @@ describe('mapConversation', () => {
           sentAt: Date.parse('2026-08-10T09:00:00Z'),
           snippet: 'Attached slides',
           htmlBody: '<p>Attached slides</p>',
+          htmlPresence: 'present',
           plainBody: null,
           hasAttachments: false,
           isUnread: false,
@@ -96,5 +107,29 @@ describe('mapConversation', () => {
       labels: ['Work'],
       remoteImagesBlocked: true,
     });
+  });
+});
+
+describe('computeThreadLabelMembership', () => {
+  const userLabels: MailLabel[] = [
+    { id: 'Label_1', name: 'Clients', kind: 'user', color: null, messageCount: 1, unreadCount: 0 },
+    { id: 'Label_2', name: 'Invoices', kind: 'user', color: null, messageCount: 1, unreadCount: 0 },
+    { id: 'INBOX', name: 'Inbox', kind: 'system', color: null, messageCount: 1, unreadCount: 0 },
+  ];
+
+  it('renders checked when present on every message, unchecked on none, and indeterminate on some', () => {
+    const result = computeThreadLabelMembership(userLabels, [
+      ['Label_1', 'INBOX'],
+      ['Label_1'],
+    ]);
+    expect(result).toEqual([
+      { id: 'Label_1', name: 'Clients', color: 'black', membership: 'checked' },
+      { id: 'Label_2', name: 'Invoices', color: 'black', membership: 'unchecked' },
+    ]);
+  });
+
+  it('renders every user label unchecked for a thread with no loaded messages', () => {
+    const result = computeThreadLabelMembership(userLabels, []);
+    expect(result.every((entry) => entry.membership === 'unchecked')).toBe(true);
   });
 });

@@ -1,9 +1,8 @@
-//! D13: an expired `history.list` checkpoint (404) discards the stored
-//! checkpoint, performs a full re-sync, and establishes a fresh one.
+//! An expired `history.list` checkpoint repairs local state in place.
 
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
-    Account, AccountRepository, Message, MessageRepository, Storage, ThreadRepository,
+    Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage, ThreadRepository,
 };
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncState, WorkRegistry};
 use wiremock::{
@@ -29,15 +28,14 @@ fn engine_with_stale_checkpoint() -> (std::sync::Arc<SyncEngine>, Storage, tempf
         },
     )
     .unwrap();
-    // A message left over from before the gap that the fresh fetch below
-    // will not mention — proof that resync wipes and rebuilds rather than
-    // leaving stale rows around.
+    // This message remains on the server but is not fetched again: expired
+    // checkpoint recovery must preserve it rather than rebuild local mail.
     MessageRepository::write_full_state(
         &connection,
         &Message {
             account_id: "account".into(),
-            id: "stale".into(),
-            thread_id: "stale-thread".into(),
+            id: "retained".into(),
+            thread_id: "retained-thread".into(),
             rfc_message_id: None,
             sender: "old@example.com".into(),
             recipients: "me@example.com".into(),
@@ -50,10 +48,12 @@ fn engine_with_stale_checkpoint() -> (std::sync::Arc<SyncEngine>, Storage, tempf
             is_unread: false,
             is_starred: false,
             history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
         },
     )
     .unwrap();
-    ThreadRepository::recompute(&connection, "account", "stale-thread").unwrap();
+    ThreadRepository::recompute(&connection, "account", "retained-thread").unwrap();
     drop(connection);
 
     let registry = WorkRegistry::new();
@@ -85,7 +85,10 @@ async fn mount_expired_then_full_resync_fixture(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{"id":"fresh","threadId":"fresh-thread"}]
+            "messages": [
+                {"id":"fresh","threadId":"fresh-thread"},
+                {"id":"retained","threadId":"retained-thread"}
+            ]
         })))
         .mount(server)
         .await;
@@ -104,7 +107,7 @@ async fn mount_expired_then_full_resync_fixture(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn expired_checkpoint_falls_back_to_a_full_resync_with_a_fresh_checkpoint() {
+async fn expired_checkpoint_repairs_in_place_and_adopts_a_fresh_checkpoint() {
     let server = MockServer::start().await;
     mount_expired_then_full_resync_fixture(&server).await;
     let (engine, storage, _directory) = engine_with_stale_checkpoint();
@@ -113,13 +116,13 @@ async fn expired_checkpoint_falls_back_to_a_full_resync_with_a_fresh_checkpoint(
     engine.run_sync("account", client).await.unwrap();
 
     let connection = storage.connection().unwrap();
-    assert!(MessageRepository::get(&connection, "account", "stale")
+    assert!(MessageRepository::get(&connection, "account", "retained")
         .unwrap()
-        .is_none());
+        .is_some());
     assert!(
-        ThreadRepository::get(&connection, "account", "stale-thread")
+        ThreadRepository::get(&connection, "account", "retained-thread")
             .unwrap()
-            .is_none()
+            .is_some()
     );
     assert!(MessageRepository::get(&connection, "account", "fresh")
         .unwrap()

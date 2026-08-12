@@ -1,0 +1,19 @@
+[[permission]]
+identifier = "allow-create-label"
+description = "Enables creating a user label with a name and palette colour."
+commands.allow = ["create_label"]
+
+[[permission]]
+identifier = "allow-rename-label"
+description = "Enables renaming a user label."
+commands.allow = ["rename_label"]
+
+[[permission]]
+identifier = "allow-recolor-label"
+description = "Enables recolouring a user label to a palette colour."
+commands.allow = ["recolor_label"]
+
+[[permission]]
+identifier = "allow-delete-label"
+description = "Enables deleting a user label and its message associations."
+commands.allow = ["delete_label"]

@@ -116,11 +116,20 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::sync::commands::list_labels,
         crate::sync::commands::list_threads,
         crate::sync::commands::load_conversation,
+        crate::sync::commands::fetch_message_body,
         crate::sync::commands::trigger_sync,
         crate::sync::commands::read_sync_status,
         crate::sync::commands::star_thread,
         crate::sync::commands::unstar_thread,
         crate::sync::commands::mark_thread_read,
-        crate::sync::commands::mark_thread_unread
+        crate::sync::commands::mark_thread_unread,
+        crate::sync::commands::mutate_threads,
+        crate::sync::commands::mutate_messages,
+        crate::sync::commands::delete_draft,
+        crate::sync::commands::create_label,
+        crate::sync::commands::rename_label,
+        crate::sync::commands::recolor_label,
+        crate::sync::commands::delete_label,
+        crate::sync::commands::read_traversal_status
     ])
 }

@@ -1,0 +1,15 @@
+-- Fixes a status-bar wording bug: `is_resumed` was derived live from
+-- `position IS NOT NULL`, but backfill writes a non-null `position` on
+-- *every* committed page (not just a page picked up after a restart), so by
+-- page 2 of a perfectly normal, uninterrupted run the status bar showed
+-- "Resuming backfill" instead of "Backfilling" for the rest of the run.
+--
+-- `resumed` instead snapshots, once per logical backfill run (at the moment
+-- `SyncEngine::enqueue_backfill` kicks that run off), whether the cursor
+-- already had a saved checkpoint position at that instant — i.e. whether
+-- this run is genuinely picking up after a prior process/run was
+-- interrupted. Every subsequent page of that same run carries the same
+-- flag forward unchanged (see `sync::traversal::run_backfill_step`), so it
+-- can no longer flip back and forth within one run based on the live
+-- `position` column.
+ALTER TABLE traversal_cursors ADD COLUMN resumed INTEGER NOT NULL DEFAULT 0;

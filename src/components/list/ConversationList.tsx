@@ -1,17 +1,28 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { useMailVirtualizer } from '@/lib/react-virtual';
 import { ErrorState } from '@/components/states/ErrorState';
 import { EmptyState } from '@/components/states/EmptyState';
 import { LoadingState } from '@/components/states/LoadingState';
-import { useThreadMutation, useThreadsQuery } from '@/lib/query/hooks';
-import { mapThreadToRow } from '@/lib/query/mappers';
+import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
+import { useCommands } from '@/lib/keyboard/useCommands';
+import { useLabelsQuery, useThreadsQuery, useTriageMutation, useTraversalStatusQuery } from '@/lib/query/hooks';
+import { mapLabelsToUserLabels, mapThreadToRow } from '@/lib/query/mappers';
 import { useLayoutStore } from '@/stores/layout';
+import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
 import type { Conversation } from '@/lib/types/conversation';
 import { conversationFixtures } from './conversation-fixtures';
 import { ConversationRow } from './ConversationRow';
 
-type ListState = 'ready' | 'loading' | 'empty' | 'error';
+type ListState = 'ready' | 'loading' | 'empty' | 'syncing' | 'error';
 const emptyCopy: Record<string, string> = {
   INBOX: 'Your Inbox is clear.',
   STARRED: 'No starred conversations.',
@@ -29,8 +40,11 @@ export function ConversationList({
   state = fixtureState(),
   onRetry,
   onLoadMore,
-  onThreadMutation,
   errorMessage,
+  allLabels = [],
+  currentLabelName,
+  onTriage,
+  syncProgress,
 }: {
   threads?: Conversation[];
   pages?: Conversation[][];
@@ -42,7 +56,12 @@ export function ConversationList({
   /** Real (Query-driven) usage fetches pages lazily instead of slicing an
    * already-loaded `pages` array — the container passes this instead. */
   onLoadMore?: () => void;
-  onThreadMutation?: (threadId: string, kind: 'star' | 'unstar' | 'read') => void;
+  allLabels?: LabelMenuEntry[];
+  currentLabelName?: string;
+  onTriage?: (threadIds: string[], change: { add: string[]; remove: string[] }) => void;
+  /** Traversal progress counts for the `syncing` empty-state variant — only
+   * meaningful while `state === 'syncing'`. */
+  syncProgress?: { persistedCount: number; discoveredCount: number };
 }) {
   'use no memo';
   const parentRef = useRef<HTMLDivElement>(null);
@@ -53,6 +72,13 @@ export function ConversationList({
   const cursor = useSelectionStore((value) => value.keyboardCursor);
   const setCursor = useSelectionStore((value) => value.setKeyboardCursor);
   const setThread = useSelectionStore((value) => value.setActiveThreadId);
+  const selectedIds = useMultiSelectStore((value) => value.selectedIds);
+  const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
+  const toggleSelected = useMultiSelectStore((value) => value.toggle);
+  const selectRange = useMultiSelectStore((value) => value.selectRange);
+  const selectAll = useMultiSelectStore((value) => value.selectAll);
+  const pruneSelected = useMultiSelectStore((value) => value.prune);
+  const clearMultiSelect = useMultiSelectStore((value) => value.clear);
   // Only fixture pagination is local. Rust-sourced rows remain owned by Query.
   const [fixturePage, setFixturePage] = useState(0);
   const [source, setSource] = useState(() => ({ pages, threads, mailboxId }));
@@ -60,7 +86,14 @@ export function ConversationList({
     setSource({ pages, threads, mailboxId });
     setFixturePage(0);
   }
-  const rows = pages ? pages.slice(0, fixturePage + 1).flat() : threads;
+  // Memoized so its identity is stable across renders that don't actually
+  // change the row set — `rowIds`/multi-select pruning key off this
+  // reference, and `slice().flat()` would otherwise allocate a fresh array
+  // (and re-trigger that pruning) on every render.
+  const rows = useMemo(
+    () => (pages ? pages.slice(0, fixturePage + 1).flat() : threads),
+    [pages, fixturePage, threads],
+  );
   useLayoutEffect(() => {
     const parent = parentRef.current;
     if (
@@ -90,42 +123,93 @@ export function ConversationList({
       if (!row) return;
       setCursor(index);
       setThread(row.id);
-      if (row.unread) onThreadMutation?.(row.id, 'read');
+      if (row.unread) onTriage?.([row.id], { add: [], remove: ['UNREAD'] });
     },
-    [onThreadMutation, rows, setCursor, setThread],
+    [onTriage, rows, setCursor, setThread],
   );
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        !['j', 'J', 'ArrowDown', 'k', 'K', 'ArrowUp', 'Enter', 'o', 'O', 'Escape'].includes(
-          event.key,
-        )
-      )
-        return;
-      if (event.key === 'Escape') {
-        setThread(null);
-        setCursor(null);
-        return;
-      }
-      if (event.key === 'Enter' || event.key === 'o' || event.key === 'O') {
-        if (cursor !== null) open(cursor);
-        return;
-      }
+  const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
+  useCommands({
+    moveCursorDown: (event) => {
       event.preventDefault();
-      const next =
-        event.key === 'j' || event.key === 'J' || event.key === 'ArrowDown'
-          ? Math.min(rows.length - 1, (cursor ?? -1) + 1)
-          : Math.max(0, (cursor ?? rows.length) - 1);
+      const next = Math.min(rows.length - 1, (cursor ?? -1) + 1);
       open(next);
       virtualizer.scrollToIndex(next, { align: 'auto' });
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [cursor, open, rows, setCursor, setThread, virtualizer]);
+    },
+    moveCursorUp: (event) => {
+      event.preventDefault();
+      const next = Math.max(0, (cursor ?? rows.length) - 1);
+      open(next);
+      virtualizer.scrollToIndex(next, { align: 'auto' });
+    },
+    openConversation: () => {
+      if (cursor !== null) open(cursor);
+    },
+    // Escape's existing two-level behavior: clear the multi-selection if one
+    // is active, otherwise clear the open conversation — matching the prior
+    // hard-coded handler exactly.
+    dismiss: () => {
+      if (multiSelectActive) {
+        clearMultiSelect();
+        return;
+      }
+      setThread(null);
+      setCursor(null);
+    },
+    selectAll: (event) => {
+      event.preventDefault();
+      selectAll(rowIds);
+    },
+    toggleStar: () => {
+      const ids = multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[];
+      if (!ids.length) return;
+      const starred = rows.some((row) => ids.includes(row.id) && row.starred);
+      onTriage?.(ids, { add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] });
+    },
+    markRead: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: [], remove: ['UNREAD'] }),
+    markUnread: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: ['UNREAD'], remove: [] }),
+    markSpam: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: ['SPAM'], remove: [] }),
+    markNotSpam: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: [], remove: ['SPAM'] }),
+    deleteConversation: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: ['TRASH'], remove: [] }),
+  });
+  // A list refresh (fresh query data, a fixture-page load) may have dropped
+  // rows that were previously selected — prune rather than leave stale ids
+  // selected forever.
+  useEffect(() => {
+    pruneSelected(rowIds);
+  }, [rowIds, pruneSelected]);
+  const handleRowClick = useCallback(
+    (event: ReactMouseEvent, index: number) => {
+      const row = rows[index];
+      if (!row) return;
+      const activeId = cursor === null ? undefined : rows[cursor]?.id;
+      if ((event.shiftKey || event.metaKey || event.ctrlKey) && !multiSelectActive && activeId)
+        toggleSelected(activeId);
+      if (event.shiftKey) {
+        selectRange(rowIds, row.id);
+        return;
+      }
+      if (event.metaKey || event.ctrlKey) {
+        toggleSelected(row.id);
+        return;
+      }
+      open(index);
+    },
+    [cursor, multiSelectActive, rows, rowIds, selectRange, toggleSelected, open],
+  );
   const content = (() => {
     if (state === 'loading') return <LoadingState>Loading conversations…</LoadingState>;
     if (state === 'empty')
       return <EmptyState>{emptyCopy[mailboxId] ?? 'No conversations in this mailbox.'}</EmptyState>;
+    if (state === 'syncing')
+      return (
+        <EmptyState
+          variant="syncing"
+          persistedCount={syncProgress?.persistedCount}
+          discoveredCount={syncProgress?.discoveredCount}
+        >
+          Older mail is still arriving
+        </EmptyState>
+      );
     if (state === 'error')
       return (
         <ErrorState>
@@ -156,11 +240,22 @@ export function ConversationList({
                 conversation={rows[item.index]}
                 density={density}
                 active={cursor === item.index}
+                selected={selectedIds.has(rows[item.index].id)}
+                multiSelectActive={multiSelectActive}
                 mailboxId={mailboxId}
-                onOpen={() => open(item.index)}
+                allLabels={allLabels}
+                currentLabelName={currentLabelName}
+                selectionCount={selectedIds.size}
+                onOpen={(event) => handleRowClick(event, item.index)}
                 onStar={() => {
                   const row = rows[item.index];
-                  onThreadMutation?.(row.id, row.starred ? 'unstar' : 'star');
+                  const ids = selectedIds.has(row.id) && multiSelectActive ? [...selectedIds] : [row.id];
+                  const starred = rows.some((candidate) => ids.includes(candidate.id) && candidate.starred);
+                  onTriage?.(ids, { add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] });
+                }}
+                onTriage={(change) => {
+                  const ids = selectedIds.has(rows[item.index].id) && multiSelectActive ? [...selectedIds] : [rows[item.index].id];
+                  onTriage?.(ids, change);
                 }}
               />
             </div>
@@ -207,7 +302,23 @@ export function ConversationListContainer() {
   const accountId = useSelectionStore((value) => value.activeAccountId);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
   const query = useThreadsQuery(accountId, mailboxId);
-  const mutation = useThreadMutation(accountId);
+  const traversal = useTraversalStatusQuery(accountId);
+  const triage = useTriageMutation(accountId);
+  const labelsQuery = useLabelsQuery(accountId);
+  const allLabels = useMemo<LabelMenuEntry[]>(
+    () =>
+      mapLabelsToUserLabels(labelsQuery.data ?? []).map((label) => ({
+        ...label,
+        membership: 'unchecked',
+      })),
+    [labelsQuery.data],
+  );
+  // Only a *user* label counts as "the removed source" (FR "Move to") — a
+  // system mailbox's own display name (e.g. browsing Inbox) must never be
+  // mistaken for one.
+  const currentLabelName = labelsQuery.data?.find(
+    (label) => label.id === mailboxId && label.kind === 'user',
+  )?.name;
   const rows = useMemo(
     () => (query.data?.pages ?? []).flatMap((page) => page.items.map(mapThreadToRow)),
     [query.data],
@@ -224,7 +335,9 @@ export function ConversationListContainer() {
         : query.isPending
           ? 'loading'
           : rows.length === 0
-            ? 'empty'
+            ? traversal.data?.state === 'backfilling' || traversal.data?.state === 'reconciling'
+              ? 'syncing'
+              : 'empty'
             : 'ready';
   return (
     <ConversationList
@@ -235,8 +348,18 @@ export function ConversationListContainer() {
       onLoadMore={() => {
         if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage();
       }}
-      onThreadMutation={
-        accountId ? (threadId, kind) => mutation.mutate({ threadId, kind }) : undefined
+      allLabels={allLabels}
+      currentLabelName={currentLabelName}
+      onTriage={(threadIds, change) => {
+        triage.mutate({ threadIds, ...change });
+      }}
+      syncProgress={
+        traversal.data
+          ? {
+              persistedCount: traversal.data.persistedCount,
+              discoveredCount: traversal.data.discoveredCount,
+            }
+          : undefined
       }
     />
   );
