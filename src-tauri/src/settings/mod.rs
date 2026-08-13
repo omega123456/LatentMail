@@ -8,6 +8,15 @@ use crate::storage::{SettingRepository, Storage, StorageError};
 
 const WINDOW_STATE_KEY: &str = "windowState";
 
+macro_rules! string_try {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+}
+
 #[derive(Clone)]
 pub struct SettingsService {
     storage: Storage,
@@ -101,15 +110,15 @@ impl SettingsService {
     }
 
     pub async fn write(&self, key: String, value: Value) -> Result<(), String> {
-        let mut settings = self.read().await.map_err(|error| error.to_string())?;
+        let mut settings = string_try!(self.read().await);
         if !settings.apply(&key, value.clone()) {
             return Err(format!("Unknown or invalid setting: {key}"));
         }
-        let encoded = serde_json::to_string(&value).map_err(|error| error.to_string())?;
-        self.storage
+        let encoded = string_try!(serde_json::to_string(&value));
+        string_try!(self.storage
             .run(move |connection| SettingRepository::set(connection, &key, &encoded))
-            .await
-            .map_err(|error| error.to_string())
+            .await);
+        Ok(())
     }
 
     pub fn save_window_state(&self, state: &WindowState) -> Result<(), StorageError> {
@@ -152,7 +161,7 @@ fn set_value<T: for<'a> Deserialize<'a>>(target: &mut T, value: Value) -> bool {
 
 #[tauri::command]
 pub async fn read_settings(service: tauri::State<'_, SettingsService>) -> Result<Settings, String> {
-    service.read().await.map_err(|error| error.to_string())
+    Ok(string_try!(service.read().await))
 }
 
 #[tauri::command]
@@ -211,18 +220,16 @@ pub fn save_window<R: Runtime>(window: &tauri::Window<R>, service: &SettingsServ
 }
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let directory = string_try!(app.path().app_data_dir());
+    string_try!(std::fs::create_dir_all(&directory));
     let service = SettingsService::new(
-        Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?,
+        string_try!(Storage::open(directory.join("latentmail.sqlite"))),
     );
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Main window is missing".to_owned())?;
     restore_window(&window, &service);
     app.manage(service);
-    window.show().map_err(|error| error.to_string())
+    string_try!(window.show());
+    Ok(())
 }

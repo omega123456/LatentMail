@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationListContainer } from '@/components/list/ConversationList';
 import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
@@ -31,16 +31,19 @@ describe('thread mutations', () => {
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     expect(screen.getByLabelText('Unstar Mutation')).toBeInTheDocument();
-    resolve();
+    await act(async () => { resolve(); });
   });
 
   it('rolls a failed star back and shows an error toast', async () => {
     const user = userEvent.setup();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     ipc.override('mutate_threads', () => Promise.reject(new Error('offline')));
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     await waitFor(() => expect(screen.getByLabelText('Star Mutation')).toBeInTheDocument());
     expect(useToastStore.getState().toast?.message).toMatch(/couldn’t update/i);
+    expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
+    error.mockRestore();
   });
 
   it('invalidates every open conversation for the account once a thread-level triage settles', async () => {

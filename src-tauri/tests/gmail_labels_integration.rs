@@ -76,6 +76,30 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
 }
 
 #[tokio::test]
+async fn labels_default_missing_type_and_ignore_incomplete_colors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "labels": [{
+                "id": "Label_1",
+                "name": "Clients",
+                "color": { "textColor": "#ffffff" }
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let labels = GmailClient::with_base_url("token", server.uri())
+        .labels()
+        .await
+        .unwrap();
+
+    assert_eq!(labels[0].kind, "user");
+    assert!(labels[0].color.is_none());
+}
+
+#[tokio::test]
 async fn deleting_a_draft_uses_the_dedicated_drafts_endpoint() {
     let server = MockServer::start().await;
     Mock::given(method("DELETE"))

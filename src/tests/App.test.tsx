@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import App from '@/App';
 
@@ -11,7 +11,7 @@ afterEach(() => vi.resetModules());
 
 it('mounts the application entry point', async () => {
   document.body.innerHTML = '<div id="root"></div>';
-  await import('@/main');
+  await act(async () => { await import('@/main'); });
   expect(await screen.findByTestId('sign-in-screen')).toBeInTheDocument();
 });
 

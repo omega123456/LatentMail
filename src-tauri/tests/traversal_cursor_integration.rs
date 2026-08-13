@@ -739,13 +739,15 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
             })
             .await
             .unwrap();
-        if matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page2")) {
+        if matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page2"))
+            && distinct_traversal_ops() == 1
+        {
             break;
         }
         tokio::task::yield_now().await;
     }
     assert_eq!(
-        cursor.expect("page 1 must have committed").position.as_deref(),
+        cursor.expect("page 1 must have committed and its operation must settle").position.as_deref(),
         Some("page2")
     );
     assert_eq!(distinct_traversal_ops(), 1, "only page 1 has completed so far");

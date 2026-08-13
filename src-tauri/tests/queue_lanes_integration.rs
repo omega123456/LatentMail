@@ -15,6 +15,17 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
     }
 }
 
+#[tokio::test]
+async fn no_op_queue_executes_enqueued_work() {
+    let queue = QueueEngine::no_op();
+    queue
+        .enqueue(operation("noop", Lane::Interactive, "entity"))
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(queue.summary().pending, 0);
+}
+
 #[tokio::test(start_paused = true)]
 async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
     let (started, mut receiver) = mpsc::unbounded_channel();

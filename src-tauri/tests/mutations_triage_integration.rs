@@ -3,14 +3,16 @@ use std::{collections::HashSet, sync::Arc};
 use latentmail_lib::{
     auth::{save_refresh_token, AuthService},
     gmail::GmailClient,
-    ipc::register,
     storage::{
         Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository,
         Storage,
     },
-    sync::{create_queue_engine_with_events, noop_event_sink, SyncEngine, WorkRegistry},
+    sync::{
+        commands::{delete_draft, mutate_threads},
+        create_queue_engine_with_events, noop_event_sink, SyncEngine, WorkRegistry,
+    },
 };
-use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
+use tauri::Manager;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -75,29 +77,9 @@ fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
 }
 
 fn app() -> tauri::App<tauri::test::MockRuntime> {
-    register(tauri::test::mock_builder())
+    tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap()
-}
-
-fn invoke(
-    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
-    command: &str,
-    body: serde_json::Value,
-) -> Result<serde_json::Value, serde_json::Value> {
-    tauri::test::get_ipc_response(
-        webview,
-        InvokeRequest {
-            cmd: command.into(),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
-            body: InvokeBody::Json(body),
-            headers: Default::default(),
-            invoke_key: INVOKE_KEY.to_owned(),
-        },
-    )
-    .map(|response| response.deserialize::<serde_json::Value>().unwrap())
 }
 
 #[tokio::test(start_paused = true)]
@@ -252,10 +234,17 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
         app.manage(storage.clone());
         app.manage(AuthService::new(storage));
         app.manage(engine);
-        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
-        invoke(&webview, "mutate_threads", serde_json::json!({
-            "accountId": "account-draft", "threadIds": ["thread-draft"], "add": ["TRASH"], "remove": []
-        })).unwrap();
+        mutate_threads(
+            app.handle().clone(),
+            app.state(),
+            app.state(),
+            "account-draft".into(),
+            vec!["thread-draft".into()],
+            vec!["TRASH".into()],
+            vec![],
+        )
+        .await
+        .unwrap();
         let requests = server.received_requests().await.unwrap();
         assert!(requests.iter().all(|request| request.url.path() != "/users/me/messages/batchModify"));
     });
@@ -307,10 +296,16 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
         app.manage(storage.clone());
         app.manage(AuthService::new(storage));
         app.manage(engine);
-        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
-        invoke(&webview, "delete_draft", serde_json::json!({
-            "accountId": "account-cached-draft", "messageId": "message-cached"
-        })).unwrap();
+        delete_draft(
+            app.handle().clone(),
+            app.state(),
+            app.state(),
+            app.state(),
+            "account-cached-draft".into(),
+            "message-cached".into(),
+        )
+        .await
+        .unwrap();
         server.verify().await;
     });
 }

@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import {
   useCreateLabelMutation,
@@ -33,6 +33,7 @@ describe('label lifecycle mutations', () => {
   });
 
   it('rejects with the mutation error so the caller can surface it inline', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     ipc.override('rename_label', () => Promise.reject(new Error('a label with this name already exists')));
     const client = new QueryClient();
     const { result } = renderHook(() => useRenameLabelMutation('account-1'), {
@@ -41,6 +42,7 @@ describe('label lifecycle mutations', () => {
     await expect(
       act(() => result.current.mutateAsync({ labelId: 'Label_1', name: 'Clients' })),
     ).rejects.toThrow('a label with this name already exists');
+    error.mockRestore();
   });
 
   it('recolours and deletes, invalidating the labels query either way', async () => {

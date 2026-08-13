@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import App from '@/App';
@@ -17,6 +17,7 @@ beforeEach(() => {
       keyboardCursor: null,
     });
     useSyncStore.setState({ accountId: null, lastSynced: null, syncState: 'idle' });
+    useLayoutStore.setState({ route: 'mail', layout: 'three-column', sidebarCollapsed: false, sidebarWidth: 260, listWidth: 350, readerHeight: 40 });
   });
 });
 
@@ -190,5 +191,46 @@ describe('AppShell wired to real data', () => {
     act(() => ipc.emit('account://state', accounts[0]));
 
     expect(await screen.findByTestId('reauth-banner')).toBeInTheDocument();
+  });
+
+  it('handles sidebar, mailbox, settings, and pane controls through the live layout', async () => {
+    const user = userEvent.setup();
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    render(<App />);
+    await screen.findByText('Q3 review');
+
+    await user.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.getByTestId('collapsed-rail')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    expect(screen.getByTestId('sidebar-slot')).toBeInTheDocument();
+
+    const inbox = screen.getAllByText('Inbox').find((element) => element.closest('button'))!;
+    await user.click(inbox.closest('button')!);
+    expect(useSelectionStore.getState().activeMailboxId).toBe('INBOX');
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize conversation list' }), { clientX: 10 });
+    fireEvent.pointerMove(window, { clientX: 30 });
+    fireEvent.pointerUp(window);
+    expect(useLayoutStore.getState().listWidth).toBe(370);
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await screen.findByText('Settings are not yet implemented.')).toBeInTheDocument();
+  });
+
+  it('resizes the bottom preview reader', async () => {
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    render(<App />);
+    await screen.findByText('Q3 review');
+    act(() => {
+      useLayoutStore.getState().setLayout('bottom-preview');
+      useSelectionStore.setState({ activeThreadId: 'thread-1' });
+    });
+    await screen.findByRole('button', { name: 'Resize reader' });
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize reader' }), { clientY: 10 });
+    fireEvent.pointerMove(window, { clientY: 30 });
+    fireEvent.pointerUp(window);
+    expect(useLayoutStore.getState().readerHeight).toBe(80);
   });
 });

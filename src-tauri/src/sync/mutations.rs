@@ -24,6 +24,15 @@ use std::{
     time::Duration,
 };
 
+macro_rules! string_try {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+}
+
 use tokio::sync::oneshot;
 
 use crate::{
@@ -63,22 +72,19 @@ pub(super) async fn delete_draft(
     message_id: &str,
 ) -> Result<(), String> {
     let draft_id = resolve_draft_id(storage, client, account_id, message_id).await?;
-    client
+    string_try!(client
         .delete_draft(&draft_id)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     let account = account_id.to_owned();
     let id = message_id.to_owned();
-    let thread_id = storage
+    let thread_id = string_try!(storage
         .run(move |connection| MessageRepository::delete(connection, &account, &id))
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     if let Some(thread_id) = thread_id {
         let account = account_id.to_owned();
-        storage
+        string_try!(storage
             .run(move |connection| ThreadRepository::recompute(connection, &account, &thread_id))
-            .await
-            .map_err(|error| error.to_string())?;
+            .await);
     }
     Ok(())
 }
@@ -96,17 +102,15 @@ async fn resolve_draft_id(
 ) -> Result<String, String> {
     let account = account_id.to_owned();
     let id = message_id.to_owned();
-    let cached = storage
+    let cached = string_try!(storage
         .run(move |connection| MessageRepository::draft_id(connection, &account, &id))
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     if let Some(draft_id) = cached {
         return Ok(draft_id);
     }
-    let mapping = client
+    let mapping = string_try!(client
         .list_draft_ids()
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     let draft_id = mapping
         .get(message_id)
         .cloned()
@@ -114,10 +118,9 @@ async fn resolve_draft_id(
     let account = account_id.to_owned();
     let id = message_id.to_owned();
     let resolved = draft_id.clone();
-    storage
+    string_try!(storage
         .run(move |connection| MessageRepository::set_draft_id(connection, &account, &id, &resolved))
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     Ok(draft_id)
 }
 
@@ -131,7 +134,7 @@ pub(super) async fn draft_message_ids(
 ) -> Result<Vec<String>, String> {
     let account = account_id.to_owned();
     let thread = thread_id.to_owned();
-    storage
+    let ids = string_try!(storage
         .run(move |connection| {
             MessageRepository::list_by_thread(connection, &account, &thread)?
                 .into_iter()
@@ -145,8 +148,8 @@ pub(super) async fn draft_message_ids(
                 .collect::<Result<Vec<_>, _>>()
                 .map(|ids| ids.into_iter().flatten().collect())
         })
-        .await
-        .map_err(|error| error.to_string())
+        .await);
+    Ok(ids)
 }
 
 /// The coalescing window: how long the leader waits for concurrently

@@ -79,10 +79,9 @@ for (const theme of ['light', 'dark'] as const) {
       { list_accounts: [playwrightMailAccount] },
       undefined,
       undefined,
-      // The fixture thread is already starred, so the row's control toggles
-      // *un*star — rejecting only `star_thread` left the click succeeding and
-      // the assertion passing off an unrelated toast.
-      ['star_thread', 'unstar_thread'],
+      // Thread triage is one batched mutation; rejecting the legacy per-star
+      // commands would leave this interaction succeeding.
+      ['mutate_threads'],
     );
     await page.goto('/');
     await toggleTheme(page, theme);

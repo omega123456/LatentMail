@@ -451,6 +451,11 @@ fn callback_state_is_validated_before_the_code_is_accepted() {
         parse_callback("/?code=code&state=wrong", "expected").unwrap_err(),
         "OAuth state did not match"
     );
+    assert_eq!(
+        parse_callback("/?state=expected", "expected").unwrap_err(),
+        "OAuth callback had no code"
+    );
+    assert!(parse_callback("\0", "expected").is_err());
 }
 
 #[test]
@@ -460,6 +465,71 @@ fn test_keychain_never_uses_the_real_os_store() {
         load_refresh_token("keychain-account").unwrap(),
         "refresh-token"
     );
+    assert_eq!(
+        load_refresh_token("missing-keychain-account").unwrap_err(),
+        "missing refresh token"
+    );
+}
+
+#[test]
+fn authorization_rejects_an_invalid_redirect() {
+    assert!(auth::authorization("client", "not a URL").is_err());
+}
+
+#[tokio::test]
+async fn exchange_and_profile_surface_http_and_payload_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/profile-error"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/profile-invalid"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+
+    assert!(auth::exchange_code(
+        "client",
+        "not a URL",
+        oauth2::AuthorizationCode::new("code".into()),
+        auth::authorization("client", "http://127.0.0.1:0")
+            .unwrap()
+            .verifier,
+    )
+    .await
+    .is_err());
+    assert!(auth::exchange_code(
+        "client",
+        "http://127.0.0.1:0",
+        oauth2::AuthorizationCode::new("code".into()),
+        auth::authorization("client", "http://127.0.0.1:0")
+            .unwrap()
+            .verifier,
+    )
+    .await
+    .is_err());
+
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_PROFILE_URL",
+        format!("{}/profile-error", server.uri()),
+    );
+    assert!(profile("token").await.is_err());
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_PROFILE_URL",
+        format!("{}/profile-invalid", server.uri()),
+    );
+    assert!(profile("token").await.is_err());
 }
 
 #[test]

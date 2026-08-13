@@ -86,7 +86,8 @@ async fn mount_fixture(server: &MockServer) {
                 {"name":"Subject","value":"Re: Hello"}
             ],"parts":[
                 {"mimeType":"text/plain","body":{"data":"cmVwbHk"}},
-                {"mimeType":"application/pdf","filename":"doc.pdf","body":{}}
+                {"mimeType":"application/pdf","filename":"doc.pdf","body":{}},
+                {"mimeType":"image/png","headers":[{"name":"Content-ID","value":"<logo>"}],"body":{"data":"aW1n"}}
             ]}
         })))
         .mount(server)

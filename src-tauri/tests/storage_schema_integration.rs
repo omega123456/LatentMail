@@ -378,6 +378,32 @@ fn all_ids_returns_every_locally_stored_message_id() {
     assert_eq!(ids, vec!["message".to_owned(), "message-2".to_owned()]);
 }
 
+#[test]
+fn set_truncated_body_overwrites_and_clears_the_stored_snippet() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    MessageRepository::write_full_state(&connection, &message()).unwrap();
+
+    MessageRepository::set_truncated_body(&connection, "account", "message", Some("truncated"))
+        .unwrap();
+    assert_eq!(
+        MessageRepository::get(&connection, "account", "message")
+            .unwrap()
+            .unwrap()
+            .truncated_body,
+        Some("truncated".to_owned())
+    );
+
+    MessageRepository::set_truncated_body(&connection, "account", "message", None).unwrap();
+    assert_eq!(
+        MessageRepository::get(&connection, "account", "message")
+            .unwrap()
+            .unwrap()
+            .truncated_body,
+        None
+    );
+}
+
 /// AC6 (schema half): a label's colour pair round-trips, present only when
 /// explicitly set.
 #[test]

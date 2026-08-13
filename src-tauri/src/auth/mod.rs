@@ -15,6 +15,15 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+macro_rules! string_try {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+}
+
 use crate::storage::{Account, AccountRepository, Storage};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -106,10 +115,8 @@ impl AuthService {
     ) -> Result<(), String> {
         async {
             let client_id = client_id()?;
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .map_err(|e| e.to_string())?;
-            let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+            let listener = string_try!(tokio::net::TcpListener::bind("127.0.0.1:0").await);
+            let port = string_try!(listener.local_addr()).port();
             let redirect = format!("http://127.0.0.1:{port}");
             tracing::info!(target: "auth", "sign-in listening on {redirect}");
             let authorization = authorization(&client_id, &redirect)?;
@@ -130,8 +137,7 @@ impl AuthService {
                 .await?;
             // The accounts query only refetches off this event, so without it
             // a successful sign-in leaves the UI on the sign-in screen.
-            app.emit("account://state", account)
-                .map_err(|error| error.to_string())?;
+            string_try!(app.emit("account://state", account));
             Ok(())
         }
         .await
@@ -214,8 +220,10 @@ impl AuthService {
             .await
             .map_err(|error| error.to_string())?;
         let account = updated.ok_or_else(|| "Unknown account".to_owned())?;
-        app.emit("account://state", account_dto(account))
-            .map_err(|error| error.to_string())
+        match app.emit("account://state", account_dto(account)) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     pub async fn refresh_access_token<R: Runtime>(
@@ -226,10 +234,10 @@ impl AuthService {
         let result = async {
             let mut client = BasicClient::new(ClientId::new(client_id()?))
                 .set_auth_type(AuthType::RequestBody)
-                .set_token_uri(
-                    TokenUrl::new(oauth_endpoint("LATENTMAIL_GOOGLE_TOKEN_URL", TOKEN_URL))
-                        .map_err(|e| e.to_string())?,
-                );
+                .set_token_uri(string_try!(TokenUrl::new(oauth_endpoint(
+                    "LATENTMAIL_GOOGLE_TOKEN_URL",
+                    TOKEN_URL
+                ))));
             if let Some(secret) = client_secret() {
                 client = client.set_client_secret(secret);
             }
@@ -266,22 +274,19 @@ impl AuthService {
 }
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let directory = string_try!(app.path().app_data_dir());
+    string_try!(std::fs::create_dir_all(&directory));
     app.manage(AuthService::new(
-        Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?,
+        string_try!(Storage::open(directory.join("latentmail.sqlite"))),
     ));
     Ok(())
 }
 
 pub fn authorization(client_id: &str, redirect: &str) -> Result<Authorization, String> {
     let client = BasicClient::new(ClientId::new(client_id.to_owned()))
-        .set_auth_uri(AuthUrl::new(AUTH_URL.to_owned()).map_err(|e| e.to_string())?)
-        .set_token_uri(TokenUrl::new(TOKEN_URL.to_owned()).map_err(|e| e.to_string())?)
-        .set_redirect_uri(RedirectUrl::new(redirect.to_owned()).map_err(|e| e.to_string())?);
+        .set_auth_uri(string_try!(AuthUrl::new(AUTH_URL.to_owned())))
+        .set_token_uri(string_try!(TokenUrl::new(TOKEN_URL.to_owned())))
+        .set_redirect_uri(string_try!(RedirectUrl::new(redirect.to_owned())));
     let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
     let (url, state) = client
         .authorize_url(CsrfToken::new_random)
@@ -306,11 +311,10 @@ pub async fn receive_code(
     listener: tokio::net::TcpListener,
     expected_state: &str,
 ) -> Result<AuthorizationCode, String> {
-    let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
+    let (mut stream, _) = string_try!(listener.accept().await);
     let mut request = vec![0; 8192];
-    let bytes = stream.read(&mut request).await.map_err(|e| e.to_string())?;
-    let target = std::str::from_utf8(&request[..bytes])
-        .map_err(|e| e.to_string())?
+    let bytes = string_try!(stream.read(&mut request).await);
+    let target = string_try!(std::str::from_utf8(&request[..bytes]))
         .split_whitespace()
         .nth(1)
         .ok_or_else(|| "Invalid OAuth callback".to_owned())?;
@@ -321,21 +325,18 @@ pub async fn receive_code(
     } else {
         "Invalid sign-in response."
     };
-    stream
-        .write_all(
+    string_try!(stream.write_all(
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{message}",
                 message.len()
             )
             .as_bytes(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        ).await);
     callback
 }
 
 pub fn parse_callback(target: &str, expected_state: &str) -> Result<AuthorizationCode, String> {
-    let url = tauri::Url::parse(&format!("http://127.0.0.1{target}")).map_err(|e| e.to_string())?;
+    let url = string_try!(tauri::Url::parse(&format!("http://127.0.0.1{target}")));
     let mut values: HashMap<_, _> = url.query_pairs().into_owned().collect();
     if values
         .get("state")
@@ -363,11 +364,11 @@ pub async fn exchange_code(
 > {
     let mut client = BasicClient::new(ClientId::new(client_id.to_owned()))
         .set_auth_type(AuthType::RequestBody)
-        .set_token_uri(
-            TokenUrl::new(oauth_endpoint("LATENTMAIL_GOOGLE_TOKEN_URL", TOKEN_URL))
-                .map_err(|e| e.to_string())?,
-        )
-        .set_redirect_uri(RedirectUrl::new(redirect.to_owned()).map_err(|e| e.to_string())?);
+        .set_token_uri(string_try!(TokenUrl::new(oauth_endpoint(
+            "LATENTMAIL_GOOGLE_TOKEN_URL",
+            TOKEN_URL
+        ))))
+        .set_redirect_uri(string_try!(RedirectUrl::new(redirect.to_owned())));
     if let Some(secret) = client_secret() {
         client = client.set_client_secret(secret);
     }

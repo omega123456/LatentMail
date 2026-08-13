@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use latentmail_lib::ipc::{write_frontend_log, FrontendLogLevel};
-use latentmail_lib::logging::{cleanup, subscriber};
+use latentmail_lib::logging::{cleanup, init, subscriber};
 use std::fs;
 use tracing::Level;
 use tracing_subscriber::filter::LevelFilter;
@@ -34,6 +34,22 @@ fn writer_records_frontend_messages_but_filters_debug() {
     assert!(contents.contains("warn record"));
     assert!(contents.contains("error record"));
     assert!(!contents.contains("filtered record"));
+}
+
+/// `init` sets the process-wide global dispatcher, so it must run in its own
+/// test process — nextest already isolates every test that way — and must be
+/// the only test in this binary that calls it.
+#[test]
+fn init_installs_a_global_dispatcher_and_creates_the_log_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let log_directory = directory.path().join("nested");
+
+    let guard = init(&log_directory).unwrap();
+
+    tracing::info!("routed through the global dispatcher");
+    drop(guard);
+
+    assert!(fs::read_dir(&log_directory).unwrap().next().is_some());
 }
 
 #[test]

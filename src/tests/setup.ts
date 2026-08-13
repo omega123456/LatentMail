@@ -3,6 +3,8 @@ import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
 
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
 vi.stubGlobal(
   'matchMedia',
   vi.fn(() => ({

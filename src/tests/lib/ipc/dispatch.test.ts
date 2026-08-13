@@ -70,12 +70,15 @@ describe('IPC dispatch', () => {
     ipc.useTauriApi();
     delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
     const { invoke } = await import('@/lib/ipc/commands');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     // `invoke` reports every failure as a rejection, including the ones
     // `dispatchInvoke` raises synchronously, so callers only need one path.
     await expect(invoke('health_check', {})).rejects.toThrow(
       'Playwright IPC router is not installed',
     );
+    expect(error).toHaveBeenCalledWith('ipc health_check failed: Playwright IPC router is not installed');
+    error.mockRestore();
     vi.unstubAllEnvs();
   });
 });

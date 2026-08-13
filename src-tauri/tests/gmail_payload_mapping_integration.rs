@@ -60,3 +60,52 @@ async fn committed_message_corpus_maps_payload_trees() {
         }
     }
 }
+
+#[tokio::test]
+async fn default_client_constructor_and_page_wrapper_map_server_data() {
+    drop(GmailClient::new("token"));
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "messages": [{ "id": "m1", "threadId": "t1" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let page = GmailClient::with_base_url("token", server.uri())
+        .list_messages_page(&[], None)
+        .await
+        .unwrap();
+
+    assert_eq!(page.items[0].id, "m1");
+}
+
+#[tokio::test]
+async fn message_date_header_is_used_when_internal_date_is_missing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/dated"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "dated",
+            "threadId": "thread",
+            "historyId": "7",
+            "payload": {
+                "headers": [{ "name": "Date", "value": "Tue, 12 Aug 2025 10:00:00 +0000" }]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let message = GmailClient::with_base_url("token", server.uri())
+        .message("dated")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        message.sent_at,
+        chrono::DateTime::parse_from_rfc2822("Tue, 12 Aug 2025 10:00:00 +0000")
+            .unwrap()
+            .timestamp()
+    );
+}

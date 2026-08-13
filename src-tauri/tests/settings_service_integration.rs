@@ -58,6 +58,38 @@ async fn read_and_write_setting_commands_round_trip_through_the_service() {
 }
 
 #[tokio::test]
+async fn every_persisted_setting_accepts_its_wire_value() {
+    let (app, _directory) = app_with_service();
+
+    for (key, value) in [
+        ("theme", serde_json::json!("light")),
+        ("layout", serde_json::json!("bottom-preview")),
+        ("density", serde_json::json!("spacious")),
+        ("sidebarCollapsed", serde_json::json!(true)),
+        ("sidebarWidth", serde_json::json!(280)),
+        ("listWidth", serde_json::json!(420)),
+        ("readerHeight", serde_json::json!(55)),
+        ("syncOnStartup", serde_json::json!(false)),
+        ("showUnreadCounts", serde_json::json!(false)),
+    ] {
+        write_setting(app.handle().clone(), app.state(), key.into(), value)
+            .await
+            .unwrap();
+    }
+
+    let settings = read_settings(app.state()).await.unwrap();
+    assert_eq!(settings.theme, latentmail_lib::settings::ThemePreference::Light);
+    assert_eq!(settings.layout, latentmail_lib::settings::Layout::BottomPreview);
+    assert_eq!(settings.density, latentmail_lib::settings::Density::Spacious);
+    assert!(settings.sidebar_collapsed);
+    assert_eq!(settings.sidebar_width, 280);
+    assert_eq!(settings.list_width, 420);
+    assert_eq!(settings.reader_height, 55);
+    assert!(!settings.sync_on_startup);
+    assert!(!settings.show_unread_counts);
+}
+
+#[tokio::test]
 async fn restore_window_applies_saved_position_size_and_maximized_state() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -158,4 +190,23 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     .unwrap();
 
     assert_eq!(read_settings(app.state()).await.unwrap().sync_interval_minutes, 15);
+}
+
+/// Before the scheduler has started (or in any app that never managed one),
+/// writing the sync interval must persist without panicking on the missing
+/// `State`.
+#[tokio::test]
+async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() {
+    let (app, _directory) = app_with_service();
+
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "syncIntervalMinutes".into(),
+        serde_json::json!(20),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(read_settings(app.state()).await.unwrap().sync_interval_minutes, 20);
 }

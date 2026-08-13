@@ -37,6 +37,21 @@ fn passes_through_an_already_inlined_data_image_uri_unchanged() {
 }
 
 #[test]
+fn resolves_angle_bracketed_content_ids() {
+    let parts = HashMap::from([(
+        "<logo>".into(),
+        CidPart {
+            bytes: vec![1, 2, 3],
+            mime_type: "image/png".into(),
+        },
+    )]);
+
+    let result = sanitize(r#"<img src="cid:logo">"#, &parts);
+
+    assert!(result.html.contains("data:image/png;base64,AQID"));
+}
+
+#[test]
 fn caps_html_at_an_element_boundary() {
     let source = format!(
         "<p>{}</p><p>after</p>",

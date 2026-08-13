@@ -595,3 +595,74 @@ async fn opposing_mutations_on_different_threads_each_receive_their_own_directio
     assert!(message_a.is_starred, "thread-a's own star must not leak away");
     assert!(!message_b.is_starred, "thread-b's own unstar must not be overridden");
 }
+
+/// The write-back half of a flush can fail even after `batchModify`
+/// succeeds — Gmail's batch endpoint returns nothing useful, so each
+/// message is re-fetched afterwards to capture its confirmed `historyId`
+/// (AC-strict-stale-read). Every waiter on that entity must hear the
+/// re-fetch's real error, not a generic queue failure.
+#[tokio::test]
+async fn a_batch_modify_success_followed_by_a_failed_refetch_reports_the_refetch_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/users/me/messages/batchModify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/message-a"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+    let (storage, _directory) = seed_two_threads();
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine_with_events(
+        1_000,
+        1_000,
+        Arc::clone(&registry),
+        Arc::new(|_event, _payload| {}),
+    );
+    let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, noop_event_sink());
+
+    let error = engine
+        .mutate(
+            "account",
+            GmailClient::with_base_url("token", server.uri()),
+            "thread-a".into(),
+            HashSet::from(["STARRED".to_owned()]),
+            HashSet::new(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("400"), "unexpected error: {error}");
+}
+
+/// `mutate_message` resolves its target from storage before ever touching
+/// Gmail; a message id that vanished locally must be reported to the
+/// caller rather than silently dropped.
+#[tokio::test]
+async fn mutate_message_reports_a_locally_missing_message_target() {
+    let (storage, _directory) = seed_two_threads();
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine_with_events(
+        1_000,
+        1_000,
+        Arc::clone(&registry),
+        Arc::new(|_event, _payload| {}),
+    );
+    let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, noop_event_sink());
+
+    let error = engine
+        .mutate_message(
+            "account",
+            GmailClient::with_base_url("token", "http://127.0.0.1:1"),
+            "message-missing".into(),
+            HashSet::from(["STARRED".to_owned()]),
+            HashSet::new(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!error.is_empty());
+}

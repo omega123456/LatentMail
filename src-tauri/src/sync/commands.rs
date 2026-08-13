@@ -25,16 +25,24 @@ use super::{
 
 const DEFAULT_PAGE_SIZE: i64 = 50;
 
+macro_rules! string_try {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+}
+
 #[tauri::command]
 pub async fn list_labels(
     storage: tauri::State<'_, Storage>,
     account_id: String,
 ) -> Result<Vec<LabelDto>, String> {
-    storage
+    let labels = string_try!(storage
         .run(move |connection| LabelRepository::list(connection, &account_id))
-        .await
-        .map(|labels| labels.into_iter().map(LabelDto::from).collect())
-        .map_err(|error| error.to_string())
+        .await);
+    Ok(labels.into_iter().map(LabelDto::from).collect())
 }
 
 #[tauri::command]
@@ -47,7 +55,7 @@ pub async fn list_threads(
 ) -> Result<ThreadPage, String> {
     let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
-    let mut threads = storage
+    let mut threads = string_try!(storage
         .run(move |connection| {
             ThreadRepository::list_paginated(
                 connection,
@@ -57,8 +65,7 @@ pub async fn list_threads(
                 limit + 1,
             )
         })
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     let next_cursor = if threads.len() as i64 > limit {
         threads.truncate(limit as usize);
         threads.last().map(|thread| ThreadCursor {
@@ -68,7 +75,7 @@ pub async fn list_threads(
     } else {
         None
     };
-    let items = storage
+    let items = string_try!(storage
         .run(move |connection| {
             threads
                 .into_iter()
@@ -79,8 +86,7 @@ pub async fn list_threads(
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     Ok(ThreadPage { items, next_cursor })
 }
 
@@ -91,7 +97,7 @@ pub async fn load_conversation(
     thread_id: String,
 ) -> Result<ConversationDto, String> {
     let (account_for_read, thread_for_read) = (account_id.clone(), thread_id.clone());
-    let (messages, thread_subject) = storage
+    let (messages, thread_subject) = string_try!(storage
         .run(move |connection| {
             let messages =
                 MessageRepository::list_by_thread(connection, &account_for_read, &thread_for_read)?;
@@ -100,22 +106,20 @@ pub async fn load_conversation(
                 .unwrap_or_default();
             Ok((messages, subject))
         })
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
 
     let mut message_dtos = Vec::with_capacity(messages.len());
     for message in messages {
         let (account_for_labels, id_for_labels) = (account_id.clone(), message.id.clone());
         let (account_for_parts, id_for_parts) = (account_id.clone(), message.id.clone());
-        let label_ids = storage
+        let label_ids = string_try!(storage
             .run(move |connection| {
                 MessageRepository::label_ids(connection, &account_for_labels, &id_for_labels)
             })
-            .await
-            .map_err(|error| error.to_string())?;
+            .await);
         let (sanitized_html, remote_images_blocked) = match &message.html_body {
             Some(html) => {
-                let inline_parts = storage
+                let inline_parts = string_try!(storage
                     .run(move |connection| {
                         MessageRepository::inline_parts(
                             connection,
@@ -123,8 +127,7 @@ pub async fn load_conversation(
                             &id_for_parts,
                         )
                     })
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    .await);
                 let cid_map: HashMap<String, CidPart> = inline_parts
                     .into_iter()
                     .map(|part| {
@@ -171,22 +174,20 @@ pub async fn fetch_message_body<R: Runtime>(
 ) -> Result<(), String> {
     let account = account_id.clone();
     let id = message_id.clone();
-    let presence = storage
+    let presence = string_try!(storage
         .run(move |connection| {
             MessageRepository::get(connection, &account, &id)
                 .map(|message| message.map(|value| value.html_presence))
         })
-        .await
-        .map_err(|error| error.to_string())?
+        .await)
         .ok_or_else(|| "Message is unavailable".to_owned())?;
     if !matches!(presence, crate::storage::HtmlPresence::NeverFetched) {
         return Ok(());
     }
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    let message = client
+    let message = string_try!(client
         .message(&message_id)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await);
     let html_presence =
         crate::storage::HtmlPresence::from_fetched_body(message.html_body.as_deref());
     let html_body = message.html_body;
@@ -199,7 +200,7 @@ pub async fn fetch_message_body<R: Runtime>(
             bytes: part.bytes,
         })
         .collect::<Vec<_>>();
-    storage
+    string_try!(storage
         .run(move |connection| {
             MessageRepository::set_html_body(
                 connection,
@@ -210,8 +211,8 @@ pub async fn fetch_message_body<R: Runtime>(
             )?;
             MessageRepository::replace_inline_parts(connection, &account_id, &message_id, &parts)
         })
-        .await
-        .map_err(|error| error.to_string())
+        .await);
+    Ok(())
 }
 
 async fn mutate_thread<R: Runtime>(
@@ -236,11 +237,8 @@ async fn mutate_thread<R: Runtime>(
     } else {
         (HashSet::new(), HashSet::from([label_id.to_owned()]))
     };
-    engine
-        .mutate(&account_id, client, thread_id, add, remove)
-        .await
-        .map(|_outcome| ())
-        .map_err(|error| error.to_string())
+    string_try!(engine.mutate(&account_id, client, thread_id, add, remove).await);
+    Ok(())
 }
 #[tauri::command]
 pub async fn star_thread<R: Runtime>(
@@ -300,7 +298,7 @@ pub async fn trigger_sync<R: Runtime>(
     let engine = Arc::clone(&engine);
     let result = engine.run_sync(&account_id, client).await;
     let status = engine.status(&account_id).await;
-    result.map_err(|error| error.to_string())?;
+    string_try!(result);
     Ok(status)
 }
 

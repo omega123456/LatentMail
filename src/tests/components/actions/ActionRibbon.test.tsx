@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ActionRibbon, computeRibbonVisibility } from '@/components/actions/ActionRibbon';
@@ -55,6 +55,8 @@ describe('ActionRibbon', () => {
     expect(handlers.onToggleStar).toHaveBeenCalledOnce();
     await user.click(screen.getByRole('button', { name: 'Delete' }));
     expect(handlers.onDelete).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: 'Mark as spam' }));
+    expect(handlers.onToggleSpam).toHaveBeenCalledOnce();
     expect(screen.getByRole('button', { name: 'Mark as spam' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Move to' })).toBeInTheDocument();
   });
@@ -92,12 +94,14 @@ describe('ActionRibbon', () => {
     render(<ActionRibbon mailboxId="INBOX" unread={false} starred={false} labels={labels} {...handlers} />);
     // Simulate the ribbon narrowing past the 500px threshold — jsdom never
     // fires a real ResizeObserver callback (see `src/tests/setup.ts`).
-    window.__resizeObserverInstances__?.forEach((instance) =>
-      instance.callback(
-        [{ contentRect: { width: 320 } } as ResizeObserverEntry],
-        {} as ResizeObserver,
-      ),
-    );
+    act(() => {
+      window.__resizeObserverInstances__?.forEach((instance) =>
+        instance.callback(
+          [{ contentRect: { width: 320 } } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        ),
+      );
+    });
     expect(await screen.findByRole('button', { name: 'More actions' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Star' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mark unread' })).toBeInTheDocument();
