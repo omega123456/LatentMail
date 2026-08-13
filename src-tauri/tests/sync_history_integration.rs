@@ -198,6 +198,183 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     assert!(fired.contains(&"mail://new".to_owned()));
 }
 
+/// Gmail's history stream is only eventually consistent with delivery: a
+/// message can be listable (and visible in Gmail's own UI) while
+/// `history.list` still reports nothing. Incremental sync must notice it
+/// anyway, or a user-triggered sync reports success with the new mail
+/// missing until some later poll happens to catch up.
+#[tokio::test]
+async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(&server)
+        .await;
+    // The mailbox counter has advanced past the delivery, but the stream
+    // still carries no record for it — the exact shape that makes adopting
+    // that counter as the checkpoint skip the record permanently.
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"historyId": "70", "history": []})),
+        )
+        .mount(&server)
+        .await;
+    // The Inbox listing, which has no such lag, already shows it — next to
+    // a message the local database already holds, which must not be
+    // re-fetched.
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "messages": [
+                {"id": "lagging", "threadId": "t9"},
+                {"id": "existing1", "threadId": "t1"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    // Mounted purely as a tripwire: the probe must filter `existing1` out
+    // before spending a fetch on it, so this response must never land.
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/existing1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "existing1", "threadId": "t1", "historyId": "999", "labelIds": ["INBOX"], "snippet": "refetched",
+            "internalDate": "1000",
+            "payload": {"mimeType": "text/plain", "headers": [
+                {"name": "From", "value": "Nobody <nobody@example.com>"},
+                {"name": "Subject", "value": "Should not have been fetched"}
+            ], "body": {"data": "bm8"}}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/lagging"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "lagging", "threadId": "t9", "historyId": "70", "labelIds": ["INBOX", "UNREAD"], "snippet": "late",
+            "internalDate": "9000",
+            "payload": {"mimeType": "text/plain", "headers": [
+                {"name": "From", "value": "Dave <dave@example.com>"},
+                {"name": "Subject", "value": "Arrived before history said so"}
+            ], "body": {"data": "bGF0ZQ"}}
+        })))
+        .mount(&server)
+        .await;
+
+    let (engine, storage, _directory, events) = engine_with_seed();
+    let client = GmailClient::with_base_url("token", server.uri());
+
+    engine.run_sync("account", client).await.unwrap();
+
+    let connection = storage.connection().unwrap();
+    let message = MessageRepository::get(&connection, "account", "lagging")
+        .unwrap()
+        .unwrap();
+    assert_eq!(message.subject, "Arrived before history said so");
+    assert!(ThreadRepository::get(&connection, "account", "t9")
+        .unwrap()
+        .is_some());
+    // Already-held ids cost no `messages.get`: the tripwire response above
+    // would have replaced this subject had one been spent.
+    assert_eq!(
+        MessageRepository::get(&connection, "account", "existing1")
+            .unwrap()
+            .unwrap()
+            .subject,
+        "Existing"
+    );
+    assert!(events.lock().unwrap().contains(&"mail://new".to_owned()));
+    // The checkpoint must NOT adopt the response's `historyId` of 70: the
+    // run applied no history record, so jumping there would drop every
+    // record between 40 and 70 that the stream had not yet materialized —
+    // `history.list` never offers a record below `startHistoryId` again.
+    assert_eq!(
+        AccountRepository::get(&connection, "account")
+            .unwrap()
+            .unwrap()
+            .history_id,
+        Some(40)
+    );
+
+    // Second run: everything the probe lists is now held locally, so it
+    // spends no fetch and reports nothing new.
+    drop(connection);
+    events.lock().unwrap().clear();
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+    assert!(!events.lock().unwrap().contains(&"mail://new".to_owned()));
+}
+
+/// Gmail emits history records whose change is carried only by `messages`,
+/// with all four typed lists absent — observed live as record 462497. Read
+/// through the typed lists alone such a record is an empty no-op, and the
+/// checkpoint then advances past it, so whatever it reported is lost for
+/// good.
+#[tokio::test]
+async fn a_history_record_carrying_only_messages_is_not_treated_as_a_no_op() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "80",
+            "history": [{
+                "id": "80",
+                "messages": [
+                    {"id": "untyped", "threadId": "t8"},
+                    {"id": "existing1", "threadId": "t1"}
+                ]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/untyped"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "untyped", "threadId": "t8", "historyId": "80", "labelIds": ["INBOX", "UNREAD"], "snippet": "untyped",
+            "internalDate": "8000",
+            "payload": {"mimeType": "text/plain", "headers": [
+                {"name": "From", "value": "Erin <erin@example.com>"},
+                {"name": "Subject", "value": "Reported without a typed delta"}
+            ], "body": {"data": "dW50"}}
+        })))
+        .mount(&server)
+        .await;
+
+    let (engine, storage, _directory, _events) = engine_with_seed();
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+
+    let connection = storage.connection().unwrap();
+    assert_eq!(
+        MessageRepository::get(&connection, "account", "untyped")
+            .unwrap()
+            .unwrap()
+            .subject,
+        "Reported without a typed delta"
+    );
+    assert!(ThreadRepository::get(&connection, "account", "t8")
+        .unwrap()
+        .is_some());
+    // The record was applied, so the checkpoint may advance to it.
+    assert_eq!(
+        AccountRepository::get(&connection, "account")
+            .unwrap()
+            .unwrap()
+            .history_id,
+        Some(80)
+    );
+}
+
 #[tokio::test]
 async fn incremental_sync_does_not_advance_the_checkpoint_on_failure() {
     let server = MockServer::start().await;

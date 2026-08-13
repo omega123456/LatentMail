@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/ipc/commands';
+import { appLog } from '@/lib/app-log';
 import type { QueueSummary, SyncStatus } from '@/lib/types/ipc';
 
 export type SyncState = 'idle' | 'syncing' | 'error';
@@ -43,8 +44,10 @@ export const useSyncStore = create<Store>((set, get) => ({
   },
   triggerSync: async (accountId) => {
     set({ refreshing: true });
+    appLog.info(`action sync requested for ${accountId}`);
     try {
       const status = await invoke('trigger_sync', { accountId });
+      appLog.info(`action sync returned ${status.state} (lastSyncedAt=${status.lastSyncedAt})`);
       get().applyStatus(status);
     } finally {
       set({ refreshing: false });

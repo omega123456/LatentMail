@@ -345,6 +345,18 @@ impl MessageRepository {
             .collect();
         ids
     }
+    /// Cheap membership check for one id — what incremental sync's Inbox
+    /// freshness probe (`sync::probe_inbox`) filters listed ids through so
+    /// only genuinely unknown ones cost a `messages.get`. Deliberately not
+    /// [`Self::all_ids`]: that loads every id in the mailbox (tens of
+    /// thousands) to answer a question about at most one page's worth.
+    pub fn exists(connection: &Connection, account_id: &str, id: &str) -> Result<bool> {
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE account_id=?1 AND id=?2)",
+            params![account_id, id],
+            |row| row.get(0),
+        )
+    }
     /// Traversal's own upsert (D1/Phase 4): writes the metadata and
     /// truncated body a whole-mailbox backfill/reconciliation fetch
     /// discovers for a message. Unlike [`Self::write_full_state`], this
@@ -709,7 +721,10 @@ impl ThreadRepository {
         }
         let (_, subject, latest_at, _, _, _) = rows.last().expect("checked non-empty above");
         let has_draft: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM message_labels ml JOIN messages m ON m.account_id=ml.account_id AND m.id=ml.message_id WHERE ml.account_id=?1 AND ml.label_id='DRAFT' AND m.thread_id=?2)",
+            // Nested for the same reason as `list_paginated`'s label filter:
+            // a flat join drives from the label's whole membership instead of
+            // the thread's own messages.
+            "SELECT EXISTS(SELECT 1 FROM messages m WHERE m.account_id=?1 AND m.thread_id=?2 AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'))",
             params![account_id, thread_id],
             |row| row.get(0),
         )?;
@@ -746,9 +761,24 @@ impl ThreadRepository {
             "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft
              FROM threads t
              WHERE t.account_id=?1
+               -- Nested rather than a flat join ON PURPOSE. A flat join lets
+               -- SQLite drive the label filter from `message_labels_by_label`
+               -- (account_id, label_id), which enumerates *every* message
+               -- carrying the label and probes each one's `thread_id` — so a
+               -- thread that does not carry the label costs a full walk of
+               -- the label's entire membership, once per thread scanned. On a
+               -- backfilled mailbox (4.5k Inbox messages, 5.6k threads) that
+               -- turned this one query into 5.5s, which the UI experienced as
+               -- new mail appearing ~40s after a sync had already stored it.
+               -- Nesting forces the messages-by-thread index first and reduces
+               -- the label test to a primary-key probe: same rows, ~0.02s.
                AND (?2 IS NULL OR EXISTS(
-                 SELECT 1 FROM message_labels ml JOIN messages m ON m.account_id=ml.account_id AND m.id=ml.message_id
-                 WHERE ml.account_id=t.account_id AND ml.label_id=?2 AND m.thread_id=t.id
+                 SELECT 1 FROM messages m
+                 WHERE m.account_id=t.account_id AND m.thread_id=t.id
+                   AND EXISTS(
+                     SELECT 1 FROM message_labels ml
+                     WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id=?2
+                   )
                ))
                AND (?3 IS NULL OR t.latest_at<?3 OR (t.latest_at=?3 AND t.id<?4))
              ORDER BY t.latest_at DESC, t.id DESC

@@ -528,8 +528,14 @@ impl SyncEngine {
             .await?
             .ok_or(SyncError::UnknownAccount)?;
         match account.history_id {
-            None => self.initial_sync(account_id, client).await,
-            Some(checkpoint) => self.incremental_sync(account_id, client, checkpoint).await,
+            None => {
+                tracing::info!(target: "sync", "{account_id}: no checkpoint, running initial sync");
+                self.initial_sync(account_id, client).await
+            }
+            Some(checkpoint) => {
+                tracing::info!(target: "sync", "{account_id}: incremental sync from checkpoint {checkpoint}");
+                self.incremental_sync(account_id, client, checkpoint).await
+            }
         }
     }
 
@@ -756,6 +762,11 @@ impl SyncEngine {
             })
             .await?;
         let now = chrono::Utc::now().timestamp();
+        tracing::info!(
+            target: "sync",
+            "{account_id}: complete — checkpoint now {history_id}, {added_count} new message(s) across {} thread(s)",
+            thread_ids.len(),
+        );
         self.set_idle(account_id, history_id, added_count, now)
             .await;
         if added_count > 0 {
@@ -954,6 +965,12 @@ async fn full_sync_body(
         .into_iter()
         .collect();
 
+    tracing::info!(
+        target: "sync",
+        "{account_id}: full sync fetched {added_count} message(s) across {} thread(s), profile checkpoint {}",
+        thread_ids.len(),
+        profile.history_id,
+    );
     let account_owned = account_id.to_owned();
     let thread_ids_for_write = thread_ids.clone();
     storage
@@ -990,6 +1007,106 @@ async fn full_sync_body(
 // Incremental sync (delta application)
 // ---------------------------------------------------------------------
 
+/// How deep into a newest-first Inbox listing [`probe_inbox`] looks. One
+/// page, sized for "what could plausibly have arrived since the last poll"
+/// rather than for completeness — the history stream remains the mechanism
+/// that catches everything else.
+///
+// ponytail: Inbox only, newest 25 — the mailbox users actually watch a sync
+// button for. A lagging history record for Spam, an archived label or
+// beyond the 25th newest Inbox message still waits for history to catch up.
+// Upgrade path: probe the active mailbox instead of a hard-coded INBOX if
+// that lag is ever noticed somewhere else.
+const INBOX_PROBE_SIZE: u32 = 25;
+
+/// Closes the window where Gmail has already delivered a message — it is
+/// listable, and visible in Gmail's own web UI — but no `history.list`
+/// record mentions it yet. That stream is only eventually consistent with
+/// delivery, so an incremental sync that trusted it alone would report
+/// success with nothing new to show and leave the message to surface
+/// "randomly" whenever a later poll happened to catch up.
+///
+/// `messages.list` has no such lag, so one newest-first Inbox page
+/// (`MESSAGES_LIST_COST`, once per incremental sync) is enough to notice.
+/// Only ids neither this run's history deltas nor the local database
+/// already hold cost a `messages.get` — on the overwhelmingly common
+/// nothing-new tick that is exactly zero extra fetches.
+async fn probe_inbox(
+    storage: &Storage,
+    client: &GmailClient,
+    account_id: &str,
+    already: &[GmailMessage],
+) -> Result<Vec<GmailMessage>, SyncError> {
+    let page = client
+        .list_messages_page_matching(
+            &["INBOX".to_owned()],
+            None,
+            None,
+            crate::gmail::ListOptions {
+                include_spam_and_trash: false,
+                page_size: INBOX_PROBE_SIZE,
+            },
+        )
+        .await?;
+    let candidates = page
+        .items
+        .into_iter()
+        .map(|reference| reference.id)
+        .collect();
+    fetch_unknown(storage, client, account_id, candidates, already, "inbox probe").await
+}
+
+/// Fetches every candidate id that neither this run already holds
+/// (`already`) nor the local database does. Shared by the two paths that
+/// discover an identifier without a usable delta attached: a history record
+/// whose change type we do not model (`HistoryRecord::messages`), and the
+/// Inbox freshness probe. `source` only names the caller in the log line.
+async fn fetch_unknown(
+    storage: &Storage,
+    client: &GmailClient,
+    account_id: &str,
+    candidates: Vec<String>,
+    already: &[GmailMessage],
+    source: &str,
+) -> Result<Vec<GmailMessage>, SyncError> {
+    let seen: HashSet<&str> = already.iter().map(|message| message.id.as_str()).collect();
+    let candidates: Vec<String> = candidates
+        .into_iter()
+        .filter(|id| !seen.contains(id.as_str()))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let account_owned = account_id.to_owned();
+    let unknown = storage
+        .run(move |connection| {
+            let mut unknown = Vec::new();
+            for id in candidates {
+                if !MessageRepository::exists(connection, &account_owned, &id)? {
+                    unknown.push(id);
+                }
+            }
+            Ok(unknown)
+        })
+        .await?;
+    if unknown.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    tracing::info!(
+        target: "sync",
+        "{account_id}: {source} found {} message(s) no delta reported: {}",
+        unknown.len(),
+        unknown.join(", "),
+    );
+    let mut messages = Vec::with_capacity(unknown.len());
+    for id in &unknown {
+        messages.extend(client.message_if_present(id).await?);
+    }
+    Ok(messages)
+}
+
 enum IncrementalOutcome {
     Updated {
         history_id: i64,
@@ -1008,7 +1125,6 @@ async fn incremental_body(
     let gmail_labels = client.labels().await?;
     let mut token = None;
     let mut records = Vec::new();
-    let mut final_history_id = start_history_id;
     loop {
         let page = match client
             .history_page(start_history_id, token.as_deref())
@@ -1018,13 +1134,36 @@ async fn incremental_body(
             Err(GmailError::HistoryExpired) => return Ok(IncrementalOutcome::Expired),
             Err(error) => return Err(error.into()),
         };
-        final_history_id = final_history_id.max(page.history_id);
         records.extend(page.records);
         if page.next_page_token.is_none() {
             break;
         }
         token = page.next_page_token;
     }
+
+    // The checkpoint advances only as far as a record this run actually
+    // applied — deliberately NOT to the response's own `historyId`, which is
+    // the mailbox's *current* counter and routinely runs ahead of the
+    // records the API is willing to hand back. Adopting that counter is what
+    // lets a history record that materializes moments later fall below the
+    // checkpoint and be skipped permanently: `history.list` only ever
+    // returns records *after* `startHistoryId`, so a record we jumped over
+    // is never offered again. Advancing to the highest record we saw makes
+    // "everything newer than what we have" literally true — a late record
+    // still sorts above the checkpoint and arrives on the next poll,
+    // however many of them there are.
+    //
+    // ponytail: an empty response therefore leaves the checkpoint where it
+    // was, so a mailbox with genuinely zero history records for longer than
+    // Gmail's retention window (documented as at least a week) expires it.
+    // That path is already handled non-destructively by the expired-
+    // checkpoint reconciliation below, and any activity at all — a read, a
+    // label change, a delete — produces a record that moves it along.
+    let final_history_id = records
+        .iter()
+        .map(|record| record.id)
+        .max()
+        .unwrap_or(start_history_id);
 
     let mut added_messages = Vec::new();
     for record in &records {
@@ -1033,6 +1172,44 @@ async fn incremental_body(
             // added; fetching it 404s. Skipping keeps one vanished id from
             // aborting the whole incremental run.
             added_messages.extend(client.message_if_present(&reference.id).await?);
+        }
+    }
+    tracing::info!(
+        target: "sync",
+        "{account_id}: history {start_history_id} -> {final_history_id}: {} record(s), {} added, {} label change(s), {} deleted",
+        records.len(),
+        added_messages.len(),
+        records.iter().map(|record| record.labels_added.len() + record.labels_removed.len()).sum::<usize>(),
+        records.iter().map(|record| record.messages_deleted.len()).sum::<usize>(),
+    );
+    // Every message a record touches, including records whose change type
+    // the four typed lists above do not express — Gmail does emit those, and
+    // reading only the typed lists made such a record a silent no-op that the
+    // checkpoint then advanced past. Anything here we do not already hold is
+    // fetched like an addition; ids the typed lists already covered are
+    // filtered out by `fetch_unknown`.
+    let untyped = fetch_unknown(
+        storage,
+        client,
+        account_id,
+        records
+            .iter()
+            .flat_map(|record| record.messages.iter().map(|item| item.id.clone()))
+            .collect(),
+        &added_messages,
+        "history record",
+    )
+    .await?;
+    added_messages.extend(untyped);
+
+    // A probe failure is never allowed to fail a sync the history stream
+    // already applied successfully — it is a safety net over that stream,
+    // not a second source of truth. Losing it costs only the freshness this
+    // one poll would have gained.
+    match probe_inbox(storage, client, account_id, &added_messages).await {
+        Ok(probed) => added_messages.extend(probed),
+        Err(error) => {
+            tracing::warn!(target: "sync", "{account_id}: inbox probe failed, relying on history alone: {error}");
         }
     }
     let added_count = added_messages.len() as u32;
@@ -1207,8 +1384,17 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?;
     let registry = WorkRegistry::new();
     let handle_for_events = app.clone();
+    // Every Rust-emitted event funnels through here, so this one line is the
+    // whole outbound event log. `queue://summary` is excluded on volume
+    // grounds only — it fires on every queue state transition and says
+    // nothing a failure investigation needs.
     let events: EventSink = Arc::new(move |event, payload| {
-        let _ = handle_for_events.emit(event, payload);
+        if event != "queue://summary" {
+            tracing::info!(target: "events", "emit {event} {payload}");
+        }
+        if let Err(error) = handle_for_events.emit(event, payload) {
+            tracing::error!(target: "events", "emit {event} failed: {error}");
+        }
     });
     // App-private compose staging tree (D3) — the compose commands resolve
     // `State<Arc<Staging>>`, and the durable Draft/Send executor below reads

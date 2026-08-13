@@ -6,6 +6,7 @@ import type { IpcEventMap } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useComposeStore } from '@/stores/compose';
+import { appLog } from '@/lib/app-log';
 
 /** Bridges Rust events onto TanStack Query invalidation and the Zustand
  * stores that mirror queue/sync state. This is the ONLY place allowed to
@@ -22,7 +23,15 @@ export function EventBridge() {
       event: E,
       handler: (payload: IpcEventMap[E]) => void,
     ) => {
-      void listen(event, handler).then((remove) => {
+      // Rust logs every event it emits; logging arrival here is what makes
+      // "emitted but never delivered to the UI" distinguishable from "never
+      // emitted". `queue://summary` is skipped for the same volume reason it
+      // is skipped on the Rust side.
+      const logged = (payload: IpcEventMap[E]) => {
+        if (event !== 'queue://summary') appLog.info(`event ${event} ${JSON.stringify(payload)}`);
+        handler(payload);
+      };
+      void listen(event, logged).then((remove) => {
         if (disposed) void remove();
         else unlistens.push(remove);
       });
@@ -50,14 +59,34 @@ export function EventBridge() {
       }, 250);
     });
 
+    // Diagnostic for "Rust delivered it, the list did not move": reports
+    // which thread queries the invalidation key actually matched and how many
+    // rows each held, before and after the refetch settles. No matching
+    // entry means the key is wrong; an unchanged count means the refetch
+    // returned the same rows; a changed count means the problem is downstream
+    // in rendering.
+    const logThreadCache = (accountId: string, when: string) => {
+      const entries = queryClient.getQueriesData<{ pages: Array<{ items: unknown[] }> }>({
+        queryKey: queryKeys.threadsForAccount(accountId),
+      });
+      const summary = entries
+        .map(
+          ([key, data]) =>
+            `${JSON.stringify(key)}=${(data?.pages ?? []).reduce((total, page) => total + page.items.length, 0)}`,
+        )
+        .join(' ');
+      appLog.info(`threads cache ${when}: ${summary || '(no query matched this key)'}`);
+    };
+
     subscribe('sync://complete', (event) => {
       useSyncStore.setState({ syncState: 'idle', lastSynced: new Date(), error: undefined });
       // Threads, label counts and the seeded sync status all changed —
       // refresh the visible list without a manual reload (acceptance
       // criterion 7).
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.threadsForAccount(event.accountId),
-      });
+      logThreadCache(event.accountId, 'before sync://complete invalidate');
+      void queryClient
+        .invalidateQueries({ queryKey: queryKeys.threadsForAccount(event.accountId) })
+        .then(() => logThreadCache(event.accountId, 'after sync://complete invalidate'));
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
     });

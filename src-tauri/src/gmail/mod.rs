@@ -141,6 +141,12 @@ pub struct HistoryPage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryRecord {
     pub id: i64,
+    /// Every message the record touches, regardless of *how*. Gmail
+    /// populates this on records whose change is not expressible in the four
+    /// typed lists below, and a consumer that reads only those lists sees
+    /// such a record as an empty no-op — then advances its checkpoint past
+    /// it, losing the change permanently.
+    pub messages: Vec<MessageRef>,
     pub messages_added: Vec<MessageRef>,
     pub messages_deleted: Vec<MessageRef>,
     pub labels_added: Vec<LabelChange>,
@@ -949,6 +955,7 @@ struct RawHistory {
 #[serde(rename_all = "camelCase")]
 struct RawHistoryRecord {
     id: String,
+    messages: Option<Vec<RawRef>>,
     messages_added: Option<Vec<RawHistoryMessage>>,
     messages_deleted: Option<Vec<RawHistoryMessage>>,
     labels_added: Option<Vec<RawLabelChange>>,
@@ -1127,6 +1134,15 @@ fn map_history(value: RawHistoryRecord) -> HistoryRecord {
     };
     HistoryRecord {
         id: number(&value.id),
+        messages: value
+            .messages
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| MessageRef {
+                id: item.id,
+                thread_id: item.thread_id.unwrap_or_default(),
+            })
+            .collect(),
         messages_added: refs(value.messages_added),
         messages_deleted: refs(value.messages_deleted),
         labels_added: changes(value.labels_added),
