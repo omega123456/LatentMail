@@ -13,7 +13,9 @@ use latentmail_lib::{
         Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message,
         MessageRepository, Storage,
     },
-    sync::{create_queue_engine_with_events, noop_event_sink, MutationOutcome, SyncEngine, WorkRegistry},
+    sync::{
+        create_queue_engine_with_events, noop_event_sink, MutationOutcome, SyncEngine, WorkRegistry,
+    },
 };
 use wiremock::{
     matchers::{method, path},
@@ -114,7 +116,12 @@ async fn a_move_produces_one_batch_call_carrying_both_directions() {
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        noop_event_sink(),
+    );
 
     let outcome = engine
         .mutate(
@@ -319,7 +326,12 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        noop_event_sink(),
+    );
 
     // Mark read: remove UNREAD.
     let read = engine

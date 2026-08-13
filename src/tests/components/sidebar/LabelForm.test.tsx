@@ -16,12 +16,8 @@ describe('validateLabelName', () => {
     expect(validateLabelName('inbox', [])).toBe(
       'label name cannot start with a reserved system prefix',
     );
-    expect(validateLabelName('Clients', ['Clients'])).toBe(
-      'a label with this name already exists',
-    );
-    expect(validateLabelName('Clients', ['clients'])).toBe(
-      'a label with this name already exists',
-    );
+    expect(validateLabelName('Clients', ['Clients'])).toBe('a label with this name already exists');
+    expect(validateLabelName('Clients', ['clients'])).toBe('a label with this name already exists');
     expect(validateLabelName('Clients', [])).toBeNull();
   });
 
@@ -53,9 +49,7 @@ describe('LabelForm', () => {
   it('submits the trimmed name with the selected colour', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    render(
-      <LabelForm mode="create" existingNames={[]} onSubmit={onSubmit} onCancel={vi.fn()} />,
-    );
+    render(<LabelForm mode="create" existingNames={[]} onSubmit={onSubmit} onCancel={vi.fn()} />);
     await user.type(screen.getByPlaceholderText('Label name'), '  Contracts  ');
     await user.click(screen.getByRole('radio', { name: 'Red' }));
     await user.click(screen.getByRole('button', { name: 'Create' }));

@@ -72,19 +72,23 @@ pub(super) async fn delete_draft(
     message_id: &str,
 ) -> Result<(), String> {
     let draft_id = resolve_draft_id(storage, client, account_id, message_id).await?;
-    string_try!(client
-        .delete_draft(&draft_id)
-        .await);
+    string_try!(client.delete_draft(&draft_id).await);
     let account = account_id.to_owned();
     let id = message_id.to_owned();
-    let thread_id = string_try!(storage
-        .run(move |connection| MessageRepository::delete(connection, &account, &id))
-        .await);
+    let thread_id = string_try!(
+        storage
+            .run(move |connection| MessageRepository::delete(connection, &account, &id))
+            .await
+    );
     if let Some(thread_id) = thread_id {
         let account = account_id.to_owned();
-        string_try!(storage
-            .run(move |connection| ThreadRepository::recompute(connection, &account, &thread_id))
-            .await);
+        string_try!(
+            storage
+                .run(move |connection| ThreadRepository::recompute(
+                    connection, &account, &thread_id
+                ))
+                .await
+        );
     }
     Ok(())
 }
@@ -102,15 +106,15 @@ async fn resolve_draft_id(
 ) -> Result<String, String> {
     let account = account_id.to_owned();
     let id = message_id.to_owned();
-    let cached = string_try!(storage
-        .run(move |connection| MessageRepository::draft_id(connection, &account, &id))
-        .await);
+    let cached = string_try!(
+        storage
+            .run(move |connection| MessageRepository::draft_id(connection, &account, &id))
+            .await
+    );
     if let Some(draft_id) = cached {
         return Ok(draft_id);
     }
-    let mapping = string_try!(client
-        .list_draft_ids()
-        .await);
+    let mapping = string_try!(client.list_draft_ids().await);
     let draft_id = mapping
         .get(message_id)
         .cloned()
@@ -118,9 +122,13 @@ async fn resolve_draft_id(
     let account = account_id.to_owned();
     let id = message_id.to_owned();
     let resolved = draft_id.clone();
-    string_try!(storage
-        .run(move |connection| MessageRepository::set_draft_id(connection, &account, &id, &resolved))
-        .await);
+    string_try!(
+        storage
+            .run(move |connection| MessageRepository::set_draft_id(
+                connection, &account, &id, &resolved
+            ))
+            .await
+    );
     Ok(draft_id)
 }
 
@@ -134,21 +142,24 @@ pub(super) async fn draft_message_ids(
 ) -> Result<Vec<String>, String> {
     let account = account_id.to_owned();
     let thread = thread_id.to_owned();
-    let ids = string_try!(storage
-        .run(move |connection| {
-            MessageRepository::list_by_thread(connection, &account, &thread)?
-                .into_iter()
-                .map(|message| {
-                    let labels = MessageRepository::label_ids(connection, &account, &message.id)?;
-                    Ok(labels
-                        .iter()
-                        .any(|label| label == "DRAFT")
-                        .then_some(message.id))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(|ids| ids.into_iter().flatten().collect())
-        })
-        .await);
+    let ids = string_try!(
+        storage
+            .run(move |connection| {
+                MessageRepository::list_by_thread(connection, &account, &thread)?
+                    .into_iter()
+                    .map(|message| {
+                        let labels =
+                            MessageRepository::label_ids(connection, &account, &message.id)?;
+                        Ok(labels
+                            .iter()
+                            .any(|label| label == "DRAFT")
+                            .then_some(message.id))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|ids| ids.into_iter().flatten().collect())
+            })
+            .await
+    );
     Ok(ids)
 }
 
@@ -270,9 +281,15 @@ impl SyncEngine {
         add: HashSet<String>,
         remove: HashSet<String>,
     ) -> Result<(), SyncError> {
-        self.submit(account_id, client, MutationTarget::Message(message_id), add, remove)
-            .await
-            .map(|_| ())
+        self.submit(
+            account_id,
+            client,
+            MutationTarget::Message(message_id),
+            add,
+            remove,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Submits a label mutation — an owned set of labels to add and a set
@@ -289,7 +306,14 @@ impl SyncEngine {
         add: HashSet<String>,
         remove: HashSet<String>,
     ) -> Result<MutationOutcome, SyncError> {
-        self.submit(account_id, client, MutationTarget::Thread(thread_id), add, remove).await
+        self.submit(
+            account_id,
+            client,
+            MutationTarget::Thread(thread_id),
+            add,
+            remove,
+        )
+        .await
     }
 
     async fn submit(
@@ -309,7 +333,10 @@ impl SyncEngine {
             let mut pending = self.pending.lock().await;
             let account_map = pending.entry(account_id.to_owned()).or_default();
             let is_leader = account_map.is_empty();
-            let key = match &target { MutationTarget::Thread(id) => format!("thread:{id}"), MutationTarget::Message(id) => format!("message:{id}") };
+            let key = match &target {
+                MutationTarget::Thread(id) => format!("thread:{id}"),
+                MutationTarget::Message(id) => format!("message:{id}"),
+            };
             let entry = account_map.entry(key).or_default();
             entry.target = Some(target);
             entry.delta.merge(&add, &remove);
@@ -413,13 +440,27 @@ async fn execute_flush(
         let storage = storage.clone();
         let account = account_id.clone();
         resolve_tasks.spawn(async move {
-            let target = entity.target.clone().expect("mutation target is set on submission");
-            let result = storage.run(move |connection| match target {
-                MutationTarget::Thread(thread_id) => MessageRepository::list_by_thread(connection, &account, &thread_id)
-                    .map(|messages| (thread_id, messages)),
-                MutationTarget::Message(message_id) => MessageRepository::get(connection, &account, &message_id)
-                    .and_then(|message| message.map(|message| (message.thread_id.clone(), vec![message])).ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)),
-            }).await;
+            let target = entity
+                .target
+                .clone()
+                .expect("mutation target is set on submission");
+            let result = storage
+                .run(move |connection| match target {
+                    MutationTarget::Thread(thread_id) => {
+                        MessageRepository::list_by_thread(connection, &account, &thread_id)
+                            .map(|messages| (thread_id, messages))
+                    }
+                    MutationTarget::Message(message_id) => {
+                        MessageRepository::get(connection, &account, &message_id).and_then(
+                            |message| {
+                                message
+                                    .map(|message| (message.thread_id.clone(), vec![message]))
+                                    .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
+                            },
+                        )
+                    }
+                })
+                .await;
             (result, entity)
         });
     }

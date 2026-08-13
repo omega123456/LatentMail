@@ -1,6 +1,19 @@
 import { useState, type ReactNode } from 'react';
 import { ContextMenu } from 'radix-ui';
-import { FolderInput, Mail, MailOpen, ShieldAlert, ShieldOff, Star, Tag, Trash2 } from 'lucide-react';
+import {
+  FolderInput,
+  Forward,
+  Mail,
+  MailOpen,
+  PenSquare,
+  Reply,
+  ReplyAll,
+  ShieldAlert,
+  ShieldOff,
+  Star,
+  Tag,
+  Trash2,
+} from 'lucide-react';
 import { computeRibbonVisibility } from './ActionRibbon';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
@@ -31,6 +44,16 @@ export type RowContextMenuProps = {
   onToggleLabel: (labelId: string, checked: boolean) => void;
   onToggleSpam: () => void;
   onDelete: () => void;
+  /** Compose entries — visible only for a single-item selection, targeting
+   * the last loaded message in that row's conversation (FR "Entry
+   * surfaces"). Omitted (rather than passed as a no-op) when no
+   * conversation is loaded to target, exactly like the ribbons above. */
+  onReply?: () => void;
+  onReplyAll?: () => void;
+  onForward?: () => void;
+  /** Present only when the single selected row's conversation has a
+   * loaded draft to edit. */
+  onEditDraft?: () => void;
 };
 
 export function RowContextMenu({
@@ -48,6 +71,10 @@ export function RowContextMenu({
   onToggleLabel,
   onToggleSpam,
   onDelete,
+  onReply,
+  onReplyAll,
+  onForward,
+  onEditDraft,
 }: RowContextMenuProps) {
   const [open, setOpen] = useState(false);
   const visibility = computeRibbonVisibility(mailboxId);
@@ -63,6 +90,33 @@ export function RowContextMenu({
             <ContextMenu.Item className={itemClass} onSelect={onOpen}>
               Open
             </ContextMenu.Item>
+          )}
+          {!multi && onReply && (
+            <ContextMenu.Item className={itemClass} onSelect={onReply}>
+              <Reply aria-hidden="true" size={16} />
+              Reply
+            </ContextMenu.Item>
+          )}
+          {!multi && onReplyAll && (
+            <ContextMenu.Item className={itemClass} onSelect={onReplyAll}>
+              <ReplyAll aria-hidden="true" size={16} />
+              Reply all
+            </ContextMenu.Item>
+          )}
+          {!multi && onForward && (
+            <ContextMenu.Item className={itemClass} onSelect={onForward}>
+              <Forward aria-hidden="true" size={16} />
+              Forward
+            </ContextMenu.Item>
+          )}
+          {!multi && onEditDraft && (
+            <ContextMenu.Item className={itemClass} onSelect={onEditDraft}>
+              <PenSquare aria-hidden="true" size={16} />
+              Edit draft
+            </ContextMenu.Item>
+          )}
+          {!multi && (onReply || onReplyAll || onForward || onEditDraft) && (
+            <ContextMenu.Separator className="my-1 h-px bg-outline-variant/40 dark:bg-dark-outline-variant/40" />
           )}
           {visibility.showReadToggle && (
             <ContextMenu.Item className={itemClass} onSelect={onToggleRead}>
@@ -114,11 +168,7 @@ export function RowContextMenu({
               </ContextMenu.SubTrigger>
               <ContextMenu.Portal>
                 <ContextMenu.SubContent className={`${menuContentClass} w-64`} collisionPadding={8}>
-                  <LabelsMenu
-                    variant="immediate"
-                    labels={labels}
-                    onToggle={onToggleLabel}
-                  />
+                  <LabelsMenu variant="immediate" labels={labels} onToggle={onToggleLabel} />
                 </ContextMenu.SubContent>
               </ContextMenu.Portal>
             </ContextMenu.Sub>

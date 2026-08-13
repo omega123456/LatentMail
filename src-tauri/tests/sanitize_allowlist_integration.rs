@@ -50,3 +50,13 @@ fn preserves_email_layout_markup() {
         );
     }
 }
+
+#[test]
+fn preserves_inert_class_and_id_attributes() {
+    let result = sanitize(
+        r#"<p id="mail-body" class="newsletter hero">Body</p>"#,
+        &HashMap::new(),
+    );
+    assert!(result.html.contains("id=\"mail-body\""));
+    assert!(result.html.contains("class=\"newsletter hero\""));
+}

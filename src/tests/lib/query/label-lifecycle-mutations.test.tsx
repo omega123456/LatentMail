@@ -34,7 +34,9 @@ describe('label lifecycle mutations', () => {
 
   it('rejects with the mutation error so the caller can surface it inline', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    ipc.override('rename_label', () => Promise.reject(new Error('a label with this name already exists')));
+    ipc.override('rename_label', () =>
+      Promise.reject(new Error('a label with this name already exists')),
+    );
     const client = new QueryClient();
     const { result } = renderHook(() => useRenameLabelMutation('account-1'), {
       wrapper: wrapper(client),

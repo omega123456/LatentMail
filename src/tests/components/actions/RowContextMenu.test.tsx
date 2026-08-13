@@ -41,7 +41,13 @@ describe('RowContextMenu', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <RowContextMenu mailboxId="INBOX" unread={false} starred={false} labels={labels} {...handlers}>
+      <RowContextMenu
+        mailboxId="INBOX"
+        unread={false}
+        starred={false}
+        labels={labels}
+        {...handlers}
+      >
         <div>row</div>
       </RowContextMenu>,
     );
@@ -62,7 +68,13 @@ describe('RowContextMenu', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <RowContextMenu mailboxId="INBOX" unread={false} starred={false} labels={labels} {...handlers}>
+      <RowContextMenu
+        mailboxId="INBOX"
+        unread={false}
+        starred={false}
+        labels={labels}
+        {...handlers}
+      >
         <div>row</div>
       </RowContextMenu>,
     );
@@ -114,7 +126,13 @@ describe('RowContextMenu', () => {
   it('hides label-mutating entries in Drafts, leaving Delete', async () => {
     const user = userEvent.setup();
     render(
-      <RowContextMenu mailboxId="DRAFT" unread={false} starred={false} labels={labels} {...baseHandlers()}>
+      <RowContextMenu
+        mailboxId="DRAFT"
+        unread={false}
+        starred={false}
+        labels={labels}
+        {...baseHandlers()}
+      >
         <div>row</div>
       </RowContextMenu>,
     );

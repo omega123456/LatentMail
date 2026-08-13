@@ -16,3 +16,11 @@ export function parseParticipant(raw: string): Participant {
   if (match) return { name: match[1].replace(/^"|"$/g, ''), address: match[2] };
   return { name: '', address: raw.trim() };
 }
+
+/** Extracts the bare address from a raw recipient string, lower-cased, so a
+ * bare address and the same address carrying a display name compare equal —
+ * the duplicate-suppression key for recipient chips (mirrors Rust's
+ * `compose::context::address_key`). */
+export function addressKey(raw: string): string {
+  return parseParticipant(raw).address.trim().toLowerCase();
+}

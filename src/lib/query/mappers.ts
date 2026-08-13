@@ -91,6 +91,9 @@ export function mapConversation(
       id: message.id,
       sender: parseParticipant(message.sender),
       recipients: message.recipients.map(parseParticipant),
+      toRecipients: (message.toRecipients ?? message.recipients).map(parseParticipant),
+      ccRecipients: (message.ccRecipients ?? []).map(parseParticipant),
+      bccRecipients: (message.bccRecipients ?? []).map(parseParticipant),
       sentAt: new Date(message.sentAt),
       snippet: message.snippet,
       html: message.htmlBody,
@@ -103,6 +106,8 @@ export function mapConversation(
       unread: message.isUnread,
       starred: message.isStarred,
       remoteImagesBlocked: message.remoteImagesBlocked,
+      isDraft: message.labelIds.includes('DRAFT'),
+      draftId: message.draftId,
     })),
   };
 }

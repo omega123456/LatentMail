@@ -4,7 +4,16 @@ import { BulkSelectionPanel } from '@/components/actions/BulkSelectionPanel';
 import { EmptyState } from '@/components/states/EmptyState';
 import { ErrorState } from '@/components/states/ErrorState';
 import { LoadingState } from '@/components/states/LoadingState';
-import { useConversationQuery, useFetchMessageBodyMutation, useLabelsQuery, useMessageTriageMutation, useThreadsQuery, useTriageMutation } from '@/lib/query/hooks';
+import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
+import {
+  useAccountsQuery,
+  useConversationQuery,
+  useFetchMessageBodyMutation,
+  useLabelsQuery,
+  useMessageTriageMutation,
+  useThreadsQuery,
+  useTriageMutation,
+} from '@/lib/query/hooks';
 import { computeThreadLabelMembership, mapConversation } from '@/lib/query/mappers';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
@@ -12,7 +21,11 @@ import { MessageCard, type MessageRibbonProps, type ReaderMessage } from './Mess
 import { moveSource } from '@/components/actions/MoveToMenu';
 
 export type ReaderConversation = { id: string; subject: string; messages: ReaderMessage[] };
-type TriageHandlers = Pick<ActionRibbonProps, 'onToggleRead' | 'onToggleStar' | 'onApplyLabels' | 'onMoveTo' | 'onToggleSpam' | 'onDelete'>;
+type TriageHandlers = Pick<
+  ActionRibbonProps,
+  'onToggleRead' | 'onToggleStar' | 'onApplyLabels' | 'onMoveTo' | 'onToggleSpam' | 'onDelete'
+>;
+export type ComposeAction = 'reply' | 'reply-all' | 'forward' | 'edit-draft';
 
 export const readerFixtures: Record<string, ReaderConversation> = {
   'thread-1': {
@@ -68,6 +81,8 @@ export function ReadingPane({
   loadingMessageId,
   failedMessageId,
   onMessageTriage,
+  onCompose,
+  onComposeTo,
 }: {
   threadId: string | null;
   conversation?: ReaderConversation;
@@ -81,6 +96,12 @@ export function ReadingPane({
   selectedCount?: number;
   unread?: boolean;
   starred?: boolean;
+  /** Reply/Reply All/Forward/Edit Draft — invoked with the *target*
+   * message id. The thread ribbon always targets the last loaded message;
+   * a per-message ribbon targets that exact message (FR "Entry surfaces").
+   * A no-op default matches every other optional handler here. */
+  onCompose?: (action: ComposeAction, messageId: string) => void;
+  onComposeTo?: (participant: import('@/lib/format/participants').Participant) => void;
   triageHandlers?: TriageHandlers;
   onFetchBody?: (messageId: string) => void;
   loadingMessageId?: string;
@@ -111,11 +132,24 @@ export function ReadingPane({
   const threadUnread = conversation.messages.some((message) => message.unread);
   const threadStarred = conversation.messages.some((message) => message.starred);
   const threadHandlers = triageHandlers ?? noTriageHandlers;
+  // Thread-level, invoked once and always targeting the last loaded
+  // message (FR "Entry surfaces") — `lastMessage` is guaranteed present
+  // here since `conversation` already passed its own emptiness check above.
+  const lastMessage = conversation.messages.at(-1);
+  const composeThread = (action: ComposeAction) => {
+    if (lastMessage) onCompose?.(action, lastMessage.id);
+  };
   const messageRibbonBase: MessageRibbonProps = {
     mailboxId,
     labels: labelMenuEntries,
     currentLabelName,
     ...threadHandlers,
+    // Placeholders — every message card below overrides these three with a
+    // handler scoped to *that* message's id (FR "Entry surfaces"); nothing
+    // ever calls the base object's own copy.
+    onReply: () => undefined,
+    onReplyAll: () => undefined,
+    onForward: () => undefined,
   };
   return (
     <section
@@ -147,6 +181,10 @@ export function ReadingPane({
             labels={labelMenuEntries}
             currentLabelName={currentLabelName}
             {...threadHandlers}
+            onReply={() => composeThread('reply')}
+            onReplyAll={() => composeThread('reply-all')}
+            onForward={() => composeThread('forward')}
+            onEditDraft={lastMessage?.isDraft ? () => composeThread('edit-draft') : undefined}
           />
         </div>
         {conversation.messages.map((message, index) => (
@@ -158,11 +196,26 @@ export function ReadingPane({
             ribbon={{
               ...messageRibbonBase,
               onApplyLabels: (changes) => onMessageTriage?.(message.id, changes),
-              onMoveTo: (destination) => onMessageTriage?.(message.id, { add: [destination], remove: moveSource(mailboxId, currentLabelName) }),
-              onToggleSpam: () => onMessageTriage?.(message.id, { add: mailboxId === 'SPAM' ? [] : ['SPAM'], remove: mailboxId === 'SPAM' ? ['SPAM'] : [] }),
+              onMoveTo: (destination) =>
+                onMessageTriage?.(message.id, {
+                  add: [destination],
+                  remove: moveSource(mailboxId, currentLabelName),
+                }),
+              onToggleSpam: () =>
+                onMessageTriage?.(message.id, {
+                  add: mailboxId === 'SPAM' ? [] : ['SPAM'],
+                  remove: mailboxId === 'SPAM' ? ['SPAM'] : [],
+                }),
               onDelete: () => onMessageTriage?.(message.id, { add: ['TRASH'], remove: [] }),
+              onReply: () => onCompose?.('reply', message.id),
+              onReplyAll: () => onCompose?.('reply-all', message.id),
+              onForward: () => onCompose?.('forward', message.id),
+              onEditDraft: message.isDraft
+                ? () => onCompose?.('edit-draft', message.id)
+                : undefined,
             }}
             onFetchBody={onFetchBody}
+            onComposeTo={onComposeTo}
             loadingBody={loadingMessageId === message.id}
             bodyError={failedMessageId === message.id}
           />
@@ -190,11 +243,20 @@ function triageHandlersFor(
   currentLabelName?: string,
 ) {
   return {
-    onToggleRead: () => mutate({ threadIds, add: unread ? [] : ['UNREAD'], remove: unread ? ['UNREAD'] : [] }),
-    onToggleStar: () => mutate({ threadIds, add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] }),
-    onApplyLabels: ({ add, remove }: { add: string[]; remove: string[] }) => mutate({ threadIds, add, remove }),
-    onMoveTo: (destination: string) => mutate({ threadIds, add: [destination], remove: moveSource(mailboxId, currentLabelName) }),
-    onToggleSpam: () => mutate({ threadIds, add: mailboxId === 'SPAM' ? [] : ['SPAM'], remove: mailboxId === 'SPAM' ? ['SPAM'] : [] }),
+    onToggleRead: () =>
+      mutate({ threadIds, add: unread ? [] : ['UNREAD'], remove: unread ? ['UNREAD'] : [] }),
+    onToggleStar: () =>
+      mutate({ threadIds, add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] }),
+    onApplyLabels: ({ add, remove }: { add: string[]; remove: string[] }) =>
+      mutate({ threadIds, add, remove }),
+    onMoveTo: (destination: string) =>
+      mutate({ threadIds, add: [destination], remove: moveSource(mailboxId, currentLabelName) }),
+    onToggleSpam: () =>
+      mutate({
+        threadIds,
+        add: mailboxId === 'SPAM' ? [] : ['SPAM'],
+        remove: mailboxId === 'SPAM' ? ['SPAM'] : [],
+      }),
     onDelete: () => mutate({ threadIds, add: ['TRASH'], remove: [] }),
   };
 }
@@ -206,6 +268,8 @@ function triageHandlersFor(
 export function ReadingPaneContainer({ threadId }: { threadId: string | null }) {
   const accountId = useSelectionStore((value) => value.activeAccountId);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
+  const accountsQuery = useAccountsQuery();
+  const accountEmail = accountsQuery.data?.find((account) => account.id === accountId)?.email ?? '';
   const selectedCount = useMultiSelectStore((value) => value.selectedIds.size);
   const selectedIds = useMultiSelectStore((value) => value.selectedIds);
   const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
@@ -223,25 +287,34 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
     ? mapConversation(conversationQuery.data, labelNamesById)
     : undefined;
   const selectedThreads = useMemo(
-    () => (threadsQuery.data?.pages ?? []).flatMap((page) => page.items).filter((thread) => selectedIds.has(thread.id)),
+    () =>
+      (threadsQuery.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .filter((thread) => selectedIds.has(thread.id)),
     [selectedIds, threadsQuery.data],
   );
   const labelMenuEntries = useMemo(
     () =>
       multiSelectActive
-        ? (labelsQuery.data ?? []).filter((label) => label.kind === 'user').map((label) => ({
-            id: label.id,
-            name: label.name,
-            color: 'black',
-            membership: selectedThreads.length === 0
-              ? 'unchecked' as const
-              : selectedThreads.every((thread) => thread.labelIndicators?.includes(label.name))
-                ? 'checked' as const
-                : selectedThreads.some((thread) => thread.labelIndicators?.includes(label.name))
-                  ? 'indeterminate' as const
-                  : 'unchecked' as const,
-          }))
-        : computeThreadLabelMembership(labelsQuery.data ?? [], conversation?.messages.map((message) => message.labelIds ?? []) ?? []),
+        ? (labelsQuery.data ?? [])
+            .filter((label) => label.kind === 'user')
+            .map((label) => ({
+              id: label.id,
+              name: label.name,
+              color: 'black',
+              membership:
+                selectedThreads.length === 0
+                  ? ('unchecked' as const)
+                  : selectedThreads.every((thread) => thread.labelIndicators?.includes(label.name))
+                    ? ('checked' as const)
+                    : selectedThreads.some((thread) => thread.labelIndicators?.includes(label.name))
+                      ? ('indeterminate' as const)
+                      : ('unchecked' as const),
+            }))
+        : computeThreadLabelMembership(
+            labelsQuery.data ?? [],
+            conversation?.messages.map((message) => message.labelIds ?? []) ?? [],
+          ),
     [conversation, labelsQuery.data, multiSelectActive, selectedThreads],
   );
   // Only a *user* label counts as "the removed source" (FR "Move to") — a
@@ -253,10 +326,10 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
   const activeIds = multiSelectActive ? [...selectedIds] : threadId ? [threadId] : [];
   const unread = multiSelectActive
     ? selectedThreads.some((thread) => thread.isUnread)
-    : conversation?.messages.some((message) => message.unread) ?? false;
+    : (conversation?.messages.some((message) => message.unread) ?? false);
   const starred = multiSelectActive
     ? selectedThreads.some((thread) => thread.isStarred)
-    : conversation?.messages.some((message) => message.starred) ?? false;
+    : (conversation?.messages.some((message) => message.starred) ?? false);
   return (
     <ReadingPane
       threadId={threadId}
@@ -266,14 +339,35 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       onFetchBody={(messageId) => fetchBody.mutate(messageId)}
       loadingMessageId={fetchBody.isPending ? fetchBody.variables : undefined}
       failedMessageId={fetchBody.isError ? fetchBody.variables : undefined}
-      onMessageTriage={(messageId, change) => messageTriage.mutate({ threadId: threadId ?? '', messageIds: [messageId], ...change })}
+      onMessageTriage={(messageId, change) =>
+        messageTriage.mutate({ threadId: threadId ?? '', messageIds: [messageId], ...change })
+      }
+      onCompose={(action, messageId) => {
+        if (!accountId) return;
+        const message = conversation?.messages.find((entry) => entry.id === messageId);
+        if (action === 'reply') void openReply('reply', accountId, accountEmail, message);
+        else if (action === 'reply-all')
+          void openReply('reply-all', accountId, accountEmail, message);
+        else if (action === 'forward') void openForward(accountId, accountEmail, message);
+        else openEditDraft(accountId, accountEmail, conversation?.subject ?? '', message);
+      }}
+      onComposeTo={(participant) => {
+        if (accountId) openNewMessage(accountId, accountEmail, participant);
+      }}
       mailboxId={mailboxId}
       currentLabelName={currentLabelName}
       labelMenuEntries={labelMenuEntries}
       selectedCount={selectedCount}
       unread={unread}
       starred={starred}
-      triageHandlers={triageHandlersFor(activeIds, unread, starred, mailboxId, triage.mutate, currentLabelName)}
+      triageHandlers={triageHandlersFor(
+        activeIds,
+        unread,
+        starred,
+        mailboxId,
+        triage.mutate,
+        currentLabelName,
+      )}
     />
   );
 }

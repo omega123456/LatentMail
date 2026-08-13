@@ -13,8 +13,16 @@ import { EmptyState } from '@/components/states/EmptyState';
 import { LoadingState } from '@/components/states/LoadingState';
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { useCommands } from '@/lib/keyboard/useCommands';
-import { useLabelsQuery, useThreadsQuery, useTriageMutation, useTraversalStatusQuery } from '@/lib/query/hooks';
-import { mapLabelsToUserLabels, mapThreadToRow } from '@/lib/query/mappers';
+import {
+  useLabelsQuery,
+  useAccountsQuery,
+  useConversationQuery,
+  useThreadsQuery,
+  useTriageMutation,
+  useTraversalStatusQuery,
+} from '@/lib/query/hooks';
+import { mapConversation, mapLabelsToUserLabels, mapThreadToRow } from '@/lib/query/mappers';
+import { openEditDraft, openForward, openReply } from '@/lib/compose/entry';
 import { useLayoutStore } from '@/stores/layout';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
@@ -45,6 +53,8 @@ export function ConversationList({
   currentLabelName,
   onTriage,
   syncProgress,
+  onCompose,
+  composeTargetThreadId,
 }: {
   threads?: Conversation[];
   pages?: Conversation[][];
@@ -62,6 +72,8 @@ export function ConversationList({
   /** Traversal progress counts for the `syncing` empty-state variant — only
    * meaningful while `state === 'syncing'`. */
   syncProgress?: { persistedCount: number; discoveredCount: number };
+  onCompose?: (threadId: string, action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => void;
+  composeTargetThreadId?: string | null;
 }) {
   'use no memo';
   const parentRef = useRef<HTMLDivElement>(null);
@@ -160,16 +172,60 @@ export function ConversationList({
       selectAll(rowIds);
     },
     toggleStar: () => {
-      const ids = multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[];
+      const ids = multiSelectActive
+        ? [...selectedIds]
+        : cursor === null
+          ? []
+          : ([rows[cursor]?.id].filter(Boolean) as string[]);
       if (!ids.length) return;
       const starred = rows.some((row) => ids.includes(row.id) && row.starred);
       onTriage?.(ids, { add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] });
     },
-    markRead: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: [], remove: ['UNREAD'] }),
-    markUnread: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: ['UNREAD'], remove: [] }),
-    markSpam: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: ['SPAM'], remove: [] }),
-    markNotSpam: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: [], remove: ['SPAM'] }),
-    deleteConversation: () => onTriage?.(multiSelectActive ? [...selectedIds] : cursor === null ? [] : [rows[cursor]?.id].filter(Boolean) as string[], { add: ['TRASH'], remove: [] }),
+    markRead: () =>
+      onTriage?.(
+        multiSelectActive
+          ? [...selectedIds]
+          : cursor === null
+            ? []
+            : ([rows[cursor]?.id].filter(Boolean) as string[]),
+        { add: [], remove: ['UNREAD'] },
+      ),
+    markUnread: () =>
+      onTriage?.(
+        multiSelectActive
+          ? [...selectedIds]
+          : cursor === null
+            ? []
+            : ([rows[cursor]?.id].filter(Boolean) as string[]),
+        { add: ['UNREAD'], remove: [] },
+      ),
+    markSpam: () =>
+      onTriage?.(
+        multiSelectActive
+          ? [...selectedIds]
+          : cursor === null
+            ? []
+            : ([rows[cursor]?.id].filter(Boolean) as string[]),
+        { add: ['SPAM'], remove: [] },
+      ),
+    markNotSpam: () =>
+      onTriage?.(
+        multiSelectActive
+          ? [...selectedIds]
+          : cursor === null
+            ? []
+            : ([rows[cursor]?.id].filter(Boolean) as string[]),
+        { add: [], remove: ['SPAM'] },
+      ),
+    deleteConversation: () =>
+      onTriage?.(
+        multiSelectActive
+          ? [...selectedIds]
+          : cursor === null
+            ? []
+            : ([rows[cursor]?.id].filter(Boolean) as string[]),
+        { add: ['TRASH'], remove: [] },
+      ),
   });
   // A list refresh (fresh query data, a fixture-page load) may have dropped
   // rows that were previously selected — prune rather than leave stale ids
@@ -249,14 +305,28 @@ export function ConversationList({
                 onOpen={(event) => handleRowClick(event, item.index)}
                 onStar={() => {
                   const row = rows[item.index];
-                  const ids = selectedIds.has(row.id) && multiSelectActive ? [...selectedIds] : [row.id];
-                  const starred = rows.some((candidate) => ids.includes(candidate.id) && candidate.starred);
-                  onTriage?.(ids, { add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] });
+                  const ids =
+                    selectedIds.has(row.id) && multiSelectActive ? [...selectedIds] : [row.id];
+                  const starred = rows.some(
+                    (candidate) => ids.includes(candidate.id) && candidate.starred,
+                  );
+                  onTriage?.(ids, {
+                    add: starred ? [] : ['STARRED'],
+                    remove: starred ? ['STARRED'] : [],
+                  });
                 }}
                 onTriage={(change) => {
-                  const ids = selectedIds.has(rows[item.index].id) && multiSelectActive ? [...selectedIds] : [rows[item.index].id];
+                  const ids =
+                    selectedIds.has(rows[item.index].id) && multiSelectActive
+                      ? [...selectedIds]
+                      : [rows[item.index].id];
                   onTriage?.(ids, change);
                 }}
+                onCompose={
+                  !multiSelectActive && rows[item.index].id === composeTargetThreadId
+                    ? (action) => onCompose?.(rows[item.index].id, action)
+                    : undefined
+                }
               />
             </div>
           ))}
@@ -300,11 +370,15 @@ export function ConversationList({
  * for unit tests. */
 export function ConversationListContainer() {
   const accountId = useSelectionStore((value) => value.activeAccountId);
+  const activeThreadId = useSelectionStore((value) => value.activeThreadId);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
   const query = useThreadsQuery(accountId, mailboxId);
   const traversal = useTraversalStatusQuery(accountId);
   const triage = useTriageMutation(accountId);
   const labelsQuery = useLabelsQuery(accountId);
+  const accountsQuery = useAccountsQuery();
+  const activeConversation = useConversationQuery(accountId, activeThreadId);
+  const accountEmail = accountsQuery.data?.find((account) => account.id === accountId)?.email ?? '';
   const allLabels = useMemo<LabelMenuEntry[]>(
     () =>
       mapLabelsToUserLabels(labelsQuery.data ?? []).map((label) => ({
@@ -353,6 +427,19 @@ export function ConversationListContainer() {
       onTriage={(threadIds, change) => {
         triage.mutate({ threadIds, ...change });
       }}
+      onCompose={(targetThreadId, action) => {
+        // Context menus only target the already loaded open conversation;
+        // opening a different row has no loaded message and is a no-op.
+        if (!accountId || targetThreadId !== activeThreadId || !activeConversation.data) return;
+        const conversation = mapConversation(activeConversation.data, new Map());
+        const message = conversation.messages.at(-1);
+        if (action === 'reply') void openReply('reply', accountId, accountEmail, message);
+        else if (action === 'reply-all')
+          void openReply('reply-all', accountId, accountEmail, message);
+        else if (action === 'forward') void openForward(accountId, accountEmail, message);
+        else void openEditDraft(accountId, accountEmail, conversation.subject, message);
+      }}
+      composeTargetThreadId={activeThreadId}
       syncProgress={
         traversal.data
           ? {

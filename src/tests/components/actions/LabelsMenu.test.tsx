@@ -11,9 +11,7 @@ const labels: LabelMenuEntry[] = [
 
 describe('LabelsMenu — staged variant', () => {
   it('exposes indeterminate membership as aria-checked="mixed"', () => {
-    render(
-      <LabelsMenu variant="staged" labels={labels} onApply={vi.fn()} onCancel={vi.fn()} />,
-    );
+    render(<LabelsMenu variant="staged" labels={labels} onApply={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByRole('menuitemcheckbox', { name: /Invoices/ })).toHaveAttribute(
       'aria-checked',
       'mixed',
@@ -31,9 +29,7 @@ describe('LabelsMenu — staged variant', () => {
   it('disables Apply until membership differs, then reports the change count', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();
-    render(
-      <LabelsMenu variant="staged" labels={labels} onApply={onApply} onCancel={vi.fn()} />,
-    );
+    render(<LabelsMenu variant="staged" labels={labels} onApply={onApply} onCancel={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
     expect(screen.getByText('0 changes staged')).toBeInTheDocument();
 
@@ -48,9 +44,7 @@ describe('LabelsMenu — staged variant', () => {
   it('reports a removal when an already-checked label is unchecked', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();
-    render(
-      <LabelsMenu variant="staged" labels={labels} onApply={onApply} onCancel={vi.fn()} />,
-    );
+    render(<LabelsMenu variant="staged" labels={labels} onApply={onApply} onCancel={vi.fn()} />);
     await user.click(screen.getByRole('menuitemcheckbox', { name: /Clients/ }));
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(onApply).toHaveBeenCalledWith({ add: [], remove: ['Label_1'] });

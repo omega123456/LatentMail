@@ -89,10 +89,18 @@ describe('ReadingPaneContainer', () => {
 
   it('wires read, star, spam, and delete thread actions to triage mutations', async () => {
     const user = userEvent.setup();
-    useSelectionStore.setState({ activeAccountId: 'account-1', activeMailboxId: 'INBOX', activeThreadId: 'thread-1', keyboardCursor: null });
+    useSelectionStore.setState({
+      activeAccountId: 'account-1',
+      activeMailboxId: 'INBOX',
+      activeThreadId: 'thread-1',
+      keyboardCursor: null,
+    });
     useMultiSelectStore.setState({ selectedIds: new Set(), anchorId: null });
     const changes: unknown[] = [];
-    ipc.override('mutate_threads', (args) => { changes.push(args); return []; });
+    ipc.override('mutate_threads', (args) => {
+      changes.push(args);
+      return [];
+    });
     renderWithClient();
     const ribbon = within(await screen.findByTestId('action-ribbon'));
     await user.click(ribbon.getByRole('button', { name: 'Mark unread' }));
@@ -100,11 +108,13 @@ describe('ReadingPaneContainer', () => {
     await user.click(ribbon.getByRole('button', { name: 'Mark as spam' }));
     await user.click(ribbon.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(changes).toHaveLength(4));
-    expect(changes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ add: ['UNREAD'], remove: [] }),
-      expect.objectContaining({ add: ['STARRED'], remove: [] }),
-      expect.objectContaining({ add: ['SPAM'], remove: [] }),
-      expect.objectContaining({ add: ['TRASH'], remove: [] }),
-    ]));
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ add: ['UNREAD'], remove: [] }),
+        expect.objectContaining({ add: ['STARRED'], remove: [] }),
+        expect.objectContaining({ add: ['SPAM'], remove: [] }),
+        expect.objectContaining({ add: ['TRASH'], remove: [] }),
+      ]),
+    );
   });
 });

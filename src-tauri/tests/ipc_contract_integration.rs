@@ -6,8 +6,8 @@ use latentmail_lib::ipc::{
 use latentmail_lib::queue::QueueEngine;
 use latentmail_lib::settings::SettingsService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository,
-    Storage, Thread, ThreadRepository,
+    Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository, Storage,
+    Thread, ThreadRepository,
 };
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
 use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
@@ -180,6 +180,9 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
     app.manage(AuthService::new(storage.clone()));
     app.manage(SettingsService::new(storage));
     app.manage(engine);
+    app.manage(std::sync::Arc::new(
+        latentmail_lib::compose::staging::Staging::new(directory.path().join("staged")),
+    ));
     std::fs::remove_dir_all(directory.path()).unwrap();
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -188,18 +191,60 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
     for (command, body) in [
         ("list_accounts", serde_json::json!({})),
         ("read_settings", serde_json::json!({})),
-        ("write_setting", serde_json::json!({ "key": "theme", "value": "dark" })),
+        (
+            "write_setting",
+            serde_json::json!({ "key": "theme", "value": "dark" }),
+        ),
         ("list_labels", serde_json::json!({ "accountId": "account" })),
-        ("list_threads", serde_json::json!({ "accountId": "account", "labelId": null, "cursor": null, "limit": null })),
-        ("load_conversation", serde_json::json!({ "accountId": "account", "threadId": "thread" })),
-        ("fetch_message_body", serde_json::json!({ "accountId": "account", "messageId": "message" })),
-        ("create_label", serde_json::json!({ "accountId": "account", "name": "Clients", "colorId": null })),
-        ("rename_label", serde_json::json!({ "accountId": "account", "labelId": "Label_1", "name": "Clients" })),
-        ("recolor_label", serde_json::json!({ "accountId": "account", "labelId": "Label_1", "colorId": "blue" })),
-        ("delete_label", serde_json::json!({ "accountId": "account", "labelId": "Label_1" })),
-        ("read_traversal_status", serde_json::json!({ "accountId": "account" })),
+        (
+            "lookup_contacts",
+            serde_json::json!({ "accountId": "account", "query": "al" }),
+        ),
+        (
+            "reply_context",
+            serde_json::json!({ "accountId": "account", "messageId": "message", "accountEmail": "me@example.com", "replyAll": false, "forward": false }),
+        ),
+        (
+            "stage_attachment_from_path",
+            serde_json::json!({ "accountId": "account", "owner": "draft", "path": "/does/not/exist", "mimeType": "text/plain", "contentId": null }),
+        ),
+        (
+            "list_threads",
+            serde_json::json!({ "accountId": "account", "labelId": null, "cursor": null, "limit": null }),
+        ),
+        (
+            "load_conversation",
+            serde_json::json!({ "accountId": "account", "threadId": "thread" }),
+        ),
+        (
+            "fetch_message_body",
+            serde_json::json!({ "accountId": "account", "messageId": "message" }),
+        ),
+        (
+            "create_label",
+            serde_json::json!({ "accountId": "account", "name": "Clients", "colorId": null }),
+        ),
+        (
+            "rename_label",
+            serde_json::json!({ "accountId": "account", "labelId": "Label_1", "name": "Clients" }),
+        ),
+        (
+            "recolor_label",
+            serde_json::json!({ "accountId": "account", "labelId": "Label_1", "colorId": "blue" }),
+        ),
+        (
+            "delete_label",
+            serde_json::json!({ "accountId": "account", "labelId": "Label_1" }),
+        ),
+        (
+            "read_traversal_status",
+            serde_json::json!({ "accountId": "account" }),
+        ),
     ] {
-        assert!(invoke(&webview, command, body).is_err(), "{command} must surface storage failure");
+        assert!(
+            invoke(&webview, command, body).is_err(),
+            "{command} must surface storage failure"
+        );
     }
 
     for command in ["mutate_threads", "mutate_messages"] {
@@ -874,10 +919,12 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
         })
     )
     .is_ok());
-    assert!(MessageRepository::get(&storage.connection().unwrap(), &account_id, "message-1")
-        .unwrap()
-        .unwrap()
-        .is_starred);
+    assert!(
+        MessageRepository::get(&storage.connection().unwrap(), &account_id, "message-1")
+            .unwrap()
+            .unwrap()
+            .is_starred
+    );
     assert!(invoke(
         &webview,
         "mutate_messages",
@@ -1137,8 +1184,14 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         },
     )
     .unwrap();
-    MessageRepository::set_label_membership(&connection, &account_id, "message-draft", "DRAFT", true)
-        .unwrap();
+    MessageRepository::set_label_membership(
+        &connection,
+        &account_id,
+        "message-draft",
+        "DRAFT",
+        true,
+    )
+    .unwrap();
     drop(connection);
 
     let server = MockServer::start().await;
@@ -1192,4 +1245,78 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         .unwrap()
         .iter()
         .all(|request| request.url.path() != "/users/me/messages/batchModify"));
+}
+
+/// Phase 2's Rust-staging command surface, dispatched through the real IPC
+/// pipeline end to end: a path and inline bytes both stage into the same
+/// canonical descriptor shape, and removal is idempotent.
+#[test]
+fn staging_commands_stage_and_release_through_real_ipc() {
+    let directory = tempfile::tempdir().unwrap();
+    let staging = std::sync::Arc::new(latentmail_lib::compose::staging::Staging::new(
+        directory.path().join("staged"),
+    ));
+    let source = directory.path().join("source.txt");
+    std::fs::write(&source, b"attachment").unwrap();
+
+    let app = app();
+    app.manage(staging);
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let staged_from_path = invoke(
+        &webview,
+        "stage_attachment_from_path",
+        serde_json::json!({
+            "accountId": "account",
+            "owner": "draft",
+            "path": source.to_string_lossy(),
+            "mimeType": "text/plain",
+            "contentId": null,
+        }),
+    )
+    .unwrap();
+    assert_eq!(staged_from_path["filename"], "source.txt");
+    assert!(staged_from_path["path"].as_str().unwrap().contains("draft"));
+    assert_eq!(staged_from_path["size"], b"attachment".len() as u64);
+
+    let staged_from_bytes = invoke(
+        &webview,
+        "stage_attachment_from_bytes",
+        serde_json::json!({
+            "accountId": "account",
+            "owner": "draft",
+            "filename": "inline.png",
+            "mimeType": "image/png",
+            "contentId": "cid:1",
+            "bytes": [1, 2, 3],
+        }),
+    )
+    .unwrap();
+    assert_eq!(staged_from_bytes["contentId"], "cid:1");
+    assert_eq!(staged_from_bytes["size"], 3);
+
+    assert!(invoke(
+        &webview,
+        "release_staged_attachment",
+        serde_json::json!({
+            "accountId": "account",
+            "owner": "draft",
+            "id": staged_from_path["id"],
+        }),
+    )
+    .is_ok());
+    // Releasing an id that was never staged (or already released) is a
+    // no-op, not an error — matches `Staging::remove_part`'s contract.
+    assert!(invoke(
+        &webview,
+        "release_staged_attachment",
+        serde_json::json!({
+            "accountId": "account",
+            "owner": "draft",
+            "id": "never-staged",
+        }),
+    )
+    .is_ok());
 }

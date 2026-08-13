@@ -25,6 +25,11 @@ pub const DRAFTS_DELETE_COST: u32 = 5;
 /// Cost of `GET /users/me/drafts` — used to resolve a message id to Gmail's
 /// own, distinct draft id (see [`GmailClient::list_draft_ids`]).
 pub const DRAFTS_LIST_COST: u32 = 5;
+pub const DRAFTS_CREATE_COST: u32 = 5;
+pub const DRAFTS_UPDATE_COST: u32 = 5;
+pub const DRAFTS_GET_COST: u32 = 5;
+pub const MESSAGES_SEND_COST: u32 = 5;
+pub const ATTACHMENTS_GET_COST: u32 = 5;
 
 /// Gmail's own default listing page size — applies whenever a caller
 /// doesn't request one explicitly. The maximum is 500.
@@ -95,6 +100,12 @@ pub struct InlinePart {
     pub bytes: Vec<u8>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentPart {
+    pub attachment_id: String,
+    pub filename: String,
+    pub mime_type: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GmailMessage {
     pub id: String,
     pub thread_id: String,
@@ -105,11 +116,21 @@ pub struct GmailMessage {
     pub rfc_message_id: Option<String>,
     pub sender: String,
     pub recipients: String,
+    pub to_recipients: String,
+    pub cc_recipients: String,
+    pub bcc_recipients: String,
+    pub rfc_references: Option<String>,
     pub subject: String,
     pub html_body: Option<String>,
     pub plain_body: Option<String>,
     pub has_attachments: bool,
     pub inline_parts: Vec<InlinePart>,
+    pub attachment_parts: Vec<AttachmentPart>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmailDraft {
+    pub id: String,
+    pub message: GmailMessage,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryPage {
@@ -141,6 +162,8 @@ pub enum GmailError {
     Network(#[from] reqwest::Error),
     #[error("invalid Gmail response: {0}")]
     Response(#[from] serde_json::Error),
+    #[error("invalid Gmail attachment payload")]
+    AttachmentData,
 }
 
 /// The account-wide sustained Gmail quota, conservatively calibrated per
@@ -330,13 +353,8 @@ impl GmailClient {
         label_ids: &[String],
         page_token: Option<&str>,
     ) -> Result<Page<MessageRef>, GmailError> {
-        self.list_messages_page_matching(
-            label_ids,
-            None,
-            page_token,
-            ListOptions::default(),
-        )
-        .await
+        self.list_messages_page_matching(label_ids, None, page_token, ListOptions::default())
+            .await
     }
     pub async fn list_all_messages(
         &self,
@@ -419,6 +437,99 @@ impl GmailClient {
             )
             .await?;
         Ok(map_message(raw))
+    }
+    /// Returns the stable draft id. Gmail answers a draft *write* with a
+    /// minimal resource — `{"id", "message": {"id", "threadId", "labelIds"}}`,
+    /// with no `historyId` and no `payload` — so a caller that needs the
+    /// message itself re-reads it through [`GmailClient::draft`], which is
+    /// the only draft route that returns a complete one.
+    /// [`GmailClient::message`], but `None` when Gmail no longer has the id.
+    /// A message can disappear between being enumerated (listed, or reported
+    /// by history) and being fetched — promoting a draft to a sent message
+    /// leaves exactly that behind, and so does any concurrent delete — so an
+    /// enumerating caller must skip the id rather than abort its whole run.
+    /// Callers acting on one specific message (a body fetch, a mutation
+    /// write-back) want the 404 instead and keep using `message`.
+    pub async fn message_if_present(&self, id: &str) -> Result<Option<GmailMessage>, GmailError> {
+        match self.message(id).await {
+            Err(GmailError::Http(404)) => Ok(None),
+            other => other.map(Some),
+        }
+    }
+    pub async fn create_draft(
+        &self,
+        raw: &[u8],
+        thread_id: Option<&str>,
+    ) -> Result<String, GmailError> {
+        self.upload_draft(
+            reqwest::Method::POST,
+            "/users/me/drafts",
+            raw,
+            thread_id,
+            DRAFTS_CREATE_COST,
+        )
+        .await
+    }
+    /// Returns the stable draft id — see [`GmailClient::create_draft`] for
+    /// why a write never carries the message back.
+    pub async fn update_draft(
+        &self,
+        draft_id: &str,
+        raw: &[u8],
+        thread_id: Option<&str>,
+    ) -> Result<String, GmailError> {
+        self.upload_draft(
+            reqwest::Method::PUT,
+            &format!("/users/me/drafts/{draft_id}"),
+            raw,
+            thread_id,
+            DRAFTS_UPDATE_COST,
+        )
+        .await
+    }
+    pub async fn draft(&self, draft_id: &str) -> Result<GmailDraft, GmailError> {
+        let raw: RawDraft = self
+            .get(
+                &format!("/users/me/drafts/{draft_id}"),
+                &[("format".into(), "full".into())],
+                DRAFTS_GET_COST,
+                false,
+            )
+            .await?;
+        Ok(GmailDraft {
+            id: raw.id,
+            message: map_message(raw.message.into_raw()?),
+        })
+    }
+    /// Promotes the draft and returns the sent message's id. Promotion, like
+    /// every other draft write, answers with a partial Message (id, thread,
+    /// labels only), so the full message comes from [`GmailClient::message`].
+    pub async fn send_draft(&self, draft_id: &str) -> Result<String, GmailError> {
+        let raw: RawId = self
+            .send(
+                reqwest::Method::POST,
+                "/users/me/drafts/send",
+                &SendDraftRequest { id: draft_id },
+                MESSAGES_SEND_COST,
+                false,
+            )
+            .await?;
+        Ok(raw.id)
+    }
+    pub async fn attachment(
+        &self,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, GmailError> {
+        let raw: RawAttachment = self
+            .get(
+                &format!("/users/me/messages/{message_id}/attachments/{attachment_id}"),
+                &[],
+                ATTACHMENTS_GET_COST,
+                false,
+            )
+            .await?;
+        decode(&raw.data).ok_or(GmailError::AttachmentData)
     }
     pub async fn modify_message(
         &self,
@@ -587,6 +698,20 @@ impl GmailClient {
                         tokio::time::sleep(backoff(attempt + 1)).await;
                         continue;
                     }
+                    // Gmail explains every 4xx in its body ("Invalid JSON
+                    // payload", "Precondition check failed", ...); a bare
+                    // status code is not diagnosable on its own. A 404 is
+                    // routine rather than a fault — an entity can vanish
+                    // between being enumerated and being fetched — so the
+                    // caller decides whether it matters (see
+                    // [`GmailClient::message_if_present`]) and this only
+                    // leaves a debug trace.
+                    let body = response.text().await.unwrap_or_default();
+                    if status == StatusCode::NOT_FOUND {
+                        tracing::debug!(target: "gmail", "{method} {path}: {status} {body}");
+                    } else {
+                        tracing::error!(target: "gmail", "{method} {path} failed: {status} {body}");
+                    }
                     return Err(GmailError::Http(status.as_u16()));
                 }
                 Err(error) if (error.is_connect() || error.is_timeout()) && attempt < 9 => {
@@ -597,6 +722,65 @@ impl GmailClient {
         }
         unreachable!("retry loop returns")
     }
+    async fn upload_draft(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        raw: &[u8],
+        thread_id: Option<&str>,
+        cost: u32,
+    ) -> Result<String, GmailError> {
+        self.acquire(cost).await;
+        // Gmail's upload endpoints take a `multipart/related` document —
+        // the Draft resource as JSON, then the RFC822 bytes verbatim — and
+        // require `uploadType`. A plain JSON body here (or one carrying
+        // `raw`/`threadId` at the top level rather than under `message`) is
+        // rejected with 400 before the message is ever assembled.
+        let boundary = crate::compose::drafts::generate_id("latentmail-part");
+        let metadata = serde_json::to_vec(&DraftUpload {
+            message: DraftUploadMessage { thread_id },
+        })?;
+        let mut body = Vec::with_capacity(raw.len() + metadata.len() + 256);
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(&metadata);
+        body.extend_from_slice(
+            format!("\r\n--{boundary}\r\nContent-Type: message/rfc822\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(raw);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let request = self
+            .http
+            .request(method, format!("{}{}", upload_base(&self.base_url), path))
+            .bearer_auth(&self.access_token)
+            .query(&[("uploadType", "multipart")])
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/related; boundary={boundary}"),
+            )
+            .body(body);
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            tracing::error!(
+                target: "gmail",
+                "draft upload {path} failed: {status} {}",
+                response.text().await.unwrap_or_default()
+            );
+            return Err(GmailError::Http(status.as_u16()));
+        }
+        let raw: RawId = response.json().await?;
+        Ok(raw.id)
+    }
+}
+
+fn upload_base(base: &str) -> String {
+    base.strip_suffix("/gmail/v1").map_or_else(
+        || format!("{base}/upload/gmail/v1"),
+        |prefix| format!("{prefix}/upload/gmail/v1"),
+    )
 }
 
 pub fn backoff(attempt: u8) -> Duration {
@@ -672,6 +856,8 @@ struct RawHeader {
 #[derive(Deserialize)]
 struct RawBody {
     data: Option<String>,
+    #[serde(rename = "attachmentId")]
+    attachment_id: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -688,14 +874,69 @@ struct BatchModifyRequest<'a> {
 }
 #[derive(Deserialize)]
 struct RawDraftList {
-    drafts: Option<Vec<RawDraft>>,
+    drafts: Option<Vec<RawDraftRef>>,
     #[serde(rename = "nextPageToken")]
     next_page_token: Option<String>,
 }
 #[derive(Deserialize)]
-struct RawDraft {
+struct RawDraftRef {
     id: String,
     message: RawRef,
+}
+/// Every draft write (create/update/promote) answers with a resource whose
+/// only dependable field is its id.
+#[derive(Deserialize)]
+struct RawId {
+    id: String,
+}
+#[derive(Deserialize)]
+struct RawDraft {
+    id: String,
+    message: RawDraftMessage,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDraftMessage {
+    id: String,
+    thread_id: String,
+    history_id: String,
+    label_ids: Option<Vec<String>>,
+    snippet: Option<String>,
+    internal_date: Option<String>,
+    payload: RawPart,
+}
+impl RawDraftMessage {
+    fn into_raw(self) -> Result<RawMessage, GmailError> {
+        Ok(RawMessage {
+            id: self.id,
+            thread_id: self.thread_id,
+            history_id: self.history_id,
+            label_ids: self.label_ids,
+            snippet: self.snippet,
+            internal_date: self.internal_date,
+            payload: self.payload,
+        })
+    }
+}
+#[derive(Deserialize)]
+struct RawAttachment {
+    data: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftUpload<'a> {
+    message: DraftUploadMessage<'a>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftUploadMessage<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_id: Option<&'a str>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendDraftRequest<'a> {
+    id: &'a str,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -759,11 +1000,16 @@ fn map_message(raw: RawMessage) -> GmailMessage {
             .cloned()
             .collect::<Vec<_>>()
             .join(", "),
+        to_recipients: headers.get("to").cloned().unwrap_or_default(),
+        cc_recipients: headers.get("cc").cloned().unwrap_or_default(),
+        bcc_recipients: headers.get("bcc").cloned().unwrap_or_default(),
+        rfc_references: headers.get("references").cloned(),
         subject: headers.get("subject").cloned().unwrap_or_default(),
         html_body: content.html,
         plain_body: content.plain,
         has_attachments: content.attachments,
         inline_parts: content.inline,
+        attachment_parts: content.attachment_parts,
     }
 }
 #[derive(Default)]
@@ -771,6 +1017,7 @@ struct Content {
     html: Option<String>,
     plain: Option<String>,
     attachments: bool,
+    attachment_parts: Vec<AttachmentPart>,
     inline: Vec<InlinePart>,
 }
 fn collect_part(part: &RawPart, content: &mut Content) {
@@ -792,6 +1039,17 @@ fn collect_part(part: &RawPart, content: &mut Content) {
     });
     if !part.filename.as_deref().unwrap_or_default().is_empty() {
         content.attachments = true;
+        if let Some(attachment_id) = part
+            .body
+            .as_ref()
+            .and_then(|body| body.attachment_id.as_deref())
+        {
+            content.attachment_parts.push(AttachmentPart {
+                attachment_id: attachment_id.to_owned(),
+                filename: part.filename.clone().unwrap_or_default(),
+                mime_type: mime.clone(),
+            });
+        }
     }
     if let (Some(content_id), Some(bytes)) = (cid, data.clone()) {
         content.inline.push(InlinePart {

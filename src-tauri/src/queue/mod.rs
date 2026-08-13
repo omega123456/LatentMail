@@ -385,13 +385,13 @@ impl QueueEngine {
     async fn wait_for_interactive(&self, operation: &QueueOperation) {
         if matches!(operation.lane, Lane::Background | Lane::Traversal) {
             loop {
-            // As with pause/resume, subscribe before checking to avoid
-            // missing the final interactive completion in between.
-            let notified = self.interactive_drained.notified();
-            if !self.has_interactive(&operation.account_id).await {
-                return;
-            }
-            notified.await;
+                // As with pause/resume, subscribe before checking to avoid
+                // missing the final interactive completion in between.
+                let notified = self.interactive_drained.notified();
+                if !self.has_interactive(&operation.account_id).await {
+                    return;
+                }
+                notified.await;
             }
         }
     }
@@ -431,10 +431,96 @@ pub fn retry_delay(attempt: u8) -> Duration {
     Duration::from_secs((1_u64 << attempt.saturating_sub(1).min(6)).min(60))
 }
 
-/// Startup recovery reads the durable subset once; the queue never polls SQLite for work.
+/// Startup recovery reads the durable subset once; the queue never polls
+/// SQLite for work. Returns the recoverable operations to re-enqueue plus
+/// the distinct account ids whose interrupted send became uncertain (never
+/// re-enqueued — the caller emits `send://uncertain` and schedules one
+/// ordinary account sync for each instead).
 pub fn recover_durable_operations(
     connection: &rusqlite::Connection,
-) -> rusqlite::Result<Vec<Operation>> {
-    OperationRepository::mark_interrupted_sends_uncertain(connection)?;
-    OperationRepository::pending_durable(connection)
+) -> rusqlite::Result<(Vec<Operation>, Vec<String>)> {
+    let uncertain_accounts = OperationRepository::mark_interrupted_sends_uncertain(connection)?;
+    OperationRepository::requeue_interrupted_drafts(connection)?;
+    let recovered = OperationRepository::pending_durable(connection)?;
+    Ok((recovered, uncertain_accounts))
+}
+
+/// Persists a durable operation's row (queued, before admission) and then
+/// admits it to the queue. Callers for [`OperationKind::Draft`]/
+/// [`OperationKind::Send`] must always go through this rather than calling
+/// [`QueueEngine::enqueue`] directly, so recovery never has to assume a
+/// durable operation without a row (D15).
+pub async fn admit_durable(
+    engine: &Arc<QueueEngine>,
+    storage: &crate::storage::Storage,
+    operation: QueueOperation,
+    payload: String,
+) -> Result<(), &'static str> {
+    debug_assert!(
+        operation.kind.persists(),
+        "admit_durable is only for Send/Draft operations"
+    );
+    let row = Operation {
+        id: operation.id.clone(),
+        account_id: operation.account_id.clone(),
+        lane: match operation.lane {
+            Lane::Interactive => "interactive".to_owned(),
+            Lane::Background => "background".to_owned(),
+            Lane::Traversal => "traversal".to_owned(),
+        },
+        kind: match operation.kind {
+            OperationKind::Draft => "draft".to_owned(),
+            OperationKind::Send => "send".to_owned(),
+            _ => return Err("only Draft/Send operations are durable"),
+        },
+        entity_key: operation.entity_key.clone(),
+        payload,
+        status: "queued".to_owned(),
+        attempts: 0,
+        next_attempt_at: None,
+        error: None,
+        created_at: chrono::Utc::now().timestamp(),
+        updated_at: chrono::Utc::now().timestamp(),
+    };
+    storage
+        .run(move |connection| OperationRepository::upsert(connection, &row))
+        .await
+        .map_err(|_| "failed to persist durable operation")?;
+    engine.enqueue(operation).await
+}
+
+/// Rebuilds recoverable queued work from its durable row. The compose service
+/// owns the payload executor, so this contains no captured process memory.
+pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation> {
+    let kind = match operation.kind.as_str() {
+        "draft" => OperationKind::Draft,
+        "send" => OperationKind::Send,
+        _ => return None,
+    };
+    let lane = if operation.lane == "background" {
+        Lane::Background
+    } else {
+        Lane::Interactive
+    };
+    Some(QueueOperation {
+        id: operation.id.clone(),
+        account_id: operation.account_id.clone(),
+        lane,
+        kind,
+        entity_key: operation.entity_key.clone(),
+        cost: 0,
+        attempts: operation.attempts.try_into().unwrap_or_default(),
+    })
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncertainSendEvent {
+    pub account_id: String,
+}
+
+pub fn uncertain_send_event(account_id: impl Into<String>) -> UncertainSendEvent {
+    UncertainSendEvent {
+        account_id: account_id.into(),
+    }
 }

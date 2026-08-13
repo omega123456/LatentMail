@@ -118,10 +118,7 @@ describe('computeThreadLabelMembership', () => {
   ];
 
   it('renders checked when present on every message, unchecked on none, and indeterminate on some', () => {
-    const result = computeThreadLabelMembership(userLabels, [
-      ['Label_1', 'INBOX'],
-      ['Label_1'],
-    ]);
+    const result = computeThreadLabelMembership(userLabels, [['Label_1', 'INBOX'], ['Label_1']]);
     expect(result).toEqual([
       { id: 'Label_1', name: 'Clients', color: 'black', membership: 'checked' },
       { id: 'Label_2', name: 'Invoices', color: 'black', membership: 'unchecked' },

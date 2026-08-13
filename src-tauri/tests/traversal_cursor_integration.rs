@@ -120,9 +120,7 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param("q", "newer_than:30d"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -272,9 +270,7 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param("q", "newer_than:30d"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
         .mount(&server)
         .await;
     // Two remaining pages of the leftover run below — "page2" (this run's
@@ -643,9 +639,7 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param("q", "newer_than:30d"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
         .mount(&server)
         .await;
     // Backfill's own two-page enumeration. `.expect(1)` on each page is
@@ -713,7 +707,10 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
     let engine = SyncEngine::new(storage.clone(), queue.clone(), registry, sink);
     let client = GmailClient::with_base_url("token", server.uri());
 
-    engine.initial_sync("account", client.clone()).await.unwrap();
+    engine
+        .initial_sync("account", client.clone())
+        .await
+        .unwrap();
 
     let distinct_traversal_ops = || {
         let count = queue_events
@@ -747,10 +744,17 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         tokio::task::yield_now().await;
     }
     assert_eq!(
-        cursor.expect("page 1 must have committed and its operation must settle").position.as_deref(),
+        cursor
+            .expect("page 1 must have committed and its operation must settle")
+            .position
+            .as_deref(),
         Some("page2")
     );
-    assert_eq!(distinct_traversal_ops(), 1, "only page 1 has completed so far");
+    assert_eq!(
+        distinct_traversal_ops(),
+        1,
+        "only page 1 has completed so far"
+    );
 
     // Simulate a second scheduler tick firing mid-run — exactly the
     // production bug this test guards against.
@@ -938,9 +942,7 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .and(query_param_is_missing("pageToken"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": []})))
         .mount(&server)
         .await;
 
@@ -1351,9 +1353,7 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
     for id in ["m1", "m2"] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(message_json(id, id, "10", id)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(message_json(id, id, "10", id)))
             .mount(&server)
             .await;
     }

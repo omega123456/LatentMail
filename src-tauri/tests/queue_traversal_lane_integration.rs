@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use latentmail_lib::queue::{Executor, Lane, OperationKind, QueueEngine, QueueError, QueueOperation};
+use latentmail_lib::queue::{
+    Executor, Lane, OperationKind, QueueEngine, QueueError, QueueOperation,
+};
 use tokio::sync::mpsc;
 
 fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
@@ -130,7 +132,10 @@ async fn interactive_dispatches_promptly_with_many_traversal_operations_queued()
         .enqueue(operation("interactive", Lane::Interactive, "thread"))
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_millis(250), interactive_started.notified())
-        .await
-        .expect("interactive must dispatch promptly even with traversal saturated");
+    tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        interactive_started.notified(),
+    )
+    .await
+    .expect("interactive must dispatch promptly even with traversal saturated");
 }

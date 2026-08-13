@@ -5,6 +5,8 @@ import { EventBridge } from '@/lib/query/event-bridge';
 import { queryKeys } from '@/lib/query/keys';
 import { QueryProvider } from '@/providers/QueryProvider';
 import { useSyncStore } from '@/stores/sync';
+import { useComposeStore } from '@/stores/compose';
+import { useToastStore } from '@/stores/toast';
 import { ipc } from '@/tests/ipc-mock';
 
 function SpyClient({ onReady }: { onReady: (client: ReturnType<typeof useQueryClient>) => void }) {
@@ -115,11 +117,119 @@ describe('EventBridge', () => {
     act(() => {
       for (let count = 0; count < 100; count += 1)
         ipc.emit('sync://traversal', {
-          accountId: 'account-1', kind: 'backfill', discoveredCount: count, persistedCount: count, completed: false,
+          accountId: 'account-1',
+          kind: 'backfill',
+          discoveredCount: count,
+          persistedCount: count,
+          completed: false,
         });
       vi.advanceTimersByTime(250);
     });
     expect(invalidate).toHaveBeenCalledTimes(3);
     vi.useRealTimers();
+  });
+
+  it('tears down every listener and any pending traversal timer on unmount', async () => {
+    const { unmount } = render(
+      <QueryProvider>
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('sync://traversal', expect.any(Function)),
+    );
+    vi.useFakeTimers();
+    // Starts the debounce timer without letting it fire, so unmount's
+    // cleanup (not the timer callback) is what clears it.
+    act(() =>
+      ipc.emit('sync://traversal', {
+        accountId: 'account-1',
+        kind: 'backfill',
+        discoveredCount: 1,
+        persistedCount: 1,
+        completed: false,
+      }),
+    );
+    const clearSpy = vi.spyOn(window, 'clearTimeout');
+    act(() => unmount());
+    expect(clearSpy).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('handles compose delivery events and ignores unrelated queue items through the shared IPC harness', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('draft://saved', expect.any(Function)),
+    );
+    act(() =>
+      useComposeStore.getState().open({
+        id: 'session-1',
+        mode: 'new',
+        accountId: 'account-1',
+        from: 'me@example.com',
+        recipients: { to: [], cc: [], bcc: [] },
+        subject: 'Draft',
+        html: '',
+      }),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() =>
+      ipc.emit('draft://saved', {
+        accountId: 'account-1',
+        sessionId: 'session-1',
+        draftId: 'draft-1',
+      }),
+    );
+    expect(useComposeStore.getState().session).toMatchObject({ draftId: 'draft-1', dirty: false });
+    act(() => ipc.emit('send://uncertain', { accountId: 'account-1' }));
+    expect(useToastStore.getState().toast?.message).toBe(
+      'Send status unknown — check Sent and Drafts',
+    );
+    act(() =>
+      ipc.emit('send://complete', {
+        accountId: 'account-1',
+        sessionId: 'session-1',
+        draftId: 'draft-1',
+      }),
+    );
+    expect(useToastStore.getState().toast?.message).toBe('Message sent.');
+    // A failure for the still-open session belongs inline, not in a toast.
+    act(() =>
+      ipc.emit('compose://failed', {
+        accountId: 'account-1',
+        sessionId: 'session-1',
+        kind: 'draft',
+        error: 'Gmail request failed with status 400',
+      }),
+    );
+    expect(useComposeStore.getState().session).toMatchObject({
+      draftStatus: 'failed',
+      lifecycleError: 'Couldn’t save draft',
+    });
+    expect(useToastStore.getState().toast?.message).toBe('Message sent.');
+    // Once the composer has closed, the toast is the only channel left.
+    act(() => useComposeStore.getState().close());
+    act(() =>
+      ipc.emit('compose://failed', {
+        accountId: 'account-1',
+        sessionId: 'session-1',
+        kind: 'send',
+        error: 'Gmail request failed with status 400',
+      }),
+    );
+    expect(useToastStore.getState().toast?.message).toBe(
+      'Couldn’t send message — Gmail request failed with status 400',
+    );
+    const beforeUnrelatedItem = invalidate.mock.calls.length;
+    act(() => ipc.emit('queue://item', { id: 'queue:account-1:1', status: 'done' }));
+    expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
+    act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'done' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.threadsForAccount('account-1') });
   });
 });

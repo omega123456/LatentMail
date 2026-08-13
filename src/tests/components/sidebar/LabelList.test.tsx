@@ -93,7 +93,12 @@ describe('LabelList', () => {
 
   it('hides unread counts when showUnreadCounts is false', () => {
     render(
-      <LabelList activeMailboxId={null} labels={labels} showUnreadCounts={false} onSelect={vi.fn()} />,
+      <LabelList
+        activeMailboxId={null}
+        labels={labels}
+        showUnreadCounts={false}
+        onSelect={vi.fn()}
+      />,
     );
     expect(screen.queryByText('3')).not.toBeInTheDocument();
   });

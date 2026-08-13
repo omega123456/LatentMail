@@ -8,7 +8,13 @@ describe('ReauthBanner', () => {
   it('starts reauthentication and remains disabled while it is pending', async () => {
     const user = userEvent.setup();
     let resolve!: () => void;
-    ipc.override('begin_reauthentication', () => new Promise<void>((done) => { resolve = done; }));
+    ipc.override(
+      'begin_reauthentication',
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        }),
+    );
     render(<ReauthBanner accountId="account-1" />);
     await user.click(screen.getByRole('button', { name: 'Fix' }));
     expect(screen.getByRole('button', { name: 'Fixing…' })).toBeDisabled();

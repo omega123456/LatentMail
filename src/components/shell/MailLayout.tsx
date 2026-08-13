@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { ReauthBanner } from '@/components/auth/ReauthBanner';
+import { ComposeOverlay } from '@/components/compose/ComposeOverlay';
 import { ConversationListContainer } from '@/components/list/ConversationList';
 import { ListHeader } from '@/components/list/ListHeader';
 import {
@@ -8,8 +9,9 @@ import {
   useLabelsQuery,
   useRecolorLabelMutation,
   useRenameLabelMutation,
+  useConversationQuery,
 } from '@/lib/query/hooks';
-import { mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
+import { mapConversation, mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
 import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
 import type { Account } from '@/lib/types/ipc';
@@ -17,15 +19,14 @@ import { AccountSwitcher } from '@/components/sidebar/AccountSwitcher';
 import { CollapsedRail } from '@/components/sidebar/CollapsedRail';
 import { FolderList } from '@/components/sidebar/FolderList';
 import { LabelList } from '@/components/sidebar/LabelList';
-import {
-  Mail,
-  PanelLeftClose,
-  Pencil,
-  Settings,
-} from 'lucide-react';
+import { Mail, PanelLeftClose, Pencil, Settings } from 'lucide-react';
 import { ResizeHandle } from './ResizeHandle';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
 import { StatusBar } from '@/components/statusbar/StatusBar';
+import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
+import { useCommands } from '@/lib/keyboard/useCommands';
+import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
+import { useComposeStore } from '@/stores/compose';
 
 const navItem =
   'flex items-center gap-3 rounded px-3 py-2 text-body-md text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
@@ -64,6 +65,8 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     update(value);
   };
   const labelsQuery = useLabelsQuery(activeAccountId);
+  const keyboardConversation = useConversationQuery(activeAccountId, activeThreadId);
+  const keyboardMultiSelect = useMultiSelectStore(selectIsMultiSelectActive);
   const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
   const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
   const createLabelMutation = useCreateLabelMutation(activeAccountId);
@@ -71,6 +74,35 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const recolorLabelMutation = useRecolorLabelMutation(activeAccountId);
   const deleteLabelMutation = useDeleteLabelMutation(activeAccountId);
   const activeMailbox = activeMailboxId ?? 'INBOX';
+  const activeAccount = accounts.find((account) => account.id === activeAccountId);
+  const compose = useCallback(() => {
+    if (activeAccount) openNewMessage(activeAccount.id, activeAccount.email);
+  }, [activeAccount]);
+  const composeTarget = useCallback(
+    (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => {
+      if (!activeAccount || keyboardMultiSelect || !keyboardConversation.data) return;
+      const labels = new Map((labelsQuery.data ?? []).map((label) => [label.id, label.name]));
+      const message = mapConversation(keyboardConversation.data, labels).messages.at(-1);
+      if (!message) return;
+      if (action === 'reply') void openReply('reply', activeAccount.id, activeAccount.email, message);
+      else if (action === 'reply-all')
+        void openReply('reply-all', activeAccount.id, activeAccount.email, message);
+      else if (action === 'forward') void openForward(activeAccount.id, activeAccount.email, message);
+      else if (message.isDraft)
+        void openEditDraft(activeAccount.id, activeAccount.email, keyboardConversation.data.subject, message);
+    },
+    [activeAccount, keyboardConversation.data, keyboardMultiSelect, labelsQuery.data],
+  );
+  useCommands({
+    newMessage: (event) => {
+      event.preventDefault();
+      compose();
+    },
+    replyToMessage: (event) => { event.preventDefault(); composeTarget('reply'); },
+    replyAllToMessage: (event) => { event.preventDefault(); composeTarget('reply-all'); },
+    forwardMessage: (event) => { event.preventDefault(); composeTarget('forward'); },
+    editDraft: (event) => { event.preventDefault(); composeTarget('edit-draft'); },
+  });
   // System mailboxes carry the display name the sidebar shows; a user label
   // falls back to its own name, and an unknown id to the raw value.
   const mailboxName =
@@ -94,6 +126,16 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   useEffect(() => {
     if (activeAccountId === null && accounts.length > 0) selectAccount(accounts[0].id);
   }, [accounts, activeAccountId, selectAccount]);
+  // Entry-point wiring (the Compose pill, keyboard command, reply/forward
+  // ribbons) covers real usage; Playwright's own screenshot scenarios open
+  // the composer directly through this test-only bridge instead, exactly
+  // the same one-shot-on-mount idiom `ReadingPane` uses for
+  // `__LATENTMAIL_PLAYWRIGHT_READER_STATE__`.
+  useEffect(() => {
+    if (!window.__LATENTMAIL_PLAYWRIGHT_IPC__) return;
+    const session = window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__;
+    if (session) useComposeStore.getState().open(session);
+  }, []);
   const openSettings = () => useLayoutStore.getState().setRoute('settings');
   const sidebar = sidebarCollapsed ? (
     <CollapsedRail
@@ -105,6 +147,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       onSelectMailbox={selectMailbox}
       onExpand={() => setSidebarCollapsed(false)}
       onSettings={openSettings}
+      onCompose={compose}
     />
   ) : (
     <aside
@@ -116,15 +159,15 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
         <span className="text-headline-md">LatentMail</span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-      <button
-        type="button"
-        disabled
-        title="Compose is not yet available"
-        className="mb-8 flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-label-md text-on-primary shadow-sm disabled:cursor-not-allowed disabled:opacity-100 dark:bg-dark-primary dark:text-dark-on-primary"
-      >
-        <Pencil aria-hidden="true" size={20} />
-        Compose
-      </button>
+        <button
+          type="button"
+          title="Compose"
+          onClick={compose}
+          className="mb-8 flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+        >
+          <Pencil aria-hidden="true" size={20} />
+          Compose
+        </button>
         <FolderList
           activeMailboxId={activeMailboxId ?? 'INBOX'}
           mailboxes={mailboxes}
@@ -136,9 +179,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           labels={labels}
           showUnreadCounts={showUnreadCounts}
           onSelect={selectMailbox}
-          onCreateLabel={({ name, colorId }) =>
-            createLabelMutation.mutateAsync({ name, colorId })
-          }
+          onCreateLabel={({ name, colorId }) => createLabelMutation.mutateAsync({ name, colorId })}
           onRenameLabel={({ id, name }) => renameLabelMutation.mutateAsync({ labelId: id, name })}
           onRecolorLabel={({ id, colorId }) =>
             recolorLabelMutation.mutateAsync({ labelId: id, colorId })
@@ -169,7 +210,9 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       </div>
     </aside>
   );
-  const topBar = <header className="h-16 shrink-0 border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface" />;
+  const topBar = (
+    <header className="h-16 shrink-0 border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface" />
+  );
   const list = (
     <section
       data-testid="list-slot"
@@ -257,6 +300,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
         </div>
       </div>
       <StatusBar accountCount={accounts.length} accountId={activeAccountId} />
+      <ComposeOverlay />
     </div>
   );
 }

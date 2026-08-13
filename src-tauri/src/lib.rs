@@ -1,4 +1,6 @@
 pub mod auth;
+pub mod compose;
+pub mod contacts;
 pub mod gmail;
 pub mod ipc;
 pub mod logging;
@@ -16,6 +18,7 @@ use tauri::Manager;
 pub fn run() {
     ipc::register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle();
             let directory = handle.path().app_log_dir()?;

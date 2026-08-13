@@ -75,11 +75,8 @@ export function LabelsMenu(props: LabelsMenuProps) {
 
   const toggle = (label: LabelMenuEntry) => {
     if (props.variant === 'staged') {
-      const currentMembership: LabelMembership = label.id in overrides
-        ? overrides[label.id]
-          ? 'checked'
-          : 'unchecked'
-        : label.membership;
+      const currentMembership: LabelMembership =
+        label.id in overrides ? (overrides[label.id] ? 'checked' : 'unchecked') : label.membership;
       setOverrides((current) => ({ ...current, [label.id]: nextBooleanFor(currentMembership) }));
     } else {
       props.onToggle(label.id, label.membership !== 'checked');
@@ -139,7 +136,11 @@ export function LabelsMenu(props: LabelsMenuProps) {
           No labels match &lsquo;{query}&rsquo;
         </p>
       ) : (
-        <div role="group" aria-label="Labels" className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
+        <div
+          role="group"
+          aria-label="Labels"
+          className="flex max-h-64 flex-col gap-0.5 overflow-y-auto"
+        >
           {filtered.map((label, index) => {
             const membership = renderMembership(label);
             const swatch = LABEL_COLOR_BY_ID[label.color];
@@ -167,7 +168,10 @@ export function LabelsMenu(props: LabelsMenuProps) {
                   {membership === 'checked' && <Check size={12} />}
                   {membership === 'indeterminate' && <Minus size={12} />}
                 </span>
-                <span aria-hidden="true" className={`size-chip-dot rounded-full ${swatch.dotClass}`} />
+                <span
+                  aria-hidden="true"
+                  className={`size-chip-dot rounded-full ${swatch.dotClass}`}
+                />
                 <span className="flex-1">{label.name}</span>
               </div>
             );

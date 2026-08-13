@@ -9,7 +9,23 @@
  * shape.
  */
 
-export type CommandName = 'moveCursorDown' | 'moveCursorUp' | 'openConversation' | 'dismiss' | 'selectAll' | 'toggleStar' | 'markRead' | 'markUnread' | 'markSpam' | 'markNotSpam' | 'deleteConversation';
+export type CommandName =
+  | 'moveCursorDown'
+  | 'moveCursorUp'
+  | 'openConversation'
+  | 'dismiss'
+  | 'selectAll'
+  | 'toggleStar'
+  | 'markRead'
+  | 'markUnread'
+  | 'markSpam'
+  | 'markNotSpam'
+  | 'deleteConversation'
+  | 'newMessage'
+  | 'replyToMessage'
+  | 'replyAllToMessage'
+  | 'forwardMessage'
+  | 'editDraft';
 
 export type CommandBindings = Record<CommandName, string[]>;
 
@@ -25,6 +41,16 @@ export const DEFAULT_COMMAND_BINDINGS: CommandBindings = {
   markSpam: ['Shift+J'],
   markNotSpam: ['Meta+Shift+J', 'Control+Shift+J'],
   deleteConversation: ['Delete'],
+  newMessage: ['c', 'C'],
+  replyToMessage: ['r', 'R'],
+  replyAllToMessage: ['a', 'A'],
+  forwardMessage: ['f', 'F'],
+  // No default key: Edit Draft has no established convention to collide
+  // with or follow, so it starts keyboard-inaccessible until a future
+  // remap UI (or product decision) assigns one. Still a named registry
+  // command — every compose call site resolves through it rather than
+  // hard-coding a key, even the ones without a default binding yet.
+  editDraft: [],
 };
 
 export type CommandOverrides = Partial<CommandBindings>;
@@ -61,7 +87,10 @@ function normalizeKey(key: string): string {
  * `event.key` at the browser level, and the plain (unmodified) fallback
  * must stay literal so remapped/custom single-key bindings (e.g. a
  * lowercase-only override) still match exactly what was declared. */
-export function commandForEvent(event: KeyboardEvent, bindings: CommandBindings): CommandName | null {
+export function commandForEvent(
+  event: KeyboardEvent,
+  bindings: CommandBindings,
+): CommandName | null {
   const modifier = event.metaKey ? 'Meta' : event.ctrlKey ? 'Control' : '';
   const key = modifier ? normalizeKey(event.key) : event.key;
   const binding = modifier

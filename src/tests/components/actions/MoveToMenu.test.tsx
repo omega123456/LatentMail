@@ -23,9 +23,7 @@ describe('MoveToMenu', () => {
   });
 
   it('shows the current user label as the removed source rather than as a destination', () => {
-    render(
-      <MoveToMenu currentMailboxId="Label_1" currentLabelName="Clients" onSelect={vi.fn()} />,
-    );
+    render(<MoveToMenu currentMailboxId="Label_1" currentLabelName="Clients" onSelect={vi.fn()} />);
     expect(screen.getByText('Removing from Clients')).toBeInTheDocument();
     expect(screen.getAllByRole('menuitem')).toHaveLength(3);
     expect(screen.getByRole('menuitem', { name: /Inbox/ })).toBeEnabled();

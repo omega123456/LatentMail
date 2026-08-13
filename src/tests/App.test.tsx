@@ -11,7 +11,9 @@ afterEach(() => vi.resetModules());
 
 it('mounts the application entry point', async () => {
   document.body.innerHTML = '<div id="root"></div>';
-  await act(async () => { await import('@/main'); });
+  await act(async () => {
+    await import('@/main');
+  });
   expect(await screen.findByTestId('sign-in-screen')).toBeInTheDocument();
 });
 

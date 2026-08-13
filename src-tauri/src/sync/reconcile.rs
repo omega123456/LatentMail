@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    contacts,
     gmail::{GmailClient, ListOptions, MAX_PAGE_SIZE},
     queue::QueueEngine,
     storage::{
@@ -34,19 +35,26 @@ pub async fn run(
     // Record the in-progress pass before any enumeration. A crash or pause
     // must never look like a completed reconciliation.
     let account = account_id.to_owned();
-    storage.run(move |connection| TraversalCursorRepository::upsert(connection, &TraversalCursor {
-        account_id: account,
-        kind: TraversalKind::Reconciliation,
-        position: Some("universe".into()),
-        discovered_count: 0,
-        persisted_count: 0,
-        completed: false,
-        last_advanced_at: chrono::Utc::now().timestamp(),
-        // The "resumed" wording distinction (D11) only applies to backfill's
-        // status-bar text — reconciliation's own status line never branches
-        // on it (see `StatusBar.tsx`), so this is always false.
-        resumed: false,
-    })).await?;
+    storage
+        .run(move |connection| {
+            TraversalCursorRepository::upsert(
+                connection,
+                &TraversalCursor {
+                    account_id: account,
+                    kind: TraversalKind::Reconciliation,
+                    position: Some("universe".into()),
+                    discovered_count: 0,
+                    persisted_count: 0,
+                    completed: false,
+                    last_advanced_at: chrono::Utc::now().timestamp(),
+                    // The "resumed" wording distinction (D11) only applies to backfill's
+                    // status-bar text — reconciliation's own status line never branches
+                    // on it (see `StatusBar.tsx`), so this is always false.
+                    resumed: false,
+                },
+            )
+        })
+        .await?;
 
     // `discovered_count`/`persisted_count` (D11: a running *count*, never a
     // percentage) must report the distinct-message universe size, not a sum
@@ -64,14 +72,40 @@ pub async fn run(
     let mut discovered_count: i64;
     let mut token = None;
     loop {
-        if let Some(queue) = queue { queue.wait_until_resumed().await; }
-        let page = client.list_messages_page_matching(&[], None, token.as_deref(), options).await?;
+        if let Some(queue) = queue {
+            queue.wait_until_resumed().await;
+        }
+        let page = client
+            .list_messages_page_matching(&[], None, token.as_deref(), options)
+            .await?;
         universe.extend(page.items.iter().map(|message| message.id.clone()));
         discovered_count = universe.len() as i64;
         let complete = page.next_page_token.is_none();
-        checkpoint(storage, account_id, format!("universe:{}", page.next_page_token.as_deref().unwrap_or("done")), discovered_count, discovered_count, false).await?;
-        traversal::emit_traversal_progress(events, traversal::TraversalProgressEvent { account_id: account_id.to_owned(), kind: "reconciliation", discovered_count, persisted_count: discovered_count, completed: false });
-        if complete { break; }
+        checkpoint(
+            storage,
+            account_id,
+            format!(
+                "universe:{}",
+                page.next_page_token.as_deref().unwrap_or("done")
+            ),
+            discovered_count,
+            discovered_count,
+            false,
+        )
+        .await?;
+        traversal::emit_traversal_progress(
+            events,
+            traversal::TraversalProgressEvent {
+                account_id: account_id.to_owned(),
+                kind: "reconciliation",
+                discovered_count,
+                persisted_count: discovered_count,
+                completed: false,
+            },
+        );
+        if complete {
+            break;
+        }
         token = page.next_page_token;
     }
 
@@ -95,15 +129,49 @@ pub async fn run(
     for label in &gmail_labels {
         let mut token = None;
         loop {
-            if let Some(queue) = queue { queue.wait_until_resumed().await; }
-            let page = client.list_messages_page_matching(std::slice::from_ref(&label.id), None, token.as_deref(), options).await?;
+            if let Some(queue) = queue {
+                queue.wait_until_resumed().await;
+            }
+            let page = client
+                .list_messages_page_matching(
+                    std::slice::from_ref(&label.id),
+                    None,
+                    token.as_deref(),
+                    options,
+                )
+                .await?;
             for message in &page.items {
-                if let Some(labels) = memberships.get_mut(&message.id) { labels.push(label.id.clone()); }
+                if let Some(labels) = memberships.get_mut(&message.id) {
+                    labels.push(label.id.clone());
+                }
             }
             let complete = page.next_page_token.is_none();
-            checkpoint(storage, account_id, format!("label:{}:{}", label.id, page.next_page_token.as_deref().unwrap_or("done")), discovered_count, persisted_count, false).await?;
-            traversal::emit_traversal_progress(events, traversal::TraversalProgressEvent { account_id: account_id.to_owned(), kind: "reconciliation", discovered_count, persisted_count, completed: false });
-            if complete { break; }
+            checkpoint(
+                storage,
+                account_id,
+                format!(
+                    "label:{}:{}",
+                    label.id,
+                    page.next_page_token.as_deref().unwrap_or("done")
+                ),
+                discovered_count,
+                persisted_count,
+                false,
+            )
+            .await?;
+            traversal::emit_traversal_progress(
+                events,
+                traversal::TraversalProgressEvent {
+                    account_id: account_id.to_owned(),
+                    kind: "reconciliation",
+                    discovered_count,
+                    persisted_count,
+                    completed: false,
+                },
+            );
+            if complete {
+                break;
+            }
             token = page.next_page_token;
         }
     }
@@ -116,7 +184,8 @@ pub async fn run(
         if let Some(queue) = queue {
             queue.wait_until_resumed().await;
         }
-        fetched_threads.extend(traversal::fetch_and_persist(storage, client, account_id, ids).await?);
+        fetched_threads
+            .extend(traversal::fetch_and_persist(storage, client, account_id, ids).await?);
         persisted_count += ids.len() as i64;
         checkpoint(
             storage,
@@ -195,6 +264,39 @@ pub async fn run(
                     }
                 }
             }
+            // Contact observations deliberately happen only after both the
+            // message row and its final label membership are committed in
+            // this reconciliation transaction.
+            for id in &universe {
+                if let Some(message) = MessageRepository::get(&transaction, &account_owned, id)? {
+                    contacts::observe(
+                        &transaction,
+                        &account_owned,
+                        &message.sender,
+                        message.sent_at,
+                    )?;
+                    if MessageRepository::label_ids(&transaction, &account_owned, id)?
+                        .iter()
+                        .any(|label| label == "SENT")
+                    {
+                        let (to, cc, _) =
+                            MessageRepository::recipient_roles(&transaction, &account_owned, id)?;
+                        for mailbox in to
+                            .split(',')
+                            .chain(cc.split(','))
+                            .map(str::trim)
+                            .filter(|mailbox| !mailbox.is_empty())
+                        {
+                            contacts::observe(
+                                &transaction,
+                                &account_owned,
+                                mailbox,
+                                message.sent_at,
+                            )?;
+                        }
+                    }
+                }
+            }
             for thread_id in &touched {
                 ThreadRepository::recompute(&transaction, &account_owned, thread_id)?;
             }
@@ -239,17 +341,31 @@ pub async fn run(
     })
 }
 
-async fn checkpoint(storage: &Storage, account_id: &str, position: String, discovered_count: i64, persisted_count: i64, completed: bool) -> Result<(), SyncError> {
+async fn checkpoint(
+    storage: &Storage,
+    account_id: &str,
+    position: String,
+    discovered_count: i64,
+    persisted_count: i64,
+    completed: bool,
+) -> Result<(), SyncError> {
     let account_id = account_id.to_owned();
-    storage.run(move |connection| TraversalCursorRepository::upsert(connection, &TraversalCursor {
-        account_id,
-        kind: TraversalKind::Reconciliation,
-        position: Some(position),
-        discovered_count,
-        persisted_count,
-        completed,
-        last_advanced_at: chrono::Utc::now().timestamp(),
-        resumed: false,
-    })).await?;
+    storage
+        .run(move |connection| {
+            TraversalCursorRepository::upsert(
+                connection,
+                &TraversalCursor {
+                    account_id,
+                    kind: TraversalKind::Reconciliation,
+                    position: Some(position),
+                    discovered_count,
+                    persisted_count,
+                    completed,
+                    last_advanced_at: chrono::Utc::now().timestamp(),
+                    resumed: false,
+                },
+            )
+        })
+        .await?;
     Ok(())
 }

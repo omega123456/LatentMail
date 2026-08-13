@@ -37,6 +37,36 @@ vi.stubGlobal(
   },
 );
 HTMLElement.prototype.scrollIntoView = vi.fn();
+Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+  configurable: true,
+  value: () => ({
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    toJSON: () => ({}),
+    top: 0,
+    width: 0,
+    x: 0,
+    y: 0,
+  }),
+});
+const emptyClientRects = {
+  length: 0,
+  item: () => null,
+  [Symbol.iterator]: function* () {},
+} as unknown as DOMRectList;
+HTMLElement.prototype.getClientRects = () => emptyClientRects;
+Element.prototype.getClientRects = () => emptyClientRects;
+Range.prototype.getClientRects = () => emptyClientRects;
+// ProseMirror's `scrollIntoView` (fired after focus/selection changes) reads
+// a `Range`'s bounding rect to compute scroll coordinates; jsdom's `Range`
+// has no `getBoundingClientRect` at all, which otherwise surfaces as an
+// unhandled async `TypeError` once a test drives real editor selection
+// (e.g. clicking inside body text) rather than only the imperative ref API.
+Range.prototype.getBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+document.elementFromPoint = () => null;
+Object.assign(navigator, { clipboard: { readText: vi.fn(), writeText: vi.fn() } });
 // jsdom has no Pointer Events implementation, so Radix primitives (which
 // probe `hasPointerCapture`/`setPointerCapture`/`releasePointerCapture`
 // before touch/mouse interactions) throw `TypeError: ... is not a function`

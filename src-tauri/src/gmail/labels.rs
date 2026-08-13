@@ -180,46 +180,92 @@ fn map_label(raw: RawLabel) -> GmailLabel {
     GmailLabel {
         id: raw.id,
         name: raw.name,
-        kind: raw.kind.unwrap_or_else(|| "user".into()).to_ascii_lowercase(),
+        kind: raw
+            .kind
+            .unwrap_or_else(|| "user".into())
+            .to_ascii_lowercase(),
         message_count: raw.messages_total.unwrap_or(0),
         unread_count: raw.messages_unread.unwrap_or(0),
-        color: raw.color.and_then(|color| Some(LabelColorPair {
-            text_color: color.text_color?,
-            background_color: color.background_color?,
-        })),
+        color: raw.color.and_then(|color| {
+            Some(LabelColorPair {
+                text_color: color.text_color?,
+                background_color: color.background_color?,
+            })
+        }),
     }
 }
 
 impl GmailClient {
-    pub async fn create_label(&self, name: &str, color: Option<&LabelColorPair>) -> Result<GmailLabel, GmailError> {
-        let raw: RawLabel = self.send(
-            reqwest::Method::POST,
-            "/users/me/labels",
-            &CreateLabelRequest { name, color: color.map(|value| LabelColorRequest { text_color: &value.text_color, background_color: &value.background_color }) },
-            LABELS_CREATE_COST,
-            false,
-        ).await?;
+    pub async fn create_label(
+        &self,
+        name: &str,
+        color: Option<&LabelColorPair>,
+    ) -> Result<GmailLabel, GmailError> {
+        let raw: RawLabel = self
+            .send(
+                reqwest::Method::POST,
+                "/users/me/labels",
+                &CreateLabelRequest {
+                    name,
+                    color: color.map(|value| LabelColorRequest {
+                        text_color: &value.text_color,
+                        background_color: &value.background_color,
+                    }),
+                },
+                LABELS_CREATE_COST,
+                false,
+            )
+            .await?;
         Ok(map_label(raw))
     }
 
-    pub async fn update_label(&self, id: &str, name: Option<&str>, color: Option<&LabelColorPair>) -> Result<GmailLabel, GmailError> {
-        let raw: RawLabel = self.send(
-            reqwest::Method::PATCH,
-            &format!("/users/me/labels/{id}"),
-            &UpdateLabelRequest { name, color: color.map(|value| LabelColorRequest { text_color: &value.text_color, background_color: &value.background_color }) },
-            LABELS_UPDATE_COST,
-            false,
-        ).await?;
+    pub async fn update_label(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        color: Option<&LabelColorPair>,
+    ) -> Result<GmailLabel, GmailError> {
+        let raw: RawLabel = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/users/me/labels/{id}"),
+                &UpdateLabelRequest {
+                    name,
+                    color: color.map(|value| LabelColorRequest {
+                        text_color: &value.text_color,
+                        background_color: &value.background_color,
+                    }),
+                },
+                LABELS_UPDATE_COST,
+                false,
+            )
+            .await?;
         Ok(map_label(raw))
     }
 
     pub async fn delete_label(&self, id: &str) -> Result<(), GmailError> {
-        let _: serde_json::Value = self.send(reqwest::Method::DELETE, &format!("/users/me/labels/{id}"), &(), LABELS_DELETE_COST, false).await?;
+        let _: serde_json::Value = self
+            .send(
+                reqwest::Method::DELETE,
+                &format!("/users/me/labels/{id}"),
+                &(),
+                LABELS_DELETE_COST,
+                false,
+            )
+            .await?;
         Ok(())
     }
 
     pub async fn delete_draft(&self, id: &str) -> Result<(), GmailError> {
-        let _: serde_json::Value = self.send(reqwest::Method::DELETE, &format!("/users/me/drafts/{id}"), &(), DRAFTS_DELETE_COST, false).await?;
+        let _: serde_json::Value = self
+            .send(
+                reqwest::Method::DELETE,
+                &format!("/users/me/drafts/{id}"),
+                &(),
+                DRAFTS_DELETE_COST,
+                false,
+            )
+            .await?;
         Ok(())
     }
 }

@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { playwrightIpcFixtures } from '@/tests/playwright-fixtures';
+import type { OpenComposeArgs } from '@/stores/compose';
 
 export async function installPlaywrightIpc(
   page: Page,
@@ -8,6 +9,7 @@ export async function installPlaywrightIpc(
   syncStatus?: { state: 'idle' | 'syncing' | 'error'; lastSynced: string; error?: string },
   rejectedCommands: string[] = [],
   pendingCommands: string[] = [],
+  composeSession?: OpenComposeArgs,
 ) {
   // `syncStatus` feeds the same `read_sync_status`/`trigger_sync` commands
   // real usage calls through `useSyncStore.hydrateSync` — a single source
@@ -30,6 +32,7 @@ export async function installPlaywrightIpc(
       rejectedCommands,
       pendingCommands,
       voidCommands,
+      composeSession: session,
     }) => {
       const responses = { ...fixtures, ...supplied } as Record<string, unknown>;
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
@@ -47,6 +50,7 @@ export async function installPlaywrightIpc(
         listen: async () => () => undefined,
       };
       window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__ = state;
+      window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__ = session;
     },
     {
       fixtures: playwrightIpcFixtures,
@@ -55,6 +59,7 @@ export async function installPlaywrightIpc(
       rejectedCommands,
       pendingCommands,
       voidCommands: Object.keys(playwrightIpcFixtures),
+      composeSession,
     },
   );
 }

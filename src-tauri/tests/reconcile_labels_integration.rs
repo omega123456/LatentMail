@@ -212,7 +212,14 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
     );
     let mut labels = MessageRepository::label_ids(&connection, "account", "starred-trash").unwrap();
     labels.sort();
-    assert_eq!(labels, vec!["STARRED".to_owned(), "TRASH".to_owned(), "UNREAD".to_owned()]);
+    assert_eq!(
+        labels,
+        vec![
+            "STARRED".to_owned(),
+            "TRASH".to_owned(),
+            "UNREAD".to_owned()
+        ]
+    );
 
     let kept_thread = ThreadRepository::get(&connection, "account", "kept-thread")
         .unwrap()
@@ -270,7 +277,10 @@ async fn reconciliation_failure_never_adopts_the_new_checkpoint() {
     let outcome = engine
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await;
-    assert!(outcome.is_err(), "the fetch failure must propagate as an error");
+    assert!(
+        outcome.is_err(),
+        "the fetch failure must propagate as an error"
+    );
 
     let connection = storage.connection().unwrap();
     assert_eq!(
@@ -453,7 +463,11 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
     labels.sort();
     assert_eq!(
         labels,
-        vec!["STARRED".to_owned(), "TRASH".to_owned(), "UNREAD".to_owned()],
+        vec![
+            "STARRED".to_owned(),
+            "TRASH".to_owned(),
+            "UNREAD".to_owned()
+        ],
         "membership must be left exactly as it was"
     );
     let thread = ThreadRepository::get(&connection, "account", "multi-thread")

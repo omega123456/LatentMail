@@ -17,7 +17,14 @@ beforeEach(() => {
       keyboardCursor: null,
     });
     useSyncStore.setState({ accountId: null, lastSynced: null, syncState: 'idle' });
-    useLayoutStore.setState({ route: 'mail', layout: 'three-column', sidebarCollapsed: false, sidebarWidth: 260, listWidth: 350, readerHeight: 40 });
+    useLayoutStore.setState({
+      route: 'mail',
+      layout: 'three-column',
+      sidebarCollapsed: false,
+      sidebarWidth: 260,
+      listWidth: 350,
+      readerHeight: 40,
+    });
   });
 });
 
@@ -89,9 +96,7 @@ const conversationOne = {
 } satisfies IpcCommandMap['load_conversation']['result'];
 
 function overrideAccount(id: string, threads: (typeof threadOne)[]) {
-  ipc.override('list_labels', ({ accountId }) =>
-    accountId === id ? [inboxLabel, workLabel] : [],
-  );
+  ipc.override('list_labels', ({ accountId }) => (accountId === id ? [inboxLabel, workLabel] : []));
   ipc.override('list_threads', ({ accountId }) =>
     accountId === id ? { items: threads, nextCursor: null } : { items: [], nextCursor: null },
   );
@@ -152,9 +157,7 @@ describe('AppShell wired to real data', () => {
     await waitFor(() => expect(useSelectionStore.getState().activeAccountId).toBe('account-2'));
     expect(useSelectionStore.getState().activeMailboxId).toBe('INBOX');
     expect(useSelectionStore.getState().activeThreadId).toBeNull();
-    await waitFor(() =>
-      expect(screen.getByText('Your Inbox is clear.')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('Your Inbox is clear.')).toBeInTheDocument());
   });
 
   it('leaves the sign-in screen for the mail layout when sign-in announces the new account', async () => {
@@ -209,7 +212,9 @@ describe('AppShell wired to real data', () => {
     await user.click(inbox.closest('button')!);
     expect(useSelectionStore.getState().activeMailboxId).toBe('INBOX');
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize conversation list' }), { clientX: 10 });
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize conversation list' }), {
+      clientX: 10,
+    });
     fireEvent.pointerMove(window, { clientX: 30 });
     fireEvent.pointerUp(window);
     expect(useLayoutStore.getState().listWidth).toBe(370);

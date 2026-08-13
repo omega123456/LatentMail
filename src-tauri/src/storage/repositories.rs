@@ -67,7 +67,15 @@ pub struct Label {
 /// case-insensitively. Gmail's own category labels share this prefix.
 const RESERVED_LABEL_PREFIX: &str = "CATEGORY_";
 const RESERVED_LABEL_NAMES: &[&str] = &[
-    "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "UNREAD", "IMPORTANT", "CHAT",
+    "INBOX",
+    "SENT",
+    "DRAFT",
+    "TRASH",
+    "SPAM",
+    "STARRED",
+    "UNREAD",
+    "IMPORTANT",
+    "CHAT",
 ];
 
 /// Every rule a label name can fail is reported distinctly (Phase 3 AC6) —
@@ -281,6 +289,32 @@ pub struct Message {
 }
 pub struct MessageRepository;
 impl MessageRepository {
+    pub fn recipient_roles(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+    ) -> Result<(String, String, String)> {
+        connection.query_row(
+            "SELECT to_recipients,cc_recipients,bcc_recipients FROM messages WHERE account_id=?1 AND id=?2",
+            params![account_id, id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+    pub fn set_recipient_roles(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+        to: &str,
+        cc: &str,
+        bcc: &str,
+        references: Option<&str>,
+    ) -> Result<()> {
+        connection.execute(
+            "UPDATE messages SET to_recipients=?1,cc_recipients=?2,bcc_recipients=?3,rfc_references=?4 WHERE account_id=?5 AND id=?6",
+            params![to, cc, bcc, references, account_id, id],
+        )?;
+        Ok(())
+    }
     pub fn write_full_state(connection: &Connection, message: &Message) -> Result<bool> {
         let changed = connection.execute("INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(account_id,id) DO UPDATE SET thread_id=excluded.thread_id,rfc_message_id=excluded.rfc_message_id,sender=excluded.sender,recipients=excluded.recipients,subject=excluded.subject,sent_at=excluded.sent_at,snippet=excluded.snippet,html_body=excluded.html_body,plain_body=excluded.plain_body,has_attachments=excluded.has_attachments,is_unread=excluded.is_unread,is_starred=excluded.is_starred,history_id=excluded.history_id,truncated_body=excluded.truncated_body,html_presence=excluded.html_presence WHERE excluded.history_id > messages.history_id", params![message.account_id,message.id,message.thread_id,message.rfc_message_id,message.sender,message.recipients,message.subject,message.sent_at,message.snippet,message.html_body,message.plain_body,message.has_attachments,message.is_unread,message.is_starred,message.history_id,message.truncated_body,message.html_presence.as_db_str()])?;
         Ok(changed == 1)
@@ -553,6 +587,44 @@ impl MessageRepository {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposeDraftMetadata {
+    pub account_id: String,
+    pub draft_id: String,
+    pub mode: String,
+    pub original_message_id: Option<String>,
+    pub original_gmail_message_id: Option<String>,
+    pub target_thread_id: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub rfc_references: Option<String>,
+    pub boundary_version: i64,
+    pub editable_body_fingerprint: Option<String>,
+    pub quote_html: Option<String>,
+    pub quote_plain: Option<String>,
+}
+
+pub struct ComposeDraftMetadataRepository;
+impl ComposeDraftMetadataRepository {
+    pub fn upsert(connection: &Connection, metadata: &ComposeDraftMetadata) -> Result<()> {
+        connection.execute("INSERT INTO compose_draft_metadata (account_id,draft_id,mode,original_message_id,original_gmail_message_id,target_thread_id,in_reply_to,rfc_references,boundary_version,editable_body_fingerprint,quote_html,quote_plain) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(account_id,draft_id) DO UPDATE SET mode=excluded.mode,original_message_id=excluded.original_message_id,original_gmail_message_id=excluded.original_gmail_message_id,target_thread_id=excluded.target_thread_id,in_reply_to=excluded.in_reply_to,rfc_references=excluded.rfc_references,boundary_version=excluded.boundary_version,editable_body_fingerprint=excluded.editable_body_fingerprint,quote_html=excluded.quote_html,quote_plain=excluded.quote_plain", params![metadata.account_id,metadata.draft_id,metadata.mode,metadata.original_message_id,metadata.original_gmail_message_id,metadata.target_thread_id,metadata.in_reply_to,metadata.rfc_references,metadata.boundary_version,metadata.editable_body_fingerprint,metadata.quote_html,metadata.quote_plain])?;
+        Ok(())
+    }
+    pub fn get(
+        connection: &Connection,
+        account_id: &str,
+        draft_id: &str,
+    ) -> Result<Option<ComposeDraftMetadata>> {
+        connection.query_row("SELECT account_id,draft_id,mode,original_message_id,original_gmail_message_id,target_thread_id,in_reply_to,rfc_references,boundary_version,editable_body_fingerprint,quote_html,quote_plain FROM compose_draft_metadata WHERE account_id=?1 AND draft_id=?2", params![account_id,draft_id], |row| Ok(ComposeDraftMetadata { account_id: row.get(0)?, draft_id: row.get(1)?, mode: row.get(2)?, original_message_id: row.get(3)?, original_gmail_message_id: row.get(4)?, target_thread_id: row.get(5)?, in_reply_to: row.get(6)?, rfc_references: row.get(7)?, boundary_version: row.get(8)?, editable_body_fingerprint: row.get(9)?, quote_html: row.get(10)?, quote_plain: row.get(11)? })).optional()
+    }
+    pub fn remove(connection: &Connection, account_id: &str, draft_id: &str) -> Result<()> {
+        connection.execute(
+            "DELETE FROM compose_draft_metadata WHERE account_id=?1 AND draft_id=?2",
+            params![account_id, draft_id],
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlinePart {
     pub content_id: String,
     pub mime_type: String,
@@ -721,8 +793,69 @@ impl OperationRepository {
         let operations = statement.query_map([], operation)?.collect();
         operations
     }
-    pub fn mark_interrupted_sends_uncertain(connection: &Connection) -> Result<usize> {
-        connection.execute("UPDATE operations SET status='failed', error='May have been sent; retry manually', updated_at=strftime('%s','now') WHERE kind='send' AND status='active'", [])
+    /// Flips every send stuck `active` (interrupted mid-promotion — it may
+    /// have delivered and may have consumed its draft) to a terminal,
+    /// non-retried `failed`/uncertain state, returning the distinct account
+    /// ids affected so the caller can schedule exactly one reconciling sync
+    /// per account and emit `send://uncertain` (see
+    /// `queue::recover_durable_operations`). A `queued` send never started
+    /// and is safe to recover ordinarily via [`Self::pending_durable`].
+    pub fn mark_interrupted_sends_uncertain(connection: &Connection) -> Result<Vec<String>> {
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT account_id FROM operations WHERE kind='send' AND status='active'",
+        )?;
+        let accounts = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>>>()?;
+        connection.execute("UPDATE operations SET status='failed', error='May have been sent; retry manually', updated_at=strftime('%s','now') WHERE kind='send' AND status='active'", [])?;
+        Ok(accounts)
+    }
+    /// A draft interrupted mid-execution (crash/kill while `active`) is safe
+    /// to retry — create/update are idempotent from Gmail's perspective, and
+    /// recovery rebuilds the request from the persisted manifest rather than
+    /// any in-memory closure — so it is simply requeued for
+    /// [`Self::pending_durable`] to pick back up.
+    pub fn requeue_interrupted_drafts(connection: &Connection) -> Result<usize> {
+        connection.execute("UPDATE operations SET status='queued', updated_at=strftime('%s','now') WHERE kind='draft' AND status='active'", [])
+    }
+    pub fn mark_active(connection: &Connection, id: &str) -> Result<()> {
+        connection.execute(
+            "UPDATE operations SET status='active', updated_at=strftime('%s','now') WHERE id=?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+    /// Persists a completed operation's terminal state — `done`, `failed` or
+    /// `superseded` (coalesced away by a newer save for the same session).
+    pub fn mark_terminal(
+        connection: &Connection,
+        id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
+        connection.execute(
+            "UPDATE operations SET status=?2, error=?3, updated_at=strftime('%s','now') WHERE id=?1",
+            params![id, status, error],
+        )?;
+        Ok(())
+    }
+    pub fn remove(connection: &Connection, id: &str) -> Result<()> {
+        connection.execute("DELETE FROM operations WHERE id=?1", params![id])?;
+        Ok(())
+    }
+    /// Cancels every not-yet-confirmed create for a compose session. Active
+    /// executors observe `discarded` after Gmail returns and delete that
+    /// just-created draft before exposing it to the rest of the app.
+    pub fn discard_session_creates(
+        connection: &Connection,
+        account_id: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        connection.execute(
+            "UPDATE operations SET status='discarded', updated_at=strftime('%s','now') WHERE account_id=?1 AND kind='draft' AND entity_key=?2 AND status IN ('queued','active')",
+            params![account_id, session_id],
+        )?;
+        Ok(())
     }
 }
 

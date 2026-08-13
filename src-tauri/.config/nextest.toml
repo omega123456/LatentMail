@@ -1,0 +1,9 @@
+# These cases each boot a full mock Tauri app and use process-wide app-data
+# configuration. Running their individual processes together starves the
+# queue's real async Gmail round trips under a saturated test run.
+[test-groups.compose-app]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'binary(=compose_drafts_integration)'
+test-group = 'compose-app'

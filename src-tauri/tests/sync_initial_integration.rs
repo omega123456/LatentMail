@@ -6,13 +6,25 @@ use latentmail_lib::queue::QueueEngine;
 use latentmail_lib::storage::{
     Account, AccountRepository, LabelRepository, MessageRepository, Storage, ThreadRepository,
 };
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncState, WorkRegistry};
+use latentmail_lib::sync::{SyncEngine, SyncState, WorkRegistry};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
 fn engine_with_storage() -> (std::sync::Arc<SyncEngine>, Storage, tempfile::TempDir) {
+    let (engine, storage, directory, _) = engine_with_recorded_events();
+    (engine, storage, directory)
+}
+
+type RecordedEvents = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>;
+
+fn engine_with_recorded_events() -> (
+    std::sync::Arc<SyncEngine>,
+    Storage,
+    tempfile::TempDir,
+    RecordedEvents,
+) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
@@ -33,8 +45,15 @@ fn engine_with_storage() -> (std::sync::Arc<SyncEngine>, Storage, tempfile::Temp
     let registry = WorkRegistry::new();
     let queue: std::sync::Arc<QueueEngine> =
         latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
-    (engine, storage, directory)
+    let events: RecordedEvents = Default::default();
+    let recorder = std::sync::Arc::clone(&events);
+    let engine = SyncEngine::new(
+        storage.clone(),
+        queue,
+        registry,
+        std::sync::Arc::new(move |name, payload| recorder.lock().unwrap().push((name, payload))),
+    );
+    (engine, storage, directory, events)
 }
 
 async fn mount_fixture(server: &MockServer) {
@@ -147,6 +166,40 @@ async fn initial_sync_populates_labels_messages_membership_and_threads() {
     assert!(status.last_synced_at.is_some());
 }
 
+/// Gmail enumerates ids and then hands them out one by one, so a message
+/// can vanish in between — promoting a draft to a sent message deletes the
+/// draft's message exactly this way. One 404 must cost that message, not
+/// the whole run.
+#[tokio::test]
+async fn a_message_that_vanishes_between_listing_and_retrieval_is_skipped() {
+    let server = MockServer::start().await;
+    // Mounted before the fixture: wiremock answers with the first mounted
+    // mock that matches, so this shadows the fixture's own `m2`.
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m2"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    mount_fixture(&server).await;
+    let (engine, storage, _directory) = engine_with_storage();
+    let client = GmailClient::with_base_url("token", server.uri());
+
+    engine.initial_sync("account", client).await.unwrap();
+
+    let connection = storage.connection().unwrap();
+    assert!(MessageRepository::get(&connection, "account", "m1")
+        .unwrap()
+        .is_some());
+    assert!(MessageRepository::get(&connection, "account", "m2")
+        .unwrap()
+        .is_none());
+    let thread = ThreadRepository::get(&connection, "account", "t1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(thread.message_count, 1);
+    assert_eq!(engine.status("account").await.state, SyncState::Idle);
+}
+
 #[tokio::test]
 async fn initial_sync_leaves_the_checkpoint_untouched_on_failure() {
     let server = MockServer::start().await;
@@ -165,11 +218,23 @@ async fn initial_sync_leaves_the_checkpoint_untouched_on_failure() {
         .respond_with(ResponseTemplate::new(403))
         .mount(&server)
         .await;
-    let (engine, storage, _directory) = engine_with_storage();
+    let (engine, storage, _directory, events) = engine_with_recorded_events();
     let client = GmailClient::with_base_url("token", server.uri());
 
     let result = engine.initial_sync("account", client).await;
     assert!(result.is_err());
+
+    // The run announced itself as syncing; without a closing announcement
+    // the status bar would spin on "Syncing…" indefinitely, since only
+    // `sync://complete` and this event ever clear it.
+    let progress: Vec<_> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(name, _)| *name == "sync://progress")
+        .map(|(_, payload)| payload["state"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(progress, vec!["syncing".to_owned(), "error".to_owned()]);
 
     let connection = storage.connection().unwrap();
     let account = AccountRepository::get(&connection, "account")

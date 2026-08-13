@@ -37,7 +37,11 @@ describe('StatusBar', () => {
     expect(screen.getByText('Sync failed')).toHaveAttribute('title', 'Gmail is unavailable');
     setStatus('idle', { pending: 3, active: 0, failed: 0, done: 0, paused: true });
     expect(screen.getByText('Paused — 3 queued')).toBeInTheDocument();
-    rerender(<QueryClientProvider client={new QueryClient()}><StatusBar accountCount={1} /></QueryClientProvider>);
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <StatusBar accountCount={1} />
+      </QueryClientProvider>,
+    );
     expect(screen.getByText('1 account')).toBeInTheDocument();
   });
 

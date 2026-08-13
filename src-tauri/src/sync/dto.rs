@@ -226,6 +226,9 @@ pub struct MessageDto {
     pub id: String,
     pub sender: String,
     pub recipients: Vec<String>,
+    pub to_recipients: Vec<String>,
+    pub cc_recipients: Vec<String>,
+    pub bcc_recipients: Vec<String>,
     pub subject: String,
     pub sent_at: i64,
     pub snippet: String,
@@ -237,6 +240,7 @@ pub struct MessageDto {
     pub is_starred: bool,
     pub label_ids: Vec<String>,
     pub remote_images_blocked: bool,
+    pub draft_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -259,14 +263,19 @@ impl From<HtmlPresence> for HtmlPresenceDto {
 
 pub fn message_dto(
     message: Message,
+    recipient_roles: (String, String, String),
     label_ids: Vec<String>,
     html_body: Option<String>,
     remote_images_blocked: bool,
+    draft_id: Option<String>,
 ) -> MessageDto {
     MessageDto {
         id: message.id,
         sender: message.sender,
         recipients: split_list(&message.recipients),
+        to_recipients: split_list(&recipient_roles.0),
+        cc_recipients: split_list(&recipient_roles.1),
+        bcc_recipients: split_list(&recipient_roles.2),
         subject: message.subject,
         sent_at: to_millis(message.sent_at),
         snippet: message.snippet,
@@ -278,6 +287,7 @@ pub fn message_dto(
         is_starred: message.is_starred,
         label_ids,
         remote_images_blocked,
+        draft_id,
     }
 }
 
@@ -320,6 +330,42 @@ pub struct SyncStatusDto {
     pub state: SyncState,
     pub last_synced_at: Option<i64>,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactSuggestionDto {
+    pub address: String,
+    pub display_name: Option<String>,
+}
+
+/// The staged-attachment payload crossing IPC once a path/bytes source has
+/// been read into Rust-owned canonical staging. Never carries bytes (D3) —
+/// `path` is an app-private, staging-scoped absolute path the frontend uses
+/// only as an opaque handle plus (once Phase 4 wires the asset scope) an
+/// inline-image preview source.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedAttachmentDto {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub path: String,
+    pub content_id: Option<String>,
+    pub size: u64,
+}
+
+impl From<crate::compose::staging::StagedPart> for StagedAttachmentDto {
+    fn from(value: crate::compose::staging::StagedPart) -> Self {
+        Self {
+            id: value.id,
+            filename: value.filename,
+            mime_type: value.mime_type,
+            path: value.path.to_string_lossy().into_owned(),
+            content_id: value.content_id,
+            size: value.size,
+        }
+    }
 }
 
 /// Storage keeps epoch **seconds** (the thread cursor compares against that

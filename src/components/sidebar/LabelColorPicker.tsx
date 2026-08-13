@@ -1,6 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check } from 'lucide-react';
-import { LABEL_COLOR_PALETTE, type LabelColorId, type LabelColorSwatch } from '@/lib/labels/palette';
+import {
+  LABEL_COLOR_PALETTE,
+  type LabelColorId,
+  type LabelColorSwatch,
+} from '@/lib/labels/palette';
 
 const COLUMNS = 10;
 
@@ -96,11 +100,7 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
         className="flex max-h-48 flex-col gap-1 overflow-y-auto p-1"
       >
         {rows.map((rowSwatches, rowIndex) => (
-          <div
-            key={rowSwatches[0]!.id}
-            role="row"
-            className="grid grid-cols-10 gap-1"
-          >
+          <div key={rowSwatches[0]!.id} role="row" className="grid grid-cols-10 gap-1">
             {rowSwatches.map((swatch, columnIndex) => {
               const index = rowIndex * COLUMNS + columnIndex;
               const selected = swatch.id === pendingId;

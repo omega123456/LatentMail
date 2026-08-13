@@ -1,4 +1,6 @@
-use latentmail_lib::storage::{Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage};
+use latentmail_lib::storage::{
+    Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage,
+};
 
 fn message(history_id: i64, subject: &str) -> Message {
     Message {

@@ -38,21 +38,22 @@ use crate::{
     },
     settings::SettingsService,
     storage::{
-        AccountRepository, HtmlPresence, InlinePart, Label, LabelColor, LabelRepository, Message,
-        MessageRepository, Storage, StorageError, ThreadRepository,
+        AccountRepository, Label, LabelColor, LabelRepository, MessageRepository, Storage,
+        StorageError, ThreadRepository,
     },
 };
 
 pub mod commands;
 mod dto;
+pub mod materialize;
 mod mutations;
 mod reconcile;
 pub mod traversal;
 
 pub use dto::{
-    ConversationDto, LabelColorDto, LabelDto, MessageDto, MutationOutcomeDto, MutationResultDto,
-    SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, TraversalKind, TraversalState,
-    TraversalStatusDto,
+    ContactSuggestionDto, ConversationDto, LabelColorDto, LabelDto, MessageDto, MutationOutcomeDto,
+    MutationResultDto, StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage,
+    TraversalKind, TraversalState, TraversalStatusDto,
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 
@@ -112,7 +113,18 @@ pub fn create_queue_engine_with_events(
     registry: Arc<WorkRegistry>,
     events: QueueEventSink,
 ) -> Arc<QueueEngine> {
-    let executor: Executor = Arc::new(move |operation: QueueOperation| -> OperationFuture {
+    QueueEngine::new_with_events(rate_per_second, burst, registry_executor(registry), events)
+}
+
+/// The `WorkRegistry`-backed executor every non-durable operation kind
+/// dispatches through (in-memory, one-shot closures — fine for kinds that
+/// are never expected to survive a restart). Extracted so production
+/// startup ([`initialize`]) can compose it with
+/// `compose::drafts::build_executor`'s payload-reconstructing executor for
+/// `Draft`/`Send`, which — unlike this one — must never depend on captured
+/// process memory (D15).
+fn registry_executor(registry: Arc<WorkRegistry>) -> Executor {
+    Arc::new(move |operation: QueueOperation| -> OperationFuture {
         let registry = Arc::clone(&registry);
         Box::pin(async move {
             match registry.take(&operation.id) {
@@ -120,8 +132,12 @@ pub fn create_queue_engine_with_events(
                 None => Ok(()),
             }
         })
-    });
-    QueueEngine::new_with_events(rate_per_second, burst, executor, events)
+    })
+}
+
+fn gmail_base_url() -> String {
+    std::env::var("LATENTMAIL_GMAIL_BASE_URL")
+        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into())
 }
 
 /// Submits `future` as a single background-lane operation for `account_id`
@@ -479,10 +495,23 @@ impl SyncEngine {
     }
 
     async fn set_error(&self, account_id: &str, error: &SyncError) {
-        let mut status = self.status.lock().await;
-        let entry = status.entry(account_id.to_owned()).or_default();
-        entry.state = Some(SyncState::Error);
-        entry.last_error = Some(error.to_string());
+        {
+            let mut status = self.status.lock().await;
+            let entry = status.entry(account_id.to_owned()).or_default();
+            entry.state = Some(SyncState::Error);
+            entry.last_error = Some(error.to_string());
+        }
+        tracing::error!(target: "sync", "sync for {account_id} failed: {error}");
+        // `set_syncing` announced the run; without a matching announcement
+        // here the frontend keeps rendering "Syncing…" forever, since only
+        // `sync://complete` ever clears it.
+        emit_progress(
+            &self.events,
+            SyncProgressEvent {
+                account_id: account_id.to_owned(),
+                state: SyncState::Error,
+            },
+        );
     }
 
     /// Runs whichever sync is appropriate for the account's current
@@ -668,14 +697,14 @@ impl SyncEngine {
                         {
                             let reconciliation_queue = Arc::clone(&traversal_queue);
                             async move {
-                            reconcile::run(
-                                &reconciliation_storage,
-                                &reconciliation_client,
-                                &reconciliation_account,
-                                &reconciliation_events,
-                                Some(&reconciliation_queue),
-                            )
-                            .await
+                                reconcile::run(
+                                    &reconciliation_storage,
+                                    &reconciliation_client,
+                                    &reconciliation_account,
+                                    &reconciliation_events,
+                                    Some(&reconciliation_queue),
+                                )
+                                .await
                             }
                         },
                     )
@@ -915,7 +944,7 @@ async fn full_sync_body(
         .await?;
     let mut messages = Vec::with_capacity(refs.len());
     for message_ref in &refs {
-        messages.push(client.message(&message_ref.id).await?);
+        messages.extend(client.message_if_present(&message_ref.id).await?);
     }
     let added_count = messages.len() as u32;
     let thread_ids: Vec<String> = messages
@@ -1000,7 +1029,10 @@ async fn incremental_body(
     let mut added_messages = Vec::new();
     for record in &records {
         for reference in &record.messages_added {
-            added_messages.push(client.message(&reference.id).await?);
+            // History reports the draft message a promotion just deleted as
+            // added; fetching it 404s. Skipping keeps one vanished id from
+            // aborting the whole incremental run.
+            added_messages.extend(client.message_if_present(&reference.id).await?);
         }
     }
     let added_count = added_messages.len() as u32;
@@ -1098,63 +1130,12 @@ pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
     }
 }
 
-fn to_message(account_id: &str, message: &GmailMessage) -> Message {
-    Message {
-        account_id: account_id.to_owned(),
-        id: message.id.clone(),
-        thread_id: message.thread_id.clone(),
-        rfc_message_id: message.rfc_message_id.clone(),
-        sender: message.sender.clone(),
-        recipients: message.recipients.clone(),
-        subject: message.subject.clone(),
-        sent_at: message.sent_at,
-        snippet: message.snippet.clone(),
-        html_body: message.html_body.clone(),
-        plain_body: message.plain_body.clone(),
-        has_attachments: message.has_attachments,
-        is_unread: message.label_ids.iter().any(|id| id == "UNREAD"),
-        is_starred: message.label_ids.iter().any(|id| id == "STARRED"),
-        history_id: message.history_id,
-        // Initial/incremental sync always fetches a message in full (the
-        // client's `MESSAGE_FIELDS` always includes `payload`), so presence
-        // is already known and never "never fetched" on this path. The
-        // truncated body is a whole-mailbox-backfill concept (Phase 4);
-        // a fully fetched message doesn't need one.
-        truncated_body: None,
-        html_presence: HtmlPresence::from_fetched_body(message.html_body.as_deref()),
-    }
-}
-
 fn write_message(
     connection: &rusqlite::Connection,
     account_id: &str,
     message: &GmailMessage,
 ) -> rusqlite::Result<()> {
-    let changed =
-        MessageRepository::write_full_state(connection, &to_message(account_id, message))?;
-    if changed {
-        for label_id in &message.label_ids {
-            LabelRepository::ensure_placeholder(connection, account_id, label_id)?;
-            MessageRepository::set_label_membership(
-                connection,
-                account_id,
-                &message.id,
-                label_id,
-                true,
-            )?;
-        }
-        let parts: Vec<InlinePart> = message
-            .inline_parts
-            .iter()
-            .map(|part| InlinePart {
-                content_id: part.content_id.clone(),
-                mime_type: part.mime_type.clone(),
-                bytes: part.bytes.clone(),
-            })
-            .collect();
-        MessageRepository::replace_inline_parts(connection, account_id, &message.id, &parts)?;
-    }
-    Ok(())
+    materialize::persist(connection, account_id, message)
 }
 
 // ---------------------------------------------------------------------
@@ -1229,17 +1210,97 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let events: EventSink = Arc::new(move |event, payload| {
         let _ = handle_for_events.emit(event, payload);
     });
-    let queue =
-        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::clone(&events));
+    // App-private compose staging tree (D3) — the compose commands resolve
+    // `State<Arc<Staging>>`, and the durable Draft/Send executor below reads
+    // its immutable operation snapshots from the same instance.
+    let staging = Arc::new(crate::compose::staging::Staging::new(
+        directory.join("compose-staging"),
+    ));
+    app.manage(Arc::clone(&staging));
+    // Managed as state (rather than only captured by the executor below) so
+    // a future admission call site — an IPC command, or this module's own
+    // tests — schedules generations on the very instance the executor
+    // checks against.
+    let coalescer = Arc::new(crate::compose::drafts::SaveCoalescer::new());
+    app.manage(Arc::clone(&coalescer));
+
+    let registry_exec = registry_executor(Arc::clone(&registry));
+    let compose_exec = crate::compose::drafts::build_executor(
+        app.clone(),
+        storage.clone(),
+        Arc::clone(&staging),
+        Arc::clone(&coalescer),
+        gmail_base_url(),
+    );
+    let executor: Executor = Arc::new(move |operation: QueueOperation| -> OperationFuture {
+        if matches!(operation.kind, OperationKind::Draft | OperationKind::Send) {
+            compose_exec(operation)
+        } else {
+            registry_exec(operation)
+        }
+    });
+    let queue = QueueEngine::new_with_events(250, 250, executor, Arc::clone(&events));
     // The read commands (`list_labels`, `list_threads`, `load_conversation`)
     // resolve `State<Storage>`, so it has to be managed and not just buried
     // inside the engine.
     app.manage(storage.clone());
-    let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, events);
-    app.manage(queue);
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        Arc::clone(&events),
+    );
+    app.manage(Arc::clone(&queue));
     app.manage(Arc::clone(&engine));
-    start_scheduler(app.clone(), engine);
+    start_scheduler(app.clone(), Arc::clone(&engine));
+    spawn_startup_recovery(app.clone(), storage, queue, engine, events);
     Ok(())
+}
+
+/// Startup durability recovery (D15): re-enqueues recoverable `Draft`/
+/// `Send` work found `queued` (including drafts requeued from an
+/// interrupted `active` run — see
+/// `OperationRepository::requeue_interrupted_drafts`), and for every
+/// account whose promotion was interrupted mid-flight, emits
+/// `send://uncertain` and schedules exactly one ordinary reconciling sync —
+/// never re-enqueuing the send itself. Runs in the background so it never
+/// delays `initialize` returning.
+fn spawn_startup_recovery<R: Runtime>(
+    app: AppHandle<R>,
+    storage: Storage,
+    queue: Arc<QueueEngine>,
+    engine: Arc<SyncEngine>,
+    events: EventSink,
+) {
+    tauri::async_runtime::spawn(async move {
+        let Ok((recovered, uncertain_accounts)) =
+            storage.run(crate::queue::recover_durable_operations).await
+        else {
+            return;
+        };
+        for operation in &recovered {
+            if let Some(queue_operation) = crate::queue::recovered_queue_operation(operation) {
+                let _ = queue.enqueue(queue_operation).await;
+            }
+        }
+        if uncertain_accounts.is_empty() {
+            return;
+        }
+        let auth = app.state::<AuthService>().inner().clone();
+        for account_id in uncertain_accounts {
+            (events)(
+                "send://uncertain",
+                serde_json::to_value(crate::queue::uncertain_send_event(account_id.clone()))
+                    .expect("UncertainSendEvent serializes"),
+            );
+            if let Ok(token) = auth.refresh_access_token(&app, &account_id).await {
+                let client = engine
+                    .gmail_client(&account_id, token, gmail_base_url())
+                    .await;
+                let _ = engine.run_sync(&account_id, client).await;
+            }
+        }
+    });
 }
 
 fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {

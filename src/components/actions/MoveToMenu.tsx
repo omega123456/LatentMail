@@ -59,7 +59,12 @@ export function MoveToMenu({ currentMailboxId, currentLabelName, onSelect }: Mov
   };
 
   return (
-    <div role="menu" aria-label="Move to" data-testid="move-to-menu" className="flex flex-col gap-1">
+    <div
+      role="menu"
+      aria-label="Move to"
+      data-testid="move-to-menu"
+      className="flex flex-col gap-1"
+    >
       {currentLabelName && (
         <div
           role="presentation"

@@ -9,8 +9,15 @@ import { useToastStore } from '@/stores/toast';
 import { queryKeys } from '@/lib/query/keys';
 
 const thread = {
-  id: 'thread-1', subject: 'Mutation', participants: ['A'], latestAt: 0, messageCount: 1,
-  isUnread: true, isStarred: false, hasAttachments: false, hasDraft: false,
+  id: 'thread-1',
+  subject: 'Mutation',
+  participants: ['A'],
+  latestAt: 0,
+  messageCount: 1,
+  isUnread: true,
+  isStarred: false,
+  hasAttachments: false,
+  hasDraft: false,
 };
 
 beforeEach(() => {
@@ -20,18 +27,30 @@ beforeEach(() => {
 });
 
 function renderList() {
-  return render(<QueryClientProvider client={new QueryClient()}><ConversationListContainer /></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ConversationListContainer />
+    </QueryClientProvider>,
+  );
 }
 
 describe('thread mutations', () => {
   it('optimistically stars a conversation', async () => {
     const user = userEvent.setup();
     let resolve!: () => void;
-    ipc.override('mutate_threads', () => new Promise((done) => { resolve = () => done([]); }));
+    ipc.override(
+      'mutate_threads',
+      () =>
+        new Promise((done) => {
+          resolve = () => done([]);
+        }),
+    );
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     expect(screen.getByLabelText('Unstar Mutation')).toBeInTheDocument();
-    await act(async () => { resolve(); });
+    await act(async () => {
+      resolve();
+    });
   });
 
   it('rolls a failed star back and shows an error toast', async () => {
@@ -60,7 +79,8 @@ describe('thread mutations', () => {
     // could never match, since it isn't a prefix of `('account', 'thread-9')`.
     await client.fetchQuery({
       queryKey: queryKeys.conversation('account', 'thread-9'),
-      queryFn: () => ipc.tauriInvoke('load_conversation', { accountId: 'account', threadId: 'thread-9' }),
+      queryFn: () =>
+        ipc.tauriInvoke('load_conversation', { accountId: 'account', threadId: 'thread-9' }),
     });
     render(
       <QueryClientProvider client={client}>

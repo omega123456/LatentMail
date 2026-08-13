@@ -23,8 +23,36 @@ const tauriListen = vi.fn(
   },
 );
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: tauriInvoke }));
+/** Deterministic stand-in for the real `convertFileSrc`, which resolves
+ * against a live Tauri asset-protocol registration jsdom has no equivalent
+ * for. Shaped like the macOS `asset:` form; `file-drop`/`staging` tests
+ * assert on the returned URL's *scope*, not its OS-specific host. */
+const tauriConvertFileSrc = vi.fn(
+  (path: string, protocol = 'asset') => `${protocol}://localhost/${encodeURIComponent(path)}`,
+);
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: tauriInvoke,
+  convertFileSrc: tauriConvertFileSrc,
+}));
 vi.mock('@tauri-apps/api/event', () => ({ listen: tauriListen }));
+
+/** `getCurrentWebview().onDragDropEvent(...)` is the app's only native
+ * drag-drop consumer (`src/lib/compose/file-drop.ts`). It doesn't go
+ * through `@tauri-apps/api/event`'s `listen`, so it needs its own
+ * centralized adapter here rather than an ad hoc per-test mock — routed
+ * through the same `listeners` map, keyed by the synthetic
+ * `'tauri://drag-drop'` channel, and driven by the same `ipc.emit`. */
+const tauriOnDragDropEvent = vi.fn(async (handler: (event: { payload: unknown }) => void) => {
+  const wrapped: Listener = (payload) => handler({ payload });
+  const key = 'tauri://drag-drop' as keyof IpcEventMap;
+  const eventListeners = listeners.get(key) ?? new Set();
+  eventListeners.add(wrapped);
+  listeners.set(key, eventListeners);
+  return () => eventListeners.delete(wrapped);
+});
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: tauriOnDragDropEvent }),
+}));
 
 function invoke(command: string, args: unknown): Promise<unknown> {
   const key = command as keyof IpcCommandMap;
@@ -51,6 +79,8 @@ export const ipc = {
     listeners.clear();
     tauriInvoke.mockClear();
     tauriListen.mockClear();
+    tauriOnDragDropEvent.mockClear();
+    tauriConvertFileSrc.mockClear();
     delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
     delete window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__;
     install();
@@ -66,4 +96,6 @@ export const ipc = {
   },
   tauriInvoke,
   tauriListen,
+  tauriOnDragDropEvent,
+  tauriConvertFileSrc,
 };

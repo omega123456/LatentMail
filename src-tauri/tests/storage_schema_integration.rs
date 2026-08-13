@@ -1,8 +1,8 @@
 use latentmail_lib::storage::{
-    truncate_body, Account, AccountRepository, HtmlPresence, Label, LabelColor, LabelNameError,
-    LabelRepository, Message, MessageRepository, Operation, OperationRepository,
-    SettingRepository, Storage, Thread, ThreadRepository, TraversalCursor,
-    TraversalCursorRepository, TraversalKind,
+    truncate_body, Account, AccountRepository, ComposeDraftMetadata,
+    ComposeDraftMetadataRepository, HtmlPresence, Label, LabelColor, LabelNameError,
+    LabelRepository, Message, MessageRepository, Operation, OperationRepository, SettingRepository,
+    Storage, Thread, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 fn account() -> Account {
@@ -73,6 +73,44 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         vec![starred, unread]
     );
     assert!(MessageRepository::write_full_state(&connection, &message()).unwrap());
+    MessageRepository::set_recipient_roles(
+        &connection,
+        "account",
+        "message",
+        "to@example.com",
+        "cc@example.com",
+        "bcc@example.com",
+        Some("<first> <second>"),
+    )
+    .unwrap();
+    assert_eq!(
+        MessageRepository::recipient_roles(&connection, "account", "message").unwrap(),
+        (
+            "to@example.com".into(),
+            "cc@example.com".into(),
+            "bcc@example.com".into()
+        )
+    );
+    let metadata = ComposeDraftMetadata {
+        account_id: "account".into(),
+        draft_id: "draft".into(),
+        mode: "reply".into(),
+        original_message_id: Some("message".into()),
+        original_gmail_message_id: None,
+        target_thread_id: Some("thread".into()),
+        in_reply_to: Some("<message>".into()),
+        rfc_references: Some("<message>".into()),
+        boundary_version: 1,
+        editable_body_fingerprint: None,
+        quote_html: Some("<blockquote>quote</blockquote>".into()),
+        quote_plain: Some("quote".into()),
+    };
+    ComposeDraftMetadataRepository::upsert(&connection, &metadata).unwrap();
+    assert_eq!(
+        ComposeDraftMetadataRepository::get(&connection, "account", "draft").unwrap(),
+        Some(metadata)
+    );
+    ComposeDraftMetadataRepository::remove(&connection, "account", "draft").unwrap();
     MessageRepository::set_label_membership(&connection, "account", "message", "UNREAD", true)
         .unwrap();
     MessageRepository::set_label_membership(&connection, "account", "message", "STARRED", true)

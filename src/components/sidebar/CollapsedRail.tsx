@@ -13,6 +13,7 @@ export function CollapsedRail({
   onSelectMailbox,
   onExpand,
   onSettings,
+  onCompose,
 }: {
   accounts: Account[];
   activeAccountId: string | null;
@@ -22,6 +23,7 @@ export function CollapsedRail({
   onSelectMailbox: (id: string) => void;
   onExpand: () => void;
   onSettings: () => void;
+  onCompose?: () => void;
 }) {
   return (
     <aside
@@ -37,9 +39,9 @@ export function CollapsedRail({
       <button
         type="button"
         aria-label="Compose"
-        title="Compose is not yet available"
-        disabled
-        className="grid size-9 place-items-center rounded-full bg-primary text-on-primary disabled:opacity-60"
+        title="Compose"
+        onClick={onCompose}
+        className="grid size-9 place-items-center rounded-full bg-primary text-on-primary focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Plus aria-hidden="true" size={18} />
       </button>

@@ -5,6 +5,7 @@
 export const queryKeys = {
   accounts: ['accounts'] as const,
   labels: (accountId: string) => ['labels', accountId] as const,
+  contacts: (accountId: string, query: string) => ['contacts', accountId, query] as const,
   threads: (accountId: string, mailboxId: string) => ['threads', accountId, mailboxId] as const,
   threadsForAccount: (accountId: string) => ['threads', accountId] as const,
   conversation: (accountId: string, threadId: string) =>

@@ -9,12 +9,11 @@ use latentmail_lib::{
     gmail::GmailClient,
     queue::{Executor, Lane, OperationKind, QueueEngine, QueueOperation},
     storage::{
-        Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
-        Storage,
+        Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message,
+        MessageRepository, Storage,
     },
     sync::{
-        create_queue_engine_with_events, noop_event_sink, MutationOutcome, SyncEngine,
-        WorkRegistry,
+        create_queue_engine_with_events, noop_event_sink, MutationOutcome, SyncEngine, WorkRegistry,
     },
 };
 use wiremock::{
@@ -406,7 +405,8 @@ async fn star_succeeds_when_batch_modify_returns_204_with_no_body() {
     );
 
     let connection = storage.connection().unwrap();
-    let message = &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
+    let message =
+        &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
     assert!(message.is_starred);
     assert_eq!(message.history_id, 20);
 }
@@ -482,7 +482,12 @@ async fn star_then_unstar_on_the_same_thread_resolves_to_unstarred_and_supersede
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        noop_event_sink(),
+    );
 
     let star_engine = Arc::clone(&engine);
     let star_server = server.uri();
@@ -519,13 +524,21 @@ async fn star_then_unstar_on_the_same_thread_resolves_to_unstarred_and_supersede
         .iter()
         .filter(|request| request.url.path() == "/users/me/messages/batchModify")
         .collect::<Vec<_>>();
-    assert_eq!(batches.len(), 1, "the superseded star must never reach Gmail");
+    assert_eq!(
+        batches.len(),
+        1,
+        "the superseded star must never reach Gmail"
+    );
     let body = batches[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(body["removeLabelIds"], serde_json::json!(["STARRED"]));
 
     let connection = storage.connection().unwrap();
-    let message = &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
-    assert!(!message.is_starred, "must resolve to the later, unstarred value");
+    let message =
+        &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
+    assert!(
+        !message.is_starred,
+        "must resolve to the later, unstarred value"
+    );
 }
 
 /// D5: opposing mutations for *different* threads inside the same window
@@ -558,7 +571,12 @@ async fn opposing_mutations_on_different_threads_each_receive_their_own_directio
         Arc::clone(&registry),
         Arc::new(|_event, _payload| {}),
     );
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        noop_event_sink(),
+    );
 
     let star_engine = Arc::clone(&engine);
     let star_server = server.uri();
@@ -592,8 +610,14 @@ async fn opposing_mutations_on_different_threads_each_receive_their_own_directio
         &MessageRepository::list_by_thread(&connection, "account", "thread-a").unwrap()[0];
     let message_b =
         &MessageRepository::list_by_thread(&connection, "account", "thread-b").unwrap()[0];
-    assert!(message_a.is_starred, "thread-a's own star must not leak away");
-    assert!(!message_b.is_starred, "thread-b's own unstar must not be overridden");
+    assert!(
+        message_a.is_starred,
+        "thread-a's own star must not leak away"
+    );
+    assert!(
+        !message_b.is_starred,
+        "thread-b's own unstar must not be overridden"
+    );
 }
 
 /// The write-back half of a flush can fail even after `batchModify`

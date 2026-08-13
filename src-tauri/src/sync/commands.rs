@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
 use crate::{
@@ -25,6 +26,335 @@ use super::{
 
 const DEFAULT_PAGE_SIZE: i64 = 50;
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeDraftRequest {
+    session_id: String,
+    account_id: String,
+    draft_id: Option<String>,
+    from: String,
+    to: Vec<String>,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    subject: String,
+    html: String,
+    mode: String,
+    thread_id: Option<String>,
+    in_reply_to: Option<String>,
+    references: Vec<String>,
+    original_message_id: Option<String>,
+    original_gmail_message_id: Option<String>,
+    quote_html: Option<String>,
+    quote_plain: Option<String>,
+    editable_body_fingerprint: Option<String>,
+    attachments: Vec<ComposeAttachmentRequest>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeAttachmentRequest {
+    id: String,
+    filename: String,
+    mime_type: String,
+    content_id: Option<String>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeQueueAcceptance {
+    operation_id: String,
+    draft_id: Option<String>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HydratedComposeDraft {
+    session_id: String,
+    account_id: String,
+    draft_id: String,
+    from: String,
+    to: Vec<String>,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    subject: String,
+    html: String,
+    quote_html: Option<String>,
+    quote_plain: Option<String>,
+    mode: String,
+    thread_id: Option<String>,
+    in_reply_to: Option<String>,
+    references: Vec<String>,
+    original_message_id: Option<String>,
+    original_gmail_message_id: Option<String>,
+    attachments: Vec<super::dto::StagedAttachmentDto>,
+}
+
+async fn admit_compose(
+    queue: &std::sync::Arc<crate::queue::QueueEngine>,
+    storage: &Storage,
+    staging: &std::sync::Arc<crate::compose::staging::Staging>,
+    coalescer: &std::sync::Arc<crate::compose::drafts::SaveCoalescer>,
+    request: ComposeDraftRequest,
+    send: bool,
+) -> Result<ComposeQueueAcceptance, String> {
+    let operation_id = crate::compose::drafts::generate_id(if send { "send" } else { "draft" });
+    // Both ids this session's parts can be filed under — the composer
+    // stages against whichever it knows, and ownership transfers to the
+    // draft id asynchronously, so neither alone is dependable here.
+    let owners: Vec<&str> = request
+        .draft_id
+        .as_deref()
+        .into_iter()
+        .chain(std::iter::once(request.session_id.as_str()))
+        .collect();
+    let parts = request
+        .attachments
+        .iter()
+        .map(|part| {
+            staging.part(
+                &request.account_id,
+                &owners,
+                &part.id,
+                part.filename.clone(),
+                part.mime_type.clone(),
+                part.content_id.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let payload = crate::compose::drafts::DraftOperationPayload {
+        mode: if send {
+            crate::compose::drafts::DraftOperationMode::Send
+        } else if request.draft_id.is_some() {
+            crate::compose::drafts::DraftOperationMode::Update
+        } else {
+            crate::compose::drafts::DraftOperationMode::Create
+        },
+        draft_id: request.draft_id.clone(),
+        thread_id: request.thread_id,
+        from: request.from,
+        to: request.to,
+        cc: request.cc,
+        bcc: request.bcc,
+        subject: request.subject,
+        html: request.html,
+        quote_html: request.quote_html,
+        in_reply_to: request.in_reply_to,
+        references: request.references,
+        metadata_mode: request.mode,
+        original_message_id: request.original_message_id,
+        original_gmail_message_id: request.original_gmail_message_id,
+        editable_body_fingerprint: request.editable_body_fingerprint,
+        quote_plain: request.quote_plain,
+        coalescing_generation: 0,
+    };
+    crate::compose::drafts::admit(
+        queue,
+        storage,
+        staging,
+        coalescer,
+        operation_id.clone(),
+        request.account_id,
+        request
+            .draft_id
+            .clone()
+            .unwrap_or(request.session_id.clone()),
+        payload,
+        &parts,
+    )
+    .await?;
+    Ok(ComposeQueueAcceptance {
+        operation_id,
+        draft_id: request.draft_id,
+    })
+}
+
+#[tauri::command]
+pub async fn save_compose_draft(
+    queue: tauri::State<'_, std::sync::Arc<crate::queue::QueueEngine>>,
+    storage: tauri::State<'_, Storage>,
+    staging: tauri::State<'_, std::sync::Arc<crate::compose::staging::Staging>>,
+    coalescer: tauri::State<'_, std::sync::Arc<crate::compose::drafts::SaveCoalescer>>,
+    draft: ComposeDraftRequest,
+) -> Result<ComposeQueueAcceptance, String> {
+    admit_compose(&queue, &storage, &staging, &coalescer, draft, false).await
+}
+
+#[tauri::command]
+pub async fn send_compose_draft(
+    queue: tauri::State<'_, std::sync::Arc<crate::queue::QueueEngine>>,
+    storage: tauri::State<'_, Storage>,
+    staging: tauri::State<'_, std::sync::Arc<crate::compose::staging::Staging>>,
+    coalescer: tauri::State<'_, std::sync::Arc<crate::compose::drafts::SaveCoalescer>>,
+    draft: ComposeDraftRequest,
+) -> Result<ComposeQueueAcceptance, String> {
+    admit_compose(&queue, &storage, &staging, &coalescer, draft, true).await
+}
+
+// Tauri injects each piece of managed state as its own parameter, so the
+// arity is the framework's, not a design choice — same carve-out as
+// `compose::drafts::admit`.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn discard_compose_draft<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    storage: tauri::State<'_, Storage>,
+    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
+    account_id: String,
+    draft_id: Option<String>,
+    session_id: String,
+) -> Result<(), String> {
+    storage
+        .run({
+            let account_id = account_id.clone();
+            let session_id = session_id.clone();
+            move |connection| {
+                crate::storage::OperationRepository::discard_session_creates(
+                    connection,
+                    &account_id,
+                    &session_id,
+                )
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(draft_id) = draft_id else {
+        let _ = staging.release_owner(&account_id, &session_id);
+        return Ok(());
+    };
+    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    crate::compose::drafts::delete(&client, &storage, &account_id, &draft_id).await?;
+    let _ = staging.release_owner(&account_id, &draft_id);
+    let _ = staging.release_owner(&account_id, &session_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hydrate_compose_draft<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    storage: tauri::State<'_, Storage>,
+    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
+    account_id: String,
+    draft_id: String,
+) -> Result<HydratedComposeDraft, String> {
+    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
+    let draft = crate::compose::drafts::hydrate(&client, &draft_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let metadata = storage
+        .run({
+            let account_id = account_id.clone();
+            let draft_id = draft_id.clone();
+            move |connection| {
+                crate::storage::ComposeDraftMetadataRepository::get(
+                    connection,
+                    &account_id,
+                    &draft_id,
+                )
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut attachments = Vec::new();
+    for part in &draft.message.attachment_parts {
+        let staged = staging
+            .stage_attachment(
+                &client,
+                &account_id,
+                &draft_id,
+                crate::compose::staging::GmailAttachmentSource {
+                    message_id: &draft.message.id,
+                    attachment_id: &part.attachment_id,
+                },
+                crate::compose::staging::NewStagedPart {
+                    id: crate::compose::drafts::generate_id("staged"),
+                    filename: part.filename.clone(),
+                    mime_type: part.mime_type.clone(),
+                    content_id: None,
+                },
+            )
+            .await?;
+        attachments.push(staged.into());
+    }
+    let quote_html = metadata.as_ref().and_then(|value| value.quote_html.clone());
+    let remote_html = draft.message.html_body.unwrap_or_default();
+    let boundary_matches = metadata.as_ref().is_some_and(|value| {
+        value.boundary_version == 1
+            && quote_html
+                .as_ref()
+                .and_then(|quote| remote_html.strip_suffix(quote))
+                .is_some_and(|editable| {
+                    value.editable_body_fingerprint.as_deref() == Some(editable)
+                })
+    });
+    if metadata.is_some() && !boundary_matches {
+        let account = account_id.clone();
+        let draft = draft_id.clone();
+        storage
+            .run(move |connection| {
+                crate::storage::ComposeDraftMetadataRepository::remove(connection, &account, &draft)
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    // Past this point a metadata row that failed the boundary check is
+    // indistinguishable from no row at all — it was just deleted above —
+    // so drop it once rather than re-testing `boundary_matches` per field.
+    let metadata = boundary_matches.then_some(metadata).flatten();
+    let html = if boundary_matches {
+        quote_html
+            .as_ref()
+            .and_then(|quote| remote_html.strip_suffix(quote))
+            .unwrap_or(&remote_html)
+            .to_owned()
+    } else {
+        remote_html.clone()
+    };
+    let split = |value: &str| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    Ok(HydratedComposeDraft {
+        session_id: crate::compose::drafts::generate_id("compose"),
+        account_id,
+        draft_id,
+        from: draft.message.sender,
+        to: split(&draft.message.to_recipients),
+        cc: split(&draft.message.cc_recipients),
+        bcc: split(&draft.message.bcc_recipients),
+        subject: draft.message.subject,
+        html,
+        quote_html: boundary_matches.then_some(quote_html).flatten(),
+        quote_plain: metadata
+            .as_ref()
+            .and_then(|value| value.quote_plain.clone()),
+        mode: metadata
+            .as_ref()
+            .map_or_else(|| "draft".into(), |value| value.mode.clone()),
+        thread_id: metadata
+            .as_ref()
+            .and_then(|value| value.target_thread_id.clone()),
+        in_reply_to: metadata
+            .as_ref()
+            .and_then(|value| value.in_reply_to.clone()),
+        references: metadata
+            .as_ref()
+            .and_then(|value| value.rfc_references.clone())
+            .map(|value| value.split_whitespace().map(str::to_owned).collect())
+            .unwrap_or_default(),
+        original_message_id: metadata
+            .as_ref()
+            .and_then(|value| value.original_message_id.clone()),
+        original_gmail_message_id: metadata.and_then(|value| value.original_gmail_message_id),
+        attachments,
+    })
+}
+
 macro_rules! string_try {
     ($result:expr) => {
         match $result {
@@ -39,10 +369,139 @@ pub async fn list_labels(
     storage: tauri::State<'_, Storage>,
     account_id: String,
 ) -> Result<Vec<LabelDto>, String> {
-    let labels = string_try!(storage
-        .run(move |connection| LabelRepository::list(connection, &account_id))
-        .await);
+    let labels = string_try!(
+        storage
+            .run(move |connection| LabelRepository::list(connection, &account_id))
+            .await
+    );
     Ok(labels.into_iter().map(LabelDto::from).collect())
+}
+
+#[tauri::command]
+pub async fn lookup_contacts(
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    query: String,
+) -> Result<Vec<super::dto::ContactSuggestionDto>, String> {
+    if query.trim().chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    let contacts = string_try!(
+        storage
+            .run(move |connection| crate::contacts::lookup(connection, &account_id, &query))
+            .await
+    );
+    Ok(contacts
+        .into_iter()
+        .map(|contact| super::dto::ContactSuggestionDto {
+            address: contact.address,
+            display_name: contact.display_name,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn reply_context(
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    message_id: String,
+    account_email: String,
+    reply_all: bool,
+    forward: bool,
+) -> Result<crate::compose::context::ReplyContext, String> {
+    let (message, roles, references) = string_try!(
+        storage
+            .run(move |connection| {
+                let message = MessageRepository::get(connection, &account_id, &message_id)?
+                    .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+                let roles =
+                    MessageRepository::recipient_roles(connection, &account_id, &message_id)?;
+                let references = connection.query_row(
+                    "SELECT rfc_references FROM messages WHERE account_id=?1 AND id=?2",
+                    rusqlite::params![account_id, message_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )?;
+                Ok((message, roles, references))
+            })
+            .await
+    );
+    if forward {
+        Ok(crate::compose::context::forward(&message))
+    } else {
+        Ok(crate::compose::context::reply(
+            &message,
+            &roles.0,
+            &roles.1,
+            &account_email,
+            reply_all,
+            references.as_deref(),
+        ))
+    }
+}
+
+/// Reads a user-selected (picker/drop) path once into Rust-owned canonical
+/// staging. `owner` is the local compose session id before a draft exists,
+/// or the stable Gmail draft id once one does (D3).
+#[tauri::command]
+pub async fn stage_attachment_from_path(
+    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
+    account_id: String,
+    owner: String,
+    path: String,
+    mime_type: String,
+    content_id: Option<String>,
+) -> Result<super::dto::StagedAttachmentDto, String> {
+    let id = crate::compose::drafts::generate_id("staged");
+    let part = string_try!(staging.stage_path(
+        &account_id,
+        &owner,
+        std::path::Path::new(&path),
+        &id,
+        mime_type,
+        content_id,
+    ));
+    Ok(part.into())
+}
+
+/// Stages inline-image bytes that have no source file on disk (e.g. a
+/// clipboard paste) directly into the same canonical tree. Bytes flow
+/// *into* Rust here, never back out over IPC — previews are authorized
+/// staging-scoped paths, not byte payloads (D3).
+#[tauri::command]
+pub async fn stage_attachment_from_bytes(
+    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
+    account_id: String,
+    owner: String,
+    filename: String,
+    mime_type: String,
+    content_id: Option<String>,
+    bytes: Vec<u8>,
+) -> Result<super::dto::StagedAttachmentDto, String> {
+    let id = crate::compose::drafts::generate_id("staged");
+    let descriptor = crate::compose::staging::StagedPart {
+        id,
+        filename,
+        mime_type,
+        path: std::path::PathBuf::new(),
+        content_id,
+        // Recomputed from the real bytes by `stage_bytes` below.
+        size: 0,
+    };
+    let part = string_try!(staging.stage_bytes(&account_id, &owner, &descriptor, &bytes));
+    Ok(part.into())
+}
+
+/// Removes one canonical staged part — e.g. the user removed an attachment
+/// chip before saving. Never touches an operation's immutable snapshot.
+#[tauri::command]
+pub async fn release_staged_attachment(
+    staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
+    account_id: String,
+    owner: String,
+    id: String,
+) -> Result<(), String> {
+    string_try!(staging.remove_part(&account_id, &owner, &id));
+    Ok(())
 }
 
 #[tauri::command]
@@ -55,17 +514,19 @@ pub async fn list_threads(
 ) -> Result<ThreadPage, String> {
     let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
-    let mut threads = string_try!(storage
-        .run(move |connection| {
-            ThreadRepository::list_paginated(
-                connection,
-                &account_id,
-                label_id.as_deref(),
-                cursor_pair,
-                limit + 1,
-            )
-        })
-        .await);
+    let mut threads = string_try!(
+        storage
+            .run(move |connection| {
+                ThreadRepository::list_paginated(
+                    connection,
+                    &account_id,
+                    label_id.as_deref(),
+                    cursor_pair,
+                    limit + 1,
+                )
+            })
+            .await
+    );
     let next_cursor = if threads.len() as i64 > limit {
         threads.truncate(limit as usize);
         threads.last().map(|thread| ThreadCursor {
@@ -75,18 +536,23 @@ pub async fn list_threads(
     } else {
         None
     };
-    let items = string_try!(storage
-        .run(move |connection| {
-            threads
-                .into_iter()
-                .map(|thread| {
-                    let (snippet, labels) =
-                        ThreadRepository::row_details(connection, &thread.account_id, &thread.id)?;
-                    Ok(ThreadDto::from(thread).with_row_details(snippet, labels))
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .await);
+    let items = string_try!(
+        storage
+            .run(move |connection| {
+                threads
+                    .into_iter()
+                    .map(|thread| {
+                        let (snippet, labels) = ThreadRepository::row_details(
+                            connection,
+                            &thread.account_id,
+                            &thread.id,
+                        )?;
+                        Ok(ThreadDto::from(thread).with_row_details(snippet, labels))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .await
+    );
     Ok(ThreadPage { items, next_cursor })
 }
 
@@ -97,37 +563,47 @@ pub async fn load_conversation(
     thread_id: String,
 ) -> Result<ConversationDto, String> {
     let (account_for_read, thread_for_read) = (account_id.clone(), thread_id.clone());
-    let (messages, thread_subject) = string_try!(storage
-        .run(move |connection| {
-            let messages =
-                MessageRepository::list_by_thread(connection, &account_for_read, &thread_for_read)?;
-            let subject = ThreadRepository::get(connection, &account_for_read, &thread_for_read)?
-                .map(|thread| thread.subject)
-                .unwrap_or_default();
-            Ok((messages, subject))
-        })
-        .await);
+    let (messages, thread_subject) = string_try!(
+        storage
+            .run(move |connection| {
+                let messages = MessageRepository::list_by_thread(
+                    connection,
+                    &account_for_read,
+                    &thread_for_read,
+                )?;
+                let subject =
+                    ThreadRepository::get(connection, &account_for_read, &thread_for_read)?
+                        .map(|thread| thread.subject)
+                        .unwrap_or_default();
+                Ok((messages, subject))
+            })
+            .await
+    );
 
     let mut message_dtos = Vec::with_capacity(messages.len());
     for message in messages {
         let (account_for_labels, id_for_labels) = (account_id.clone(), message.id.clone());
         let (account_for_parts, id_for_parts) = (account_id.clone(), message.id.clone());
-        let label_ids = string_try!(storage
-            .run(move |connection| {
-                MessageRepository::label_ids(connection, &account_for_labels, &id_for_labels)
-            })
-            .await);
+        let label_ids = string_try!(
+            storage
+                .run(move |connection| {
+                    MessageRepository::label_ids(connection, &account_for_labels, &id_for_labels)
+                })
+                .await
+        );
         let (sanitized_html, remote_images_blocked) = match &message.html_body {
             Some(html) => {
-                let inline_parts = string_try!(storage
-                    .run(move |connection| {
-                        MessageRepository::inline_parts(
-                            connection,
-                            &account_for_parts,
-                            &id_for_parts,
-                        )
-                    })
-                    .await);
+                let inline_parts = string_try!(
+                    storage
+                        .run(move |connection| {
+                            MessageRepository::inline_parts(
+                                connection,
+                                &account_for_parts,
+                                &id_for_parts,
+                            )
+                        })
+                        .await
+                );
                 let cid_map: HashMap<String, CidPart> = inline_parts
                     .into_iter()
                     .map(|part| {
@@ -145,11 +621,34 @@ pub async fn load_conversation(
             }
             None => (None, false),
         };
+        let (account_for_roles, id_for_roles) = (account_id.clone(), message.id.clone());
+        let recipient_roles = string_try!(
+            storage
+                .run(move |connection| MessageRepository::recipient_roles(
+                    connection,
+                    &account_for_roles,
+                    &id_for_roles
+                ))
+                .await
+        );
+        let draft_id = string_try!(
+            storage
+                .run({
+                    let account_id = account_id.clone();
+                    let message_id = message.id.clone();
+                    move |connection| {
+                        MessageRepository::draft_id(connection, &account_id, &message_id)
+                    }
+                })
+                .await
+        );
         message_dtos.push(message_dto(
             message,
+            recipient_roles,
             label_ids,
             sanitized_html,
             remote_images_blocked,
+            draft_id,
         ));
     }
 
@@ -174,20 +673,20 @@ pub async fn fetch_message_body<R: Runtime>(
 ) -> Result<(), String> {
     let account = account_id.clone();
     let id = message_id.clone();
-    let presence = string_try!(storage
-        .run(move |connection| {
-            MessageRepository::get(connection, &account, &id)
-                .map(|message| message.map(|value| value.html_presence))
-        })
-        .await)
-        .ok_or_else(|| "Message is unavailable".to_owned())?;
+    let presence = string_try!(
+        storage
+            .run(move |connection| {
+                MessageRepository::get(connection, &account, &id)
+                    .map(|message| message.map(|value| value.html_presence))
+            })
+            .await
+    )
+    .ok_or_else(|| "Message is unavailable".to_owned())?;
     if !matches!(presence, crate::storage::HtmlPresence::NeverFetched) {
         return Ok(());
     }
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    let message = string_try!(client
-        .message(&message_id)
-        .await);
+    let message = string_try!(client.message(&message_id).await);
     let html_presence =
         crate::storage::HtmlPresence::from_fetched_body(message.html_body.as_deref());
     let html_body = message.html_body;
@@ -200,18 +699,25 @@ pub async fn fetch_message_body<R: Runtime>(
             bytes: part.bytes,
         })
         .collect::<Vec<_>>();
-    string_try!(storage
-        .run(move |connection| {
-            MessageRepository::set_html_body(
-                connection,
-                &account_id,
-                &message_id,
-                html_body.as_deref(),
-                html_presence,
-            )?;
-            MessageRepository::replace_inline_parts(connection, &account_id, &message_id, &parts)
-        })
-        .await);
+    string_try!(
+        storage
+            .run(move |connection| {
+                MessageRepository::set_html_body(
+                    connection,
+                    &account_id,
+                    &message_id,
+                    html_body.as_deref(),
+                    html_presence,
+                )?;
+                MessageRepository::replace_inline_parts(
+                    connection,
+                    &account_id,
+                    &message_id,
+                    &parts,
+                )
+            })
+            .await
+    );
     Ok(())
 }
 
@@ -237,7 +743,11 @@ async fn mutate_thread<R: Runtime>(
     } else {
         (HashSet::new(), HashSet::from([label_id.to_owned()]))
     };
-    string_try!(engine.mutate(&account_id, client, thread_id, add, remove).await);
+    string_try!(
+        engine
+            .mutate(&account_id, client, thread_id, add, remove)
+            .await
+    );
     Ok(())
 }
 #[tauri::command]
@@ -343,13 +853,15 @@ pub async fn mutate_threads<R: Runtime>(
     let mut results = Vec::with_capacity(thread_ids.len());
     let mut tasks = tokio::task::JoinSet::new();
     for thread_id in thread_ids {
-        let drafts = super::mutations::draft_message_ids(engine.storage(), &account_id, &thread_id).await?;
+        let drafts =
+            super::mutations::draft_message_ids(engine.storage(), &account_id, &thread_id).await?;
         if !drafts.is_empty() {
             if add != HashSet::from(["TRASH".to_owned()]) || !remove.is_empty() {
                 return Err("Draft messages cannot be modified; delete them instead.".into());
             }
             for message_id in drafts {
-                super::mutations::delete_draft(engine.storage(), &client, &account_id, &message_id).await?;
+                super::mutations::delete_draft(engine.storage(), &client, &account_id, &message_id)
+                    .await?;
             }
             results.push(MutationResultDto {
                 thread_id,
@@ -417,7 +929,11 @@ pub async fn mutate_messages<R: Runtime>(
 /// Gmail exposes these as read-only membership states. Keeping the check at
 /// the IPC boundary protects keyboard/UI regressions as well as direct IPC.
 fn reject_protected_label_mutation(add: &[String], remove: &[String]) -> Result<(), String> {
-    if add.iter().chain(remove).any(|label| matches!(label.as_str(), "DRAFT" | "SENT")) {
+    if add
+        .iter()
+        .chain(remove)
+        .any(|label| matches!(label.as_str(), "DRAFT" | "SENT"))
+    {
         return Err("Draft and Sent labels cannot be modified.".into());
     }
     Ok(())

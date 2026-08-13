@@ -42,7 +42,9 @@ describe('LabelColorPicker', () => {
 
   it('groups swatches into contiguous hue-family rows rather than raw declaration order', () => {
     render(<LabelColorPicker selectedId="blue" onApply={vi.fn()} onCancel={vi.fn()} />);
-    const cellNames = screen.getAllByRole('gridcell').map((cell) => cell.getAttribute('aria-label'));
+    const cellNames = screen
+      .getAllByRole('gridcell')
+      .map((cell) => cell.getAttribute('aria-label'));
     // The raw palette's declaration order interleaves black/charcoal/grey
     // with red/orange before any hue grouping — the displayed order must
     // differ from it once swatches are grouped by hue family.

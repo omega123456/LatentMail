@@ -12,7 +12,9 @@ export function SignInScreen() {
       await invoke('begin_sign_in', {});
     } catch (cause) {
       // `invoke` already logged the failure centrally; this only surfaces it.
-      setError(`Could not start Google sign-in: ${cause instanceof Error ? cause.message : String(cause)}`);
+      setError(
+        `Could not start Google sign-in: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
       setSigningIn(false);
     }
   };

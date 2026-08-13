@@ -183,4 +183,194 @@ for (const theme of themes) {
     await expect(page.getByRole('heading', { name: 'Q3 Marketing Strategy Review' })).toBeVisible();
     await screenshot(page, page.getByTestId('mail-layout'), 'full-shell-three-column', theme);
   });
+
+  // These scenarios open the composer directly through the Playwright-only
+  // test bridge `installPlaywrightIpc` seeds
+  // (`window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__`, read once by
+  // `MailLayout`) instead of driving the real Compose pill, keyboard
+  // command, or reply/forward ribbons — the same idiom already used for
+  // reader state.
+  test(`composer panel ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(
+      page,
+      { list_accounts: [playwrightMailAccount] },
+      undefined,
+      undefined,
+      [],
+      [],
+      {
+        id: 'compose-session-1',
+        mode: 'new',
+        accountId: 'mail-account',
+        from: 'you@example.com',
+        recipients: { to: [], cc: [], bcc: [] },
+        subject: '',
+        html: '',
+      },
+    );
+    await page.goto('/');
+    await screenshot(page, page.getByTestId('compose-overlay'), 'composer-panel', theme);
+  });
+
+  test(`composer lifecycle ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(
+      page,
+      { list_accounts: [playwrightMailAccount] },
+      undefined,
+      undefined,
+      ['send_compose_draft'],
+      [],
+      {
+        id: 'compose-session-lifecycle',
+        mode: 'new',
+        accountId: 'mail-account',
+        from: 'you@example.com',
+        recipients: { to: ['elena.r@example.com'], cc: [], bcc: [] },
+        subject: 'Draft to discard',
+        html: '',
+      },
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: 'Discard' }).click();
+    await expect(page.getByRole('alertdialog')).toBeVisible();
+    await screenshot(page, page.getByTestId('compose-overlay'), 'composer-lifecycle', theme);
+  });
+
+  test(`attachment strip and inline preview ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(
+      page,
+      { list_accounts: [playwrightMailAccount] },
+      undefined,
+      undefined,
+      [],
+      [],
+      {
+        id: 'compose-session-attachments',
+        mode: 'new',
+        accountId: 'mail-account',
+        from: 'you@example.com',
+        recipients: { to: ['elena.r@example.com'], cc: [], bcc: [] },
+        subject: 'Q3 budget',
+        html: '<p>See the chart:</p><img src="http://asset.localhost/compose-staging/chart.png" alt="Budget chart">',
+        attachments: [
+          {
+            localId: 'budget-pdf',
+            filename: 'Q3-budget.pdf',
+            mimeType: 'application/pdf',
+            size: 253952,
+            state: 'settled',
+            staged: {
+              id: 'staged-budget-pdf',
+              path: '/compose-staging/Q3-budget.pdf',
+              assetUrl: 'http://asset.localhost/compose-staging/Q3-budget.pdf',
+              size: 253952,
+            },
+            contentId: null,
+            error: null,
+          },
+          {
+            localId: 'chart-image',
+            filename: 'chart.png',
+            mimeType: 'image/png',
+            size: 1024,
+            state: 'settled',
+            staged: {
+              id: 'staged-chart-image',
+              path: '/compose-staging/chart.png',
+              assetUrl: 'http://asset.localhost/compose-staging/chart.png',
+              size: 1024,
+            },
+            contentId: 'cid:chart@latentmail',
+            error: null,
+          },
+        ],
+      },
+    );
+    await page.route('http://asset.localhost/**', (route) =>
+      route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="72"><rect width="120" height="72" fill="#dce8ff"/><path d="M12 54 40 34l20 12 42-30" fill="none" stroke="#1459c7" stroke-width="5"/></svg>',
+      }),
+    );
+    await page.goto('/');
+    await expect(page.getByTestId('attachment-strip')).toBeVisible();
+    await screenshot(
+      page,
+      page.getByTestId('compose-overlay'),
+      'attachment-strip-inline-preview',
+      theme,
+    );
+  });
+
+  test(`recipient field ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(
+      page,
+      { list_accounts: [playwrightMailAccount] },
+      undefined,
+      undefined,
+      [],
+      [],
+      {
+        id: 'compose-session-2',
+        mode: 'new',
+        accountId: 'mail-account',
+        from: 'you@example.com',
+        recipients: {
+          // Long enough, and enough of them, to reliably wrap past the
+          // three-row boundary at the panel's default width and exercise
+          // the real "+N more" overflow control in a real browser layout.
+          to: [
+            'Priya Raman <priya.raman@example.com>',
+            'Tomás Field <tomas.field@example.com>',
+            'ops@example.com',
+            'marketing@example.com',
+            'engineering@example.com',
+            'design@example.com',
+            'finance.team@example.com',
+            'customer.success@example.com',
+            'product@example.com',
+            'legal@example.com',
+          ],
+          cc: ['Dana Whitfield <dana.whitfield@example.com>'],
+          bcc: [],
+        },
+        subject: '',
+        html: '',
+      },
+    );
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /more recipient/ })).toBeVisible();
+    await screenshot(page, page.getByTestId('recipient-field'), 'recipient-field', theme);
+  });
+
+  test(`quote disclosure ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(
+      page,
+      { list_accounts: [playwrightMailAccount] },
+      undefined,
+      undefined,
+      [],
+      [],
+      {
+        id: 'compose-session-3',
+        mode: 'reply',
+        accountId: 'mail-account',
+        from: 'you@example.com',
+        recipients: { to: ['elena.r@example.com'], cc: [], bcc: [] },
+        subject: 'Re: Q3 Marketing Strategy Review',
+        html: '',
+        quote: {
+          html: "<p>Hi Team, I hope you're all having a great week. I've attached the finalized slide deck for tomorrow's presentation.</p>",
+          attribution: 'On 14 Mar 2024 at 10:42, Elena Rodriguez wrote:',
+        },
+      },
+    );
+    await page.goto('/');
+    const disclosure = page.getByTestId('quote-disclosure');
+    await screenshot(page, disclosure, 'quote-disclosure-collapsed', theme);
+    await page.getByRole('button', { name: 'Show quoted text' }).click();
+    await expect(page.getByRole('region', { name: 'Quoted content, read-only' })).toBeVisible();
+    await screenshot(page, disclosure, 'quote-disclosure-expanded', theme);
+  });
 }

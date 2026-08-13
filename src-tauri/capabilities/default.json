@@ -17,6 +17,15 @@
     "allow-begin-sign-in",
     "allow-begin-reauthentication",
     "allow-list-labels",
+    "allow-lookup-contacts",
+    "allow-reply-context",
+    "allow-stage-attachment-from-path",
+    "allow-stage-attachment-from-bytes",
+    "allow-release-staged-attachment",
+    "allow-save-compose-draft",
+    "allow-send-compose-draft",
+    "allow-discard-compose-draft",
+    "allow-hydrate-compose-draft",
     "allow-list-threads",
     "allow-load-conversation",
     "allow-fetch-message-body",
@@ -34,6 +43,7 @@
     "allow-recolor-label",
     "allow-delete-label",
     "allow-read-traversal-status",
+    "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "http://*" }, { "url": "https://*" }]

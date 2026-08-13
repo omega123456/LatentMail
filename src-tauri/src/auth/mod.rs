@@ -276,9 +276,9 @@ impl AuthService {
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = string_try!(app.path().app_data_dir());
     string_try!(std::fs::create_dir_all(&directory));
-    app.manage(AuthService::new(
-        string_try!(Storage::open(directory.join("latentmail.sqlite"))),
-    ));
+    app.manage(AuthService::new(string_try!(Storage::open(
+        directory.join("latentmail.sqlite")
+    ))));
     Ok(())
 }
 
@@ -325,13 +325,17 @@ pub async fn receive_code(
     } else {
         "Invalid sign-in response."
     };
-    string_try!(stream.write_all(
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{message}",
-                message.len()
+    string_try!(
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{message}",
+                    message.len()
+                )
+                .as_bytes(),
             )
-            .as_bytes(),
-        ).await);
+            .await
+    );
     callback
 }
 

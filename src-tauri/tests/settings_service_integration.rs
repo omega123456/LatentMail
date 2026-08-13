@@ -78,9 +78,18 @@ async fn every_persisted_setting_accepts_its_wire_value() {
     }
 
     let settings = read_settings(app.state()).await.unwrap();
-    assert_eq!(settings.theme, latentmail_lib::settings::ThemePreference::Light);
-    assert_eq!(settings.layout, latentmail_lib::settings::Layout::BottomPreview);
-    assert_eq!(settings.density, latentmail_lib::settings::Density::Spacious);
+    assert_eq!(
+        settings.theme,
+        latentmail_lib::settings::ThemePreference::Light
+    );
+    assert_eq!(
+        settings.layout,
+        latentmail_lib::settings::Layout::BottomPreview
+    );
+    assert_eq!(
+        settings.density,
+        latentmail_lib::settings::Density::Spacious
+    );
     assert!(settings.sidebar_collapsed);
     assert_eq!(settings.sidebar_width, 280);
     assert_eq!(settings.list_width, 420);
@@ -189,7 +198,13 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     .await
     .unwrap();
 
-    assert_eq!(read_settings(app.state()).await.unwrap().sync_interval_minutes, 15);
+    assert_eq!(
+        read_settings(app.state())
+            .await
+            .unwrap()
+            .sync_interval_minutes,
+        15
+    );
 }
 
 /// Before the scheduler has started (or in any app that never managed one),
@@ -208,5 +223,11 @@ async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() 
     .await
     .unwrap();
 
-    assert_eq!(read_settings(app.state()).await.unwrap().sync_interval_minutes, 20);
+    assert_eq!(
+        read_settings(app.state())
+            .await
+            .unwrap()
+            .sync_interval_minutes,
+        20
+    );
 }

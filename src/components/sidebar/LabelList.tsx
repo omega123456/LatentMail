@@ -194,7 +194,10 @@ export function LabelList({
                       className="shrink-0 rounded p-1.5 text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
                       aria-label={`Change ${label.name}'s colour`}
                     >
-                      <span aria-hidden="true" className={`size-chip-dot rounded-full ${swatch.dotClass}`} />
+                      <span
+                        aria-hidden="true"
+                        className={`size-chip-dot rounded-full ${swatch.dotClass}`}
+                      />
                     </button>
                   </div>
                 )}
@@ -248,7 +251,10 @@ export function LabelList({
         </div>
       )}
       {error && !creating && rowMode?.kind !== 'renaming' && (
-        <p role="alert" className="mt-stack-gap-sm px-3 text-label-sm text-error dark:text-dark-error">
+        <p
+          role="alert"
+          className="mt-stack-gap-sm px-3 text-label-sm text-error dark:text-dark-error"
+        >
           {error}
         </p>
       )}

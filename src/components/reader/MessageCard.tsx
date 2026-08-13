@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, ImageOff } from 'lucide-react';
-import { MessageActionRibbon, type MessageActionRibbonProps } from '@/components/actions/MessageActionRibbon';
+import {
+  MessageActionRibbon,
+  type MessageActionRibbonProps,
+} from '@/components/actions/MessageActionRibbon';
 import { BodyFrame } from './BodyFrame';
 import { MessageHeader, type MessageSender } from './MessageHeader';
 import type { Participant } from '@/lib/format/participants';
@@ -9,6 +12,11 @@ export type ReaderMessage = {
   id: string;
   sender: MessageSender;
   recipients: Participant[];
+  /** Role-separated recipients (D14) — `toRecipients` falls back to
+   * `recipients` for fixtures/tests that only populate the flattened list. */
+  toRecipients?: Participant[];
+  ccRecipients?: Participant[];
+  bccRecipients?: Participant[];
   sentAt: Date;
   snippet: string;
   html: string | null;
@@ -19,6 +27,11 @@ export type ReaderMessage = {
   unread?: boolean;
   starred?: boolean;
   remoteImagesBlocked?: boolean;
+  /** True when this message is itself a Gmail draft — governs Edit Draft
+   * visibility on its own ribbon/context-menu entry (FR "Entry surfaces"). */
+  isDraft?: boolean;
+  /** Stable Gmail draft id, distinct from the changing Gmail message id. */
+  draftId?: string | null;
 };
 
 /** Every prop `MessageActionRibbon` needs besides this message's own
@@ -33,6 +46,7 @@ export function MessageCard({
   onFetchBody,
   loadingBody = false,
   bodyError = false,
+  onComposeTo,
 }: {
   message: ReaderMessage;
   expanded: boolean;
@@ -44,12 +58,14 @@ export function MessageCard({
   onFetchBody?: (messageId: string) => void;
   loadingBody?: boolean;
   bodyError?: boolean;
+  onComposeTo?: (participant: Participant) => void;
 }) {
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
   const requested = useRef<string | null>(null);
   useEffect(() => {
-    if (!open || message.htmlPresence !== 'neverFetched' || requested.current === message.id) return;
+    if (!open || message.htmlPresence !== 'neverFetched' || requested.current === message.id)
+      return;
     requested.current = message.id;
     onFetchBody?.(message.id);
   }, [message.htmlPresence, message.id, onFetchBody, open]);
@@ -77,6 +93,7 @@ export function MessageCard({
           sender={message.sender}
           recipients={message.recipients}
           sentAt={message.sentAt}
+          onComposeTo={onComposeTo}
         />
       </div>
       {open ? (
@@ -89,14 +106,23 @@ export function MessageCard({
           )}
           {message.htmlPresence === 'neverFetched' ? (
             loadingBody ? (
-              <p className="min-h-reader-body text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">Loading message…</p>
+              <p className="min-h-reader-body text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
+                Loading message…
+              </p>
             ) : bodyError ? (
               <div className="min-h-reader-body text-body-sm text-error dark:text-dark-error">
                 Couldn’t load this message.{' '}
-                <button onClick={() => onFetchBody?.(message.id)} className="underline focus-visible:outline-2 focus-visible:outline-primary">Retry</button>
+                <button
+                  onClick={() => onFetchBody?.(message.id)}
+                  className="underline focus-visible:outline-2 focus-visible:outline-primary"
+                >
+                  Retry
+                </button>
               </div>
             ) : (
-              <p className="min-h-reader-body text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">Loading message…</p>
+              <p className="min-h-reader-body text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
+                Loading message…
+              </p>
             )
           ) : (
             <BodyFrame html={message.html} text={message.text} />

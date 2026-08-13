@@ -1,10 +1,10 @@
 mod repositories;
 
 pub use repositories::{
-    truncate_body, Account, AccountRepository, HtmlPresence, InlinePart, Label, LabelColor,
-    LabelNameError, LabelRepository, Message, MessageRepository, Operation, OperationRepository,
-    SettingRepository, Thread, ThreadRepository, TraversalCursor, TraversalCursorRepository,
-    TraversalKind,
+    truncate_body, Account, AccountRepository, ComposeDraftMetadata,
+    ComposeDraftMetadataRepository, HtmlPresence, InlinePart, Label, LabelColor, LabelNameError,
+    LabelRepository, Message, MessageRepository, Operation, OperationRepository, SettingRepository,
+    Thread, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 use std::{

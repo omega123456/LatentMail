@@ -78,6 +78,27 @@ async fn client_round_trips_every_slice_endpoint_and_paginates() {
     );
 }
 
+#[tokio::test]
+async fn draft_uploads_use_upload_base_while_attachment_hydration_uses_standard_base() {
+    let server = MockServer::start().await;
+    let draft = serde_json::json!({"id":"d1","message":{"id":"m1","threadId":"t1","labelIds":["DRAFT"]}});
+    Mock::given(method("POST"))
+        .and(path("/upload/gmail/v1/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(draft))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/gmail/v1/users/me/messages/m1/attachments/a1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":"aGVsbG8"})),
+        )
+        .mount(&server)
+        .await;
+    let client = GmailClient::with_base_url("token", format!("{}/gmail/v1", server.uri()));
+    assert_eq!(client.create_draft(b"hello", Some("t1")).await.unwrap(), "d1");
+    assert_eq!(client.attachment("m1", "a1").await.unwrap(), b"hello");
+}
+
 /// A bounce the sending host queued overnight: Gmail accepted it on Jul 23,
 /// but `internalDate` carries the sender's Jul 22 `Date:` instead. Gmail's own
 /// list shows the receipt time, so the topmost `Received:` hop wins. Values are

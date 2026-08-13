@@ -241,11 +241,20 @@ describe('ConversationList multi-selection', () => {
 describe('ConversationList triage shortcuts', () => {
   it('uses the registry bindings for selected conversations and ignores focused inputs', () => {
     const onTriage = vi.fn();
-    render(<><input aria-label="filter" /><ConversationList onTriage={onTriage} /></>);
+    render(
+      <>
+        <input aria-label="filter" />
+        <ConversationList onTriage={onTriage} />
+      </>,
+    );
     fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), { ctrlKey: true });
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'I', shiftKey: true })));
     expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], { add: [], remove: ['UNREAD'] });
-    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'J', ctrlKey: true, shiftKey: true })));
+    act(() =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'J', ctrlKey: true, shiftKey: true }),
+      ),
+    );
     expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], { add: [], remove: ['SPAM'] });
     screen.getByLabelText('filter').focus();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })));

@@ -10,6 +10,7 @@ export { playwrightConversation, playwrightDeferredBodyConversation } from './co
 export { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
 export { playwrightTraversalStatus } from './traversal';
 export { playwrightSettings } from './settings';
+export { playwrightContactSuggestions, playwrightStagedAttachment } from './compose';
 export {
   playwrightPausedQueueSummary,
   playwrightQueueSummary,

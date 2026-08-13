@@ -5,6 +5,7 @@ import App from '@/App';
 import { ipc } from '@/tests/ipc-mock';
 import { useSelectionStore } from '@/stores/selection';
 import { useSyncStore } from '@/stores/sync';
+import { useComposeStore } from '@/stores/compose';
 
 beforeEach(() => {
   act(() => {
@@ -94,5 +95,42 @@ describe('MailLayout — label lifecycle wiring', () => {
     await waitFor(() =>
       expect(deleted).toMatchObject({ accountId: 'account-1', labelId: 'Label_1' }),
     );
+  });
+});
+
+/** Phase 3 mounts `ComposeOverlay` over the mail surface but does not yet
+ * wire any entry point to open it (Phase 4's job) — the expanded Compose
+ * pill and the collapsed rail's stub both stay disabled. The panel itself
+ * is still fully exercisable here by driving `useComposeStore` directly,
+ * exactly as the plan intends. */
+describe('MailLayout — composer mounting', () => {
+  beforeEach(() => act(() => useComposeStore.getState().close()));
+
+  it('mounts the composer over the mail surface, openable by driving the compose store directly', async () => {
+    ipc.override('list_accounts', [account]);
+    render(<App />);
+    await screen.findByRole('button', { name: 'Collapse sidebar' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    act(() => {
+      useComposeStore.getState().open({
+        id: 'session-1',
+        mode: 'new',
+        accountId: 'account-1',
+        from: 'alex@example.com',
+        recipients: { to: [], cc: [], bcc: [] },
+        subject: '',
+        html: '',
+      });
+    });
+    expect(await screen.findByRole('dialog', { name: 'New Message' })).toBeInTheDocument();
+  });
+
+  it('opens a blank composer from the expanded Compose control', async () => {
+    ipc.override('list_accounts', [account]);
+    render(<App />);
+    const compose = await screen.findByRole('button', { name: 'Compose' });
+    await userEvent.setup().click(compose);
+    expect(useComposeStore.getState().session).toMatchObject({ mode: 'new' });
   });
 });

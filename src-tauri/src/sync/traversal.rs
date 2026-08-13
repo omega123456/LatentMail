@@ -117,7 +117,9 @@ pub async fn run_backfill_step(
     let existing = storage
         .run({
             let account = account_id.to_owned();
-            move |connection| TraversalCursorRepository::get(connection, &account, TraversalKind::Backfill)
+            move |connection| {
+                TraversalCursorRepository::get(connection, &account, TraversalKind::Backfill)
+            }
         })
         .await?;
 
@@ -166,7 +168,7 @@ pub async fn run_backfill_step(
 
     let mut messages = Vec::with_capacity(ids.len());
     for id in &ids {
-        messages.push(client.message(id).await?);
+        messages.extend(client.message_if_present(id).await?);
     }
 
     let persisted = persisted + messages.len() as i64;
@@ -238,7 +240,7 @@ pub async fn fetch_and_persist(
 ) -> Result<Vec<String>, SyncError> {
     let mut messages = Vec::with_capacity(ids.len());
     for id in ids {
-        messages.push(client.message(id).await?);
+        messages.extend(client.message_if_present(id).await?);
     }
     let account_owned = account_id.to_owned();
     let thread_ids = storage
@@ -300,6 +302,15 @@ fn write_traversal_message(
     };
     let changed = MessageRepository::write_traversal_state(connection, &record)?;
     if changed {
+        MessageRepository::set_recipient_roles(
+            connection,
+            account_id,
+            &message.id,
+            &message.to_recipients,
+            &message.cc_recipients,
+            &message.bcc_recipients,
+            message.rfc_references.as_deref(),
+        )?;
         for label_id in &message.label_ids {
             LabelRepository::ensure_placeholder(connection, account_id, label_id)?;
             MessageRepository::set_label_membership(

@@ -1,0 +1,44 @@
+[[permission]]
+identifier = "allow-lookup-contacts"
+description = "Enables account-scoped learned contact lookup."
+commands.allow = ["lookup_contacts"]
+
+[[permission]]
+identifier = "allow-reply-context"
+description = "Enables Rust-owned reply and forward context derivation."
+commands.allow = ["reply_context"]
+
+[[permission]]
+identifier = "allow-stage-attachment-from-path"
+description = "Enables reading a user-selected path once into Rust-owned canonical compose staging."
+commands.allow = ["stage_attachment_from_path"]
+
+[[permission]]
+identifier = "allow-stage-attachment-from-bytes"
+description = "Enables staging inline-image bytes with no source path (e.g. clipboard paste) into Rust-owned canonical compose staging."
+commands.allow = ["stage_attachment_from_bytes"]
+
+[[permission]]
+identifier = "allow-release-staged-attachment"
+description = "Enables removing one canonical staged compose attachment."
+commands.allow = ["release_staged_attachment"]
+
+[[permission]]
+identifier = "allow-save-compose-draft"
+description = "Enables durable compose draft admission."
+commands.allow = ["save_compose_draft"]
+
+[[permission]]
+identifier = "allow-send-compose-draft"
+description = "Enables durable draft promotion admission."
+commands.allow = ["send_compose_draft"]
+
+[[permission]]
+identifier = "allow-discard-compose-draft"
+description = "Enables deleting an existing compose draft."
+commands.allow = ["discard_compose_draft"]
+
+[[permission]]
+identifier = "allow-hydrate-compose-draft"
+description = "Enables reopening a Gmail draft with compose metadata."
+commands.allow = ["hydrate_compose_draft"]

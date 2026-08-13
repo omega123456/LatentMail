@@ -4,6 +4,8 @@ import { listen } from '@/lib/ipc/events';
 import { useSyncStore } from '@/stores/sync';
 import type { IpcEventMap } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
+import { useToastStore } from '@/stores/toast';
+import { useComposeStore } from '@/stores/compose';
 
 /** Bridges Rust events onto TanStack Query invalidation and the Zustand
  * stores that mirror queue/sync state. This is the ONLY place allowed to
@@ -53,20 +55,59 @@ export function EventBridge() {
       // Threads, label counts and the seeded sync status all changed —
       // refresh the visible list without a manual reload (acceptance
       // criterion 7).
-      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(event.accountId) });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(event.accountId),
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
     });
 
     subscribe('mail://new', (event) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(event.accountId) });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(event.accountId),
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
+    });
+
+    subscribe('send://uncertain', () => {
+      useToastStore.getState().showError('Send status unknown — check Sent and Drafts');
+    });
+    subscribe('draft://saved', (event) => {
+      const session = useComposeStore.getState().session;
+      if (session?.id === event.sessionId) {
+        useComposeStore.getState().setDraftId(event.draftId);
+        useComposeStore.getState().markSaved();
+      }
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(event.accountId),
+      });
+    });
+    subscribe('send://complete', (event) => {
+      useToastStore.getState().showSuccess('Message sent.');
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(event.accountId),
+      });
+    });
+
+    // The composer closes on queue acceptance, not on delivery, so a
+    // failure that happens after it closed has nowhere to render but a
+    // toast; while the same session is still open it belongs inline.
+    subscribe('compose://failed', (event) => {
+      const message =
+        event.kind === 'send' ? `Couldn’t send message — ${event.error}` : 'Couldn’t save draft';
+      const compose = useComposeStore.getState();
+      if (compose.session?.id === event.sessionId || compose.session?.draftId === event.sessionId) {
+        compose.setDraftStatus('failed', message);
+        return;
+      }
+      useToastStore.getState().showError(message);
     });
 
     subscribe('queue://item', (item) => {
       if (!item.id.startsWith('mutation:')) return;
       const accountId = item.id.split(':')[1];
-      if (accountId) void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+      if (accountId)
+        void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
     });
 
     subscribe('account://state', () => {

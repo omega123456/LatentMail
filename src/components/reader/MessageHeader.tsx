@@ -7,10 +7,12 @@ export function MessageHeader({
   sender,
   recipients,
   sentAt,
+  onComposeTo,
 }: {
   sender: MessageSender;
   recipients: Participant[];
   sentAt: Date;
+  onComposeTo?: (participant: Participant) => void;
 }) {
   const timestamp = formatDistanceToNowStrict(sentAt, { addSuffix: true });
   return (
@@ -24,19 +26,25 @@ export function MessageHeader({
         </div>
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sender text-on-surface dark:text-dark-on-surface">
+            <button
+              type="button"
+              onClick={() => onComposeTo?.(sender)}
+              className="truncate text-left text-sender text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface"
+            >
               {sender.name || sender.address}
-            </span>
+            </button>
             <span className="truncate text-body-sm text-secondary dark:text-dark-secondary">
               &lt;{sender.address}&gt;
             </span>
           </div>
-          <p
+          <button
+            type="button"
+            onClick={() => recipients[0] && onComposeTo?.(recipients[0])}
             title={participantsTitle(recipients)}
-            className="truncate text-snippet text-secondary dark:text-dark-secondary"
+            className="truncate text-left text-snippet text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary"
           >
             to {formatParticipants(recipients)}
-          </p>
+          </button>
         </div>
       </div>
       <time

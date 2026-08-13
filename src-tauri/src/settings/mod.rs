@@ -115,9 +115,11 @@ impl SettingsService {
             return Err(format!("Unknown or invalid setting: {key}"));
         }
         let encoded = string_try!(serde_json::to_string(&value));
-        string_try!(self.storage
-            .run(move |connection| SettingRepository::set(connection, &key, &encoded))
-            .await);
+        string_try!(
+            self.storage
+                .run(move |connection| SettingRepository::set(connection, &key, &encoded))
+                .await
+        );
         Ok(())
     }
 
@@ -222,9 +224,9 @@ pub fn save_window<R: Runtime>(window: &tauri::Window<R>, service: &SettingsServ
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = string_try!(app.path().app_data_dir());
     string_try!(std::fs::create_dir_all(&directory));
-    let service = SettingsService::new(
-        string_try!(Storage::open(directory.join("latentmail.sqlite"))),
-    );
+    let service = SettingsService::new(string_try!(Storage::open(
+        directory.join("latentmail.sqlite")
+    )));
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Main window is missing".to_owned())?;

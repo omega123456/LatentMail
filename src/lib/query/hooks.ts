@@ -29,6 +29,15 @@ export function useLabelsQuery(accountId: string | null) {
   });
 }
 
+export function useContactSuggestionsQuery(accountId: string | null, query: string) {
+  return useQuery({
+    queryKey: queryKeys.contacts(accountId ?? '', query),
+    queryFn: () => invoke('lookup_contacts', { accountId: accountId as string, query }),
+    enabled: accountId !== null && query.trim().length >= 2,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
 export function useThreadsQuery(accountId: string | null, mailboxId: string | null) {
   return useInfiniteQuery({
     queryKey: queryKeys.threads(accountId ?? '', mailboxId ?? ''),
@@ -71,7 +80,9 @@ export function useFetchMessageBodyMutation(accountId: string | null, threadId: 
     mutationFn: (messageId: string) =>
       invoke('fetch_message_body', { accountId: accountId as string, messageId }),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.conversation(accountId ?? '', threadId ?? '') }),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.conversation(accountId ?? '', threadId ?? ''),
+      }),
   });
 }
 
@@ -101,8 +112,7 @@ function useLabelLifecycleMutation<TArgs>(
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId ?? '') }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId ?? '') }),
   });
 }
 
@@ -142,7 +152,14 @@ export function useThreadMutation(accountId: string | null) {
       kind: 'star' | 'unstar' | 'read' | 'unread';
     }) => {
       if (!accountId) return;
-      const [add, remove] = kind === 'star' ? [['STARRED'], []] : kind === 'unstar' ? [[], ['STARRED']] : kind === 'read' ? [[], ['UNREAD']] : [['UNREAD'], []];
+      const [add, remove] =
+        kind === 'star'
+          ? [['STARRED'], []]
+          : kind === 'unstar'
+            ? [[], ['STARRED']]
+            : kind === 'read'
+              ? [[], ['UNREAD']]
+              : [['UNREAD'], []];
       await invoke('mutate_threads', { accountId, threadIds: [threadId], add, remove });
     },
     onMutate: async ({ threadId, kind }) => {
@@ -170,7 +187,12 @@ export function useThreadMutation(accountId: string | null) {
 }
 
 export type TriageChange = { threadIds: string[]; add: string[]; remove: string[] };
-export type MessageTriageChange = { threadId: string; messageIds: string[]; add: string[]; remove: string[] };
+export type MessageTriageChange = {
+  threadId: string;
+  messageIds: string[];
+  add: string[];
+  remove: string[];
+};
 
 /** The single optimistic triage path. Confirmation and rollback both read
  * SQLite again; snapshots are invalid under coalescing. */
@@ -183,23 +205,49 @@ export function useTriageMutation(accountId: string | null) {
     onMutate: async ({ threadIds, add, remove }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
       const mailboxId = useSelectionStore.getState().activeMailboxId;
-      const leavesMailbox = mailboxId !== null && (remove.includes(mailboxId) || (mailboxId === 'INBOX' && add.includes('TRASH')) || (mailboxId === 'INBOX' && add.includes('SPAM')));
+      const leavesMailbox =
+        mailboxId !== null &&
+        (remove.includes(mailboxId) ||
+          (mailboxId === 'INBOX' && add.includes('TRASH')) ||
+          (mailboxId === 'INBOX' && add.includes('SPAM')));
       queryClient.setQueriesData(
         { queryKey: queryKeys.threadsForAccount(accountId ?? '') },
-        (data: { pages: ThreadPage[] } | undefined) => data && ({
-          ...data,
-          pages: data.pages.map((page) => ({ ...page, items: page.items.filter((thread) => !(leavesMailbox && threadIds.includes(thread.id))).map((thread) =>
-            threadIds.includes(thread.id) ? { ...thread,
-              isStarred: add.includes('STARRED') ? true : remove.includes('STARRED') ? false : thread.isStarred,
-              isUnread: add.includes('UNREAD') ? true : remove.includes('UNREAD') ? false : thread.isUnread,
-            } : thread) })),
-        }),
+        (data: { pages: ThreadPage[] } | undefined) =>
+          data && {
+            ...data,
+            pages: data.pages.map((page) => ({
+              ...page,
+              items: page.items
+                .filter((thread) => !(leavesMailbox && threadIds.includes(thread.id)))
+                .map((thread) =>
+                  threadIds.includes(thread.id)
+                    ? {
+                        ...thread,
+                        isStarred: add.includes('STARRED')
+                          ? true
+                          : remove.includes('STARRED')
+                            ? false
+                            : thread.isStarred,
+                        isUnread: add.includes('UNREAD')
+                          ? true
+                          : remove.includes('UNREAD')
+                            ? false
+                            : thread.isUnread,
+                      }
+                    : thread,
+                ),
+            })),
+          },
       );
     },
     onError: () => showError('Couldn’t update conversation. Please try again.'),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.conversationsForAccount(accountId ?? '') });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(accountId ?? ''),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
+      });
       useMultiSelectStore.getState().clear();
     },
   });
@@ -209,31 +257,66 @@ export function useMessageTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
   const showError = useToastStore((state) => state.showError);
   return useMutation({
-    mutationFn: (change: MessageTriageChange) => invoke('mutate_messages', { accountId: accountId as string, ...change }),
+    mutationFn: (change: MessageTriageChange) =>
+      invoke('mutate_messages', { accountId: accountId as string, ...change }),
     onMutate: async ({ threadId, messageIds, add, remove }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
       queryClient.setQueriesData(
         { queryKey: queryKeys.conversation(accountId ?? '', threadId) },
-        (data: { messages: Array<{ id: string; labelIds: string[]; isUnread: boolean; isStarred: boolean }> } | undefined) =>
-          data && ({
+        (
+          data:
+            | {
+                messages: Array<{
+                  id: string;
+                  labelIds: string[];
+                  isUnread: boolean;
+                  isStarred: boolean;
+                }>;
+              }
+            | undefined,
+        ) =>
+          data && {
             ...data,
-            messages: data.messages.filter((message) => !(add.includes('TRASH') || add.includes('SPAM')) || !messageIds.includes(message.id)).map((message) =>
-              messageIds.includes(message.id)
-                ? {
-                    ...message,
-                    isUnread: add.includes('UNREAD') ? true : remove.includes('UNREAD') ? false : message.isUnread,
-                    isStarred: add.includes('STARRED') ? true : remove.includes('STARRED') ? false : message.isStarred,
-                    labelIds: [...new Set([...message.labelIds.filter((id) => !remove.includes(id)), ...add])],
-                  }
-                : message,
-            ),
-          }),
+            messages: data.messages
+              .filter(
+                (message) =>
+                  !(add.includes('TRASH') || add.includes('SPAM')) ||
+                  !messageIds.includes(message.id),
+              )
+              .map((message) =>
+                messageIds.includes(message.id)
+                  ? {
+                      ...message,
+                      isUnread: add.includes('UNREAD')
+                        ? true
+                        : remove.includes('UNREAD')
+                          ? false
+                          : message.isUnread,
+                      isStarred: add.includes('STARRED')
+                        ? true
+                        : remove.includes('STARRED')
+                          ? false
+                          : message.isStarred,
+                      labelIds: [
+                        ...new Set([
+                          ...message.labelIds.filter((id) => !remove.includes(id)),
+                          ...add,
+                        ]),
+                      ],
+                    }
+                  : message,
+              ),
+          },
       );
     },
     onError: () => showError('Couldn’t update message. Please try again.'),
     onSettled: (_result, _error, { threadId }) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(accountId ?? '', threadId) });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(accountId ?? ''),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversation(accountId ?? '', threadId),
+      });
     },
   });
 }

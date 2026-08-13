@@ -77,7 +77,9 @@ describe('IPC dispatch', () => {
     await expect(invoke('health_check', {})).rejects.toThrow(
       'Playwright IPC router is not installed',
     );
-    expect(error).toHaveBeenCalledWith('ipc health_check failed: Playwright IPC router is not installed');
+    expect(error).toHaveBeenCalledWith(
+      'ipc health_check failed: Playwright IPC router is not installed',
+    );
     error.mockRestore();
     vi.unstubAllEnvs();
   });

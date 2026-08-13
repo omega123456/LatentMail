@@ -2,8 +2,12 @@ import { useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import {
   FolderInput,
+  Forward,
   Mail,
   MailOpen,
+  PenSquare,
+  Reply,
+  ReplyAll,
   ShieldAlert,
   ShieldOff,
   Star,
@@ -27,16 +31,24 @@ export type MessageActionRibbonProps = {
   onToggleSpam: () => void;
   onDelete: () => void;
   onCreateLabel?: () => void;
+  onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
+  /** Renders only where this exact message is a draft (FR "Entry
+   * surfaces"). */
+  onEditDraft?: () => void;
 };
 
 const iconButtonClass =
   'inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface';
 
-/** Per-message triage actions, applying to the whole conversation (star and
- * read/unread are conversation-wide even here — FR "Triage actions"). Always
- * rendered — never hover-revealed, which the plan explicitly rejects for
- * failing keyboard and touch discoverability — and drawn smaller (14px) than
- * the thread-level `ActionRibbon` (18px) to read as subordinate. */
+/** Per-message triage and compose actions, applying to the whole
+ * conversation for the triage half (star and read/unread are
+ * conversation-wide even here — FR "Triage actions") but to *this exact
+ * message* for Reply/Reply All/Forward/Edit Draft (FR "Entry surfaces").
+ * Always rendered — never hover-revealed, which the plan explicitly rejects
+ * for failing keyboard and touch discoverability — and drawn smaller (14px)
+ * than the thread-level `ActionRibbon` (18px) to read as subordinate. */
 export function MessageActionRibbon({
   mailboxId,
   unread,
@@ -50,6 +62,10 @@ export function MessageActionRibbon({
   onToggleSpam,
   onDelete,
   onCreateLabel,
+  onReply,
+  onReplyAll,
+  onForward,
+  onEditDraft,
 }: MessageActionRibbonProps) {
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -62,6 +78,48 @@ export function MessageActionRibbon({
       aria-label="Message actions"
       className="flex items-center gap-1"
     >
+      <button
+        type="button"
+        aria-label="Reply"
+        title="Reply"
+        onClick={onReply}
+        className={iconButtonClass}
+      >
+        <Reply aria-hidden="true" size={14} />
+      </button>
+      <button
+        type="button"
+        aria-label="Reply all"
+        title="Reply all"
+        onClick={onReplyAll}
+        className={iconButtonClass}
+      >
+        <ReplyAll aria-hidden="true" size={14} />
+      </button>
+      <button
+        type="button"
+        aria-label="Forward"
+        title="Forward"
+        onClick={onForward}
+        className={iconButtonClass}
+      >
+        <Forward aria-hidden="true" size={14} />
+      </button>
+      {onEditDraft && (
+        <button
+          type="button"
+          aria-label="Edit draft"
+          title="Edit draft"
+          onClick={onEditDraft}
+          className={iconButtonClass}
+        >
+          <PenSquare aria-hidden="true" size={14} />
+        </button>
+      )}
+      <span
+        aria-hidden="true"
+        className="mx-0.5 h-4 w-px bg-outline-variant/50 dark:bg-dark-outline-variant/50"
+      />
       {visibility.showReadToggle && (
         <button
           type="button"
@@ -117,12 +175,7 @@ export function MessageActionRibbon({
       {visibility.showMoveTo && (
         <DropdownMenu.Root open={moveOpen} onOpenChange={setMoveOpen}>
           <DropdownMenu.Trigger asChild>
-            <button
-              type="button"
-              aria-label="Move to"
-              title="Move to"
-              className={iconButtonClass}
-            >
+            <button type="button" aria-label="Move to" title="Move to" className={iconButtonClass}>
               <FolderInput aria-hidden="true" size={14} />
             </button>
           </DropdownMenu.Trigger>

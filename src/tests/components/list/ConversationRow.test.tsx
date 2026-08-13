@@ -116,4 +116,26 @@ describe('ConversationRow', () => {
     await user.click(await screen.findByText('Mark read'));
     expect(onTriage).toHaveBeenCalledWith({ add: [], remove: ['UNREAD'] });
   });
+
+  it('dispatches reply and forward actions from its context menu', async () => {
+    const user = userEvent.setup();
+    const onCompose = vi.fn();
+    render(
+      <ConversationRow
+        conversation={conversation}
+        density="comfortable"
+        active={false}
+        mailboxId="INBOX"
+        onOpen={vi.fn()}
+        onStar={vi.fn()}
+        onCompose={onCompose}
+      />,
+    );
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.click(await screen.findByText('Reply'));
+    expect(onCompose).toHaveBeenCalledWith('reply');
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.click(await screen.findByText('Forward'));
+    expect(onCompose).toHaveBeenCalledWith('forward');
+  });
 });

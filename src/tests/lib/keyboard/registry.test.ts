@@ -28,12 +28,52 @@ describe('keyboard command registry', () => {
   });
 
   it('keeps Cmd/Ctrl-Shift-J distinct from the spam shortcut', () => {
-    expect(commandForEvent(new KeyboardEvent('keydown', { key: 'J', ctrlKey: true, shiftKey: true }), DEFAULT_COMMAND_BINDINGS)).toBe('markNotSpam');
-    expect(commandForEvent(new KeyboardEvent('keydown', { key: 'J', shiftKey: true }), DEFAULT_COMMAND_BINDINGS)).toBe('markSpam');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'J', ctrlKey: true, shiftKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('markNotSpam');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'J', shiftKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('markSpam');
   });
 
   it('resolves a real lowercase Meta/Control-a keydown (as browsers actually report it) to selectAll', () => {
-    expect(commandForEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true }), DEFAULT_COMMAND_BINDINGS)).toBe('selectAll');
-    expect(commandForEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true }), DEFAULT_COMMAND_BINDINGS)).toBe('selectAll');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'a', metaKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('selectAll');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'a', ctrlKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('selectAll');
+  });
+
+  it('resolves the compose commands, keeping bare "a" (Reply All) distinct from Meta/Control-A (Select All)', () => {
+    expect(commandForKey('c', DEFAULT_COMMAND_BINDINGS)).toBe('newMessage');
+    expect(commandForKey('r', DEFAULT_COMMAND_BINDINGS)).toBe('replyToMessage');
+    expect(commandForKey('a', DEFAULT_COMMAND_BINDINGS)).toBe('replyAllToMessage');
+    expect(commandForKey('f', DEFAULT_COMMAND_BINDINGS)).toBe('forwardMessage');
+    expect(
+      commandForEvent(new KeyboardEvent('keydown', { key: 'a' }), DEFAULT_COMMAND_BINDINGS),
+    ).toBe('replyAllToMessage');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'a', metaKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('selectAll');
+  });
+
+  it('registers editDraft with no default binding, so it is reachable only programmatically until remapped', () => {
+    expect(DEFAULT_COMMAND_BINDINGS.editDraft).toEqual([]);
   });
 });

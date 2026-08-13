@@ -1,7 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_COMMAND_BINDINGS } from '@/lib/keyboard/registry';
-import { CommandProvider, useCommandBindings } from '@/providers/CommandProvider';
+import {
+  CommandProvider,
+  useCommandBindings,
+  useSetCommandOverride,
+} from '@/providers/CommandProvider';
 
 function Bindings() {
   const bindings = useCommandBindings();
@@ -21,5 +25,14 @@ describe('CommandProvider', () => {
       </CommandProvider>,
     );
     expect(screen.getByText(JSON.stringify(DEFAULT_COMMAND_BINDINGS))).toBeInTheDocument();
+  });
+
+  it('is a harmless no-op to set an override without a provider ancestor', () => {
+    function SetOverride() {
+      const setOverride = useSetCommandOverride();
+      setOverride('toggleStar', ['Mod+K']);
+      return null;
+    }
+    expect(() => render(<SetOverride />)).not.toThrow();
   });
 });

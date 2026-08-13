@@ -11,6 +11,9 @@ function baseHandlers() {
     onMoveTo: vi.fn(),
     onToggleSpam: vi.fn(),
     onDelete: vi.fn(),
+    onReply: vi.fn(),
+    onReplyAll: vi.fn(),
+    onForward: vi.fn(),
   };
 }
 
@@ -73,7 +76,13 @@ describe('MessageActionRibbon', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <MessageActionRibbon mailboxId="INBOX" unread={false} starred={false} labels={[]} {...handlers} />,
+      <MessageActionRibbon
+        mailboxId="INBOX"
+        unread={false}
+        starred={false}
+        labels={[]}
+        {...handlers}
+      />,
     );
     await user.click(screen.getByRole('button', { name: 'Move to' }));
     await user.click(await screen.findByRole('menuitem', { name: /Trash/ }));
@@ -84,7 +93,13 @@ describe('MessageActionRibbon', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <MessageActionRibbon mailboxId="INBOX" unread={false} starred={false} labels={[]} {...handlers} />,
+      <MessageActionRibbon
+        mailboxId="INBOX"
+        unread={false}
+        starred={false}
+        labels={[]}
+        {...handlers}
+      />,
     );
     await user.click(screen.getByRole('button', { name: 'Mark as spam' }));
     expect(handlers.onToggleSpam).toHaveBeenCalledOnce();

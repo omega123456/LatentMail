@@ -28,6 +28,7 @@ type Props = {
   onOpen: (event: ReactMouseEvent) => void;
   onStar: () => void;
   onTriage?: (change: { add: string[]; remove: string[] }) => void;
+  onCompose?: (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => void;
 };
 
 export function ConversationRow({
@@ -43,6 +44,7 @@ export function ConversationRow({
   onOpen,
   onStar,
   onTriage = () => undefined,
+  onCompose,
 }: Props) {
   const compact = density === 'compact';
   const spacious = density === 'spacious';
@@ -71,15 +73,31 @@ export function ConversationRow({
       // The context menu's "Open" entry always opens plainly (no
       // range/toggle modifiers) regardless of how the menu itself was
       // invoked.
-      onOpen={() =>
-        onOpen({ shiftKey: false, metaKey: false, ctrlKey: false } as ReactMouseEvent)
+      onOpen={() => onOpen({ shiftKey: false, metaKey: false, ctrlKey: false } as ReactMouseEvent)}
+      onToggleRead={() =>
+        onTriage({
+          add: conversation.unread ? [] : ['UNREAD'],
+          remove: conversation.unread ? ['UNREAD'] : [],
+        })
       }
-      onToggleRead={() => onTriage({ add: conversation.unread ? [] : ['UNREAD'], remove: conversation.unread ? ['UNREAD'] : [] })}
       onToggleStar={onStar}
-      onMoveTo={(destination: MoveDestinationId) => onTriage({ add: [destination], remove: moveSource(mailboxId ?? 'INBOX', currentLabelName) })}
-      onToggleLabel={(labelId, checked) => onTriage({ add: checked ? [labelId] : [], remove: checked ? [] : [labelId] })}
-      onToggleSpam={() => onTriage({ add: mailboxId === 'SPAM' ? [] : ['SPAM'], remove: mailboxId === 'SPAM' ? ['SPAM'] : [] })}
+      onMoveTo={(destination: MoveDestinationId) =>
+        onTriage({ add: [destination], remove: moveSource(mailboxId ?? 'INBOX', currentLabelName) })
+      }
+      onToggleLabel={(labelId, checked) =>
+        onTriage({ add: checked ? [labelId] : [], remove: checked ? [] : [labelId] })
+      }
+      onToggleSpam={() =>
+        onTriage({
+          add: mailboxId === 'SPAM' ? [] : ['SPAM'],
+          remove: mailboxId === 'SPAM' ? ['SPAM'] : [],
+        })
+      }
       onDelete={() => onTriage({ add: ['TRASH'], remove: [] })}
+      onReply={onCompose ? () => onCompose('reply') : undefined}
+      onReplyAll={onCompose ? () => onCompose('reply-all') : undefined}
+      onForward={onCompose ? () => onCompose('forward') : undefined}
+      onEditDraft={conversation.draft && onCompose ? () => onCompose('edit-draft') : undefined}
     >
       <article
         data-testid="conversation-row"

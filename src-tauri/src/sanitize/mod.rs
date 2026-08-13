@@ -32,7 +32,7 @@ pub fn sanitize(html: &str, cid_parts: &HashMap<String, CidPart>) -> SanitizedHt
     builder
         .add_tags(&["style"])
         .rm_clean_content_tags(&["style"])
-        .add_generic_attributes(&["style"])
+        .add_generic_attributes(&["style", "class", "id"])
         .url_schemes(["http", "https", "mailto", "data", "cid"].into())
         .attribute_filter(
             move |element, attribute, value| match (element, attribute) {

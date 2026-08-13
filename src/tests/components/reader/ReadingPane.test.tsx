@@ -76,8 +76,17 @@ describe('ReadingPane', () => {
   it('routes per-message spam and delete actions to that message', async () => {
     const user = userEvent.setup();
     const onMessageTriage = vi.fn();
-    const conversation = { ...readerFixtures['thread-1'], messages: [{ ...readerFixtures['thread-1'].messages[1], html: null, text: 'Body' }] };
-    render(<ReadingPane threadId="thread-1" conversation={conversation} onMessageTriage={onMessageTriage} />);
+    const conversation = {
+      ...readerFixtures['thread-1'],
+      messages: [{ ...readerFixtures['thread-1'].messages[1], html: null, text: 'Body' }],
+    };
+    render(
+      <ReadingPane
+        threadId="thread-1"
+        conversation={conversation}
+        onMessageTriage={onMessageTriage}
+      />,
+    );
     const ribbon = within(screen.getByRole('toolbar', { name: 'Message actions' }));
     await user.click(ribbon.getByRole('button', { name: 'Mark as spam' }));
     await user.click(ribbon.getByRole('button', { name: 'Delete' }));
