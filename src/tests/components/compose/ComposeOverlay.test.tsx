@@ -247,4 +247,35 @@ describe('ComposeOverlay', () => {
     await act(async () => accept());
     await waitFor(() => expect(useComposeStore.getState().session).toBeNull());
   });
+
+  it('leaves the discard confirmation behind with the session that raised it', async () => {
+    const user = userEvent.setup();
+    ipc.override('discard_compose_draft', vi.fn());
+    renderOverlay();
+    openSession('new', { subject: 'No longer needed' });
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard' }),
+    );
+    await waitFor(() => expect(useComposeStore.getState().session).toBeNull());
+    openSession('new', { id: 'session-2' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('reports a send failure inline and dispatches again from its retry', async () => {
+    const user = userEvent.setup();
+    const send = vi.fn(() => Promise.reject(new Error('offline')));
+    ipc.override('send_compose_draft', send);
+    renderOverlay();
+    openSession('new');
+    await user.type(screen.getByRole('combobox', { name: 'To' }), 'a@example.com{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Couldn’t send.');
+    expect(useComposeStore.getState().session).toMatchObject({ draftStatus: 'failed' });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    // The session stays open — a failed send never discards the draft.
+    expect(useComposeStore.getState().session).not.toBeNull();
+  });
 });

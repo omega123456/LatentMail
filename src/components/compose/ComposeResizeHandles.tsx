@@ -1,9 +1,7 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { ComposeDimensions } from '@/stores/compose';
+import { COMPOSE_MIN_PX, type ComposeDimensions } from '@/stores/compose';
 
-/** Must match `--spacing-compose-min` in `index.css` — the panel clamps to
- * this on every axis. */
-export const COMPOSE_MIN_PX = 360;
+export { COMPOSE_MIN_PX };
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);

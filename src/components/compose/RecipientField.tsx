@@ -161,45 +161,50 @@ export function RecipientField({
     open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
 
   return (
-    <div className="flex min-w-0 flex-1 items-start gap-1">
+    // `gap-2` matches the Subject row's label-to-input gap, so every field's
+    // value starts on the same left edge.
+    <div className="flex min-w-0 flex-1 items-center gap-2">
       <span
         id={`${listboxId}-label`}
-        className="w-13 shrink-0 pt-1 text-label-md text-secondary dark:text-dark-secondary"
+        className="w-13 shrink-0 text-label-md text-secondary dark:text-dark-secondary"
       >
         {label}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div ref={chipListRef} className="flex flex-wrap items-center gap-1">
-          {chips.slice(0, visibleCount).map((chip, index) => (
-            <span
-              key={`${chip}-${index}`}
-              className="inline-flex items-center gap-1 rounded-full bg-surface-container-high px-2 py-0.5 text-body-sm text-on-surface dark:bg-dark-surface-container-high dark:text-dark-on-surface"
-            >
-              {chipLabel(chip)}
-              <button
-                type="button"
-                aria-label={`Remove ${chipLabel(chip)}`}
-                title={`Remove ${chipLabel(chip)}`}
-                onClick={() => removeRecipient(fieldRole, index)}
-                className="rounded-full text-secondary hover:text-error dark:text-dark-secondary dark:hover:text-dark-error"
-              >
-                <X aria-hidden="true" size={12} />
-              </button>
-            </span>
-          ))}
-          {hiddenCount > 0 && (
-            <button
-              type="button"
-              aria-label={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
-              title={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
-              onClick={() => setVisibleCount(chips.length)}
-              className="rounded-full bg-surface-container px-2 py-0.5 text-label-md text-secondary hover:text-on-surface dark:bg-dark-surface-container dark:text-dark-secondary dark:hover:text-dark-on-surface"
-            >
-              +{hiddenCount} more
-            </button>
-          )}
-          <Popover.Root open={open}>
-            <Popover.Anchor asChild>
+      <Popover.Root open={open}>
+        {/* Anchored to the whole field column rather than the input, so the
+         * suggestion list spans the field the way the design asset draws
+         * it instead of tracking the caret's inline position. */}
+        <Popover.Anchor asChild>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div ref={chipListRef} className="flex flex-wrap items-center gap-1">
+              {chips.slice(0, visibleCount).map((chip, index) => (
+                <span
+                  key={`${chip}-${index}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-surface-container-high py-0.5 pl-2 pr-1 text-snippet text-on-surface dark:bg-dark-surface-container-high dark:text-dark-on-surface"
+                >
+                  {chipLabel(chip)}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${chipLabel(chip)}`}
+                    title={`Remove ${chipLabel(chip)}`}
+                    onClick={() => removeRecipient(fieldRole, index)}
+                    className="rounded-full text-secondary hover:bg-surface-container-highest hover:text-on-surface dark:text-dark-secondary dark:hover:bg-dark-surface-container-highest dark:hover:text-dark-on-surface"
+                  >
+                    <X aria-hidden="true" size={12} />
+                  </button>
+                </span>
+              ))}
+              {hiddenCount > 0 && (
+                <button
+                  type="button"
+                  aria-label={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
+                  title={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
+                  onClick={() => setVisibleCount(chips.length)}
+                  className="rounded-sm px-1.5 py-0.5 text-label-md text-primary hover:bg-surface-container-high dark:text-dark-primary dark:hover:bg-dark-surface-container-high"
+                >
+                  +{hiddenCount} more
+                </button>
+              )}
               <input
                 ref={inputRef}
                 type="text"
@@ -220,25 +225,28 @@ export function RecipientField({
                 onBlur={commit}
                 className="min-w-24 flex-1 bg-transparent text-body-md text-on-surface outline-none placeholder:text-outline dark:text-dark-on-surface dark:placeholder:text-dark-outline"
               />
-            </Popover.Anchor>
-            <Popover.Portal>
-              <Popover.Content
-                align="start"
-                sideOffset={4}
-                onOpenAutoFocus={(event) => event.preventDefault()}
-                className="z-50 max-h-64 w-72 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
-              >
-                <ContactSuggestions
-                  id={listboxId}
-                  items={suggestions}
-                  activeIndex={activeIndex}
-                  onSelect={selectSuggestion}
-                />
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
-        </div>
-      </div>
+            </div>
+          </div>
+        </Popover.Anchor>
+        <Popover.Portal>
+          <Popover.Content
+            align="start"
+            sideOffset={6}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            // Matches the anchored field's width, as the design asset draws
+            // it — the panel is resizable, so this cannot be a fixed token.
+            style={{ width: 'var(--radix-popover-trigger-width)' }}
+            className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
+          >
+            <ContactSuggestions
+              id={listboxId}
+              items={suggestions}
+              activeIndex={activeIndex}
+              onSelect={selectSuggestion}
+            />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   );
 }

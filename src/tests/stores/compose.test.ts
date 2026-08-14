@@ -46,6 +46,40 @@ describe('compose store', () => {
     });
   });
 
+  it('scales the opening size to the viewport, between its floor and its ceiling', () => {
+    const resize = (width: number, height: number) => {
+      window.innerWidth = width;
+      window.innerHeight = height;
+    };
+    const original = { width: window.innerWidth, height: window.innerHeight };
+    try {
+      // A laptop keeps the height floor rather than shrinking below it.
+      resize(1280, 800);
+      openSession();
+      expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 538, height: 500 });
+
+      // A large display scales up instead of leaving a small card.
+      useComposeStore.getState().close();
+      resize(1920, 1080);
+      openSession();
+      expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 806, height: 670 });
+
+      // Past the ceiling it stays a panel over the mailbox, not a window.
+      useComposeStore.getState().close();
+      resize(3440, 1440);
+      openSession();
+      expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 840, height: 820 });
+
+      // A viewport smaller than the floor wins over it, down to the minimum.
+      useComposeStore.getState().close();
+      resize(500, 400);
+      openSession();
+      expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 452, height: 360 });
+    } finally {
+      resize(original.width, original.height);
+    }
+  });
+
   it('accepts an initial quote at open', () => {
     openSession({ quote: { html: '<p>Original</p>', attribution: 'On Mar 1, Elena wrote:' } });
     expect(useComposeStore.getState().session?.quote).toEqual({

@@ -80,13 +80,13 @@ export function AttachmentChip({
     <div
       data-testid={`attachment-chip-${attachment.localId}`}
       data-attachment-state={attachment.state}
-      className="flex w-56 items-center gap-stack-gap-sm rounded-md border border-outline-variant/40 bg-surface-container-lowest p-stack-gap-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
+      className="flex max-w-56 items-center gap-stack-gap-sm rounded border border-outline-variant bg-surface-container-low p-1.5 dark:border-dark-outline-variant dark:bg-dark-surface-container-low"
     >
       <div
         aria-hidden="true"
         className={`grid size-7 shrink-0 place-items-center rounded ${
           failed
-            ? 'bg-error-container text-error dark:bg-dark-error-container dark:text-dark-error'
+            ? 'bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container'
             : 'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant'
         }`}
       >
@@ -101,13 +101,13 @@ export function AttachmentChip({
       <div className="min-w-0 flex-1">
         <p
           title={attachment.filename}
-          className="truncate text-label-md text-on-surface dark:text-dark-on-surface"
+          className="truncate text-snippet text-on-surface dark:text-dark-on-surface"
         >
           {attachment.filename}
         </p>
         <p
           className={`truncate text-label-sm ${
-            failed ? 'text-error dark:text-dark-error' : 'text-secondary dark:text-dark-secondary'
+            failed ? 'text-error dark:text-dark-error' : 'text-outline dark:text-dark-outline'
           }`}
         >
           {reading

@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test';
 import { formatISO, getTime, parseISO } from 'date-fns';
 import { installPlaywrightIpc } from './helpers';
 import {
+  playwrightContactSuggestionMatches,
   playwrightMailAccount,
   playwrightReauthAccount,
   playwrightSidebarAccounts,
@@ -342,6 +343,34 @@ for (const theme of themes) {
     await page.goto('/');
     await expect(page.getByRole('button', { name: /more recipient/ })).toBeVisible();
     await screenshot(page, page.getByTestId('recipient-field'), 'recipient-field', theme);
+  });
+
+  test(`contact suggestions ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(
+      page,
+      {
+        list_accounts: [playwrightMailAccount],
+        lookup_contacts: playwrightContactSuggestionMatches,
+      },
+      undefined,
+      undefined,
+      [],
+      [],
+      {
+        id: 'compose-session-suggestions',
+        mode: 'new',
+        accountId: 'mail-account',
+        from: 'you@example.com',
+        recipients: { to: ['Priya Raman <priya.raman@example.com>'], cc: [], bcc: [] },
+        subject: '',
+        html: '',
+      },
+    );
+    await page.goto('/');
+    await page.getByRole('combobox', { name: 'To' }).fill('mar');
+    await expect(page.getByRole('option', { name: /Marta Oliveira/ })).toBeVisible();
+    await page.getByRole('combobox', { name: 'To' }).press('ArrowDown');
+    await screenshot(page, page.getByTestId('compose-overlay'), 'contact-suggestions', theme);
   });
 
   test(`quote disclosure ${theme}`, async ({ page }) => {

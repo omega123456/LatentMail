@@ -21,7 +21,7 @@ export function ComposeHeader({
   onDiscard?: () => void;
 }) {
   return (
-    <div className="flex shrink-0 items-center justify-between rounded-t-lg border-b border-outline-variant bg-surface px-stack-gap-md py-stack-gap-sm dark:border-dark-outline-variant dark:bg-dark-surface">
+    <div className="flex shrink-0 items-center justify-between gap-2 border-b border-outline-variant bg-surface py-2 pl-stack-gap-md pr-2.5 dark:border-dark-outline-variant dark:bg-dark-surface">
       <h2 id={titleId} className="text-title-lg text-on-surface dark:text-dark-on-surface">
         {modeTitles[mode]}
       </h2>
@@ -32,7 +32,7 @@ export function ComposeHeader({
           title="Discard"
           disabled={!onDiscard}
           onClick={onDiscard}
-          className={`${circularButton} hover:text-error disabled:cursor-not-allowed disabled:opacity-40 dark:hover:text-dark-error`}
+          className={`${circularButton} hover:bg-surface-container-high hover:text-error disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-dark-surface-container-high dark:hover:text-dark-error`}
         >
           <Trash2 aria-hidden="true" size={18} />
         </button>
@@ -41,7 +41,7 @@ export function ComposeHeader({
           aria-label="Close"
           title="Close"
           onClick={onClose}
-          className={`${circularButton} hover:bg-surface-container-low hover:text-primary dark:hover:bg-dark-surface-container-low dark:hover:text-dark-primary`}
+          className={`${circularButton} hover:bg-surface-container-high hover:text-primary dark:hover:bg-dark-surface-container-high dark:hover:text-dark-primary`}
         >
           <X aria-hidden="true" size={18} />
         </button>

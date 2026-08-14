@@ -210,7 +210,7 @@ describe('EventBridge', () => {
     );
     expect(useComposeStore.getState().session).toMatchObject({
       draftStatus: 'failed',
-      lifecycleError: 'Couldn’t save draft',
+      lifecycleError: 'Couldn’t save draft.',
     });
     expect(useToastStore.getState().toast?.message).toBe('Message sent.');
     // Once the composer has closed, the toast is the only channel left.

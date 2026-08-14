@@ -105,7 +105,7 @@ describe('compose autosave', () => {
     await act(async () => result.current.saveNow());
     expect(useComposeStore.getState().session).toMatchObject({
       draftStatus: 'failed',
-      lifecycleError: 'offline',
+      lifecycleError: 'Couldn’t save draft.',
     });
   });
 });

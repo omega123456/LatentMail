@@ -24,7 +24,7 @@ export function QuoteDisclosure({
         type="button"
         aria-label={open ? 'Hide quoted text' : 'Show quoted text'}
         title={open ? 'Hide quoted text' : 'Show quoted text'}
-        className="inline-flex items-center gap-1 rounded-full border border-outline-variant bg-surface-container-low px-3 py-1 text-label-md text-secondary hover:text-on-surface dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:text-dark-secondary dark:hover:text-dark-on-surface"
+        className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-low py-1 pl-2.5 pr-3 text-snippet font-medium text-secondary hover:border-primary hover:text-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:text-dark-secondary dark:hover:border-dark-primary dark:hover:text-dark-primary"
       >
         {open ? (
           <ChevronUp aria-hidden="true" size={14} />
@@ -37,9 +37,9 @@ export function QuoteDisclosure({
         <div
           role="region"
           aria-label="Quoted content, read-only"
-          className="mt-stack-gap-sm border-l-2 border-outline-variant pl-stack-gap-md dark:border-dark-outline-variant"
+          className="mt-2.5 rounded-r border-l-3 border-outline-variant bg-surface-container-low px-3 py-2.5 text-body-sm text-on-surface-variant dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:text-dark-on-surface-variant"
         >
-          <p className="text-label-md text-outline dark:text-dark-outline">{attribution}</p>
+          <p className="mb-2 text-snippet text-outline dark:text-dark-outline">{attribution}</p>
           <BodyFrame html={html} text={null} />
         </div>
       </Collapsible.Content>

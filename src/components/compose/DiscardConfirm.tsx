@@ -1,3 +1,8 @@
+const pillButton = 'shrink-0 rounded-full px-2.5 py-1 text-label-md font-bold';
+
+/** Confirms inline **above the header**, on `error-container`, rather than
+ * as a separate dialog — an empty draft discards silently, so this only
+ * appears when something could actually be lost, and there is no undo. */
 export function DiscardConfirm({
   onCancel,
   onDiscard,
@@ -10,27 +15,21 @@ export function DiscardConfirm({
       role="alertdialog"
       aria-modal="false"
       aria-labelledby="discard-title"
-      className="mx-stack-gap-md mb-stack-gap-sm rounded-md border border-outline-variant bg-surface-container-low p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-surface-container-low"
+      className="flex shrink-0 items-center gap-stack-gap-sm border-b border-outline-variant bg-error-container px-3 py-2 text-snippet text-on-error-container dark:border-dark-outline-variant dark:bg-dark-error-container dark:text-dark-on-error-container"
     >
-      <p id="discard-title" className="text-body-md text-on-surface dark:text-dark-on-surface">
-        Discard this draft?
+      <p id="discard-title" className="min-w-0 flex-1 truncate">
+        Discard this message?
       </p>
-      <div className="mt-stack-gap-sm flex justify-end gap-stack-gap-sm">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded px-stack-gap-sm py-1 text-label-md text-secondary dark:text-dark-secondary"
-        >
-          Keep editing
-        </button>
-        <button
-          type="button"
-          onClick={onDiscard}
-          className="rounded bg-error px-stack-gap-sm py-1 text-label-md text-on-error dark:bg-dark-error dark:text-dark-on-error"
-        >
-          Discard
-        </button>
-      </div>
+      <button type="button" onClick={onCancel} className={pillButton}>
+        Keep
+      </button>
+      <button
+        type="button"
+        onClick={onDiscard}
+        className={`${pillButton} bg-error text-on-error dark:bg-dark-error dark:text-dark-on-error`}
+      >
+        Discard
+      </button>
     </div>
   );
 }

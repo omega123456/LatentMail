@@ -17,7 +17,7 @@ export function AttachmentStrip({
   return (
     <div
       data-testid="attachment-strip"
-      className="flex flex-wrap gap-stack-gap-sm border-t border-outline-variant px-stack-gap-md py-stack-gap-sm dark:border-dark-outline-variant"
+      className="mx-stack-gap-md flex flex-wrap gap-stack-gap-sm border-t border-outline-variant py-3 dark:border-dark-outline-variant"
     >
       {chips.map((attachment) => (
         <AttachmentChip

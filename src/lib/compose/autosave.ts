@@ -82,8 +82,8 @@ export function useComposeAutosave() {
           if (accepted.draftId) setDraftId(accepted.draftId);
           markSaved();
         })
-        .catch((error: unknown) =>
-          setStatus('failed', error instanceof Error ? error.message : 'Couldn’t save draft.'),
+        .catch(() =>
+          setStatus('failed', 'Couldn’t save draft.'),
         );
     }, AUTOSAVE_DELAY_MS);
     return () => {
@@ -112,8 +112,8 @@ export function useComposeAutosave() {
         const accepted = await invoke('save_compose_draft', { draft: toDraftRequest(current) });
         if (accepted.draftId) setDraftId(accepted.draftId);
         markSaved();
-      } catch (error) {
-        setStatus('failed', error instanceof Error ? error.message : 'Couldn’t save draft.');
+      } catch {
+        setStatus('failed', 'Couldn’t save draft.');
       }
     },
   };

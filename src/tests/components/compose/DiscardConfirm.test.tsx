@@ -11,7 +11,7 @@ describe('compose lifecycle controls', () => {
     const onDiscard = vi.fn();
     render(<DiscardConfirm onCancel={onCancel} onDiscard={onDiscard} />);
     expect(screen.getByRole('alertdialog')).toHaveAttribute('aria-modal', 'false');
-    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    await user.click(screen.getByRole('button', { name: 'Keep' }));
     await user.click(screen.getByRole('button', { name: 'Discard' }));
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onDiscard).toHaveBeenCalledOnce();

@@ -159,7 +159,11 @@
   --spacing-compose-min: 360px;
   --spacing-compose-width: 512px;
   --spacing-compose-height: 500px;
-  --spacing-compose-status-w: 160px;
+  --spacing-compose-status-w: 88px;
+  /* Field rows carry a 1px hairline that thickens to 2px on focus-within;
+   * the focus padding is 1px shorter so the row's content never nudges. */
+  --spacing-field-row-y: 6px;
+  --spacing-field-row-y-focus: 5px;
   /* Three named-token chip-row heights (D-series recipient chips): the
    * container clamps to `chip-rows-3` before collapsing later chips behind
    * an overflow control. One row ≈ a 28px chip plus vertical gap. */

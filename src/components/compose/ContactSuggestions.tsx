@@ -17,7 +17,7 @@ export function ContactSuggestions({
   onSelect: (item: ContactSuggestion) => void;
 }) {
   return (
-    <ul id={id} role="listbox" aria-label="Contact suggestions" className="flex flex-col py-1">
+    <ul id={id} role="listbox" aria-label="Contact suggestions" className="flex flex-col">
       {items.map((item, index) => (
         <li key={item.address} role="presentation">
           <button
@@ -30,7 +30,7 @@ export function ContactSuggestions({
             // before this selection has a chance to land.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onSelect(item)}
-            className={`flex w-full flex-col items-start gap-0.5 px-stack-gap-md py-stack-gap-sm text-left ${
+            className={`flex w-full flex-col items-start gap-0.5 rounded px-2.5 py-1.5 text-left ${
               index === activeIndex
                 ? 'bg-surface-container-high dark:bg-dark-surface-container-high'
                 : 'hover:bg-surface-container-low dark:hover:bg-dark-surface-container-low'

@@ -126,7 +126,14 @@ export function EventBridge() {
         event.kind === 'send' ? `Couldn’t send message — ${event.error}` : 'Couldn’t save draft';
       const compose = useComposeStore.getState();
       if (compose.session?.id === event.sessionId || compose.session?.draftId === event.sessionId) {
-        compose.setDraftStatus('failed', message);
+        // The footer's status region is narrow and sits beside the Send
+        // control, so inline failures carry the wireframe's fixed copy
+        // rather than a server message of unbounded length; the toast
+        // path below still reports the detail.
+        compose.setDraftStatus(
+          'failed',
+          event.kind === 'send' ? 'Couldn’t send.' : 'Couldn’t save draft.',
+        );
         return;
       }
       useToastStore.getState().showError(message);

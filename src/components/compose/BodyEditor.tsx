@@ -31,6 +31,11 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
         Image,
       ],
       content: value,
+      // Classes go on the ProseMirror element itself so it fills the whole
+      // body area — a click anywhere in that area lands in the document
+      // rather than on inert padding — and so its focus ring is suppressed
+      // there rather than in a stylesheet the styling rules forbid.
+      editorProps: { attributes: { class: 'flex-1 py-3.5 outline-none' } },
       onCreate: ({ editor }) => {
         onSelectionChange?.(editor);
         setIsEmpty(editor.isEmpty);
@@ -55,18 +60,18 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
       [editor],
     );
     return (
-      <div className="relative min-h-40 flex-1">
+      <div className="relative flex min-h-40 flex-1 flex-col">
         {isEmpty && (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute left-0 top-0 p-stack-gap-md text-body-md text-outline dark:text-dark-outline"
+            className="pointer-events-none absolute left-0 top-0 py-3.5 text-body-md text-outline dark:text-dark-outline"
           >
             {placeholderText}
           </span>
         )}
         <EditorContent
           editor={editor}
-          className="min-h-40 p-stack-gap-md text-body-md text-on-surface dark:text-dark-on-surface"
+          className="flex min-h-40 flex-1 flex-col text-body-md text-on-surface dark:text-dark-on-surface"
         />
       </div>
     );

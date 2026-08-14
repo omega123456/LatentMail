@@ -20,6 +20,12 @@ import {
 import { toDraftRequest, useComposeAutosave } from '@/lib/compose/autosave';
 import { invoke } from '@/lib/ipc/commands';
 
+/** One field row: 52px label column, a hairline that thickens to 2px
+ * `primary` on focus-within, and a focus padding 1px shorter so the
+ * thickening never nudges the row's content. */
+const fieldRow =
+  'flex items-center gap-2 border-b border-outline-variant pt-field-row-y pb-field-row-y focus-within:border-b-2 focus-within:border-primary focus-within:pb-field-row-y-focus dark:border-dark-outline-variant dark:focus-within:border-dark-primary';
+
 /** The composer panel: a Radix Dialog in non-modal mode, anchored
  * bottom-right over the mailbox (D8). The backdrop tints but never blocks
  * pointer access, focus is never trapped, and focus returns to whatever was
@@ -43,7 +49,10 @@ export function ComposeOverlay() {
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
+  // Keyed on the session that raised it rather than a bare boolean, so the
+  // confirmation cannot survive the discard that closed that session and
+  // greet the next composer already open.
+  const [confirmingFor, setConfirmingFor] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const titleId = useId();
   const { onAttach, onInsertImage, onRemoveAttachment } = useAttachmentPipeline(bodyRef);
@@ -58,6 +67,8 @@ export function ComposeOverlay() {
 
   if (!session) return null;
 
+  const discardOpen = confirmingFor === session.id;
+
   const closeWithSave = () => {
     if (qualifies && session.dirty) void saveNow();
     close();
@@ -67,7 +78,7 @@ export function ComposeOverlay() {
       !discardOpen &&
       (session.subject.trim() || session.html.trim() || session.recipients.to.length)
     ) {
-      setDiscardOpen(true);
+      setConfirmingFor(session.id);
       return;
     }
     await invoke('discard_compose_draft', {
@@ -84,8 +95,8 @@ export function ComposeOverlay() {
     try {
       await invoke('send_compose_draft', { draft: toDraftRequest(session) });
       close();
-    } catch (error) {
-      setStatus('failed', error instanceof Error ? error.message : 'Couldn’t send message.');
+    } catch {
+      setStatus('failed', 'Couldn’t send.');
     } finally {
       setSending(false);
     }
@@ -151,21 +162,21 @@ export function ComposeOverlay() {
             Compose panel. The mailbox behind it stays interactive.
           </Dialog.Description>
           <ComposeResizeHandles dimensions={session.dimensions} onResize={setDimensions} />
+          {discardOpen && (
+            <DiscardConfirm
+              onCancel={() => setConfirmingFor(null)}
+              onDiscard={() => void discard()}
+            />
+          )}
           <ComposeHeader
             mode={session.mode}
             titleId={titleId}
             onClose={closeWithSave}
             onDiscard={() => void discard()}
           />
-          {discardOpen && (
-            <DiscardConfirm
-              onCancel={() => setDiscardOpen(false)}
-              onDiscard={() => void discard()}
-            />
-          )}
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-stack-gap-md pt-stack-gap-md">
             <div data-testid="recipient-field" className="flex flex-col">
-              <div className="flex items-start gap-2 border-b border-outline-variant px-stack-gap-md py-stack-gap-sm focus-within:border-b-2 focus-within:border-primary dark:border-dark-outline-variant dark:focus-within:border-dark-primary">
+              <div className={fieldRow}>
                 <RecipientField
                   fieldRole="to"
                   label="To"
@@ -177,7 +188,7 @@ export function ComposeOverlay() {
                   <button
                     type="button"
                     onClick={revealCcBcc}
-                    className="shrink-0 pt-1 text-label-sm text-secondary hover:text-on-surface dark:text-dark-secondary dark:hover:text-dark-on-surface"
+                    className="shrink-0 rounded-sm px-1.5 py-1 text-label-sm text-secondary hover:text-primary dark:text-dark-secondary dark:hover:text-dark-primary"
                   >
                     Cc/Bcc
                   </button>
@@ -185,7 +196,7 @@ export function ComposeOverlay() {
               </div>
               {session.ccBccRevealed && (
                 <>
-                  <div className="flex items-start gap-2 border-b border-outline-variant px-stack-gap-md py-stack-gap-sm focus-within:border-b-2 focus-within:border-primary dark:border-dark-outline-variant dark:focus-within:border-dark-primary">
+                  <div className={fieldRow}>
                     <RecipientField
                       fieldRole="cc"
                       label="Cc"
@@ -193,7 +204,7 @@ export function ComposeOverlay() {
                       placeholder="Email addresses…"
                     />
                   </div>
-                  <div className="flex items-start gap-2 border-b border-outline-variant px-stack-gap-md py-stack-gap-sm focus-within:border-b-2 focus-within:border-primary dark:border-dark-outline-variant dark:focus-within:border-dark-primary">
+                  <div className={fieldRow}>
                     <RecipientField
                       fieldRole="bcc"
                       label="Bcc"
@@ -204,7 +215,7 @@ export function ComposeOverlay() {
                 </>
               )}
             </div>
-            <div className="flex items-center gap-2 border-b border-outline-variant px-stack-gap-md py-stack-gap-sm focus-within:border-b-2 focus-within:border-primary dark:border-dark-outline-variant dark:focus-within:border-dark-primary">
+            <div className={fieldRow}>
               <span className="w-13 shrink-0 text-label-md text-secondary dark:text-dark-secondary">
                 Subject
               </span>
@@ -226,7 +237,7 @@ export function ComposeOverlay() {
               <LinkDialog editor={editor} onClose={() => setLinkOpen(false)} />
             )}
             {session.quote && (
-              <div className="px-stack-gap-md py-stack-gap-sm">
+              <div className="pb-stack-gap-md">
                 <QuoteDisclosure
                   html={session.quote.html}
                   attribution={session.quote.attribution}
@@ -250,9 +261,11 @@ export function ComposeOverlay() {
                 : session.draftStatus === 'saving'
                   ? 'Saving…'
                   : session.draftStatus === 'saved'
-                    ? 'Saved'
+                    ? 'Draft saved'
                     : 'Couldn’t save draft')
             }
+            failed={Boolean(session.lifecycleError) || session.draftStatus === 'failed'}
+            onRetry={() => void (session.lifecycleError ? send() : saveNow())}
             onSend={() => void send()}
             sending={sending}
             blocked={readingAttachment}

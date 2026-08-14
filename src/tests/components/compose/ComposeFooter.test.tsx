@@ -99,4 +99,44 @@ describe('ComposeFooter', () => {
     expect(container.querySelector('[aria-live="polite"]')?.className).toBe(statusClass);
     expect(screen.getByText('Draft saved')).toBeInTheDocument();
   });
+
+  it('renders a failure with an inline retry, keeping the reserved status region so Send never moves', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const { container } = render(
+      <ComposeFooter
+        editor={null}
+        onLink={() => {}}
+        onAttach={() => {}}
+        onInsertImage={() => {}}
+        ready
+        status="Couldn’t send."
+        failed
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByText('Couldn’t send.')).toBeInTheDocument();
+    // The reserved slot stays present but empty, so the action group keeps
+    // its position while the failure occupies its own line.
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('tolerates a failure rendered without a retry handler', async () => {
+    const user = userEvent.setup();
+    render(
+      <ComposeFooter
+        editor={null}
+        onLink={() => {}}
+        onAttach={() => {}}
+        onInsertImage={() => {}}
+        ready
+        status="Couldn’t save draft."
+        failed
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByText('Couldn’t save draft.')).toBeInTheDocument();
+  });
 });

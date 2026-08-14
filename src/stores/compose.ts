@@ -147,7 +147,51 @@ type ComposeStore = {
   markSaved: () => void;
 };
 
-const defaultDimensions: ComposeDimensions = { width: 512, height: 500 };
+/** Must match `--spacing-compose-min` in `index.css` — the panel clamps to
+ * this on every axis, on open and on resize alike. */
+export const COMPOSE_MIN_PX = 360;
+
+/** Floors, matching `--spacing-compose-width` / `--spacing-compose-height`.
+ * A panel never opens smaller than this unless the viewport itself forces
+ * it. */
+const COMPOSE_FLOOR = { width: 512, height: 500 };
+/** Ceilings. Past these the composer stops being a panel over the mailbox
+ * and starts being a window, which D8's non-modal design depends on it not
+ * becoming. */
+const COMPOSE_CEILING = { width: 840, height: 820 };
+/** Fraction of the viewport the panel prefers to occupy between those
+ * bounds, so a 4K display gets a usable composer instead of the same
+ * 512px card that suits a laptop. */
+const COMPOSE_VIEWPORT_FRACTION = { width: 0.42, height: 0.62 };
+/** The bottom-right anchor's inset, doubled — the panel never fills the
+ * viewport edge to edge. Matches `--spacing-container-padding`. */
+const COMPOSE_VIEWPORT_INSET = 48;
+
+function axis(viewport: number, floor: number, ceiling: number, fraction: number) {
+  const preferred = Math.max(floor, Math.round(viewport * fraction));
+  const available = Math.max(COMPOSE_MIN_PX, Math.min(ceiling, viewport - COMPOSE_VIEWPORT_INSET));
+  return Math.min(preferred, available);
+}
+
+/** Read at open time rather than module load, so a composer opened after
+ * the window was resized or moved to another display is sized for the
+ * viewport it actually appears on. */
+function initialDimensions(): ComposeDimensions {
+  return {
+    width: axis(
+      window.innerWidth,
+      COMPOSE_FLOOR.width,
+      COMPOSE_CEILING.width,
+      COMPOSE_VIEWPORT_FRACTION.width,
+    ),
+    height: axis(
+      window.innerHeight,
+      COMPOSE_FLOOR.height,
+      COMPOSE_CEILING.height,
+      COMPOSE_VIEWPORT_FRACTION.height,
+    ),
+  };
+}
 const defaultOverflow: Record<RecipientRole, number> = { to: 0, cc: 0, bcc: 0 };
 
 function normalizeRecipient(raw: string): string | null {
@@ -170,7 +214,7 @@ export const useComposeStore = create<ComposeStore>((set) => ({
         overflow: { ...defaultOverflow },
         quote: session.quote ?? null,
         quoteOpen: false,
-        dimensions: session.dimensions ?? defaultDimensions,
+        dimensions: session.dimensions ?? initialDimensions(),
         attachments: session.attachments ?? [],
         draftId: session.draftId ?? null,
         threadId: session.threadId ?? null,
