@@ -528,15 +528,7 @@ async fn execute_flush(
             let client = client.clone();
             let account = account_id.clone();
             write_tasks.spawn(async move {
-                let result = write_entity(
-                    &storage,
-                    &client,
-                    &account,
-                    &thread_id,
-                    &messages,
-                    &entity.delta,
-                )
-                .await;
+                let result = write_entity(&storage, &client, &account, &thread_id, &messages).await;
                 (result, entity)
             });
         }
@@ -562,53 +554,40 @@ async fn execute_flush(
 
 /// Re-reads each of the entity's messages (Gmail's batch endpoint returns
 /// nothing useful) to capture the returned `historyId` for the strict
-/// stale-read gate, writes the confirmed label membership for every label
-/// the delta touched, and recomputes the thread once.
+/// stale-read gate, writes the confirmed label membership, and recomputes
+/// the thread once.
+///
+/// Membership comes from the re-read message's own `labelIds`, not from the
+/// delta we sent: Gmail applies side effects of its own, and adding `TRASH`
+/// or `SPAM` drops `INBOX` server-side. Applying only the delta left the
+/// local copy still carrying `INBOX`, so a deleted or moved conversation
+/// stayed in the mailbox it had just left until the next full sync
+/// overwrote it.
 async fn write_entity(
     storage: &Storage,
     client: &GmailClient,
     account_id: &str,
     thread_id: &str,
     messages: &[Message],
-    delta: &LabelDelta,
 ) -> Result<(), SyncError> {
     let mut updates = Vec::with_capacity(messages.len());
     for message in messages {
         let updated = client.message(&message.id).await?;
-        updates.push((message.id.clone(), updated.history_id));
+        updates.push((message.id.clone(), updated.history_id, updated.label_ids));
     }
     let account = account_id.to_owned();
     let thread = thread_id.to_owned();
-    let additions = delta.additions.clone();
-    let removals = delta.removals.clone();
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            for (id, history_id) in updates {
+            for (id, history_id, label_ids) in updates {
                 MessageRepository::write_mutation_history(
                     &transaction,
                     &account,
                     std::slice::from_ref(&id),
                     history_id,
                 )?;
-                for label in &additions {
-                    MessageRepository::set_label_membership(
-                        &transaction,
-                        &account,
-                        &id,
-                        label,
-                        true,
-                    )?;
-                }
-                for label in &removals {
-                    MessageRepository::set_label_membership(
-                        &transaction,
-                        &account,
-                        &id,
-                        label,
-                        false,
-                    )?;
-                }
+                MessageRepository::overwrite_membership(&transaction, &account, &id, &label_ids)?;
             }
             ThreadRepository::recompute(&transaction, &account, &thread)?;
             transaction.commit()

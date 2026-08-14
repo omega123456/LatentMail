@@ -133,6 +133,11 @@ export function EventBridge() {
     });
 
     subscribe('queue://item', (item) => {
+      // Only terminal statuses. `queued`/`active` arrive *before* the flush
+      // has written anything to SQLite, so invalidating on them refetched the
+      // pre-mutation row and visibly reverted the optimistic update for the
+      // length of the Gmail round trip.
+      if (item.status !== 'done' && item.status !== 'failed') return;
       if (!item.id.startsWith('mutation:')) return;
       const accountId = item.id.split(':')[1];
       if (accountId)

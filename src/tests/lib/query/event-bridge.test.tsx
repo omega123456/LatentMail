@@ -229,6 +229,12 @@ describe('EventBridge', () => {
     const beforeUnrelatedItem = invalidate.mock.calls.length;
     act(() => ipc.emit('queue://item', { id: 'queue:account-1:1', status: 'done' }));
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
+    // A mutation that has only been queued or picked up has not written to
+    // SQLite yet; invalidating here refetches the pre-mutation row and
+    // visibly reverts the optimistic update mid-flight.
+    act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'queued' }));
+    act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'active' }));
+    expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
     act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'done' }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.threadsForAccount('account-1') });
   });

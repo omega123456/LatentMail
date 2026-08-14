@@ -552,12 +552,19 @@ async fn opposing_mutations_on_different_threads_each_receive_their_own_directio
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
-    for (id, thread_id) in [("message-a", "thread-a"), ("message-b", "thread-b")] {
+    // Each message answers with the label set Gmail would really hold after
+    // its own direction was applied — write-back trusts the re-read, not the
+    // delta, so a mock that answered identically for both would not
+    // distinguish a leak from a correct write.
+    for (id, thread_id, labels) in [
+        ("message-a", "thread-a", vec!["INBOX", "STARRED"]),
+        ("message-b", "thread-b", vec!["INBOX"]),
+    ] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": id, "threadId": thread_id, "historyId": "20",
-                "labelIds": ["INBOX"], "snippet": "updated",
+                "labelIds": labels, "snippet": "updated",
                 "internalDate": "1", "payload": { "headers": [] }
             })))
             .mount(&server)
