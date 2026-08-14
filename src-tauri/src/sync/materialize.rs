@@ -60,7 +60,7 @@ pub fn persist(
             .collect::<Vec<_>>();
         MessageRepository::replace_inline_parts(connection, account_id, &value.id, &parts)?;
     }
-    ThreadRepository::recompute(connection, account_id, &value.thread_id)
+    Ok(())
 }
 
 pub fn replace_draft(
@@ -76,29 +76,31 @@ pub fn replace_draft(
     // executor persists a completed draft/send from there (see
     // `compose::drafts`).
     let transaction = connection.unchecked_transaction()?;
-    let old = transaction
-        .query_row(
-            "SELECT id FROM messages WHERE account_id=?1 AND draft_id=?2",
-            rusqlite::params![account_id, draft_id],
-            |row| row.get::<_, String>(0),
-        )
-        .ok();
-    let old_thread = match old {
-        Some(id) => MessageRepository::delete(&transaction, account_id, &id)?,
-        None => None,
-    };
-    persist(&transaction, account_id, replacement)?;
+    replace_draft_rows(&transaction, account_id, draft_id, replacement, consumed)?;
+    transaction.commit()
+}
+
+pub(crate) fn replace_draft_rows(
+    connection: &Connection,
+    account_id: &str,
+    draft_id: &str,
+    replacement: &GmailMessage,
+    consumed: bool,
+) -> rusqlite::Result<()> {
+    let old_thread = MessageRepository::delete_by_draft_id(connection, account_id, draft_id)?;
+    persist(connection, account_id, replacement)?;
     if !consumed {
         // Gmail assigns a fresh message id on every draft update.  The stable
         // draft id is therefore the only durable association between those
         // replacements; keep it on the newly materialized local message.
-        MessageRepository::set_draft_id(&transaction, account_id, &replacement.id, draft_id)?;
+        MessageRepository::set_draft_id(connection, account_id, &replacement.id, draft_id)?;
     }
     if consumed {
-        crate::storage::ComposeDraftMetadataRepository::remove(&transaction, account_id, draft_id)?;
+        crate::storage::ComposeDraftMetadataRepository::remove(connection, account_id, draft_id)?;
     }
-    if let Some(thread) = old_thread {
-        ThreadRepository::recompute(&transaction, account_id, &thread)?;
+    ThreadRepository::recompute(connection, account_id, &replacement.thread_id)?;
+    if let Some(thread) = old_thread.filter(|thread| thread != &replacement.thread_id) {
+        ThreadRepository::recompute(connection, account_id, &thread)?;
     }
-    transaction.commit()
+    Ok(())
 }

@@ -34,6 +34,7 @@ fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
     for (id, kind, status) in [
         ("queued-send", "send", "queued"),
         ("active-send", "send", "active"),
+        ("active-send-2", "send", "active"),
         ("queued-draft", "draft", "queued"),
         ("label", "label", "queued"),
     ] {
@@ -76,6 +77,13 @@ fn restart_recovers_queued_durable_work_and_marks_active_send_uncertain() {
     assert_eq!(
         interrupted.error.as_deref(),
         Some("May have been sent; retry manually")
+    );
+    assert_eq!(
+        OperationRepository::get(&connection, "active-send-2")
+            .unwrap()
+            .unwrap()
+            .status,
+        "failed"
     );
 }
 

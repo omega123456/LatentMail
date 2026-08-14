@@ -219,12 +219,9 @@ pub async fn run(
             for label in &labels {
                 LabelRepository::upsert(&transaction, label)?;
             }
-            let current: HashSet<String> =
-                MessageRepository::all_ids(&transaction, &account_owned)?
-                    .into_iter()
-                    .collect();
+            let current = MessageRepository::reconciliation_messages(&transaction, &account_owned)?;
             let mut touched = HashSet::new();
-            for id in current.difference(&universe) {
+            for id in current.keys().filter(|id| !universe.contains(*id)) {
                 if let Some(thread_id) =
                     MessageRepository::delete(&transaction, &account_owned, id)?
                 {
@@ -232,14 +229,7 @@ pub async fn run(
                 }
             }
             for (id, label_ids) in &memberships {
-                if let Some(message) = MessageRepository::get(&transaction, &account_owned, id)? {
-                    for label_id in label_ids {
-                        LabelRepository::ensure_placeholder(
-                            &transaction,
-                            &account_owned,
-                            label_id,
-                        )?;
-                    }
+                if let Some(message) = current.get(id) {
                     // Compared as sets, not as ordered vectors: DB reads
                     // come back `ORDER BY label_id` while `memberships` is
                     // built in Gmail's per-label listing order, so a message
@@ -248,58 +238,46 @@ pub async fn run(
                     // (plan-adherence re-audit) — marking it "touched" and
                     // triggering a no-op membership overwrite for a thread
                     // that never actually changed.
-                    let current_label_ids: HashSet<String> =
-                        MessageRepository::label_ids(&transaction, &account_owned, id)?
-                            .into_iter()
-                            .collect();
-                    let wanted_label_ids: HashSet<&String> = label_ids.iter().collect();
-                    if current_label_ids.iter().collect::<HashSet<&String>>() != wanted_label_ids {
+                    let current_label_ids: HashSet<&str> =
+                        message.label_ids.iter().map(String::as_str).collect();
+                    let wanted_label_ids: HashSet<&str> =
+                        label_ids.iter().map(String::as_str).collect();
+                    if current_label_ids != wanted_label_ids {
                         MessageRepository::overwrite_membership(
                             &transaction,
                             &account_owned,
                             id,
                             label_ids,
                         )?;
-                        touched.insert(message.thread_id);
+                        touched.insert(message.thread_id.clone());
                     }
                 }
             }
             // Contact observations deliberately happen only after both the
             // message row and its final label membership are committed in
             // this reconciliation transaction.
+            let mut contact_observations = Vec::new();
             for id in &universe {
-                if let Some(message) = MessageRepository::get(&transaction, &account_owned, id)? {
-                    contacts::observe(
-                        &transaction,
-                        &account_owned,
-                        &message.sender,
-                        message.sent_at,
-                    )?;
-                    if MessageRepository::label_ids(&transaction, &account_owned, id)?
-                        .iter()
-                        .any(|label| label == "SENT")
+                if let Some(message) = current.get(id) {
+                    contact_observations.push((message.sender.clone(), message.sent_at));
+                    if memberships
+                        .get(id)
+                        .is_some_and(|labels| labels.iter().any(|label| label == "SENT"))
                     {
-                        let (to, cc, _) =
-                            MessageRepository::recipient_roles(&transaction, &account_owned, id)?;
-                        for mailbox in to
+                        for mailbox in message
+                            .to_recipients
                             .split(',')
-                            .chain(cc.split(','))
+                            .chain(message.cc_recipients.split(','))
                             .map(str::trim)
                             .filter(|mailbox| !mailbox.is_empty())
                         {
-                            contacts::observe(
-                                &transaction,
-                                &account_owned,
-                                mailbox,
-                                message.sent_at,
-                            )?;
+                            contact_observations.push((mailbox.to_owned(), message.sent_at));
                         }
                     }
                 }
             }
-            for thread_id in &touched {
-                ThreadRepository::recompute(&transaction, &account_owned, thread_id)?;
-            }
+            contacts::observe_many(&transaction, &account_owned, &contact_observations)?;
+            ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
             TraversalCursorRepository::upsert(
                 &transaction,
                 &TraversalCursor {

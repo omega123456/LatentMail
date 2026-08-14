@@ -12,7 +12,6 @@ use std::{
     sync::Arc,
 };
 
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::Mutex;
@@ -193,20 +192,14 @@ pub async fn delete(
     let draft = draft_id.to_owned();
     storage
         .run(move |connection| {
-            let local_id: Option<String> = connection
-                .query_row(
-                    "SELECT id FROM messages WHERE account_id=?1 AND draft_id=?2",
-                    rusqlite::params![account, draft],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if let Some(local_id) = local_id {
-                if let Some(thread_id) = MessageRepository::delete(connection, &account, &local_id)?
-                {
-                    ThreadRepository::recompute(connection, &account, &thread_id)?;
-                }
+            let transaction = connection.unchecked_transaction()?;
+            if let Some(thread_id) =
+                MessageRepository::delete_by_draft_id(&transaction, &account, &draft)?
+            {
+                ThreadRepository::recompute(&transaction, &account, &thread_id)?;
             }
-            ComposeDraftMetadataRepository::remove(connection, &account, &draft)
+            ComposeDraftMetadataRepository::remove(&transaction, &account, &draft)?;
+            transaction.commit()
         })
         .await
         .map_err(|error| error.to_string())
@@ -514,13 +507,20 @@ async fn run<R: Runtime>(
         let draft_id = draft_id.clone();
         storage
             .run(move |connection| {
-                materialize::replace_draft(connection, &account_id, &draft_id, &message, consumed)?;
+                let transaction = connection.unchecked_transaction()?;
+                materialize::replace_draft_rows(
+                    &transaction,
+                    &account_id,
+                    &draft_id,
+                    &message,
+                    consumed,
+                )?;
                 if !consumed {
-                    ComposeDraftMetadataRepository::upsert(connection, &metadata)?;
+                    ComposeDraftMetadataRepository::upsert(&transaction, &metadata)?;
                 } else {
                     // Local delivery is already confirmed; learn the same
                     // contacts reconciliation would learn on a later sync.
-                    crate::contacts::observe_now(connection, &account_id, &message.sender)?;
+                    crate::contacts::observe_now(&transaction, &account_id, &message.sender)?;
                     for mailbox in message
                         .to_recipients
                         .split(',')
@@ -528,10 +528,10 @@ async fn run<R: Runtime>(
                         .map(str::trim)
                         .filter(|mailbox| !mailbox.is_empty())
                     {
-                        crate::contacts::observe_now(connection, &account_id, mailbox)?;
+                        crate::contacts::observe_now(&transaction, &account_id, mailbox)?;
                     }
                 }
-                Ok::<(), rusqlite::Error>(())
+                transaction.commit()
             })
             .await
     };

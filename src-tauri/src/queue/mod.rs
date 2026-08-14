@@ -439,9 +439,11 @@ pub fn retry_delay(attempt: u8) -> Duration {
 pub fn recover_durable_operations(
     connection: &rusqlite::Connection,
 ) -> rusqlite::Result<(Vec<Operation>, Vec<String>)> {
-    let uncertain_accounts = OperationRepository::mark_interrupted_sends_uncertain(connection)?;
-    OperationRepository::requeue_interrupted_drafts(connection)?;
-    let recovered = OperationRepository::pending_durable(connection)?;
+    let transaction = connection.unchecked_transaction()?;
+    let uncertain_accounts = OperationRepository::mark_interrupted_sends_uncertain(&transaction)?;
+    OperationRepository::requeue_interrupted_drafts(&transaction)?;
+    let recovered = OperationRepository::pending_durable(&transaction)?;
+    transaction.commit()?;
     Ok((recovered, uncertain_accounts))
 }
 

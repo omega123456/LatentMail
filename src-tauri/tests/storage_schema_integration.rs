@@ -39,6 +39,15 @@ fn message() -> Message {
     }
 }
 
+fn query_plan(connection: &rusqlite::Connection, sql: &str) -> Vec<String> {
+    let mut statement = connection.prepare(sql).unwrap();
+    statement
+        .query_map([], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
 #[test]
 fn migrations_are_idempotent_and_repositories_round_trip() {
     let mut connection = Storage::in_memory().unwrap();
@@ -414,6 +423,108 @@ fn all_ids_returns_every_locally_stored_message_id() {
 
     let ids = MessageRepository::all_ids(&connection, "account").unwrap();
     assert_eq!(ids, vec!["message".to_owned(), "message-2".to_owned()]);
+}
+
+#[test]
+fn missing_ids_batches_primary_key_lookups_and_deduplicates_candidates() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    for id in ["id-0", "id-500"] {
+        let stored = Message {
+            id: id.into(),
+            ..message()
+        };
+        MessageRepository::write_full_state(&connection, &stored).unwrap();
+    }
+    let mut candidates: Vec<String> = (0..=500).map(|id| format!("id-{id}")).collect();
+    candidates.push("id-1".into());
+
+    let missing = MessageRepository::missing_ids(&connection, "account", candidates).unwrap();
+
+    assert_eq!(missing.len(), 499);
+    assert_eq!(missing.first().map(String::as_str), Some("id-1"));
+    assert_eq!(missing.last().map(String::as_str), Some("id-499"));
+}
+
+#[test]
+fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
+    let connection = Storage::in_memory().unwrap();
+    let thread_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM threads WHERE account_id='account' ORDER BY latest_at DESC,id DESC LIMIT 51",
+    );
+    assert!(thread_plan
+        .iter()
+        .any(|step| step.contains("threads_by_latest")));
+    assert!(!thread_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    let cursor_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM threads WHERE account_id='account' AND (latest_at,id)<(10,'thread') ORDER BY latest_at DESC,id DESC LIMIT 51",
+    );
+    assert!(cursor_plan
+        .iter()
+        .any(|step| step.contains("threads_by_latest")));
+    assert!(!cursor_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+
+    let message_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT snippet FROM messages WHERE account_id='account' AND thread_id='thread' ORDER BY sent_at DESC,id DESC LIMIT 1",
+    );
+    assert!(message_plan
+        .iter()
+        .any(|step| step.contains("messages_by_thread")));
+    assert!(!message_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+
+    let draft_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE account_id='account' AND draft_id='draft'",
+    );
+    assert!(draft_plan
+        .iter()
+        .any(|step| step.contains("messages_by_draft")));
+
+    let contact_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT address FROM contacts WHERE account_id='account' AND address LIKE 'a%'",
+    );
+    assert!(contact_plan
+        .iter()
+        .any(|step| step.contains("contacts_lookup")));
+
+    let operation_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE kind IN ('send','draft') AND status='queued' ORDER BY created_at",
+    );
+    assert!(operation_plan
+        .iter()
+        .any(|step| step.contains("operations_queued_durable")));
+    assert!(!operation_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    let active_draft_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN UPDATE operations SET status='queued' WHERE kind='draft' AND status='active'",
+    );
+    assert!(active_draft_plan
+        .iter()
+        .any(|step| step.contains("operations_active_drafts")));
+    let account_operation_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE account_id='account'",
+    );
+    assert!(account_operation_plan
+        .iter()
+        .any(|step| step.contains("operations_by_account")));
+
+    let mut statement = connection.prepare("PRAGMA index_list(messages)").unwrap();
+    let message_indexes = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(!message_indexes
+        .iter()
+        .any(|name| name == "messages_by_history"));
 }
 
 #[test]

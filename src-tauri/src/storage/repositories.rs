@@ -1,7 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use thiserror::Error;
+
+const BIND_BATCH_SIZE: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
@@ -287,8 +289,55 @@ pub struct Message {
     pub truncated_body: Option<String>,
     pub html_presence: HtmlPresence,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposeMessageContext {
+    pub message: Message,
+    pub recipient_roles: (String, String, String),
+    pub references: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMessage {
+    pub message: Message,
+    pub recipient_roles: (String, String, String),
+    pub label_ids: Vec<String>,
+    pub inline_parts: Vec<InlinePart>,
+    pub draft_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconciliationMessage {
+    pub thread_id: String,
+    pub sender: String,
+    pub sent_at: i64,
+    pub to_recipients: String,
+    pub cc_recipients: String,
+    pub label_ids: Vec<String>,
+}
+
 pub struct MessageRepository;
 impl MessageRepository {
+    pub fn compose_context(
+        connection: &Connection,
+        account_id: &str,
+        id: &str,
+    ) -> Result<Option<ComposeMessageContext>> {
+        connection
+            .query_row(
+                "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,rfc_references
+                 FROM messages WHERE account_id=?1 AND id=?2",
+                params![account_id, id],
+                |row| {
+                    Ok(ComposeMessageContext {
+                        message: message(row)?,
+                        recipient_roles: (row.get(17)?, row.get(18)?, row.get(19)?),
+                        references: row.get(20)?,
+                    })
+                },
+            )
+            .optional()
+    }
     pub fn recipient_roles(
         connection: &Connection,
         account_id: &str,
@@ -333,6 +382,154 @@ impl MessageRepository {
             .collect();
         messages
     }
+    pub fn list_by_threads(
+        connection: &Connection,
+        account_id: &str,
+        thread_ids: &[String],
+    ) -> Result<HashMap<String, Vec<Message>>> {
+        let mut messages: HashMap<String, Vec<Message>> = thread_ids
+            .iter()
+            .map(|thread_id| (thread_id.clone(), Vec::new()))
+            .collect();
+        for chunk in thread_ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence
+                 FROM messages WHERE account_id=? AND thread_id IN ({placeholders})
+                 ORDER BY thread_id,sent_at,id"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
+            for result in statement.query_map(rusqlite::params_from_iter(parameters), message)? {
+                let message = result?;
+                messages
+                    .entry(message.thread_id.clone())
+                    .or_default()
+                    .push(message);
+            }
+        }
+        Ok(messages)
+    }
+    pub fn get_many(
+        connection: &Connection,
+        account_id: &str,
+        ids: &[String],
+    ) -> Result<HashMap<String, Message>> {
+        let mut messages = HashMap::new();
+        for chunk in ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence
+                 FROM messages WHERE account_id=? AND id IN ({placeholders})"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
+            for result in statement.query_map(rusqlite::params_from_iter(parameters), message)? {
+                let message = result?;
+                messages.insert(message.id.clone(), message);
+            }
+        }
+        Ok(messages)
+    }
+    pub fn draft_message_ids_by_thread(
+        connection: &Connection,
+        account_id: &str,
+        thread_ids: &[String],
+    ) -> Result<HashMap<String, Vec<String>>> {
+        let mut drafts: HashMap<String, Vec<String>> = HashMap::new();
+        for chunk in thread_ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT m.thread_id,m.id
+                 FROM messages m CROSS JOIN message_labels ml
+                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                   AND ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'
+                 ORDER BY m.thread_id,m.sent_at,m.id"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            for (thread_id, message_id) in rows {
+                drafts.entry(thread_id).or_default().push(message_id);
+            }
+        }
+        Ok(drafts)
+    }
+    pub fn list_conversation(
+        connection: &Connection,
+        account_id: &str,
+        thread_id: &str,
+    ) -> Result<Vec<ConversationMessage>> {
+        let mut statement = connection.prepare(
+            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
+             FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at,id",
+        )?;
+        let mut messages = statement
+            .query_map(params![account_id, thread_id], |row| {
+                Ok(ConversationMessage {
+                    message: message(row)?,
+                    recipient_roles: (row.get(17)?, row.get(18)?, row.get(19)?),
+                    label_ids: Vec::new(),
+                    inline_parts: Vec::new(),
+                    draft_id: row.get(20)?,
+                })
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        let positions: HashMap<String, usize> = messages
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (value.message.id.clone(), index))
+            .collect();
+
+        let mut statement = connection.prepare(
+            "SELECT ml.message_id,ml.label_id
+             FROM messages m CROSS JOIN message_labels ml
+             WHERE m.account_id=?1 AND m.thread_id=?2
+               AND ml.account_id=m.account_id AND ml.message_id=m.id",
+        )?;
+        let labels = statement
+            .query_map(params![account_id, thread_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        for (message_id, label_id) in labels {
+            if let Some(index) = positions.get(&message_id) {
+                messages[*index].label_ids.push(label_id);
+            }
+        }
+        for message in &mut messages {
+            message.label_ids.sort();
+        }
+
+        let mut statement = connection.prepare(
+            "SELECT p.message_id,p.content_id,p.mime_type,p.bytes
+             FROM messages m CROSS JOIN message_inline_parts p
+             WHERE m.account_id=?1 AND m.thread_id=?2 AND m.html_body IS NOT NULL
+               AND p.account_id=m.account_id AND p.message_id=m.id",
+        )?;
+        let parts = statement
+            .query_map(params![account_id, thread_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    InlinePart {
+                        content_id: row.get(1)?,
+                        mime_type: row.get(2)?,
+                        bytes: row.get(3)?,
+                    },
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        for (message_id, part) in parts {
+            if let Some(index) = positions.get(&message_id) {
+                messages[*index].inline_parts.push(part);
+            }
+        }
+        Ok(messages)
+    }
     /// Every locally stored message id for an account — the universe
     /// reconciliation's server-diff (Phase 5) compares against. No existing
     /// method provided this: the old expired-checkpoint path deleted
@@ -345,17 +542,35 @@ impl MessageRepository {
             .collect();
         ids
     }
-    /// Cheap membership check for one id — what incremental sync's Inbox
-    /// freshness probe (`sync::probe_inbox`) filters listed ids through so
-    /// only genuinely unknown ones cost a `messages.get`. Deliberately not
-    /// [`Self::all_ids`]: that loads every id in the mailbox (tens of
-    /// thousands) to answer a question about at most one page's worth.
-    pub fn exists(connection: &Connection, account_id: &str, id: &str) -> Result<bool> {
-        connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM messages WHERE account_id=?1 AND id=?2)",
-            params![account_id, id],
-            |row| row.get(0),
-        )
+    /// Filters a bounded candidate set through batched primary-key lookups,
+    /// preserving first-seen order and removing duplicates before Gmail gets.
+    pub fn missing_ids(
+        connection: &Connection,
+        account_id: &str,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>> {
+        let mut seen = HashSet::new();
+        let ids: Vec<String> = ids
+            .into_iter()
+            .filter(|id| seen.insert(id.clone()))
+            .collect();
+        let mut existing = HashSet::new();
+        for chunk in ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql =
+                format!("SELECT id FROM messages WHERE account_id=? AND id IN ({placeholders})");
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
+            existing.extend(
+                statement
+                    .query_map(rusqlite::params_from_iter(parameters), |row| row.get(0))?
+                    .collect::<Result<Vec<String>>>()?,
+            );
+        }
+        Ok(ids
+            .into_iter()
+            .filter(|id| !existing.contains(id))
+            .collect())
     }
     /// Traversal's own upsert (D1/Phase 4): writes the metadata and
     /// truncated body a whole-mailbox backfill/reconciliation fetch
@@ -473,16 +688,25 @@ impl MessageRepository {
         message_id: &str,
         label_ids: &[String],
     ) -> Result<()> {
-        let current: HashSet<String> = Self::label_ids(connection, account_id, message_id)?
-            .into_iter()
-            .collect();
-        let desired: HashSet<String> = label_ids.iter().cloned().collect();
-        for label in current.difference(&desired) {
-            Self::set_label_membership(connection, account_id, message_id, label, false)?;
+        connection.execute(
+            "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2",
+            params![account_id, message_id],
+        )?;
+        let mut statement = connection.prepare(
+            "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)",
+        )?;
+        for label_id in label_ids {
+            statement.execute(params![account_id, message_id, label_id])?;
         }
-        for label in desired.difference(&current) {
-            Self::set_label_membership(connection, account_id, message_id, label, true)?;
-        }
+        connection.execute(
+            "UPDATE messages SET is_unread=?1,is_starred=?2 WHERE account_id=?3 AND id=?4",
+            params![
+                label_ids.iter().any(|id| id == "UNREAD"),
+                label_ids.iter().any(|id| id == "STARRED"),
+                account_id,
+                message_id
+            ],
+        )?;
         Ok(())
     }
     pub fn write_mutation_history(
@@ -533,20 +757,26 @@ impl MessageRepository {
     /// callers can recompute that thread's summary, or `None` if the
     /// message was already gone.
     pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<Option<String>> {
-        let thread_id: Option<String> = connection
+        connection
             .query_row(
-                "SELECT thread_id FROM messages WHERE account_id=?1 AND id=?2",
+                "DELETE FROM messages WHERE account_id=?1 AND id=?2 RETURNING thread_id",
                 params![account_id, id],
                 |row| row.get(0),
             )
-            .optional()?;
-        if thread_id.is_some() {
-            connection.execute(
-                "DELETE FROM messages WHERE account_id=?1 AND id=?2",
-                params![account_id, id],
-            )?;
-        }
-        Ok(thread_id)
+            .optional()
+    }
+    pub fn delete_by_draft_id(
+        connection: &Connection,
+        account_id: &str,
+        draft_id: &str,
+    ) -> Result<Option<String>> {
+        connection
+            .query_row(
+                "DELETE FROM messages WHERE account_id=?1 AND draft_id=?2 RETURNING thread_id",
+                params![account_id, draft_id],
+                |row| row.get(0),
+            )
+            .optional()
     }
     pub fn label_ids(connection: &Connection, account_id: &str, id: &str) -> Result<Vec<String>> {
         let mut statement = connection.prepare(
@@ -595,6 +825,45 @@ impl MessageRepository {
             })?
             .collect();
         parts
+    }
+
+    pub fn reconciliation_messages(
+        connection: &Connection,
+        account_id: &str,
+    ) -> Result<HashMap<String, ReconciliationMessage>> {
+        let mut statement = connection.prepare(
+            "SELECT id,thread_id,sender,sent_at,to_recipients,cc_recipients
+             FROM messages WHERE account_id=?1",
+        )?;
+        let mut messages = statement
+            .query_map([account_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    ReconciliationMessage {
+                        thread_id: row.get(1)?,
+                        sender: row.get(2)?,
+                        sent_at: row.get(3)?,
+                        to_recipients: row.get(4)?,
+                        cc_recipients: row.get(5)?,
+                        label_ids: Vec::new(),
+                    },
+                ))
+            })?
+            .collect::<Result<HashMap<_, _>>>()?;
+        let mut statement = connection.prepare(
+            "SELECT message_id,label_id FROM message_labels WHERE account_id=?1 ORDER BY message_id,label_id",
+        )?;
+        let labels = statement
+            .query_map([account_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        for (message_id, label_id) in labels {
+            if let Some(message) = messages.get_mut(&message_id) {
+                message.label_ids.push(label_id);
+            }
+        }
+        Ok(messages)
     }
 }
 
@@ -656,26 +925,26 @@ pub struct Thread {
     pub has_attachments: bool,
     pub has_draft: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadListRow {
+    pub thread: Thread,
+    pub snippet: String,
+    pub label_indicators: Vec<String>,
+}
+
+struct ThreadMessageRow {
+    sender: String,
+    subject: String,
+    sent_at: i64,
+    has_attachments: bool,
+    is_unread: bool,
+    is_starred: bool,
+    is_draft: bool,
+}
+
 pub struct ThreadRepository;
 impl ThreadRepository {
-    pub fn row_details(
-        connection: &Connection,
-        account_id: &str,
-        thread_id: &str,
-    ) -> Result<(String, Vec<String>)> {
-        let snippet = connection.query_row(
-            "SELECT snippet FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at DESC, id DESC LIMIT 1",
-            params![account_id, thread_id],
-            |row| row.get(0),
-        ).optional()?.unwrap_or_default();
-        let mut statement = connection.prepare(
-            "SELECT DISTINCT l.name FROM labels l JOIN message_labels ml ON ml.account_id=l.account_id AND ml.label_id=l.id JOIN messages m ON m.account_id=ml.account_id AND m.id=ml.message_id WHERE m.account_id=?1 AND m.thread_id=?2 AND l.kind='user' ORDER BY l.name",
-        )?;
-        let label_indicators = statement
-            .query_map(params![account_id, thread_id], |row| row.get(0))?
-            .collect::<Result<Vec<String>>>()?;
-        Ok((snippet, label_indicators))
-    }
     pub fn upsert(connection: &Connection, thread: &Thread) -> Result<()> {
         connection.execute("INSERT INTO threads (account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(account_id,id) DO UPDATE SET subject=excluded.subject,participants=excluded.participants,latest_at=excluded.latest_at,message_count=excluded.message_count,is_unread=excluded.is_unread,is_starred=excluded.is_starred,has_attachments=excluded.has_attachments,has_draft=excluded.has_draft", params![thread.account_id,thread.id,thread.subject,thread.participants,thread.latest_at,thread.message_count,thread.is_unread,thread.is_starred,thread.has_attachments,thread.has_draft])?;
         Ok(())
@@ -689,19 +958,60 @@ impl ThreadRepository {
     /// message/label writes, rather than keeping counters incrementally in
     /// sync (aggregation from source rows can't drift).
     pub fn recompute(connection: &Connection, account_id: &str, thread_id: &str) -> Result<()> {
-        let mut statement = connection.prepare("SELECT sender,subject,sent_at,has_attachments,is_unread,is_starred FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at")?;
-        let rows: Vec<(String, String, i64, bool, bool, bool)> = statement
-            .query_map(params![account_id, thread_id], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })?
-            .collect::<Result<_>>()?;
+        let mut statement = connection.prepare(
+            "SELECT m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
+                    EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT')
+             FROM messages m WHERE m.account_id=?1 AND m.thread_id=?2 ORDER BY m.sent_at,m.id",
+        )?;
+        let rows = statement
+            .query_map(params![account_id, thread_id], thread_message_row)?
+            .collect::<Result<Vec<_>>>()?;
+        Self::write_summary(connection, account_id, thread_id, &rows)
+    }
+
+    pub fn recompute_many(
+        connection: &Connection,
+        account_id: &str,
+        thread_ids: &HashSet<String>,
+    ) -> Result<()> {
+        let mut rows: HashMap<String, Vec<ThreadMessageRow>> = thread_ids
+            .iter()
+            .map(|thread_id| (thread_id.clone(), Vec::new()))
+            .collect();
+        let ids: Vec<&str> = thread_ids.iter().map(String::as_str).collect();
+        for chunk in ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT m.thread_id,m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
+                        EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT')
+                 FROM messages m WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                 ORDER BY m.thread_id,m.sent_at,m.id"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().copied());
+            let results = statement
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    Ok((row.get::<_, String>(0)?, thread_message_row_offset(row, 1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            for (thread_id, row) in results {
+                rows.get_mut(&thread_id)
+                    .expect("summary query only returns requested threads")
+                    .push(row);
+            }
+        }
+        for (thread_id, rows) in rows {
+            Self::write_summary(connection, account_id, &thread_id, &rows)?;
+        }
+        Ok(())
+    }
+
+    fn write_summary(
+        connection: &Connection,
+        account_id: &str,
+        thread_id: &str,
+        rows: &[ThreadMessageRow],
+    ) -> Result<()> {
         if rows.is_empty() {
             connection.execute(
                 "DELETE FROM threads WHERE account_id=?1 AND id=?2",
@@ -710,32 +1020,26 @@ impl ThreadRepository {
             return Ok(());
         }
         let mut participants = Vec::new();
-        let (mut is_unread, mut is_starred, mut has_attachments) = (false, false, false);
-        for (sender, _, _, attachments, unread, starred) in &rows {
-            if !participants.contains(sender) {
-                participants.push(sender.clone());
+        let (mut is_unread, mut is_starred, mut has_attachments, mut has_draft) =
+            (false, false, false, false);
+        for row in rows {
+            if !participants.contains(&row.sender) {
+                participants.push(row.sender.clone());
             }
-            is_unread |= unread;
-            is_starred |= starred;
-            has_attachments |= attachments;
+            is_unread |= row.is_unread;
+            is_starred |= row.is_starred;
+            has_attachments |= row.has_attachments;
+            has_draft |= row.is_draft;
         }
-        let (_, subject, latest_at, _, _, _) = rows.last().expect("checked non-empty above");
-        let has_draft: bool = connection.query_row(
-            // Nested for the same reason as `list_paginated`'s label filter:
-            // a flat join drives from the label's whole membership instead of
-            // the thread's own messages.
-            "SELECT EXISTS(SELECT 1 FROM messages m WHERE m.account_id=?1 AND m.thread_id=?2 AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'))",
-            params![account_id, thread_id],
-            |row| row.get(0),
-        )?;
+        let latest = rows.last().expect("checked non-empty above");
         Self::upsert(
             connection,
             &Thread {
                 account_id: account_id.to_owned(),
                 id: thread_id.to_owned(),
-                subject: subject.clone(),
+                subject: latest.subject.clone(),
                 participants: participants.join(", "),
-                latest_at: *latest_at,
+                latest_at: latest.sent_at,
                 message_count: rows.len() as i64,
                 is_unread,
                 is_starred,
@@ -752,13 +1056,13 @@ impl ThreadRepository {
         label_id: Option<&str>,
         cursor: Option<(i64, String)>,
         limit: i64,
-    ) -> Result<Vec<Thread>> {
-        let (cursor_at, cursor_id) = match cursor {
-            Some((at, id)) => (Some(at), Some(id)),
-            None => (None, None),
-        };
-        let mut statement = connection.prepare(
-            "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft
+    ) -> Result<Vec<ThreadListRow>> {
+        let cursor_sql = cursor
+            .as_ref()
+            .map_or("", |_| "AND (t.latest_at,t.id)<(?3,?4)");
+        let sql = format!(
+            "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,
+                    COALESCE((SELECT m.snippet FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1),'')
              FROM threads t
              WHERE t.account_id=?1
                -- Nested rather than a flat join ON PURPOSE. A flat join lets
@@ -780,18 +1084,89 @@ impl ThreadRepository {
                      WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id=?2
                    )
                ))
-               AND (?3 IS NULL OR t.latest_at<?3 OR (t.latest_at=?3 AND t.id<?4))
+               {cursor_sql}
              ORDER BY t.latest_at DESC, t.id DESC
-             LIMIT ?5",
-        )?;
-        let threads = statement
+             LIMIT ?5"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let (cursor_at, cursor_id) = match cursor {
+            Some((at, id)) => (Some(at), Some(id)),
+            None => (None, None),
+        };
+        let mut rows = statement
             .query_map(
                 params![account_id, label_id, cursor_at, cursor_id, limit],
-                thread,
+                |row| {
+                    Ok(ThreadListRow {
+                        thread: thread(row)?,
+                        snippet: row.get(10)?,
+                        label_indicators: Vec::new(),
+                    })
+                },
             )?
+            .collect::<Result<Vec<_>>>()?;
+        if rows.is_empty() {
+            return Ok(rows);
+        }
+
+        let positions: HashMap<String, usize> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row.thread.id.clone(), index))
             .collect();
-        threads
+        let mut all_labels = Vec::new();
+        for chunk in rows.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT m.thread_id,l.name
+                 FROM messages m
+                 CROSS JOIN message_labels ml
+                 CROSS JOIN labels l
+                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                   AND ml.account_id=m.account_id AND ml.message_id=m.id
+                   AND l.account_id=ml.account_id AND l.id=ml.label_id AND l.kind='user'"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters =
+                std::iter::once(account_id).chain(chunk.iter().map(|row| row.thread.id.as_str()));
+            all_labels.extend(
+                statement
+                    .query_map(rusqlite::params_from_iter(parameters), |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
+        let mut seen = HashSet::new();
+        for (thread_id, label) in all_labels {
+            if seen.insert((thread_id.clone(), label.clone())) {
+                let index = positions
+                    .get(&thread_id)
+                    .expect("label query only returns requested threads");
+                rows[*index].label_indicators.push(label);
+            }
+        }
+        for row in &mut rows {
+            row.label_indicators.sort();
+        }
+        Ok(rows)
     }
+}
+
+fn thread_message_row(row: &rusqlite::Row<'_>) -> Result<ThreadMessageRow> {
+    thread_message_row_offset(row, 0)
+}
+
+fn thread_message_row_offset(row: &rusqlite::Row<'_>, offset: usize) -> Result<ThreadMessageRow> {
+    Ok(ThreadMessageRow {
+        sender: row.get(offset)?,
+        subject: row.get(offset + 1)?,
+        sent_at: row.get(offset + 2)?,
+        has_attachments: row.get(offset + 3)?,
+        is_unread: row.get(offset + 4)?,
+        is_starred: row.get(offset + 5)?,
+        is_draft: row.get(offset + 6)?,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -832,12 +1207,16 @@ impl OperationRepository {
     /// and is safe to recover ordinarily via [`Self::pending_durable`].
     pub fn mark_interrupted_sends_uncertain(connection: &Connection) -> Result<Vec<String>> {
         let mut statement = connection.prepare(
-            "SELECT DISTINCT account_id FROM operations WHERE kind='send' AND status='active'",
+            "UPDATE operations
+             SET status='failed',error='May have been sent; retry manually',updated_at=strftime('%s','now')
+             WHERE kind='send' AND status='active'
+             RETURNING account_id",
         )?;
-        let accounts = statement
+        let accounts: HashSet<String> = statement
             .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>>>()?;
-        connection.execute("UPDATE operations SET status='failed', error='May have been sent; retry manually', updated_at=strftime('%s','now') WHERE kind='send' AND status='active'", [])?;
+            .collect::<Result<_>>()?;
+        let mut accounts: Vec<String> = accounts.into_iter().collect();
+        accounts.sort();
         Ok(accounts)
     }
     /// A draft interrupted mid-execution (crash/kill while `active`) is safe

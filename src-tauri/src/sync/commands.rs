@@ -409,32 +409,24 @@ pub async fn reply_context(
     reply_all: bool,
     forward: bool,
 ) -> Result<crate::compose::context::ReplyContext, String> {
-    let (message, roles, references) = string_try!(
+    let context = string_try!(
         storage
             .run(move |connection| {
-                let message = MessageRepository::get(connection, &account_id, &message_id)?
-                    .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-                let roles =
-                    MessageRepository::recipient_roles(connection, &account_id, &message_id)?;
-                let references = connection.query_row(
-                    "SELECT rfc_references FROM messages WHERE account_id=?1 AND id=?2",
-                    rusqlite::params![account_id, message_id],
-                    |row| row.get::<_, Option<String>>(0),
-                )?;
-                Ok((message, roles, references))
+                MessageRepository::compose_context(connection, &account_id, &message_id)?
+                    .ok_or(rusqlite::Error::QueryReturnedNoRows)
             })
             .await
     );
     if forward {
-        Ok(crate::compose::context::forward(&message))
+        Ok(crate::compose::context::forward(&context.message))
     } else {
         Ok(crate::compose::context::reply(
-            &message,
-            &roles.0,
-            &roles.1,
+            &context.message,
+            &context.recipient_roles.0,
+            &context.recipient_roles.1,
             &account_email,
             reply_all,
-            references.as_deref(),
+            context.references.as_deref(),
         ))
     }
 }
@@ -514,7 +506,7 @@ pub async fn list_threads(
 ) -> Result<ThreadPage, String> {
     let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
-    let mut threads = string_try!(
+    let mut rows = string_try!(
         storage
             .run(move |connection| {
                 ThreadRepository::list_paginated(
@@ -527,32 +519,19 @@ pub async fn list_threads(
             })
             .await
     );
-    let next_cursor = if threads.len() as i64 > limit {
-        threads.truncate(limit as usize);
-        threads.last().map(|thread| ThreadCursor {
-            latest_at: thread.latest_at,
-            id: thread.id.clone(),
+    let next_cursor = if rows.len() as i64 > limit {
+        rows.truncate(limit as usize);
+        rows.last().map(|row| ThreadCursor {
+            latest_at: row.thread.latest_at,
+            id: row.thread.id.clone(),
         })
     } else {
         None
     };
-    let items = string_try!(
-        storage
-            .run(move |connection| {
-                threads
-                    .into_iter()
-                    .map(|thread| {
-                        let (snippet, labels) = ThreadRepository::row_details(
-                            connection,
-                            &thread.account_id,
-                            &thread.id,
-                        )?;
-                        Ok(ThreadDto::from(thread).with_row_details(snippet, labels))
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .await
-    );
+    let items = rows
+        .into_iter()
+        .map(|row| ThreadDto::from(row.thread).with_row_details(row.snippet, row.label_indicators))
+        .collect();
     Ok(ThreadPage { items, next_cursor })
 }
 
@@ -566,7 +545,7 @@ pub async fn load_conversation(
     let (messages, thread_subject) = string_try!(
         storage
             .run(move |connection| {
-                let messages = MessageRepository::list_by_thread(
+                let messages = MessageRepository::list_conversation(
                     connection,
                     &account_for_read,
                     &thread_for_read,
@@ -581,30 +560,11 @@ pub async fn load_conversation(
     );
 
     let mut message_dtos = Vec::with_capacity(messages.len());
-    for message in messages {
-        let (account_for_labels, id_for_labels) = (account_id.clone(), message.id.clone());
-        let (account_for_parts, id_for_parts) = (account_id.clone(), message.id.clone());
-        let label_ids = string_try!(
-            storage
-                .run(move |connection| {
-                    MessageRepository::label_ids(connection, &account_for_labels, &id_for_labels)
-                })
-                .await
-        );
-        let (sanitized_html, remote_images_blocked) = match &message.html_body {
+    for stored in messages {
+        let (sanitized_html, remote_images_blocked) = match &stored.message.html_body {
             Some(html) => {
-                let inline_parts = string_try!(
-                    storage
-                        .run(move |connection| {
-                            MessageRepository::inline_parts(
-                                connection,
-                                &account_for_parts,
-                                &id_for_parts,
-                            )
-                        })
-                        .await
-                );
-                let cid_map: HashMap<String, CidPart> = inline_parts
+                let cid_map: HashMap<String, CidPart> = stored
+                    .inline_parts
                     .into_iter()
                     .map(|part| {
                         (
@@ -621,34 +581,13 @@ pub async fn load_conversation(
             }
             None => (None, false),
         };
-        let (account_for_roles, id_for_roles) = (account_id.clone(), message.id.clone());
-        let recipient_roles = string_try!(
-            storage
-                .run(move |connection| MessageRepository::recipient_roles(
-                    connection,
-                    &account_for_roles,
-                    &id_for_roles
-                ))
-                .await
-        );
-        let draft_id = string_try!(
-            storage
-                .run({
-                    let account_id = account_id.clone();
-                    let message_id = message.id.clone();
-                    move |connection| {
-                        MessageRepository::draft_id(connection, &account_id, &message_id)
-                    }
-                })
-                .await
-        );
         message_dtos.push(message_dto(
-            message,
-            recipient_roles,
-            label_ids,
+            stored.message,
+            stored.recipient_roles,
+            stored.label_ids,
             sanitized_html,
             remote_images_blocked,
-            draft_id,
+            stored.draft_id,
         ));
     }
 
@@ -702,19 +641,21 @@ pub async fn fetch_message_body<R: Runtime>(
     string_try!(
         storage
             .run(move |connection| {
+                let transaction = connection.unchecked_transaction()?;
                 MessageRepository::set_html_body(
-                    connection,
+                    &transaction,
                     &account_id,
                     &message_id,
                     html_body.as_deref(),
                     html_presence,
                 )?;
                 MessageRepository::replace_inline_parts(
-                    connection,
+                    &transaction,
                     &account_id,
                     &message_id,
                     &parts,
-                )
+                )?;
+                transaction.commit()
             })
             .await
     );
@@ -850,12 +791,16 @@ pub async fn mutate_threads<R: Runtime>(
     let client = engine.gmail_client(&account_id, token, base_url).await;
     let add: HashSet<String> = add.into_iter().collect();
     let remove: HashSet<String> = remove.into_iter().collect();
+    let drafts_by_thread =
+        super::mutations::draft_message_ids(engine.storage(), &account_id, &thread_ids).await?;
 
     let mut results = Vec::with_capacity(thread_ids.len());
     let mut tasks = tokio::task::JoinSet::new();
     for thread_id in thread_ids {
-        let drafts =
-            super::mutations::draft_message_ids(engine.storage(), &account_id, &thread_id).await?;
+        let drafts = drafts_by_thread
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default();
         if !drafts.is_empty() {
             if add != HashSet::from(["TRASH".to_owned()]) || !remove.is_empty() {
                 return Err("Draft messages cannot be modified; delete them instead.".into());

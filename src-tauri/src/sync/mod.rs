@@ -958,11 +958,9 @@ async fn full_sync_body(
         messages.extend(client.message_if_present(&message_ref.id).await?);
     }
     let added_count = messages.len() as u32;
-    let thread_ids: Vec<String> = messages
+    let thread_ids: HashSet<String> = messages
         .iter()
         .map(|message| message.thread_id.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
         .collect();
 
     tracing::info!(
@@ -975,31 +973,30 @@ async fn full_sync_body(
     let thread_ids_for_write = thread_ids.clone();
     storage
         .run(move |connection| {
+            let transaction = connection.unchecked_transaction()?;
             // Wiping and rebuilding (rather than diffing) is what makes this
             // "full" — it's shared by both initial sync (a no-op wipe, since
             // the account has no rows yet) and the D13 re-sync fallback
             // (where it also reconciles messages Gmail deleted while the
             // checkpoint was expired, which incremental delta application
             // alone cannot detect).
-            connection.execute("DELETE FROM messages WHERE account_id=?1", [&account_owned])?;
-            connection.execute("DELETE FROM threads WHERE account_id=?1", [&account_owned])?;
+            transaction.execute("DELETE FROM messages WHERE account_id=?1", [&account_owned])?;
+            transaction.execute("DELETE FROM threads WHERE account_id=?1", [&account_owned])?;
             for label in &gmail_labels {
-                LabelRepository::upsert(connection, &to_label(&account_owned, label))?;
+                LabelRepository::upsert(&transaction, &to_label(&account_owned, label))?;
             }
             for message in &messages {
-                write_message(connection, &account_owned, message)?;
+                write_message(&transaction, &account_owned, message)?;
             }
-            for thread_id in &thread_ids_for_write {
-                ThreadRepository::recompute(connection, &account_owned, thread_id)?;
-            }
-            Ok(())
+            ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
+            transaction.commit()
         })
         .await?;
 
     Ok(FullSyncOutcome {
         history_id: profile.history_id,
         added_count,
-        thread_ids,
+        thread_ids: thread_ids.into_iter().collect(),
     })
 }
 
@@ -1053,7 +1050,15 @@ async fn probe_inbox(
         .into_iter()
         .map(|reference| reference.id)
         .collect();
-    fetch_unknown(storage, client, account_id, candidates, already, "inbox probe").await
+    fetch_unknown(
+        storage,
+        client,
+        account_id,
+        candidates,
+        already,
+        "inbox probe",
+    )
+    .await
 }
 
 /// Fetches every candidate id that neither this run already holds
@@ -1081,13 +1086,7 @@ async fn fetch_unknown(
     let account_owned = account_id.to_owned();
     let unknown = storage
         .run(move |connection| {
-            let mut unknown = Vec::new();
-            for id in candidates {
-                if !MessageRepository::exists(connection, &account_owned, &id)? {
-                    unknown.push(id);
-                }
-            }
-            Ok(unknown)
+            MessageRepository::missing_ids(connection, &account_owned, candidates)
         })
         .await?;
     if unknown.is_empty() {
@@ -1221,20 +1220,25 @@ async fn incremental_body(
     let account_owned = account_id.to_owned();
     storage
         .run(move |connection| {
+            let transaction = connection.unchecked_transaction()?;
             for label in &gmail_labels {
-                LabelRepository::upsert(connection, &to_label(&account_owned, label))?;
+                LabelRepository::upsert(&transaction, &to_label(&account_owned, label))?;
             }
             let mut touched = HashSet::new();
             for message in &added_messages {
                 touched.insert(message.thread_id.clone());
-                write_message(connection, &account_owned, message)?;
+                write_message(&transaction, &account_owned, message)?;
             }
             for record in &records {
                 for change in &record.labels_added {
                     for label_id in &change.label_ids {
-                        LabelRepository::ensure_placeholder(connection, &account_owned, label_id)?;
+                        LabelRepository::ensure_placeholder(
+                            &transaction,
+                            &account_owned,
+                            label_id,
+                        )?;
                         MessageRepository::set_label_membership(
-                            connection,
+                            &transaction,
                             &account_owned,
                             &change.message.id,
                             label_id,
@@ -1246,7 +1250,7 @@ async fn incremental_body(
                 for change in &record.labels_removed {
                     for label_id in &change.label_ids {
                         MessageRepository::set_label_membership(
-                            connection,
+                            &transaction,
                             &account_owned,
                             &change.message.id,
                             label_id,
@@ -1256,7 +1260,7 @@ async fn incremental_body(
                     touched.insert(change.message.thread_id.clone());
                 }
                 for deleted in &record.messages_deleted {
-                    match MessageRepository::delete(connection, &account_owned, &deleted.id)? {
+                    match MessageRepository::delete(&transaction, &account_owned, &deleted.id)? {
                         Some(thread_id) => {
                             touched.insert(thread_id);
                         }
@@ -1266,10 +1270,8 @@ async fn incremental_body(
                     }
                 }
             }
-            for thread_id in &touched {
-                ThreadRepository::recompute(connection, &account_owned, thread_id)?;
-            }
-            Ok(())
+            ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
+            transaction.commit()
         })
         .await?;
 

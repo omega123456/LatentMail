@@ -20,3 +20,23 @@ it('loads the bundled Inter face when the browser supports it', async () => {
 
   await vi.waitFor(() => expect(add).toHaveBeenCalledWith('inter-face'));
 });
+
+it('keeps rendering when the bundled font cannot load', async () => {
+  const add = vi.fn();
+  class FailingFontFace {
+    load = vi.fn().mockRejectedValue(new Error('font unavailable'));
+  }
+  vi.stubGlobal('FontFace', FailingFontFace);
+  Object.defineProperty(document, 'fonts', { configurable: true, value: { add } });
+  vi.resetModules();
+  const { ThemeProvider } = await import('@/providers/ThemeProvider');
+
+  render(
+    <ThemeProvider>
+      <span>theme</span>
+    </ThemeProvider>,
+  );
+
+  await Promise.resolve();
+  expect(add).not.toHaveBeenCalled();
+});

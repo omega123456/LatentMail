@@ -1,5 +1,14 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use rusqlite::{params, Connection, Result};
+
+const UPSERT_CONTACT: &str =
+    "INSERT INTO contacts (account_id,address,display_name,frequency,last_seen_at) VALUES (?1,?2,?3,?4,?5)
+     ON CONFLICT(account_id,address) DO UPDATE SET
+       frequency=contacts.frequency+excluded.frequency,
+       last_seen_at=MAX(contacts.last_seen_at, excluded.last_seen_at),
+       display_name=CASE WHEN excluded.display_name IS NOT NULL AND ?6 >= contacts.last_seen_at THEN excluded.display_name ELSE contacts.display_name END";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contact {
@@ -21,13 +30,44 @@ pub fn observe(
         return Ok(());
     }
     connection.execute(
-        "INSERT INTO contacts (account_id,address,display_name,frequency,last_seen_at) VALUES (?1,?2,?3,1,?4)
-         ON CONFLICT(account_id,address) DO UPDATE SET
-           frequency=contacts.frequency+1,
-           last_seen_at=MAX(contacts.last_seen_at, excluded.last_seen_at),
-           display_name=CASE WHEN excluded.display_name IS NOT NULL AND excluded.last_seen_at >= contacts.last_seen_at THEN excluded.display_name ELSE contacts.display_name END",
-        params![account_id, address, display_name, seen_at],
+        UPSERT_CONTACT,
+        params![account_id, address, display_name, 1, seen_at, seen_at],
     )?;
+    Ok(())
+}
+
+pub fn observe_many(
+    connection: &Connection,
+    account_id: &str,
+    observations: &[(String, i64)],
+) -> Result<()> {
+    let mut contacts: HashMap<String, (Option<String>, i64, i64, i64)> = HashMap::new();
+    for (mailbox, seen_at) in observations {
+        let (display_name, address) = parse_mailbox(mailbox);
+        if address.is_empty() {
+            continue;
+        }
+        let contact = contacts
+            .entry(address)
+            .or_insert_with(|| (None, i64::MIN, 0, *seen_at));
+        contact.2 += 1;
+        contact.3 = contact.3.max(*seen_at);
+        if display_name.is_some() && *seen_at >= contact.1 {
+            contact.0 = display_name;
+            contact.1 = *seen_at;
+        }
+    }
+    let mut statement = connection.prepare(UPSERT_CONTACT)?;
+    for (address, (display_name, display_seen_at, frequency, last_seen_at)) in contacts {
+        statement.execute(params![
+            account_id,
+            address,
+            display_name,
+            frequency,
+            last_seen_at,
+            display_seen_at
+        ])?;
+    }
     Ok(())
 }
 

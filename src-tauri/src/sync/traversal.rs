@@ -183,9 +183,7 @@ pub async fn run_backfill_step(
                 touched.insert(message.thread_id.clone());
                 write_traversal_message(&transaction, &account_owned, message)?;
             }
-            for thread_id in &touched {
-                ThreadRepository::recompute(&transaction, &account_owned, thread_id)?;
-            }
+            ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
             // Cursor advance lives in the *same* transaction as the
             // batch's message/thread writes — the "one transaction per
             // batch" requirement is what makes checkpoint advancement
@@ -251,9 +249,7 @@ pub async fn fetch_and_persist(
                 touched.insert(message.thread_id.clone());
                 write_traversal_message(&transaction, &account_owned, message)?;
             }
-            for thread_id in &touched {
-                ThreadRepository::recompute(&transaction, &account_owned, thread_id)?;
-            }
+            ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
             transaction.commit()?;
             Ok(touched.into_iter().collect::<Vec<_>>())
         })

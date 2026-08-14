@@ -59,3 +59,37 @@ fn observe_now_wraps_observe_with_the_current_time() {
     assert_eq!(observed[0].address, "now@example.com");
     assert!((before..=after).contains(&observed[0].last_seen_at));
 }
+
+#[test]
+fn observe_many_coalesces_repeated_addresses_without_losing_recency() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "one".into(),
+            email: "one@example.com".into(),
+            display_name: "one".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    contacts::observe_many(
+        &connection,
+        "one",
+        &[
+            ("Old Name <person@example.com>".into(), 1),
+            ("New Name <PERSON@example.com>".into(), 2),
+            ("person@example.com".into(), 3),
+        ],
+    )
+    .unwrap();
+
+    let contact = contacts::lookup(&connection, "one", "person").unwrap();
+    assert_eq!(contact[0].frequency, 3);
+    assert_eq!(contact[0].last_seen_at, 3);
+    assert_eq!(contact[0].display_name.as_deref(), Some("New Name"));
+}

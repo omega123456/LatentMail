@@ -75,21 +75,17 @@ pub(super) async fn delete_draft(
     string_try!(client.delete_draft(&draft_id).await);
     let account = account_id.to_owned();
     let id = message_id.to_owned();
-    let thread_id = string_try!(
+    string_try!(
         storage
-            .run(move |connection| MessageRepository::delete(connection, &account, &id))
+            .run(move |connection| {
+                let transaction = connection.unchecked_transaction()?;
+                if let Some(thread_id) = MessageRepository::delete(&transaction, &account, &id)? {
+                    ThreadRepository::recompute(&transaction, &account, &thread_id)?;
+                }
+                transaction.commit()
+            })
             .await
     );
-    if let Some(thread_id) = thread_id {
-        let account = account_id.to_owned();
-        string_try!(
-            storage
-                .run(move |connection| ThreadRepository::recompute(
-                    connection, &account, &thread_id
-                ))
-                .await
-        );
-    }
     Ok(())
 }
 
@@ -132,31 +128,20 @@ async fn resolve_draft_id(
     Ok(draft_id)
 }
 
-/// Every message id in `thread_id` currently carrying the `DRAFT` label —
+/// Every message id in the requested threads currently carrying the `DRAFT` label —
 /// `sync::commands::mutate_threads`'s own check for whether a thread-level
 /// triage action is actually a draft deletion in disguise.
 pub(super) async fn draft_message_ids(
     storage: &Storage,
     account_id: &str,
-    thread_id: &str,
-) -> Result<Vec<String>, String> {
+    thread_ids: &[String],
+) -> Result<HashMap<String, Vec<String>>, String> {
     let account = account_id.to_owned();
-    let thread = thread_id.to_owned();
+    let threads = thread_ids.to_vec();
     let ids = string_try!(
         storage
             .run(move |connection| {
-                MessageRepository::list_by_thread(connection, &account, &thread)?
-                    .into_iter()
-                    .map(|message| {
-                        let labels =
-                            MessageRepository::label_ids(connection, &account, &message.id)?;
-                        Ok(labels
-                            .iter()
-                            .any(|label| label == "DRAFT")
-                            .then_some(message.id))
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(|ids| ids.into_iter().flatten().collect())
+                MessageRepository::draft_message_ids_by_thread(connection, &account, &threads)
             })
             .await
     );
@@ -431,47 +416,69 @@ async fn execute_flush(
     surviving: HashMap<String, EntityAccumulator>,
 ) -> Result<(), QueueError> {
     let mut any_failed = false;
-    // Entities are independent (different threads, different message rows),
-    // so their message lists are resolved concurrently rather than one
-    // storage round trip at a time — a bulk action over hundreds of threads
-    // would otherwise pay for every round trip serially.
-    let mut resolve_tasks = tokio::task::JoinSet::new();
-    for (_entity_key, entity) in surviving {
-        let storage = storage.clone();
-        let account = account_id.clone();
-        resolve_tasks.spawn(async move {
-            let target = entity
-                .target
-                .clone()
-                .expect("mutation target is set on submission");
-            let result = storage
-                .run(move |connection| match target {
-                    MutationTarget::Thread(thread_id) => {
-                        MessageRepository::list_by_thread(connection, &account, &thread_id)
-                            .map(|messages| (thread_id, messages))
-                    }
-                    MutationTarget::Message(message_id) => {
-                        MessageRepository::get(connection, &account, &message_id).and_then(
-                            |message| {
-                                message
-                                    .map(|message| (message.thread_id.clone(), vec![message]))
-                                    .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
-                            },
-                        )
-                    }
-                })
-                .await;
-            (result, entity)
-        });
-    }
+    let entities: Vec<(MutationTarget, EntityAccumulator)> = surviving
+        .into_values()
+        .map(|entity| {
+            (
+                entity
+                    .target
+                    .clone()
+                    .expect("mutation target is set on submission"),
+                entity,
+            )
+        })
+        .collect();
+    let thread_ids = entities
+        .iter()
+        .filter_map(|(target, _)| match target {
+            MutationTarget::Thread(id) => Some(id.clone()),
+            MutationTarget::Message(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let message_ids = entities
+        .iter()
+        .filter_map(|(target, _)| match target {
+            MutationTarget::Message(id) => Some(id.clone()),
+            MutationTarget::Thread(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let account = account_id.clone();
+    let loaded = storage
+        .run(move |connection| {
+            Ok((
+                MessageRepository::list_by_threads(connection, &account, &thread_ids)?,
+                MessageRepository::get_many(connection, &account, &message_ids)?,
+            ))
+        })
+        .await;
     let mut resolved: Vec<ResolvedEntity> = Vec::new();
-    while let Some(outcome) = resolve_tasks.join_next().await {
-        let (result, entity) = outcome.expect("resolve task panicked");
-        match result {
-            Ok((thread_id, messages)) => resolved.push((thread_id, messages, entity)),
-            Err(error) => {
+    match loaded {
+        Ok((mut threads, mut messages)) => {
+            for (target, entity) in entities {
+                let resolved_data = match target {
+                    MutationTarget::Thread(thread_id) => threads
+                        .remove(&thread_id)
+                        .map(|messages| (thread_id, messages)),
+                    MutationTarget::Message(message_id) => messages
+                        .remove(&message_id)
+                        .map(|message| (message.thread_id.clone(), vec![message])),
+                };
+                if let Some((thread_id, messages)) = resolved_data {
+                    resolved.push((thread_id, messages, entity));
+                    continue;
+                }
                 any_failed = true;
-                let message = SyncError::from(error).to_string();
+                for request in entity.requests {
+                    let _ = request.reply.send(Err(SyncError::Failed(
+                        "mutation target is no longer available".into(),
+                    )));
+                }
+            }
+        }
+        Err(error) => {
+            any_failed = true;
+            let message = SyncError::from(error).to_string();
+            for (_, entity) in entities {
                 for request in entity.requests {
                     let _ = request.reply.send(Err(SyncError::Failed(message.clone())));
                 }
@@ -565,38 +572,47 @@ async fn write_entity(
     messages: &[Message],
     delta: &LabelDelta,
 ) -> Result<(), SyncError> {
+    let mut updates = Vec::with_capacity(messages.len());
     for message in messages {
         let updated = client.message(&message.id).await?;
-        let account = account_id.to_owned();
-        let id = message.id.clone();
-        let additions = delta.additions.clone();
-        let removals = delta.removals.clone();
-        storage
-            .run(move |connection| {
+        updates.push((message.id.clone(), updated.history_id));
+    }
+    let account = account_id.to_owned();
+    let thread = thread_id.to_owned();
+    let additions = delta.additions.clone();
+    let removals = delta.removals.clone();
+    storage
+        .run(move |connection| {
+            let transaction = connection.unchecked_transaction()?;
+            for (id, history_id) in updates {
                 MessageRepository::write_mutation_history(
-                    connection,
+                    &transaction,
                     &account,
                     std::slice::from_ref(&id),
-                    updated.history_id,
+                    history_id,
                 )?;
                 for label in &additions {
                     MessageRepository::set_label_membership(
-                        connection, &account, &id, label, true,
+                        &transaction,
+                        &account,
+                        &id,
+                        label,
+                        true,
                     )?;
                 }
                 for label in &removals {
                     MessageRepository::set_label_membership(
-                        connection, &account, &id, label, false,
+                        &transaction,
+                        &account,
+                        &id,
+                        label,
+                        false,
                     )?;
                 }
-                Ok(())
-            })
-            .await?;
-    }
-    let account = account_id.to_owned();
-    let thread = thread_id.to_owned();
-    storage
-        .run(move |connection| ThreadRepository::recompute(connection, &account, &thread))
+            }
+            ThreadRepository::recompute(&transaction, &account, &thread)?;
+            transaction.commit()
+        })
         .await?;
     Ok(())
 }

@@ -2,9 +2,10 @@ mod repositories;
 
 pub use repositories::{
     truncate_body, Account, AccountRepository, ComposeDraftMetadata,
-    ComposeDraftMetadataRepository, HtmlPresence, InlinePart, Label, LabelColor, LabelNameError,
-    LabelRepository, Message, MessageRepository, Operation, OperationRepository, SettingRepository,
-    Thread, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationMessage, HtmlPresence,
+    InlinePart, Label, LabelColor, LabelNameError, LabelRepository, Message, MessageRepository,
+    Operation, OperationRepository, ReconciliationMessage, SettingRepository, Thread,
+    ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 use std::{
@@ -21,19 +22,20 @@ use thiserror::Error;
 /// single write lock while readers proceed under WAL.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Applied to every file-backed connection: foreign keys on, WAL journaling
-/// (a persistent database-level property, set once here rather than per
-/// transaction) and a busy timeout so a momentary lock conflict waits
-/// instead of erroring immediately. WAL is what lets a read complete while a
-/// write transaction is in flight — the default rollback journal blocks
-/// readers for the duration of a writer's transaction. In-memory databases
-/// cannot use WAL (see [`Storage::in_memory`]), so this is never called for
-/// them.
+/// Applied to every file-backed connection: foreign keys and a busy timeout
+/// so a momentary lock conflict waits instead of erroring immediately.
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
-    connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     Ok(())
+}
+
+/// WAL is persistent database state, so set it once when opening the storage
+/// rather than issuing the journal-mode PRAGMA on every short-lived task
+/// connection. In-memory databases cannot use WAL.
+fn configure_database(connection: &Connection) -> rusqlite::Result<()> {
+    configure(connection)?;
+    connection.pragma_update(None, "journal_mode", "WAL")
 }
 
 mod embedded {
@@ -62,7 +64,8 @@ impl Storage {
         let storage = Self {
             path: Arc::new(path.as_ref().to_path_buf()),
         };
-        let mut connection = storage.connection()?;
+        let mut connection = Connection::open(storage.path.as_ref())?;
+        configure_database(&connection)?;
         embedded::migrations::runner().run(&mut connection)?;
         Ok(storage)
     }

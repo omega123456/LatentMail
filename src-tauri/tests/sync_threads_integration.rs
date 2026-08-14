@@ -104,6 +104,55 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     for (id, at) in [("t1", 1), ("t2", 2), ("t3", 3)] {
         ThreadRepository::upsert(&connection, &thread(id, at, id == "t2")).unwrap();
     }
+    LabelRepository::upsert(
+        &connection,
+        &Label {
+            account_id: "account".into(),
+            id: "Label_Project".into(),
+            name: "Project".into(),
+            kind: "user".into(),
+            color: None,
+            message_count: 2,
+            unread_count: 0,
+        },
+    )
+    .unwrap();
+    let latest = Message {
+        account_id: "account".into(),
+        id: "m2".into(),
+        thread_id: "t2".into(),
+        rfc_message_id: None,
+        sender: "alice@example.com".into(),
+        recipients: "me@example.com".into(),
+        subject: "Subject t2".into(),
+        sent_at: 2,
+        snippet: "latest snippet".into(),
+        html_body: None,
+        plain_body: None,
+        has_attachments: false,
+        is_unread: false,
+        is_starred: false,
+        history_id: 2,
+        truncated_body: None,
+        html_presence: HtmlPresence::Absent,
+    };
+    let older = Message {
+        id: "m2-old".into(),
+        sent_at: 1,
+        snippet: "old snippet".into(),
+        ..latest.clone()
+    };
+    for message in [older, latest] {
+        MessageRepository::write_full_state(&connection, &message).unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            "account",
+            &message.id,
+            "Label_Project",
+            true,
+        )
+        .unwrap();
+    }
     drop(connection);
     let application = app();
     application.manage(storage);
@@ -115,6 +164,8 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     assert_eq!(first_page.items[0].id, "t3");
     assert_eq!(first_page.items[1].id, "t2");
     assert!(first_page.items[1].has_draft);
+    assert_eq!(first_page.items[1].snippet, "latest snippet");
+    assert_eq!(first_page.items[1].label_indicators, ["Project"]);
     let cursor = first_page.next_cursor.clone().expect("more pages remain");
     assert_eq!(cursor.id, "t2");
 
@@ -188,6 +239,17 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     )
     .unwrap();
     MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    MessageRepository::set_recipient_roles(
+        &connection,
+        "account",
+        "m1",
+        "me@example.com",
+        "cc@example.com",
+        "bcc@example.com",
+        None,
+    )
+    .unwrap();
+    MessageRepository::set_draft_id(&connection, "account", "m1", "draft-1").unwrap();
     MessageRepository::replace_inline_parts(
         &connection,
         "account",
@@ -211,6 +273,10 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     assert_eq!(conversation.messages.len(), 1);
     let message = &conversation.messages[0];
     assert_eq!(message.label_ids, vec!["INBOX".to_owned()]);
+    assert_eq!(message.to_recipients, ["me@example.com"]);
+    assert_eq!(message.cc_recipients, ["cc@example.com"]);
+    assert_eq!(message.bcc_recipients, ["bcc@example.com"]);
+    assert_eq!(message.draft_id.as_deref(), Some("draft-1"));
     assert_eq!(
         message.recipients,
         vec!["me@example.com".to_owned(), "cc@example.com".to_owned()]
