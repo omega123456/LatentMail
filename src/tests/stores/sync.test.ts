@@ -1,5 +1,5 @@
 import { act } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useSyncStore } from '@/stores/sync';
 import { ipc } from '@/tests/ipc-mock';
 
@@ -41,6 +41,7 @@ describe('useSyncStore', () => {
   });
 
   it('triggers a real sync via trigger_sync and applies the returned status', async () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     ipc.override('trigger_sync', {
       accountId: 'account-1',
       state: 'idle',
@@ -50,6 +51,7 @@ describe('useSyncStore', () => {
     await act(() => useSyncStore.getState().triggerSync('account-1'));
     expect(useSyncStore.getState().lastSynced).toEqual(new Date('2026-08-11T10:00:00Z'));
     expect(useSyncStore.getState().refreshing).toBe(false);
+    log.mockRestore();
   });
 
   it('surfaces a sync error from the status DTO', async () => {

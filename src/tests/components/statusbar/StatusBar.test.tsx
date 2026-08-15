@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from '@/components/statusbar/StatusBar';
 import { ipc } from '@/tests/ipc-mock';
@@ -98,6 +98,7 @@ describe('StatusBar', () => {
   });
 
   it('enables the refresh control for an active account and triggers a real sync', async () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const user = userEvent.setup();
     ipc.override('read_sync_status', {
       accountId: 'account-1',
@@ -118,5 +119,6 @@ describe('StatusBar', () => {
     await waitFor(() =>
       expect(screen.getByText(/Synced/)).toHaveAttribute('title', 'Aug 11, 2026, 10:00 AM'),
     );
+    log.mockRestore();
   });
 });

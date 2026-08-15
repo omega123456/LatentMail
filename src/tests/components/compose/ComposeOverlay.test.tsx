@@ -265,6 +265,7 @@ describe('ComposeOverlay', () => {
 
   it('reports a send failure inline and dispatches again from its retry', async () => {
     const user = userEvent.setup();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const send = vi.fn(() => Promise.reject(new Error('offline')));
     ipc.override('send_compose_draft', send);
     renderOverlay();
@@ -277,5 +278,6 @@ describe('ComposeOverlay', () => {
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     // The session stays open — a failed send never discards the draft.
     expect(useComposeStore.getState().session).not.toBeNull();
+    error.mockRestore();
   });
 });

@@ -92,6 +92,7 @@ describe('compose autosave', () => {
   });
 
   it('saveNow is a no-op without qualifying content and reports failures', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { result } = renderHook(() => useComposeAutosave());
     act(() => {
       useComposeStore.getState().setSubject('');
@@ -107,5 +108,6 @@ describe('compose autosave', () => {
       draftStatus: 'failed',
       lifecycleError: 'Couldn’t save draft.',
     });
+    error.mockRestore();
   });
 });

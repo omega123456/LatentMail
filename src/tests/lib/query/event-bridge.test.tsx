@@ -1,6 +1,6 @@
 import { act, render, waitFor } from '@testing-library/react';
 import { useQueryClient } from '@tanstack/react-query';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBridge } from '@/lib/query/event-bridge';
 import { queryKeys } from '@/lib/query/keys';
 import { QueryProvider } from '@/providers/QueryProvider';
@@ -15,6 +15,8 @@ function SpyClient({ onReady }: { onReady: (client: ReturnType<typeof useQueryCl
 }
 
 describe('EventBridge', () => {
+  beforeEach(() => vi.spyOn(console, 'info').mockImplementation(() => undefined));
+
   afterEach(() =>
     act(() =>
       useSyncStore.setState({

@@ -11,7 +11,7 @@ describe('BodyFrame', () => {
     expect(screen.getByText('Plain body')).toBeInTheDocument();
   });
 
-  it('sanitizes HTML and opens clicked links through centralized IPC', () => {
+  it('sanitizes HTML and opens clicked links through centralized IPC', async () => {
     const openExternal = vi.fn();
     ipc.override('open_external_url', openExternal);
     render(
@@ -24,7 +24,10 @@ describe('BodyFrame', () => {
     expect(frame).toHaveAttribute('sandbox', 'allow-same-origin');
     expect(frame.getAttribute('srcdoc')).not.toContain('<script>');
     frame.contentDocument?.write('<a href="https://example.com">Safe link</a>');
-    act(() => fireEvent.load(frame));
+    await act(async () => {
+      fireEvent.load(frame);
+      await Promise.resolve();
+    });
     const link = frame.contentDocument?.querySelector('a');
     expect(link).not.toBeNull();
     link?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
