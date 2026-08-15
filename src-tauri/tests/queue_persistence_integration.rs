@@ -217,3 +217,39 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn uncertain_send_event_names_the_account() {
+    let event = latentmail_lib::queue::uncertain_send_event("account");
+    assert_eq!(
+        serde_json::to_value(event).unwrap(),
+        serde_json::json!({ "accountId": "account" })
+    );
+}
+
+#[test]
+fn recovered_queue_operation_rebuilds_send_work_and_ignores_other_kinds() {
+    let send = Operation {
+        id: "send-1".into(),
+        account_id: "account".into(),
+        lane: "background".into(),
+        kind: "send".into(),
+        entity_key: "draft:d1".into(),
+        payload: "{}".into(),
+        status: "queued".into(),
+        attempts: 2,
+        next_attempt_at: None,
+        error: None,
+        created_at: 1,
+        updated_at: 1,
+    };
+    let rebuilt = recovered_queue_operation(&send).unwrap();
+    assert_eq!(rebuilt.kind, OperationKind::Send);
+    assert_eq!(rebuilt.lane, Lane::Background);
+    assert_eq!(rebuilt.attempts, 2);
+    assert!(recovered_queue_operation(&Operation {
+        kind: "label".into(),
+        ..send
+    })
+    .is_none());
+}

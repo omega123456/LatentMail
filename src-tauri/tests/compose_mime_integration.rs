@@ -88,11 +88,13 @@ fn nests_related_and_mixed_parts_when_needed() {
         filename: "logo.png".into(),
         mime_type: "image/png".into(),
         bytes: vec![1, 2],
-        content_id: Some("logo".into()),
+        content_id: None,
     });
     let related = String::from_utf8(assemble(&message).unwrap()).unwrap();
     assert!(related.contains("multipart/related"));
-    assert!(related.contains("Content-ID: <logo>"));
+    // No Content-ID on the part: assembly falls back to the filename so the
+    // related part is still addressable.
+    assert!(related.contains("Content-ID: <logo.png>"));
     assert!(related.contains("cid:logo"));
     message.attachments.push(Part {
         filename: "notes.txt".into(),

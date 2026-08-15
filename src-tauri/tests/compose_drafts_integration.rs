@@ -303,6 +303,32 @@ async fn compose_save_and_send_commands_persist_their_respective_durable_modes()
     )
     .unwrap();
     assert_eq!(staged["size"], 3);
+    let mut with_part = request(None);
+    with_part["attachments"] = serde_json::json!([{
+        "id": staged["id"],
+        "filename": "inline.png",
+        "mimeType": "image/png",
+        "contentId": "inline-1",
+    }]);
+    assert!(invoke(
+        &webview,
+        "save_compose_draft",
+        serde_json::json!({ "draft": with_part }),
+    )
+    .is_ok());
+    let mut missing_part = request(None);
+    missing_part["attachments"] = serde_json::json!([{
+        "id": "never-staged",
+        "filename": "gone.txt",
+        "mimeType": "text/plain",
+        "contentId": null,
+    }]);
+    assert!(invoke(
+        &webview,
+        "save_compose_draft",
+        serde_json::json!({ "draft": missing_part }),
+    )
+    .is_err());
     invoke(
         &webview,
         "release_staged_attachment",

@@ -186,6 +186,49 @@ async fn draft_deletion_uses_the_drafts_endpoint_without_a_label_mutation() {
         .all(|request| request.url.path() != "/users/me/messages/batchModify"));
 }
 
+#[tokio::test]
+async fn draft_deletion_errors_when_gmail_lists_no_draft_for_the_message() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "drafts": [] })))
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    save_refresh_token("account", "refresh").unwrap();
+
+    let (engine, directory) = seeded_engine();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let app = app();
+    app.manage(storage);
+    app.manage(AuthService::new(app.state::<Storage>().inner().clone()));
+    app.manage(engine);
+
+    let error = delete_draft(
+        app.handle().clone(),
+        app.state(),
+        app.state(),
+        app.state(),
+        "account".into(),
+        "message-1".into(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("Gmail has no draft for message message-1"));
+}
+
 #[test]
 fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
     let runtime = tokio::runtime::Runtime::new().unwrap();

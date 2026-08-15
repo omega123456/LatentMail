@@ -6,8 +6,8 @@ use latentmail_lib::ipc::{
 use latentmail_lib::queue::QueueEngine;
 use latentmail_lib::settings::SettingsService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository, Storage,
-    Thread, ThreadRepository,
+    Account, AccountRepository, HtmlPresence, InlinePart, LabelRepository, Message,
+    MessageRepository, Storage, Thread, ThreadRepository,
 };
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
 use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
@@ -1319,4 +1319,211 @@ fn staging_commands_stage_and_release_through_real_ipc() {
         }),
     )
     .is_ok());
+}
+
+/// Reply/forward context, contact lookup, HTML conversation sanitization,
+/// and traversal-status reconciliation of independent cursor rows — the
+/// success paths the command-wrapper sweeps only hit as missing-row errors.
+#[tokio::test]
+async fn reply_contacts_html_conversation_and_traversal_status_round_trip_through_ipc() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let auth_service = AuthService::new(storage.clone());
+    let account_id = auth_service
+        .save_account("me@example.com".into(), "refresh-token".into(), None)
+        .await
+        .unwrap()
+        .id;
+
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: account_id.clone(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    LabelRepository::ensure_placeholder(&connection, &account_id, "INBOX").unwrap();
+    ThreadRepository::upsert(
+        &connection,
+        &Thread {
+            account_id: account_id.clone(),
+            id: "thread-1".into(),
+            subject: "Hello".into(),
+            participants: "Alice <alice@example.com>".into(),
+            latest_at: 1,
+            message_count: 1,
+            is_unread: false,
+            is_starred: false,
+            has_attachments: false,
+            has_draft: false,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: account_id.clone(),
+            id: "message-1".into(),
+            thread_id: "thread-1".into(),
+            rfc_message_id: Some("<m1@example.com>".into()),
+            sender: "Alice <alice@example.com>".into(),
+            recipients: "me@example.com".into(),
+            subject: "Hello".into(),
+            sent_at: 1,
+            snippet: "hi".into(),
+            html_body: Some(
+                "<p>hi <img src=\"cid:logo\"></p><img src=\"https://tracker.example/pixel.png\">"
+                    .into(),
+            ),
+            plain_body: Some("hi".into()),
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Present,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_recipient_roles(
+        &connection,
+        &account_id,
+        "message-1",
+        "me@example.com, bob@example.com",
+        "cc@example.com",
+        "",
+        Some("<prev@example.com>"),
+    )
+    .unwrap();
+    MessageRepository::replace_inline_parts(
+        &connection,
+        &account_id,
+        "message-1",
+        &[InlinePart {
+            content_id: "logo".into(),
+            mime_type: "image/png".into(),
+            bytes: b"img".to_vec(),
+        }],
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
+        .unwrap();
+    latentmail_lib::contacts::observe(
+        &connection,
+        &account_id,
+        "Alice <alice@example.com>",
+        chrono::Utc::now().timestamp(),
+    )
+    .unwrap();
+    latentmail_lib::storage::TraversalCursorRepository::upsert(
+        &connection,
+        &latentmail_lib::storage::TraversalCursor {
+            account_id: account_id.clone(),
+            kind: latentmail_lib::storage::TraversalKind::Backfill,
+            position: None,
+            discovered_count: 20,
+            persisted_count: 20,
+            completed: true,
+            last_advanced_at: 1_700_000_100,
+            resumed: false,
+        },
+    )
+    .unwrap();
+    latentmail_lib::storage::TraversalCursorRepository::upsert(
+        &connection,
+        &latentmail_lib::storage::TraversalCursor {
+            account_id: account_id.clone(),
+            kind: latentmail_lib::storage::TraversalKind::Reconciliation,
+            position: Some("token".into()),
+            discovered_count: 4,
+            persisted_count: 2,
+            completed: false,
+            last_advanced_at: 1_700_000_000,
+            resumed: true,
+        },
+    )
+    .unwrap();
+    drop(connection);
+
+    let registry = WorkRegistry::new();
+    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
+    let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let app = app();
+    app.manage(storage);
+    app.manage(auth_service);
+    app.manage(engine);
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let reply = invoke(
+        &webview,
+        "reply_context",
+        serde_json::json!({
+            "accountId": account_id,
+            "messageId": "message-1",
+            "accountEmail": "me@example.com",
+            "replyAll": true,
+            "forward": false,
+        }),
+    )
+    .unwrap();
+    assert_eq!(reply["subject"], "Re: Hello");
+    assert_eq!(reply["to"][0], "Alice <alice@example.com>");
+    assert!(reply["cc"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "cc@example.com"));
+
+    let forwarded = invoke(
+        &webview,
+        "reply_context",
+        serde_json::json!({
+            "accountId": account_id,
+            "messageId": "message-1",
+            "accountEmail": "me@example.com",
+            "replyAll": false,
+            "forward": true,
+        }),
+    )
+    .unwrap();
+    assert_eq!(forwarded["subject"], "Fwd: Hello");
+    assert!(forwarded["targetThreadId"].is_null());
+
+    let contacts = invoke(
+        &webview,
+        "lookup_contacts",
+        serde_json::json!({ "accountId": account_id, "query": "al" }),
+    )
+    .unwrap();
+    assert_eq!(contacts[0]["address"], "alice@example.com");
+    assert_eq!(contacts[0]["displayName"], "Alice");
+
+    let conversation = invoke(
+        &webview,
+        "load_conversation",
+        serde_json::json!({ "accountId": account_id, "threadId": "thread-1" }),
+    )
+    .unwrap();
+    assert_eq!(conversation["messages"][0]["htmlPresence"], "present");
+    assert_eq!(conversation["messages"][0]["remoteImagesBlocked"], true);
+
+    let status = invoke(
+        &webview,
+        "read_traversal_status",
+        serde_json::json!({ "accountId": account_id }),
+    )
+    .unwrap();
+    assert_eq!(status["state"], "complete");
+    assert_eq!(status["kind"], "backfill");
+    assert_eq!(status["discoveredCount"], 20);
 }

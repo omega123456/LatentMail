@@ -19,7 +19,7 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
             "color": { "textColor": color.text_color, "backgroundColor": color.background_color }
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "Label_1", "name": "Clients", "type": "user",
+            "id": "Label_1", "name": "Clients",
             "color": { "textColor": color.text_color, "backgroundColor": color.background_color }
         })))
         .mount(&server)
@@ -54,6 +54,7 @@ async fn create_rename_recolor_and_delete_round_trip_against_the_fake_server() {
 
     let created = client.create_label("Clients", Some(&color)).await.unwrap();
     assert_eq!(created.id, "Label_1");
+    assert_eq!(created.kind, "user");
     assert_eq!(
         created.color.as_ref().unwrap().background_color,
         color.background_color
