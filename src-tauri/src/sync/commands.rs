@@ -749,6 +749,9 @@ pub async fn trigger_sync<R: Runtime>(
     let engine = Arc::clone(&engine);
     tracing::info!(target: "sync", "{account_id}: manual sync requested");
     let result = engine.run_sync(&account_id, client).await;
+    if result.is_err() {
+        auth.invalidate_access_token(&account_id);
+    }
     let status = engine.status(&account_id).await;
     string_try!(result);
     Ok(status)

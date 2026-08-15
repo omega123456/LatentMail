@@ -80,6 +80,7 @@ export function EventBridge() {
 
     subscribe('sync://complete', (event) => {
       useSyncStore.setState({ syncState: 'idle', lastSynced: new Date(), error: undefined });
+      if (!event.changed) return;
       // Threads, label counts and the seeded sync status all changed —
       // refresh the visible list without a manual reload (acceptance
       // criterion 7).

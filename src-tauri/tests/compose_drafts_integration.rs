@@ -468,14 +468,38 @@ async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
     }
 
     for (command, body) in [
-        ("create_label", serde_json::json!({ "accountId": "account", "name": "Label", "colorId": "invalid" })),
-        ("rename_label", serde_json::json!({ "accountId": "account", "labelId": "missing", "name": "Label" })),
-        ("recolor_label", serde_json::json!({ "accountId": "account", "labelId": "missing", "colorId": "invalid" })),
-        ("delete_label", serde_json::json!({ "accountId": "account", "labelId": "missing" })),
-        ("star_thread", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
-        ("unstar_thread", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
-        ("mark_thread_read", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
-        ("mark_thread_unread", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
+        (
+            "create_label",
+            serde_json::json!({ "accountId": "account", "name": "Label", "colorId": "invalid" }),
+        ),
+        (
+            "rename_label",
+            serde_json::json!({ "accountId": "account", "labelId": "missing", "name": "Label" }),
+        ),
+        (
+            "recolor_label",
+            serde_json::json!({ "accountId": "account", "labelId": "missing", "colorId": "invalid" }),
+        ),
+        (
+            "delete_label",
+            serde_json::json!({ "accountId": "account", "labelId": "missing" }),
+        ),
+        (
+            "star_thread",
+            serde_json::json!({ "accountId": "account", "threadId": "missing" }),
+        ),
+        (
+            "unstar_thread",
+            serde_json::json!({ "accountId": "account", "threadId": "missing" }),
+        ),
+        (
+            "mark_thread_read",
+            serde_json::json!({ "accountId": "account", "threadId": "missing" }),
+        ),
+        (
+            "mark_thread_unread",
+            serde_json::json!({ "accountId": "account", "threadId": "missing" }),
+        ),
     ] {
         assert!(invoke(&webview, command, body).is_err(), "{command}");
     }
@@ -852,7 +876,9 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         .await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1/attachments/a1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": "bm90ZXM" })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": "bm90ZXM" })),
+        )
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
@@ -1038,7 +1064,10 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     .unwrap();
     assert_eq!(restored["html"], "");
     assert_eq!(restored["quoteHtml"], "");
-    assert_eq!(restored["references"], serde_json::json!(["<one>", "<two>"]));
+    assert_eq!(
+        restored["references"],
+        serde_json::json!(["<one>", "<two>"])
+    );
 
     invoke(
         &webview,
@@ -1460,9 +1489,11 @@ async fn discard_racing_an_active_create_deletes_the_returned_draft() {
     .unwrap();
     wait_for(|| queue.summary().pending == 0 && queue.summary().active == 0).await;
 
-    assert!(MessageRepository::get(&storage.connection().unwrap(), "account", "m1")
-        .unwrap()
-        .is_none());
+    assert!(
+        MessageRepository::get(&storage.connection().unwrap(), "account", "m1")
+            .unwrap()
+            .is_none()
+    );
     assert!(staging.snapshot_manifest("op-race").is_err());
 }
 

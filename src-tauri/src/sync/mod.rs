@@ -365,6 +365,7 @@ pub struct SyncCompleteEvent {
     pub account_id: String,
     pub history_id: i64,
     pub added_count: u32,
+    pub changed: bool,
 }
 /// Named emitter for `sync://complete`.
 pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
@@ -408,7 +409,7 @@ pub struct SyncEngine {
     /// yet terminal). Guards [`SyncEngine::enqueue_backfill`] against
     /// starting a second concurrent chain for the same account — the
     /// scheduler calls it unconditionally on every tick, and a fresh
-    /// backfill routinely spans more than one `sync_interval_minutes`
+    /// backfill routinely spans more than one `sync_interval_seconds`
     /// window. This is *in addition to* the queue's own entity-lock
     /// serialization (`queue::mod`), not a replacement for it: that lock
     /// only serializes operations once they run, it does not stop a second
@@ -476,7 +477,14 @@ impl SyncEngine {
         );
     }
 
-    async fn set_idle(&self, account_id: &str, history_id: i64, added_count: u32, now: i64) {
+    async fn set_idle(
+        &self,
+        account_id: &str,
+        history_id: i64,
+        added_count: u32,
+        now: i64,
+        changed: bool,
+    ) {
         {
             let mut status = self.status.lock().await;
             let entry = status.entry(account_id.to_owned()).or_default();
@@ -490,6 +498,7 @@ impl SyncEngine {
                 account_id: account_id.to_owned(),
                 history_id,
                 added_count,
+                changed,
             },
         );
     }
@@ -595,7 +604,7 @@ impl SyncEngine {
     pub async fn enqueue_backfill(&self, account_id: &str, client: GmailClient) {
         // Guard against a second concurrent chain: the scheduler calls this
         // unconditionally every tick, and a fresh backfill routinely
-        // outlives one `sync_interval_minutes` window. If a chain is
+        // outlives one `sync_interval_seconds` window. If a chain is
         // already live for this account, skip — the live chain's own
         // recursive `enqueue_backfill_step` calls will keep resuming until
         // it's done. See `active_backfills`'s doc comment.
@@ -670,10 +679,12 @@ impl SyncEngine {
                     history_id,
                     added_count,
                     thread_ids,
+                    changed,
                 } => Ok(FullSyncOutcome {
                     history_id,
                     added_count,
                     thread_ids,
+                    changed,
                 }),
                 IncrementalOutcome::Expired => {
                     // ponytail: this still enqueues reconciliation onto the
@@ -734,6 +745,7 @@ impl SyncEngine {
                     result.history_id,
                     result.added_count,
                     result.thread_ids,
+                    result.changed,
                 )
                 .await
             }
@@ -752,6 +764,7 @@ impl SyncEngine {
         history_id: i64,
         added_count: u32,
         thread_ids: Vec<String>,
+        changed: bool,
     ) -> Result<(), SyncError> {
         self.storage
             .run({
@@ -767,7 +780,7 @@ impl SyncEngine {
             "{account_id}: complete — checkpoint now {history_id}, {added_count} new message(s) across {} thread(s)",
             thread_ids.len(),
         );
-        self.set_idle(account_id, history_id, added_count, now)
+        self.set_idle(account_id, history_id, added_count, now, changed)
             .await;
         if added_count > 0 {
             emit_new_mail(
@@ -937,6 +950,7 @@ pub(crate) struct FullSyncOutcome {
     history_id: i64,
     added_count: u32,
     thread_ids: Vec<String>,
+    changed: bool,
 }
 
 async fn full_sync_body(
@@ -997,6 +1011,7 @@ async fn full_sync_body(
         history_id: profile.history_id,
         added_count,
         thread_ids: thread_ids.into_iter().collect(),
+        changed: true,
     })
 }
 
@@ -1111,6 +1126,7 @@ enum IncrementalOutcome {
         history_id: i64,
         added_count: u32,
         thread_ids: Vec<String>,
+        changed: bool,
     },
     Expired,
 }
@@ -1212,6 +1228,7 @@ async fn incremental_body(
         }
     }
     let added_count = added_messages.len() as u32;
+    let changed = !records.is_empty() || !added_messages.is_empty();
     let added_thread_ids: HashSet<String> = added_messages
         .iter()
         .map(|message| message.thread_id.clone())
@@ -1279,6 +1296,7 @@ async fn incremental_body(
         history_id: final_history_id,
         added_count,
         thread_ids: added_thread_ids.into_iter().collect(),
+        changed,
     })
 }
 
@@ -1361,6 +1379,10 @@ impl SyncScheduler {
     /// interval that was already in progress finishes.
     pub fn set_interval(&self, interval: Duration) {
         let _ = self.interval_tx.send(interval);
+    }
+
+    pub fn interval(&self) -> Duration {
+        *self.interval_tx.borrow()
     }
 }
 
@@ -1496,8 +1518,13 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
     let settings = app.state::<SettingsService>().inner().clone();
     tauri::async_runtime::spawn(async move {
         let preferences = settings.read().await.unwrap_or_default();
-        let interval =
-            Duration::from_secs(u64::from(preferences.sync_interval_minutes.max(1)) * 60);
+        // ponytail: no jitter, no poll-level backoff: a persistently failing
+        // account retries every interval. The existing per-request retry and
+        // the 3-strike reauth flag are the only brakes.
+        let interval = Duration::from_secs(
+            u64::from(preferences.sync_interval_seconds)
+                .max(crate::settings::MIN_SYNC_INTERVAL_SECS),
+        );
         let app_for_manage = app.clone();
         let scheduler = SyncScheduler::start(interval, preferences.sync_on_startup, move || {
             let app = app.clone();
@@ -1507,6 +1534,8 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                 let Ok(accounts) = auth.accounts().await else {
                     return;
                 };
+                // ponytail: all accounts are polled serially in one tick —
+                // fine for a handful, not for dozens.
                 for account in accounts {
                     if account.needs_reauthentication {
                         continue;
@@ -1528,6 +1557,8 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                         // `SyncEngine::enqueue_backfill` for why this is
                         // cheap to call unconditionally.
                         engine.enqueue_backfill(&account.id, client).await;
+                    } else {
+                        auth.invalidate_access_token(&account.id);
                     }
                 }
             }

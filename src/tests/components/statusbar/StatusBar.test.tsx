@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from '@/components/statusbar/StatusBar';
+import { EventBridge } from '@/lib/query/event-bridge';
 import { ipc } from '@/tests/ipc-mock';
 import { useSyncStore } from '@/stores/sync';
 
@@ -22,6 +23,7 @@ function setStatus(
       syncState: state,
       lastSynced: new Date('2026-08-11T10:00:00Z'),
       error: state === 'error' ? 'Gmail is unavailable' : undefined,
+      refreshing: false,
     }),
   );
 }
@@ -32,7 +34,7 @@ describe('StatusBar', () => {
     const { rerender } = renderStatusBar(<StatusBar accountCount={2} />);
     expect(await screen.findByText(/Synced/)).toHaveAttribute('title', 'Aug 11, 2026, 10:00 AM');
     setStatus('syncing');
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
     setStatus('error');
     expect(screen.getByText('Sync failed')).toHaveAttribute('title', 'Gmail is unavailable');
     setStatus('idle', { pending: 3, active: 0, failed: 0, done: 0, paused: true });
@@ -119,6 +121,47 @@ describe('StatusBar', () => {
     await waitFor(() =>
       expect(screen.getByText(/Synced/)).toHaveAttribute('title', 'Aug 11, 2026, 10:00 AM'),
     );
+    log.mockRestore();
+  });
+
+  it('does not show Syncing… on a background tick; a manual refresh does', async () => {
+    const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    let finish: ((value: {
+      accountId: string;
+      state: 'idle';
+      lastSyncedAt: number;
+      lastError: null;
+    }) => void) | undefined;
+    ipc.override(
+      'trigger_sync',
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderStatusBar(
+      <>
+        <EventBridge />
+        <StatusBar accountCount={1} accountId="account-1" />
+      </>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('sync://progress', expect.any(Function)),
+    );
+    act(() => ipc.emit('sync://progress', { accountId: 'account-1', state: 'syncing' }));
+    expect(screen.queryByText('Syncing…')).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Refresh mail' }));
+    expect(await screen.findByText('Syncing…')).toBeInTheDocument();
+    act(() => {
+      finish!({
+        accountId: 'account-1',
+        state: 'idle',
+        lastSyncedAt: Date.parse('2026-08-11T10:00:00Z'),
+        lastError: null,
+      });
+    });
+    await waitFor(() => expect(screen.queryByText('Syncing…')).not.toBeInTheDocument());
     log.mockRestore();
   });
 });

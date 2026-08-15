@@ -10,5 +10,5 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   readerHeight: 40,
   syncOnStartup: true,
   showUnreadCounts: true,
-  syncIntervalMinutes: 5,
+  syncIntervalSeconds: 30,
 };

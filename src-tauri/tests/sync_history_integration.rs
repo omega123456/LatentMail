@@ -18,6 +18,8 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
+type FiredEvents = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
 fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Message {
     Message {
         account_id: "account".into(),
@@ -40,12 +42,7 @@ fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Messag
     }
 }
 
-fn engine_with_seed() -> (
-    Arc<SyncEngine>,
-    Storage,
-    tempfile::TempDir,
-    Arc<Mutex<Vec<String>>>,
-) {
+fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEvents) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
@@ -98,8 +95,11 @@ fn engine_with_seed() -> (
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let events_for_sink = Arc::clone(&events);
-    let sink: EventSink = Arc::new(move |name, _payload| {
-        events_for_sink.lock().unwrap().push(name.to_owned());
+    let sink: EventSink = Arc::new(move |name, payload| {
+        events_for_sink
+            .lock()
+            .unwrap()
+            .push((name.to_owned(), payload));
     });
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
@@ -194,8 +194,16 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     assert_eq!(account.history_id, Some(50));
 
     let fired = events.lock().unwrap().clone();
-    assert!(fired.contains(&"sync://complete".to_owned()));
-    assert!(fired.contains(&"mail://new".to_owned()));
+    assert!(fired.iter().any(|(name, _)| name == "sync://complete"));
+    assert!(fired.iter().any(|(name, _)| name == "mail://new"));
+    let complete = fired
+        .iter()
+        .find(|(name, _)| name == "sync://complete")
+        .map(|(_, payload)| payload);
+    assert_eq!(
+        complete.and_then(|payload| payload.get("changed")),
+        Some(&serde_json::json!(true))
+    );
 }
 
 /// Gmail's history stream is only eventually consistent with delivery: a
@@ -284,7 +292,11 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
             .subject,
         "Existing"
     );
-    assert!(events.lock().unwrap().contains(&"mail://new".to_owned()));
+    assert!(events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(name, _)| name == "mail://new"));
     // The checkpoint must NOT adopt the response's `historyId` of 70: the
     // run applied no history record, so jumping there would drop every
     // record between 40 and 70 that the stream had not yet materialized —
@@ -305,7 +317,16 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
         .unwrap();
-    assert!(!events.lock().unwrap().contains(&"mail://new".to_owned()));
+    let second = events.lock().unwrap().clone();
+    assert!(!second.iter().any(|(name, _)| name == "mail://new"));
+    let complete = second
+        .iter()
+        .find(|(name, _)| name == "sync://complete")
+        .map(|(_, payload)| payload);
+    assert_eq!(
+        complete.and_then(|payload| payload.get("changed")),
+        Some(&serde_json::json!(false))
+    );
 }
 
 /// Gmail emits history records whose change is carried only by `messages`,

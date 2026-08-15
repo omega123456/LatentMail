@@ -143,7 +143,7 @@ export interface Settings {
   readerHeight: number;
   syncOnStartup: boolean;
   showUnreadCounts: boolean;
-  syncIntervalMinutes: number;
+  syncIntervalSeconds: number;
 }
 
 export type SettingKey = keyof Settings;
@@ -332,6 +332,7 @@ export interface SyncCompleteEvent {
   accountId: string;
   historyId: number;
   addedCount: number;
+  changed: boolean;
 }
 
 export interface NewMailEvent {

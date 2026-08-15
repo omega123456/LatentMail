@@ -40,7 +40,7 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     readerHeight: 40,
     syncOnStartup: true,
     showUnreadCounts: true,
-    syncIntervalMinutes: 5,
+    syncIntervalSeconds: 30,
   },
   write_setting: undefined,
   pause_queue: { pending: 0, active: 0, failed: 0, done: 0, paused: true },

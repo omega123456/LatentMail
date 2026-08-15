@@ -30,7 +30,7 @@ describe('layout store', () => {
       readerHeight: 60,
       syncOnStartup: false,
       showUnreadCounts: false,
-      syncIntervalMinutes: 10,
+      syncIntervalSeconds: 30,
     });
     const store = await loadStore();
     store.getState().setRoute('settings');

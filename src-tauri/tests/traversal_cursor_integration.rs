@@ -615,7 +615,7 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
 
 /// Scheduler-tick dedupe: `SyncEngine::enqueue_backfill` is called
 /// unconditionally on every scheduler tick (`start_scheduler`), and a fresh
-/// backfill routinely outlives one `sync_interval_minutes` window. A second
+/// backfill routinely outlives one `sync_interval_seconds` window. A second
 /// call while a chain is already live for the account must be a no-op — not
 /// a second, interleaved chain racing the first — and the guard must not
 /// wedge future backfills once the in-flight chain actually finishes.

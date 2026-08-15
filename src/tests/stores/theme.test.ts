@@ -79,7 +79,7 @@ describe('theme store', () => {
       readerHeight: 40,
       syncOnStartup: true,
       showUnreadCounts: true,
-      syncIntervalMinutes: 5,
+      syncIntervalSeconds: 30,
     });
     const { useThemeStore } = await loadThemeStore();
     const writes: Array<{ key: string; value: unknown }> = [];

@@ -258,7 +258,10 @@ fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
             .unwrap();
         assert_eq!(part.read().unwrap().bytes, bytes, "{id} survived the merge");
     }
-    assert!(!early.path.exists(), "the session owner is gone once merged");
+    assert!(
+        !early.path.exists(),
+        "the session owner is gone once merged"
+    );
     assert!(staging
         .part(
             "account",

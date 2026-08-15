@@ -8,6 +8,9 @@ use crate::storage::{SettingRepository, Storage, StorageError};
 
 const WINDOW_STATE_KEY: &str = "windowState";
 
+/// ponytail: 15-second floor is arbitrary; it exists to stop a bad setting melting quota.
+pub const MIN_SYNC_INTERVAL_SECS: u64 = 15;
+
 macro_rules! string_try {
     ($result:expr) => {
         match $result {
@@ -34,7 +37,7 @@ pub struct Settings {
     pub reader_height: u8,
     pub sync_on_startup: bool,
     pub show_unread_counts: bool,
-    pub sync_interval_minutes: u32,
+    pub sync_interval_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -82,7 +85,7 @@ impl Default for Settings {
             reader_height: 40,
             sync_on_startup: true,
             show_unread_counts: true,
-            sync_interval_minutes: 5,
+            sync_interval_seconds: 30,
         }
     }
 }
@@ -149,7 +152,7 @@ impl Settings {
             "readerHeight" => set_value(&mut self.reader_height, value),
             "syncOnStartup" => set_value(&mut self.sync_on_startup, value),
             "showUnreadCounts" => set_value(&mut self.show_unread_counts, value),
-            "syncIntervalMinutes" => set_value(&mut self.sync_interval_minutes, value),
+            "syncIntervalSeconds" => set_value(&mut self.sync_interval_seconds, value),
             _ => false,
         }
     }
@@ -182,16 +185,18 @@ pub async fn write_setting<R: Runtime>(
 /// preference takes effect without a restart. Currently only the sync
 /// interval qualifies; everything else is read on demand.
 fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
-    if key != "syncIntervalMinutes" {
+    if key != "syncIntervalSeconds" {
         return;
     }
-    let (Some(minutes), Some(scheduler)) = (
-        value.as_u64(),
+    let (Some(seconds), Some(scheduler)) = (
+        value.as_u64().and_then(|value| u32::try_from(value).ok()),
         app.try_state::<std::sync::Arc<crate::sync::SyncScheduler>>(),
     ) else {
         return;
     };
-    scheduler.set_interval(std::time::Duration::from_secs(minutes.max(1) * 60));
+    scheduler.set_interval(std::time::Duration::from_secs(
+        u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
+    ));
 }
 
 pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsService) {

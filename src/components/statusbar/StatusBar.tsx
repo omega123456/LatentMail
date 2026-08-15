@@ -68,7 +68,7 @@ function LeftZone({ accountId }: { accountId: string | null }) {
 }
 
 function ProgressZone({ accountId }: { accountId: string | null }) {
-  const syncing = useSyncStore((state) => state.syncState === 'syncing');
+  const refreshing = useSyncStore((state) => state.refreshing);
   const traversal = useTraversalStatusQuery(accountId);
   const status = traversal.data;
   if (status?.state === 'backfilling') {
@@ -87,7 +87,7 @@ function ProgressZone({ accountId }: { accountId: string | null }) {
         <span>{`Reconciling · ${status.persistedCount.toLocaleString()} / ${status.discoveredCount.toLocaleString()}`}</span>
       </div>
     );
-  return syncing ? (
+  return refreshing ? (
     <div className="flex items-center gap-stack-gap-sm">
       <Loader2 aria-hidden="true" size={16} className="animate-spin" />
       <span>Syncing…</span>

@@ -54,10 +54,68 @@ describe('EventBridge', () => {
     act(() => ipc.emit('sync://progress', { accountId: 'account-1', state: 'syncing' }));
     expect(useSyncStore.getState().syncState).toBe('syncing');
     act(() =>
-      ipc.emit('sync://complete', { accountId: 'account-1', historyId: 42, addedCount: 3 }),
+      ipc.emit('sync://complete', {
+        accountId: 'account-1',
+        historyId: 42,
+        addedCount: 3,
+        changed: true,
+      }),
     );
     expect(useSyncStore.getState().syncState).toBe('idle');
     expect(useSyncStore.getState().lastSynced).toBeInstanceOf(Date);
+  });
+
+  it('updates lastSynced on an unchanged tick without invalidating thread queries', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('sync://complete', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() =>
+      ipc.emit('sync://complete', {
+        accountId: 'account-1',
+        historyId: 42,
+        addedCount: 0,
+        changed: false,
+      }),
+    );
+    expect(useSyncStore.getState().syncState).toBe('idle');
+    expect(useSyncStore.getState().lastSynced).toBeInstanceOf(Date);
+    expect(useSyncStore.getState().error).toBeUndefined();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('invalidates threads, labels and sync status when a tick reports changes', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('sync://complete', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() =>
+      ipc.emit('sync://complete', {
+        accountId: 'account-1',
+        historyId: 42,
+        addedCount: 3,
+        changed: true,
+      }),
+    );
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.threadsForAccount('account-1'),
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.syncStatus('account-1') });
   });
 
   it('invalidates the accounts query on account state changes, so the reauth banner appears live', async () => {

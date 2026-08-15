@@ -191,9 +191,11 @@ async fn draft_deletion_errors_when_gmail_lists_no_draft_for_the_message() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+            ),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))

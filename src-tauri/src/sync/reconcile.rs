@@ -316,6 +316,7 @@ pub async fn run(
         history_id: history_checkpoint,
         added_count: new_ids.len() as u32,
         thread_ids,
+        changed: true,
     })
 }
 

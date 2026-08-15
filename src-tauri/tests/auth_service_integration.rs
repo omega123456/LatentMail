@@ -169,6 +169,92 @@ async fn refresh_access_token_succeeds_against_a_mock_token_endpoint() {
 }
 
 #[tokio::test]
+async fn refresh_access_token_caches_within_expiry_and_skips_tokens_shorter_than_the_skew() {
+    let server = MockServer::start().await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    let (service, _directory) = service_with_storage();
+    let application = app();
+    let handle = application.handle().clone();
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "cached-access-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    save_refresh_token("cached-account", "stored-refresh-token").unwrap();
+    let first = service
+        .refresh_access_token(&handle, "cached-account")
+        .await
+        .unwrap();
+    let second = service
+        .refresh_access_token(&handle, "cached-account")
+        .await
+        .unwrap();
+    assert_eq!(first, "cached-access-token");
+    assert_eq!(second, first);
+    service.invalidate_access_token("cached-account");
+    let third = service
+        .refresh_access_token(&handle, "cached-account")
+        .await
+        .unwrap();
+    assert_eq!(third, "cached-access-token");
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "default-lifetime-token",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    save_refresh_token("default-expiry-account", "stored-refresh-token").unwrap();
+    let first = service
+        .refresh_access_token(&handle, "default-expiry-account")
+        .await
+        .unwrap();
+    let second = service
+        .refresh_access_token(&handle, "default-expiry-account")
+        .await
+        .unwrap();
+    assert_eq!(first, "default-lifetime-token");
+    assert_eq!(second, first);
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "short-lived-token",
+            "token_type": "Bearer",
+            "expires_in": 120,
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    save_refresh_token("short-lived-account", "stored-refresh-token").unwrap();
+    let first = service
+        .refresh_access_token(&handle, "short-lived-account")
+        .await
+        .unwrap();
+    let second = service
+        .refresh_access_token(&handle, "short-lived-account")
+        .await
+        .unwrap();
+    assert_eq!(first, "short-lived-token");
+    assert_eq!(second, first);
+}
+
+#[tokio::test]
 async fn refresh_access_token_marks_reauthentication_after_three_consecutive_failures() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

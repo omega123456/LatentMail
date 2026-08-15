@@ -71,6 +71,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ("readerHeight", serde_json::json!(55)),
         ("syncOnStartup", serde_json::json!(false)),
         ("showUnreadCounts", serde_json::json!(false)),
+        ("syncIntervalSeconds", serde_json::json!(45)),
     ] {
         write_setting(app.handle().clone(), app.state(), key.into(), value)
             .await
@@ -96,6 +97,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
     assert_eq!(settings.reader_height, 55);
     assert!(!settings.sync_on_startup);
     assert!(!settings.show_unread_counts);
+    assert_eq!(settings.sync_interval_seconds, 45);
 }
 
 #[tokio::test]
@@ -183,17 +185,18 @@ fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window(
 #[tokio::test]
 async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     let (app, _directory) = app_with_service();
-    app.manage(latentmail_lib::sync::SyncScheduler::start(
+    let scheduler = latentmail_lib::sync::SyncScheduler::start(
         std::time::Duration::from_secs(300),
         false,
         || async {},
-    ));
+    );
+    app.manage(std::sync::Arc::clone(&scheduler));
 
     write_setting(
         app.handle().clone(),
         app.state(),
-        "syncIntervalMinutes".into(),
-        serde_json::json!(15),
+        "syncIntervalSeconds".into(),
+        serde_json::json!(30),
     )
     .await
     .unwrap();
@@ -202,9 +205,20 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
         read_settings(app.state())
             .await
             .unwrap()
-            .sync_interval_minutes,
-        15
+            .sync_interval_seconds,
+        30
     );
+    assert_eq!(scheduler.interval(), std::time::Duration::from_secs(30));
+
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "syncIntervalSeconds".into(),
+        serde_json::json!(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(scheduler.interval(), std::time::Duration::from_secs(15));
 }
 
 /// Before the scheduler has started (or in any app that never managed one),
@@ -217,7 +231,7 @@ async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() 
     write_setting(
         app.handle().clone(),
         app.state(),
-        "syncIntervalMinutes".into(),
+        "syncIntervalSeconds".into(),
         serde_json::json!(20),
     )
     .await
@@ -227,7 +241,7 @@ async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() 
         read_settings(app.state())
             .await
             .unwrap()
-            .sync_interval_minutes,
+            .sync_interval_seconds,
         20
     );
 }

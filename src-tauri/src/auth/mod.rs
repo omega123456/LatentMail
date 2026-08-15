@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use oauth2::{
     basic::BasicClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
@@ -63,10 +64,15 @@ pub fn client_secret() -> Option<ClientSecret> {
 #[cfg(not(feature = "test-utils"))]
 const KEYCHAIN_SERVICE: &str = "com.latentmail.refresh-token";
 
+const ACCESS_TOKEN_EXPIRY_SKEW: ChronoDuration = ChronoDuration::minutes(5);
+
+type AccessTokenCache = HashMap<String, (String, DateTime<Utc>)>;
+
 #[derive(Clone)]
 pub struct AuthService {
     storage: Storage,
     refresh_failures: Arc<Mutex<HashMap<String, u8>>>,
+    access_tokens: Arc<Mutex<AccessTokenCache>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +103,7 @@ impl AuthService {
         Self {
             storage,
             refresh_failures: Arc::new(Mutex::new(HashMap::new())),
+            access_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -226,11 +233,28 @@ impl AuthService {
         }
     }
 
+    pub fn invalidate_access_token(&self, account_id: &str) {
+        if let Ok(mut tokens) = self.access_tokens.lock() {
+            tokens.remove(account_id);
+        }
+    }
+
     pub async fn refresh_access_token<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         account_id: &str,
     ) -> Result<String, String> {
+        {
+            let tokens = self
+                .access_tokens
+                .lock()
+                .map_err(|_| "refresh lock poisoned".to_owned())?;
+            if let Some((token, expiry)) = tokens.get(account_id) {
+                if Utc::now() + ACCESS_TOKEN_EXPIRY_SKEW < *expiry {
+                    return Ok(token.clone());
+                }
+            }
+        }
         let result = async {
             let mut client = BasicClient::new(ClientId::new(client_id()?))
                 .set_auth_type(AuthType::RequestBody)
@@ -246,15 +270,24 @@ impl AuthService {
                 .request_async(&reqwest::Client::new())
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(token.access_token().secret().to_owned())
+            let lifetime = token
+                .expires_in()
+                .and_then(|std_dur| ChronoDuration::from_std(std_dur).ok())
+                .unwrap_or(ChronoDuration::seconds(3600));
+            let expiry = Utc::now() + lifetime;
+            Ok((token.access_token().secret().to_owned(), expiry))
         }
         .await;
-        if result.is_ok() {
+        if let Ok((access, expiry)) = &result {
+            self.access_tokens
+                .lock()
+                .map_err(|_| "refresh lock poisoned".to_owned())?
+                .insert(account_id.to_owned(), (access.clone(), *expiry));
             self.refresh_failures
                 .lock()
                 .map_err(|_| "refresh lock poisoned".to_owned())?
                 .remove(account_id);
-            return result;
+            return Ok(access.clone());
         }
         let failed = {
             let mut failures = self
@@ -269,7 +302,7 @@ impl AuthService {
             self.mark_needs_reauthentication(app, account_id.to_owned())
                 .await?;
         }
-        result
+        result.map(|(access, _)| access)
     }
 }
 
