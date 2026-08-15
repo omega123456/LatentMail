@@ -1,7 +1,27 @@
-import { act, render, waitFor } from '@testing-library/react';
-import { createRef } from 'react';
+import type { Editor } from '@tiptap/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { createRef, useState, type RefObject } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { BodyEditor, type BodyEditorHandle } from '@/components/compose/BodyEditor';
+import { EditorToolbar } from '@/components/compose/EditorToolbar';
+
+/** The toolbar drives the real editor here rather than a stub, so the list
+ * controls are exercised end to end — command through rendered markup. */
+function ComposerHarness({ bodyRef }: { bodyRef: RefObject<BodyEditorHandle | null> }) {
+  const [editor, setEditor] = useState<Editor | null>(null);
+  return (
+    <>
+      <BodyEditor
+        ref={bodyRef}
+        value="<p>Hello</p>"
+        onChange={() => {}}
+        onSelectionChange={(next) => setEditor(next ?? null)}
+      />
+      <EditorToolbar editor={editor} onLink={() => {}} />
+    </>
+  );
+}
 
 describe('BodyEditor', () => {
   it('mounts and inserts an authorized inline preview, reporting changes and selection', async () => {
@@ -48,6 +68,21 @@ describe('BodyEditor', () => {
     );
     await waitFor(() => expect(onSelectionChange).toHaveBeenCalled());
   });
+
+  it.each([
+    ['Bullet List', '<ul class="list-disc ps-6">'],
+    ['Numbered List', '<ol class="list-decimal ps-6">'],
+  ])(
+    'renders %s markers on the list node, which preflight would otherwise strip',
+    async (label, expectedTag) => {
+      const user = userEvent.setup();
+      const ref = createRef<BodyEditorHandle>();
+      render(<ComposerHarness bodyRef={ref} />);
+      await waitFor(() => expect(screen.getByRole('button', { name: label })).toBeEnabled());
+      await user.click(screen.getByRole('button', { name: label }));
+      expect(ref.current?.html()).toContain(expectedTag);
+    },
+  );
 
   it('exposes an imperative focus method for focus-on-open behaviour', () => {
     const ref = createRef<BodyEditorHandle>();

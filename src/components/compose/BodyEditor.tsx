@@ -25,7 +25,17 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
     const [isEmpty, setIsEmpty] = useState(true);
     const editor = useEditor({
       extensions: [
-        StarterKit.configure({ link: false, underline: false }),
+        // Tailwind's preflight strips list markers and indentation from
+        // `ul`/`ol`, so a toggled list would render identically to a
+        // paragraph. The utilities ride on the nodes themselves — the
+        // styling rules allow no stylesheet rule or arbitrary variant to
+        // reach inside the editor's content.
+        StarterKit.configure({
+          link: false,
+          underline: false,
+          bulletList: { HTMLAttributes: { class: 'list-disc ps-6' } },
+          orderedList: { HTMLAttributes: { class: 'list-decimal ps-6' } },
+        }),
         Underline,
         Link.configure({ openOnClick: false, autolink: true }),
         Image,
