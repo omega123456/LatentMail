@@ -119,7 +119,9 @@ export function ConversationList({
     previousRows.current = rows;
     previousHeight.current = parent?.scrollHeight ?? 0;
   }, [rows]);
-  const rowHeight = density === 'compact' ? 44 : density === 'comfortable' ? 56 : 72;
+  // Only a first-paint estimate — rows size themselves from their own padding
+  // and content (like the design), and `measureElement` corrects this below.
+  const rowHeight = density === 'compact' ? 48 : density === 'comfortable' ? 68 : 88;
   const virtualizer = useMailVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -289,6 +291,8 @@ export function ConversationList({
           {visible.map((item) => (
             <div
               key={item.key}
+              data-index={item.index}
+              ref={virtualizer.measureElement}
               className="absolute left-0 top-0 w-full"
               style={{ transform: `translateY(${item.start}px)` }}
             >

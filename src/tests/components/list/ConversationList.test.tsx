@@ -55,7 +55,10 @@ describe('ConversationList', () => {
       'comfortable',
     );
     expect(screen.queryByText(/finalized slides/)).not.toBeInTheDocument();
-    await user.click(screen.getByLabelText('Cycle conversation density'));
+    const densityButton = screen.getByLabelText('Cycle conversation density');
+    expect(densityButton.querySelector('svg')).toHaveClass('lucide-rows-3');
+    await user.click(densityButton);
+    expect(densityButton.querySelector('svg')).toHaveClass('lucide-rows-2');
     expect(screen.getAllByTestId('conversation-row')[0]).toHaveAttribute(
       'data-density',
       'spacious',

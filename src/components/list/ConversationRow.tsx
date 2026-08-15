@@ -48,7 +48,6 @@ export function ConversationRow({
 }: Props) {
   const compact = density === 'compact';
   const spacious = density === 'spacious';
-  const height = compact ? 'h-row-compact' : spacious ? 'h-row-spacious' : 'h-row-comfortable';
   // The single-active (keyboard-cursor/open) highlight and the
   // multi-selection treatment must never render simultaneously.
   const showActive = active && !multiSelectActive;
@@ -104,7 +103,7 @@ export function ConversationRow({
         data-density={density}
         data-active={showActive || undefined}
         data-selected={selected || undefined}
-        className={`relative mb-1 flex shrink-0 items-center gap-2 rounded border p-3 transition-colors ${height} ${stateClasses}`}
+        className={`relative mb-1 flex shrink-0 items-center gap-2 rounded border p-3 transition-colors ${stateClasses}`}
       >
         {selected && (
           <span
@@ -116,10 +115,12 @@ export function ConversationRow({
           aria-label={conversation.unread ? 'Unread' : 'Read'}
           className={`absolute left-2 top-4 h-2 w-2 rounded-full ${conversation.unread ? 'bg-primary dark:bg-dark-primary' : 'bg-transparent'}`}
         />
+        {/* `after:inset-0` stretches the open control's hit area over the
+            whole row while keeping one real button for keyboard/AT. */}
         <button
           aria-label={`Open ${conversation.subject}`}
           onClick={onOpen}
-          className="flex min-w-0 flex-1 flex-col gap-1 pl-4 text-left focus-visible:outline-2 focus-visible:outline-primary"
+          className="flex min-w-0 flex-1 flex-col gap-1 pl-4 text-left after:absolute after:inset-0 focus-visible:outline-2 focus-visible:outline-primary"
         >
           <span className="flex w-full min-w-0 items-baseline justify-between">
             <span
@@ -182,7 +183,7 @@ export function ConversationRow({
                 : `Star ${conversation.subject}`
             }
             onClick={onStar}
-            className={`shrink-0 rounded-sm p-1 focus-visible:outline-2 focus-visible:outline-primary ${conversation.starred ? 'text-star dark:text-dark-star' : 'text-secondary dark:text-dark-secondary'}`}
+            className={`relative z-10 shrink-0 rounded-sm p-1 focus-visible:outline-2 focus-visible:outline-primary ${conversation.starred ? 'text-star dark:text-dark-star' : 'text-secondary dark:text-dark-secondary'}`}
           >
             <Star size={18} fill={conversation.starred ? 'currentColor' : 'none'} />
           </button>
