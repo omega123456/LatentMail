@@ -280,3 +280,30 @@ fn recovery_cleanup_tolerates_an_absent_operations_directory_and_missing_release
     staging.release_snapshot("already-gone").unwrap();
     staging.release_owner("account", "already-gone").unwrap();
 }
+
+#[test]
+fn staging_reports_missing_sources_and_unknown_parts() {
+    let directory = tempfile::tempdir().unwrap();
+    let staging = Staging::new(directory.path().join("staged"));
+
+    assert!(staging
+        .stage_path(
+            "account",
+            "draft",
+            &directory.path().join("missing.txt"),
+            "part",
+            "text/plain".into(),
+            None,
+        )
+        .is_err());
+    assert!(staging
+        .part(
+            "account",
+            &["draft"],
+            "missing",
+            "missing.txt".into(),
+            "text/plain".into(),
+            None,
+        )
+        .is_err());
+}

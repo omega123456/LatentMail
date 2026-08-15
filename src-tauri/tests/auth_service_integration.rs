@@ -558,3 +558,17 @@ fn reconnecting_an_email_updates_its_existing_account() {
         vec![reconnected]
     );
 }
+
+#[tokio::test]
+async fn auth_validation_handles_missing_codes_tokens_and_local_part_fallbacks() {
+    assert!(latentmail_lib::auth::parse_callback("/?state=expected", "expected").is_err());
+    assert!(latentmail_lib::auth::parse_callback("not a callback", "expected").is_err());
+    assert!(latentmail_lib::auth::load_refresh_token("unknown-account").is_err());
+
+    let (service, _directory) = service_with_storage();
+    let account = service
+        .save_account("local-only".into(), "refresh".into(), None)
+        .await
+        .unwrap();
+    assert_eq!(account.display_name, "local-only");
+}

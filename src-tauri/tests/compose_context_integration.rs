@@ -1,5 +1,6 @@
+use chrono::{DateTime, Utc};
 use latentmail_lib::{
-    compose::context::{forward, reply},
+    compose::context::{display_quote, forward, reply},
     storage::{HtmlPresence, Message},
 };
 
@@ -51,4 +52,35 @@ fn reply_and_forward_preserve_their_distinct_threading_contracts() {
             && forwarded.references.is_empty()
     );
     assert_eq!(forwarded.subject, "Fwd: re: Hello");
+}
+
+#[test]
+fn reply_context_normalizes_self_replies_and_display_quotes() {
+    let mut original = message("Me <ME@example.com>", "Hello");
+    original.rfc_message_id = None;
+    original.sent_at = DateTime::<Utc>::from_timestamp(0, 0).unwrap().timestamp();
+    original.plain_body = Some("One & <two>\nthree".into());
+
+    let reply = reply(
+        &original,
+        "ME@example.com, Other <OTHER@example.com>, other@example.com",
+        "copy@example.com",
+        "me@example.com",
+        false,
+        None,
+    );
+    assert_eq!(reply.to, vec!["Other <OTHER@example.com>"]);
+    assert!(reply.cc.is_empty());
+    assert!(reply.references.is_empty());
+    assert_eq!(reply.subject, "Re: Hello");
+    assert_eq!(
+        reply.display_quote.unwrap().html,
+        "<p>One &amp; &lt;two&gt;<br>three</p>"
+    );
+
+    original.html_body = Some("<script>bad()</script><p>safe</p>".into());
+    assert_eq!(display_quote(&original).unwrap().html, "<p>safe</p>");
+    original.html_body = None;
+    original.plain_body = None;
+    assert!(display_quote(&original).is_none());
 }

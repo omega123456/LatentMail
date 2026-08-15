@@ -11,12 +11,13 @@ use latentmail_lib::{
     auth::AuthService,
     compose::{
         drafts::{self, DraftOperationMode, DraftOperationPayload, SaveCoalescer},
-        staging::Staging,
+        staging::{StagedPart, Staging},
     },
     queue::{Lane, OperationKind, QueueEngine, QueueError, QueueOperation},
     storage::{
-        Account, AccountRepository, ComposeDraftMetadataRepository, MessageRepository, Operation,
-        OperationRepository, Storage,
+        Account, AccountRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository,
+        HtmlPresence, InlinePart, Message, MessageRepository, Operation, OperationRepository,
+        Storage,
     },
 };
 use tauri::{
@@ -165,6 +166,46 @@ async fn generated_ids_are_prefixed_and_coalescing_is_scoped_to_each_draft() {
     assert!(!coalescer.is_current("draft:a", first_generation).await);
     assert!(coalescer.is_current("draft:a", second_generation).await);
     assert!(!coalescer.is_current("draft:b", second_generation).await);
+    assert!(coalescer.draft_id("draft:a").await.is_none());
+    coalescer
+        .set_draft_id("draft:a", "gmail-draft".into())
+        .await;
+    assert_eq!(
+        coalescer.draft_id("draft:a").await.as_deref(),
+        Some("gmail-draft")
+    );
+}
+
+#[tokio::test]
+async fn admitting_a_draft_requires_all_staged_parts_to_exist() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let queue = QueueEngine::no_op();
+    let staging = Staging::new(directory.path().join("staged"));
+    let coalescer = SaveCoalescer::new();
+
+    let error = drafts::admit(
+        &queue,
+        &storage,
+        &staging,
+        &coalescer,
+        "operation".into(),
+        "account".into(),
+        "session".into(),
+        base_payload(DraftOperationMode::Create, None),
+        &[StagedPart {
+            id: "missing".into(),
+            filename: "missing.txt".into(),
+            mime_type: "text/plain".into(),
+            path: directory.path().join("missing.txt"),
+            content_id: None,
+            size: 0,
+        }],
+    )
+    .await
+    .unwrap_err();
+
+    assert!(!error.is_empty());
 }
 
 fn invoke(
@@ -400,88 +441,18 @@ async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
         let _ = invoke(&webview, command, body);
     }
 
-    // Direct handlers instantiate the concrete MockRuntime generic without
-    // network access: each request intentionally fails at its documented
-    // validation/configuration boundary after entering production code.
-    assert!(latentmail_lib::sync::commands::create_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "Label".into(),
-        Some("invalid".into())
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::rename_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into(),
-        "Label".into()
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::recolor_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into(),
-        "invalid".into()
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::delete_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into()
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::star_thread(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into()
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::unstar_thread(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into()
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::mark_thread_read(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into()
-    )
-    .await
-    .is_err());
-    assert!(latentmail_lib::sync::commands::mark_thread_unread(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "missing".into()
-    )
-    .await
-    .is_err());
+    for (command, body) in [
+        ("create_label", serde_json::json!({ "accountId": "account", "name": "Label", "colorId": "invalid" })),
+        ("rename_label", serde_json::json!({ "accountId": "account", "labelId": "missing", "name": "Label" })),
+        ("recolor_label", serde_json::json!({ "accountId": "account", "labelId": "missing", "colorId": "invalid" })),
+        ("delete_label", serde_json::json!({ "accountId": "account", "labelId": "missing" })),
+        ("star_thread", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
+        ("unstar_thread", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
+        ("mark_thread_read", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
+        ("mark_thread_unread", serde_json::json!({ "accountId": "account", "threadId": "missing" })),
+    ] {
+        assert!(invoke(&webview, command, body).is_err(), "{command}");
+    }
 }
 
 #[tokio::test]
@@ -525,6 +496,7 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
         ("bad-payload", "draft:bad"),
         ("missing-manifest", "draft:missing"),
         ("missing-token", "draft:token"),
+        ("discarded", "draft:discarded"),
     ] {
         drafts::admit(
             &queue,
@@ -549,6 +521,26 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
         )
         .unwrap();
     staging.release_snapshot("missing-manifest").unwrap();
+    storage
+        .connection()
+        .unwrap()
+        .execute(
+            "UPDATE operations SET status='discarded' WHERE id='discarded'",
+            [],
+        )
+        .unwrap();
+    queue
+        .enqueue(QueueOperation {
+            id: "missing-row".into(),
+            account_id: "account".into(),
+            lane: Lane::Interactive,
+            kind: OperationKind::Draft,
+            entity_key: "draft:missing-row".into(),
+            cost: 0,
+            attempts: 0,
+        })
+        .await
+        .unwrap();
     // The composer closes on queue acceptance, so a failure this side of it
     // reaches the user only through this event.
     let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
@@ -576,6 +568,7 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
     })
     .await;
     wait_for(|| reported.lock().unwrap().len() == 3).await;
+    wait_for(|| staging.snapshot_manifest("discarded").is_err()).await;
     for event in reported.lock().unwrap().iter() {
         assert_eq!(event["accountId"], "account");
         assert_eq!(event["kind"], "draft");
@@ -677,13 +670,46 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
         .respond_with(ResponseTemplate::new(200).set_body_json(draft_response("d1", "m1", "t1")))
         .mount(&server)
         .await;
-
     let (app, _home) = boot(&server);
     let handle = app.handle();
     let directory = app.path().app_data_dir().unwrap();
     let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
     let staging = handle.state::<std::sync::Arc<Staging>>().inner().clone();
+    MessageRepository::write_full_state(
+        &storage.connection().unwrap(),
+        &Message {
+            account_id: "account".into(),
+            id: "original".into(),
+            thread_id: "thread-original".into(),
+            rfc_message_id: None,
+            sender: "sender@example.com".into(),
+            recipients: "me@example.com".into(),
+            subject: "Original".into(),
+            sent_at: 1,
+            snippet: "original".into(),
+            html_body: Some("<p>Original</p>".into()),
+            plain_body: None,
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Present,
+        },
+    )
+    .unwrap();
 
+    MessageRepository::replace_inline_parts(
+        &storage.connection().unwrap(),
+        "account",
+        "original",
+        &[InlinePart {
+            content_id: "logo".into(),
+            mime_type: "image/png".into(),
+            bytes: vec![1, 2, 3],
+        }],
+    )
+    .unwrap();
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), b"attachment bytes").unwrap();
     let part = staging
@@ -714,6 +740,7 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
     // never happened.
     let generation = coalescer.schedule("draft:local-session").await;
     let mut payload = base_payload(DraftOperationMode::Create, None);
+    payload.original_message_id = Some("original".into());
     payload.coalescing_generation = generation;
     let payload_json = serde_json::to_string(&payload).unwrap();
     storage
@@ -777,9 +804,34 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     let _environment = APP_ENV.lock().await;
     let server = MockServer::start().await;
     mock_token(&server).mount(&server).await;
+    let mut hydrated_draft = draft_response("d1", "m1", "t1");
+    hydrated_draft["message"]["payload"] = serde_json::json!({
+        "mimeType": "text/html",
+        "headers": [
+            {"name": "Subject", "value": "Hello"},
+            {"name": "To", "value": "one@example.com, two@example.com"},
+            {"name": "Cc", "value": "copy@example.com"}
+        ],
+        "body": {"data": "PHA+ZWRpdGFibGU8L3A+PHA+cXVvdGU8L3A+"},
+        "parts": [{
+            "mimeType": "text/plain",
+            "filename": "notes.txt",
+            "body": {"attachmentId": "a1"}
+        }]
+    });
     Mock::given(method("GET"))
         .and(path("/users/me/drafts/d1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(draft_response("d1", "m1", "t1")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(hydrated_draft))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/a1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": "bm90ZXM" })))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/users/me/drafts/d1"))
+        .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
     let directory = tempfile::tempdir().unwrap();
@@ -795,6 +847,24 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
             needs_reauthentication: false,
             created_at: 1,
             updated_at: 1,
+        },
+    )
+    .unwrap();
+    ComposeDraftMetadataRepository::upsert(
+        &storage.connection().unwrap(),
+        &ComposeDraftMetadata {
+            account_id: "account".into(),
+            draft_id: "d1".into(),
+            mode: "reply".into(),
+            original_message_id: Some("original".into()),
+            original_gmail_message_id: Some("gmail-original".into()),
+            target_thread_id: Some("thread-original".into()),
+            in_reply_to: Some("<original@example.com>".into()),
+            rfc_references: Some("<one> <two>".into()),
+            boundary_version: 1,
+            editable_body_fingerprint: Some("stale".into()),
+            quote_html: Some("<p>quote</p>".into()),
+            quote_plain: Some("quote".into()),
         },
     )
     .unwrap();
@@ -868,38 +938,36 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         .unwrap()["accountId"],
         "account"
     );
-    assert!(latentmail_lib::sync::commands::mutate_messages(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        vec!["missing".into()],
-        vec!["DRAFT".into()],
-        Vec::new(),
+    assert!(invoke(
+        &webview,
+        "mutate_messages",
+        serde_json::json!({
+            "accountId": "account",
+            "messageIds": ["missing"],
+            "add": ["DRAFT"],
+            "remove": []
+        }),
     )
-    .await
     .is_err());
-    assert!(latentmail_lib::sync::commands::create_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "Label".into(),
-        Some("not-a-colour".into()),
+    assert!(invoke(
+        &webview,
+        "create_label",
+        serde_json::json!({
+            "accountId": "account",
+            "name": "Label",
+            "colorId": "not-a-colour"
+        }),
     )
-    .await
     .is_err());
-    assert!(latentmail_lib::sync::commands::recolor_label(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        "account".into(),
-        "Label_1".into(),
-        "not-a-colour".into(),
+    assert!(invoke(
+        &webview,
+        "recolor_label",
+        serde_json::json!({
+            "accountId": "account",
+            "labelId": "Label_1",
+            "colorId": "not-a-colour"
+        }),
     )
-    .await
     .is_err());
 
     let hydrated = invoke(
@@ -910,12 +978,52 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     .unwrap();
     assert_eq!(hydrated["draftId"], "d1");
     assert_eq!(hydrated["mode"], "draft");
-    assert_eq!(hydrated["attachments"], serde_json::json!([]));
+    assert_eq!(hydrated["attachments"][0]["filename"], "notes.txt");
+    assert!(ComposeDraftMetadataRepository::get(
+        &app.state::<Storage>().connection().unwrap(),
+        "account",
+        "d1",
+    )
+    .unwrap()
+    .is_none());
+    ComposeDraftMetadataRepository::upsert(
+        &app.state::<Storage>().connection().unwrap(),
+        &ComposeDraftMetadata {
+            account_id: "account".into(),
+            draft_id: "d1".into(),
+            mode: "reply".into(),
+            original_message_id: Some("original".into()),
+            original_gmail_message_id: Some("gmail-original".into()),
+            target_thread_id: Some("thread-original".into()),
+            in_reply_to: Some("<original@example.com>".into()),
+            rfc_references: Some("<one> <two>".into()),
+            boundary_version: 1,
+            editable_body_fingerprint: Some(String::new()),
+            quote_html: Some(String::new()),
+            quote_plain: Some("quote".into()),
+        },
+    )
+    .unwrap();
+    let restored = invoke(
+        &webview,
+        "hydrate_compose_draft",
+        serde_json::json!({ "accountId": "account", "draftId": "d1" }),
+    )
+    .unwrap();
+    assert_eq!(restored["html"], "");
+    assert_eq!(restored["quoteHtml"], "");
+    assert_eq!(restored["references"], serde_json::json!(["<one>", "<two>"]));
 
     invoke(
         &webview,
         "discard_compose_draft",
         serde_json::json!({ "accountId": "account", "draftId": null, "sessionId": "session" }),
+    )
+    .unwrap();
+    invoke(
+        &webview,
+        "discard_compose_draft",
+        serde_json::json!({ "accountId": "account", "draftId": "d1", "sessionId": "session" }),
     )
     .unwrap();
 }
@@ -1129,13 +1237,25 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         .mount(&server)
         .await;
     let send_order = std::sync::Arc::clone(&call_order);
+    let sends = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sent_count = std::sync::Arc::clone(&sends);
     Mock::given(method("POST"))
         .and(path("/users/me/drafts/send"))
         .respond_with(move |_: &wiremock::Request| {
             send_order.lock().unwrap().push("send");
+            let message_id = if sent_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                "sent-1"
+            } else {
+                "sent-2"
+            };
             ResponseTemplate::new(200)
-                .set_body_json(draft_response("ignored", "sent-1", "t1")["message"].clone())
+                .set_body_json(draft_response("ignored", message_id, "t1")["message"].clone())
         })
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload/gmail/v1/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(draft_response("d2", "m2", "t2")))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -1143,6 +1263,14 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(draft_response("ignored", "sent-1", "t1")["message"].clone()),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/sent-2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(draft_response("ignored", "sent-2", "t2")["message"].clone()),
         )
         .mount(&server)
         .await;
@@ -1212,6 +1340,104 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         "send must upload the current assembled document to the existing draft \
          before promoting it — never promote a stale draft"
     );
+
+    let first_click_part = staging
+        .stage_path(
+            "account",
+            "session-2",
+            source.path(),
+            "part-2",
+            "text/plain".into(),
+            None,
+        )
+        .unwrap();
+    drafts::admit(
+        &queue,
+        &storage,
+        &staging,
+        &coalescer,
+        "op-first-send".into(),
+        "account".into(),
+        "session-2".into(),
+        base_payload(DraftOperationMode::Send, None),
+        std::slice::from_ref(&first_click_part),
+    )
+    .await
+    .unwrap();
+    wait_for(|| queue.summary().pending == 0 && queue.summary().active == 0).await;
+    assert!(
+        MessageRepository::get(&storage.connection().unwrap(), "account", "sent-2")
+            .unwrap()
+            .is_some()
+    );
+    assert!(!first_click_part.path.exists());
+}
+
+#[tokio::test]
+async fn discard_racing_an_active_create_deletes_the_returned_draft() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    mock_token(&server).mount(&server).await;
+    let (app, _home) = boot(&server);
+    let handle = app.handle();
+    let directory = app.path().app_data_dir().unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let staging = handle.state::<std::sync::Arc<Staging>>().inner().clone();
+    let coalescer = handle
+        .state::<std::sync::Arc<SaveCoalescer>>()
+        .inner()
+        .clone();
+    let queue = handle
+        .state::<std::sync::Arc<QueueEngine>>()
+        .inner()
+        .clone();
+
+    let storage_for_create = storage.clone();
+    Mock::given(method("POST"))
+        .and(path("/upload/gmail/v1/users/me/drafts"))
+        .respond_with(move |_: &wiremock::Request| {
+            storage_for_create
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE operations SET status='discarded' WHERE id='op-race'",
+                    [],
+                )
+                .unwrap();
+            ResponseTemplate::new(200).set_body_json(draft_response("d1", "m1", "t1"))
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts/d1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(draft_response("d1", "m1", "t1")))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/gmail/v1/users/me/drafts/d1"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    drafts::admit(
+        &queue,
+        &storage,
+        &staging,
+        &coalescer,
+        "op-race".into(),
+        "account".into(),
+        "session-race".into(),
+        base_payload(DraftOperationMode::Create, None),
+        &[],
+    )
+    .await
+    .unwrap();
+    wait_for(|| queue.summary().pending == 0 && queue.summary().active == 0).await;
+
+    assert!(MessageRepository::get(&storage.connection().unwrap(), "account", "m1")
+        .unwrap()
+        .is_none());
+    assert!(staging.snapshot_manifest("op-race").is_err());
 }
 
 #[tokio::test]

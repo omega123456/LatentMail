@@ -104,3 +104,10 @@ fn nests_related_and_mixed_parts_when_needed() {
     assert!(mixed.contains("multipart/mixed"));
     assert!(mixed.contains("notes.txt"));
 }
+
+#[test]
+fn rejects_invalid_mailboxes_before_building_a_message() {
+    let mut message = outgoing();
+    message.to = vec!["not an address".into()];
+    assert!(assemble(&message).is_err());
+}
