@@ -89,7 +89,7 @@ for (const theme of themes) {
     );
     await page.goto('/');
     await page.getByLabel('Unstar Q3 Marketing Strategy Review', { exact: true }).click();
-    await screenshot(page, page.getByRole('alert'), 'mutation-error-toast', theme);
+    await screenshot(page, page.getByTestId('toast'), 'mutation-error-toast', theme);
   });
 
   test(`conversation list ${theme}`, async ({ page }) => {

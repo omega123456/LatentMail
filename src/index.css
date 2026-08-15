@@ -51,6 +51,10 @@
   --color-on-background: #131b2e;
   --color-surface-variant: #dae2fd;
   --color-star: #a45d00;
+  /* The palette had no success role, which is why "Message sent." rendered in
+   * error red. Only the base tone is defined — toasts pair it with a neutral
+   * surface, so no `on-success` foreground is needed yet. */
+  --color-success: #146c2e;
 
   --color-dark-surface: #131313;
   --color-dark-surface-dim: #131313;
@@ -100,6 +104,7 @@
   --color-dark-on-background: #e5e2e1;
   --color-dark-surface-variant: #353534;
   --color-dark-star: #ffb95e;
+  --color-dark-success: #8ddb98;
 
   --font-inter: Inter, sans-serif;
   --text-display-sm: 30px;
@@ -170,6 +175,46 @@
   --spacing-body-frame-max: 1600px;
   --spacing-ribbon-gap: 12px;
   --spacing-accent-border: 3px;
+  --spacing-toast-max: 340px;
+
+  /* Toast countdown rail. An *animation* rather than a transition because only
+   * an animation can pause in place: each severity ships a `-hold` twin that
+   * differs from its running form by nothing but the shorthand's `paused`
+   * keyword, so swapping the class freezes the rail without restarting it
+   * (the keyframe name is identical, so the browser keeps the elapsed time).
+   * Tailwind ships no `animation-play-state` utility, which is what makes the
+   * paired-token approach necessary. */
+  --animate-toast-success: toast-drain 4s linear forwards;
+  --animate-toast-success-hold: toast-drain 4s linear forwards paused;
+  --animate-toast-error: toast-drain 30s linear forwards;
+  --animate-toast-error-hold: toast-drain 30s linear forwards paused;
+
+  @keyframes toast-drain {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
+    }
+  }
+
+  /* Entrance. Radix mounts the toast already in place, so this runs once on
+   * mount and needs no React state to trigger it — applied through
+   * `motion-safe:` so a reduced-motion viewer simply gets the toast. Slides in
+   * from the right edge the stack is anchored to, which is also the direction
+   * it is swiped away in. */
+  --animate-toast-enter: toast-enter 200ms ease-out;
+
+  @keyframes toast-enter {
+    from {
+      opacity: 0;
+      transform: translateX(0.75rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
   --sidebar-w: 260px;
   --list-w: 350px;
   --reader-h: 40%;

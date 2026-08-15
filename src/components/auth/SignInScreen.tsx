@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Mail, LoaderCircle } from 'lucide-react';
 import { invoke } from '@/lib/ipc/commands';
+import { useToastStore } from '@/stores/toast';
 
 export function SignInScreen() {
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const showError = useToastStore((state) => state.showError);
   const signIn = async () => {
     setSigningIn(true);
     setError(null);
@@ -12,9 +14,13 @@ export function SignInScreen() {
       await invoke('begin_sign_in', {});
     } catch (cause) {
       // `invoke` already logged the failure centrally; this only surfaces it.
+      // The inline block keeps the detailed cause next to the button that
+      // failed; the toast is what catches the eye of a user who has already
+      // looked away waiting for the browser to open.
       setError(
         `Could not start Google sign-in: ${cause instanceof Error ? cause.message : String(cause)}`,
       );
+      showError('Couldn’t start Google sign-in.');
       setSigningIn(false);
     }
   };

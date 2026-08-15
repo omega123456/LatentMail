@@ -76,6 +76,7 @@ export function useTraversalStatusQuery(accountId: string | null) {
 
 export function useFetchMessageBodyMutation(accountId: string | null, threadId: string | null) {
   const queryClient = useQueryClient();
+  const showError = useToastStore((state) => state.showError);
   return useMutation({
     mutationFn: (messageId: string) =>
       invoke('fetch_message_body', { accountId: accountId as string, messageId }),
@@ -83,6 +84,9 @@ export function useFetchMessageBodyMutation(accountId: string | null, threadId: 
       queryClient.invalidateQueries({
         queryKey: queryKeys.conversation(accountId ?? '', threadId ?? ''),
       }),
+    // The reader shows a body-shaped hole on failure with nothing to explain
+    // it, so this is the only place the user learns the fetch went wrong.
+    onError: () => showError('Couldn’t load this message.'),
   });
 }
 
@@ -104,39 +108,61 @@ function updateThread(
  * settled invalidation below refetches server-confirmed state — there's
  * nothing to roll back because nothing was applied ahead of the response.
  * `LabelList` calls these through `.mutateAsync` and surfaces a rejection's
- * `message` inline, matching the Rust-side `LabelNameError` text. */
+ * `message` inline, matching the Rust-side `LabelNameError` text.
+ *
+ * A toast rides alongside that inline message rather than replacing it: the
+ * label row is a small target in a scrolling sidebar and its inline error is
+ * easy to miss, unlike the compose footer or an attachment chip the user is
+ * looking straight at when those fail. */
 function useLabelLifecycleMutation<TArgs>(
   accountId: string | null,
   mutationFn: (args: TArgs) => Promise<unknown>,
+  copy: { done: string; failed: string },
 ) {
   const queryClient = useQueryClient();
+  const showSuccess = useToastStore((state) => state.showSuccess);
+  const showError = useToastStore((state) => state.showError);
   return useMutation({
     mutationFn,
+    onSuccess: () => showSuccess(copy.done),
+    onError: () => showError(copy.failed),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId ?? '') }),
   });
 }
 
 export function useCreateLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(accountId, (args: { name: string; colorId: string | null }) =>
-    invoke('create_label', { accountId: accountId as string, ...args }),
+  return useLabelLifecycleMutation(
+    accountId,
+    (args: { name: string; colorId: string | null }) =>
+      invoke('create_label', { accountId: accountId as string, ...args }),
+    { done: 'Label created.', failed: 'Couldn’t create the label.' },
   );
 }
 
 export function useRenameLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(accountId, (args: { labelId: string; name: string }) =>
-    invoke('rename_label', { accountId: accountId as string, ...args }),
+  return useLabelLifecycleMutation(
+    accountId,
+    (args: { labelId: string; name: string }) =>
+      invoke('rename_label', { accountId: accountId as string, ...args }),
+    { done: 'Label renamed.', failed: 'Couldn’t rename the label.' },
   );
 }
 
 export function useRecolorLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(accountId, (args: { labelId: string; colorId: string }) =>
-    invoke('recolor_label', { accountId: accountId as string, ...args }),
+  return useLabelLifecycleMutation(
+    accountId,
+    (args: { labelId: string; colorId: string }) =>
+      invoke('recolor_label', { accountId: accountId as string, ...args }),
+    { done: 'Label colour updated.', failed: 'Couldn’t update the colour.' },
   );
 }
 
 export function useDeleteLabelMutation(accountId: string | null) {
-  return useLabelLifecycleMutation(accountId, (args: { labelId: string }) =>
-    invoke('delete_label', { accountId: accountId as string, ...args }),
+  return useLabelLifecycleMutation(
+    accountId,
+    (args: { labelId: string }) =>
+      invoke('delete_label', { accountId: accountId as string, ...args }),
+    { done: 'Label deleted.', failed: 'Couldn’t delete the label.' },
   );
 }
 
@@ -179,7 +205,7 @@ export function useThreadMutation(accountId: string | null) {
       return undefined;
     },
     onError: () => {
-      showError('Couldn’t update conversation. Please try again.');
+      showError('Couldn’t update conversation.');
     },
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') }),
@@ -240,7 +266,15 @@ export function useTriageMutation(accountId: string | null) {
           },
       );
     },
-    onError: () => showError('Couldn’t update conversation. Please try again.'),
+    // One toast for the whole change, not one per thread: a bulk triage over a
+    // selection fails as a single `mutate_threads` call, and reporting it
+    // per-thread would flood the viewport and blow past its cap.
+    onError: (_error, { threadIds }) =>
+      showError(
+        threadIds.length > 1
+          ? `Couldn’t update ${threadIds.length} conversations.`
+          : 'Couldn’t update conversation.',
+      ),
     onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(accountId ?? ''),
@@ -309,7 +343,12 @@ export function useMessageTriageMutation(accountId: string | null) {
           },
       );
     },
-    onError: () => showError('Couldn’t update message. Please try again.'),
+    onError: (_error, { messageIds }) =>
+      showError(
+        messageIds.length > 1
+          ? `Couldn’t update ${messageIds.length} messages.`
+          : 'Couldn’t update message.',
+      ),
     onSettled: (_result, _error, { threadId }) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(accountId ?? ''),

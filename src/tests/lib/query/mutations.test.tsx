@@ -22,7 +22,7 @@ const thread = {
 
 beforeEach(() => {
   useSelectionStore.setState({ activeAccountId: 'account', activeMailboxId: 'INBOX' });
-  useToastStore.getState().dismiss();
+  useToastStore.setState({ toasts: [] });
   ipc.override('list_threads', { items: [thread], nextCursor: null });
 });
 
@@ -60,7 +60,7 @@ describe('thread mutations', () => {
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     await waitFor(() => expect(screen.getByLabelText('Star Mutation')).toBeInTheDocument());
-    expect(useToastStore.getState().toast?.message).toMatch(/couldn’t update/i);
+    expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
     expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
     error.mockRestore();
   });

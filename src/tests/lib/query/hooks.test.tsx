@@ -42,7 +42,7 @@ beforeEach(() => {
   act(() => {
     useSelectionStore.setState({ activeMailboxId: 'INBOX' });
     useMultiSelectStore.setState({ selectedIds: new Set(['thread-1']), anchorId: 'thread-1' });
-    useToastStore.getState().dismiss();
+    useToastStore.setState({ toasts: [] });
   });
 });
 
@@ -130,7 +130,7 @@ describe('query hooks', () => {
     await expect(
       act(() => result.current.mutateAsync({ threadId: 'thread-1', kind: 'unread' })),
     ).rejects.toThrow('offline');
-    expect(useToastStore.getState().toast?.message).toMatch(/couldn’t update/i);
+    expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
     expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
     error.mockRestore();
   });

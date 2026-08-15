@@ -343,8 +343,8 @@ describe('EventBridge', () => {
     );
     expect(useComposeStore.getState().session).toMatchObject({ draftId: 'draft-1', dirty: false });
     act(() => ipc.emit('send://uncertain', { accountId: 'account-1' }));
-    expect(useToastStore.getState().toast?.message).toBe(
-      'Send status unknown — check Sent and Drafts',
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe(
+      'Send status unknown — check Sent and Drafts.',
     );
     act(() =>
       ipc.emit('send://complete', {
@@ -353,7 +353,7 @@ describe('EventBridge', () => {
         draftId: 'draft-1',
       }),
     );
-    expect(useToastStore.getState().toast?.message).toBe('Message sent.');
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Message sent.');
     // A failure for the still-open session belongs inline, not in a toast.
     act(() =>
       ipc.emit('compose://failed', {
@@ -367,7 +367,7 @@ describe('EventBridge', () => {
       draftStatus: 'failed',
       lifecycleError: 'Couldn’t save draft.',
     });
-    expect(useToastStore.getState().toast?.message).toBe('Message sent.');
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Message sent.');
     // Once the composer has closed, the toast is the only channel left.
     act(() => useComposeStore.getState().close());
     act(() =>
@@ -378,9 +378,8 @@ describe('EventBridge', () => {
         error: 'Gmail request failed with status 400',
       }),
     );
-    expect(useToastStore.getState().toast?.message).toBe(
-      'Couldn’t send message — Gmail request failed with status 400',
-    );
+    // The raw Gmail string is logged, never rendered.
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Couldn’t send your message.');
     const beforeUnrelatedItem = invalidate.mock.calls.length;
     act(() => ipc.emit('queue://item', { id: 'queue:account-1:1', status: 'done' }));
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);

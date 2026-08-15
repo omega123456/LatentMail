@@ -127,7 +127,7 @@ export function EventBridge() {
     });
 
     subscribe('send://uncertain', () => {
-      useToastStore.getState().showError('Send status unknown — check Sent and Drafts');
+      useToastStore.getState().showError('Send status unknown — check Sent and Drafts.');
     });
     subscribe('draft://saved', (event) => {
       const session = useComposeStore.getState().session;
@@ -150,21 +150,23 @@ export function EventBridge() {
     // failure that happens after it closed has nowhere to render but a
     // toast; while the same session is still open it belongs inline.
     subscribe('compose://failed', (event) => {
-      const message =
-        event.kind === 'send' ? `Couldn’t send message — ${event.error}` : 'Couldn’t save draft';
       const compose = useComposeStore.getState();
       if (compose.session?.id === event.sessionId || compose.session?.draftId === event.sessionId) {
         // The footer's status region is narrow and sits beside the Send
         // control, so inline failures carry the wireframe's fixed copy
-        // rather than a server message of unbounded length; the toast
-        // path below still reports the detail.
+        // rather than a server message of unbounded length.
         compose.setDraftStatus(
           'failed',
           event.kind === 'send' ? 'Couldn’t send.' : 'Couldn’t save draft.',
         );
         return;
       }
-      useToastStore.getState().showError(message);
+      // The raw Gmail error is unbounded and not written for end users, so it
+      // goes to the log and the toast carries the human message.
+      appLog.error(`compose ${event.kind} failed: ${event.error}`);
+      useToastStore
+        .getState()
+        .showError(event.kind === 'send' ? 'Couldn’t send your message.' : 'Couldn’t save draft.');
     });
 
     subscribe('queue://item', (item) => {
