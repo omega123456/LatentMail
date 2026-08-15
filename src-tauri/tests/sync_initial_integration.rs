@@ -166,6 +166,31 @@ async fn initial_sync_populates_labels_messages_membership_and_threads() {
     assert!(status.last_synced_at.is_some());
 }
 
+/// Initial sync "adds" the entire recent mailbox. It still emits
+/// `mail://new` (the list has to refresh), but it must carry no arrivals —
+/// those are what the frontend turns into OS notifications, and a fresh
+/// account would otherwise announce every message it ever downloads.
+#[tokio::test]
+async fn initial_sync_announces_no_arrivals_to_notify_about() {
+    let server = MockServer::start().await;
+    mount_fixture(&server).await;
+    let (engine, _storage, _directory, events) = engine_with_recorded_events();
+
+    engine
+        .initial_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+
+    let new_mail = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(name, _)| *name == "mail://new")
+        .map(|(_, payload)| payload.clone())
+        .expect("initial sync still announces new mail so the list refreshes");
+    assert_eq!(new_mail.get("arrivals"), Some(&serde_json::json!([])));
+}
+
 /// Gmail enumerates ids and then hands them out one by one, so a message
 /// can vanish in between — promoting a draft to a sent message deletes the
 /// draft's message exactly this way. One 404 must cost that message, not

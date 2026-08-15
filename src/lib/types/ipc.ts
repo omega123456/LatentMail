@@ -335,9 +335,18 @@ export interface SyncCompleteEvent {
   changed: boolean;
 }
 
+/** One newly arrived, still-unread Inbox message. Only the incremental
+ * (poll) sync fills these in — a full sync reports the whole mailbox as
+ * "added" and must never raise notifications for it. */
+export interface MailArrival {
+  sender: string;
+  subject: string;
+}
+
 export interface NewMailEvent {
   accountId: string;
   threadIds: string[];
+  arrivals: MailArrival[];
 }
 
 export interface TraversalProgressEvent {

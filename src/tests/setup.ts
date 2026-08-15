@@ -36,6 +36,36 @@ vi.stubGlobal(
     disconnect() {}
   },
 );
+// jsdom implements no Notification API, and in the app `window.Notification`
+// is the Tauri notification plugin's injected shim rather than the browser's
+// own — so it is polyfilled here, shaped like that shim (constructor +
+// readable `permission` + `requestPermission`). Tests assert new-mail
+// notifications through `window.__notifications__`.
+declare global {
+  interface Window {
+    __notifications__?: { title: string; body?: string }[];
+  }
+}
+// Re-installed per test rather than stubbed once: a suite that calls
+// `vi.unstubAllGlobals()` would otherwise strip it for every suite after it.
+function installNotificationStub() {
+  window.__notifications__ = [];
+  vi.stubGlobal(
+    'Notification',
+    Object.assign(
+      class {
+        constructor(title: string, options?: NotificationOptions) {
+          window.__notifications__?.push({ title, body: options?.body });
+        }
+      },
+      {
+        permission: 'granted' as NotificationPermission,
+        requestPermission: vi.fn(async (): Promise<NotificationPermission> => 'granted'),
+      },
+    ),
+  );
+}
+installNotificationStub();
 HTMLElement.prototype.scrollIntoView = vi.fn();
 Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
   configurable: true,
@@ -84,6 +114,7 @@ if (!Element.prototype.releasePointerCapture) {
 beforeEach(() => {
   ipc.reset();
   window.__resizeObserverInstances__ = [];
+  installNotificationStub();
 });
 // Unmount, don't just wipe the DOM: clearing `innerHTML` leaves the previous
 // test's React tree mounted and still subscribed to the Zustand stores, so it

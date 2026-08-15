@@ -375,11 +375,23 @@ pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
     );
 }
 
+/// One newly arrived, still-unread Inbox message, carried on `mail://new`
+/// so the frontend can raise an OS notification without a round trip.
+/// Only the incremental (poll) path fills these in — a full sync's
+/// "additions" are the whole mailbox, which must never be announced.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailArrival {
+    pub sender: String,
+    pub subject: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewMailEvent {
     pub account_id: String,
     pub thread_ids: Vec<String>,
+    pub arrivals: Vec<MailArrival>,
 }
 /// Named emitter for `mail://new`.
 pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
@@ -680,11 +692,13 @@ impl SyncEngine {
                     added_count,
                     thread_ids,
                     changed,
+                    arrivals,
                 } => Ok(FullSyncOutcome {
                     history_id,
                     added_count,
                     thread_ids,
                     changed,
+                    arrivals,
                 }),
                 IncrementalOutcome::Expired => {
                     // ponytail: this still enqueues reconciliation onto the
@@ -739,16 +753,7 @@ impl SyncEngine {
         outcome: Result<FullSyncOutcome, SyncError>,
     ) -> Result<(), SyncError> {
         match outcome {
-            Ok(result) => {
-                self.complete(
-                    account_id,
-                    result.history_id,
-                    result.added_count,
-                    result.thread_ids,
-                    result.changed,
-                )
-                .await
-            }
+            Ok(result) => self.complete(account_id, result).await,
             Err(error) => {
                 self.set_error(account_id, &error).await;
                 Err(error)
@@ -761,11 +766,15 @@ impl SyncEngine {
     async fn complete(
         &self,
         account_id: &str,
-        history_id: i64,
-        added_count: u32,
-        thread_ids: Vec<String>,
-        changed: bool,
+        outcome: FullSyncOutcome,
     ) -> Result<(), SyncError> {
+        let FullSyncOutcome {
+            history_id,
+            added_count,
+            thread_ids,
+            changed,
+            arrivals,
+        } = outcome;
         self.storage
             .run({
                 let account_id = account_id.to_owned();
@@ -788,6 +797,7 @@ impl SyncEngine {
                 NewMailEvent {
                     account_id: account_id.to_owned(),
                     thread_ids,
+                    arrivals,
                 },
             );
         }
@@ -951,6 +961,8 @@ pub(crate) struct FullSyncOutcome {
     added_count: u32,
     thread_ids: Vec<String>,
     changed: bool,
+    /// See [`MailArrival`] — empty for every full-sync path.
+    arrivals: Vec<MailArrival>,
 }
 
 async fn full_sync_body(
@@ -1012,6 +1024,7 @@ async fn full_sync_body(
         added_count,
         thread_ids: thread_ids.into_iter().collect(),
         changed: true,
+        arrivals: Vec::new(),
     })
 }
 
@@ -1127,6 +1140,7 @@ enum IncrementalOutcome {
         added_count: u32,
         thread_ids: Vec<String>,
         changed: bool,
+        arrivals: Vec<MailArrival>,
     },
     Expired,
 }
@@ -1229,6 +1243,20 @@ async fn incremental_body(
     }
     let added_count = added_messages.len() as u32;
     let changed = !records.is_empty() || !added_messages.is_empty();
+    // Announce only what the user would consider "new mail": still in the
+    // Inbox and still unread. Sent copies, drafts and anything already read
+    // elsewhere (phone) are additions to *us*, not arrivals to them.
+    let arrivals: Vec<MailArrival> = added_messages
+        .iter()
+        .filter(|message| {
+            let has = |label: &str| message.label_ids.iter().any(|id| id == label);
+            has("INBOX") && has("UNREAD")
+        })
+        .map(|message| MailArrival {
+            sender: message.sender.clone(),
+            subject: message.subject.clone(),
+        })
+        .collect();
     let added_thread_ids: HashSet<String> = added_messages
         .iter()
         .map(|message| message.thread_id.clone())
@@ -1297,6 +1325,7 @@ async fn incremental_body(
         added_count,
         thread_ids: added_thread_ids.into_iter().collect(),
         changed,
+        arrivals,
     })
 }
 

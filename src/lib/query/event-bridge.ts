@@ -2,11 +2,37 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { listen } from '@/lib/ipc/events';
 import { useSyncStore } from '@/stores/sync';
-import type { IpcEventMap } from '@/lib/types/ipc';
+import type { IpcEventMap, MailArrival } from '@/lib/types/ipc';
+import { parseParticipant } from '@/lib/format/participants';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useComposeStore } from '@/stores/compose';
 import { appLog } from '@/lib/app-log';
+
+/** Raises one OS notification for the mail a poll just brought in.
+ *
+ * `window.Notification` here is the Tauri notification plugin's injected
+ * shim, so this is a real native notification on both macOS and Windows.
+ * The permission dance is not optional on either: Windows never resolves
+ * the shim's cached permission (its startup check short-circuits and leaves
+ * it `denied`), and macOS may still be at `default` on the first poll after
+ * launch — `requestPermission` is what settles both, and the desktop Rust
+ * side always grants. */
+async function notifyArrivals(arrivals: MailArrival[]) {
+  const [first, ...rest] = arrivals;
+  if (!first) return;
+  if (
+    Notification.permission !== 'granted' &&
+    (await Notification.requestPermission()) !== 'granted'
+  ) {
+    return;
+  }
+  const { name, address } = parseParticipant(first.sender);
+  const subject = first.subject || '(No subject)';
+  new Notification(name || address, {
+    body: rest.length > 0 ? `${subject} — and ${rest.length} more` : subject,
+  });
+}
 
 /** Bridges Rust events onto TanStack Query invalidation and the Zustand
  * stores that mirror queue/sync state. This is the ONLY place allowed to
@@ -97,6 +123,7 @@ export function EventBridge() {
         queryKey: queryKeys.threadsForAccount(event.accountId),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
+      void notifyArrivals(event.arrivals);
     });
 
     subscribe('send://uncertain', () => {

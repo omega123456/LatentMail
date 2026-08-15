@@ -206,6 +206,90 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     );
 }
 
+/// The poll is what raises OS notifications, so `mail://new` has to carry
+/// enough to describe the arrival — and only what the user would call one:
+/// their own sent copy and mail already read on another device are
+/// additions to the local database, not arrivals to announce.
+#[tokio::test]
+async fn incremental_sync_reports_only_unread_inbox_arrivals() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "50",
+            "history": [{
+                "id": "50",
+                "messagesAdded": [
+                    {"message": {"id": "arrival", "threadId": "t2"}},
+                    {"message": {"id": "sentcopy", "threadId": "t4"}},
+                    {"message": {"id": "alreadyread", "threadId": "t5"}}
+                ]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    for (id, thread, labels, from, subject) in [
+        (
+            "arrival",
+            "t2",
+            serde_json::json!(["INBOX", "UNREAD"]),
+            "Carol <carol@example.com>",
+            "New mail",
+        ),
+        (
+            "sentcopy",
+            "t4",
+            serde_json::json!(["SENT"]),
+            "me@example.com",
+            "My own reply",
+        ),
+        (
+            "alreadyread",
+            "t5",
+            serde_json::json!(["INBOX"]),
+            "Dave <dave@example.com>",
+            "Read on my phone",
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id, "threadId": thread, "historyId": "50", "labelIds": labels, "snippet": "s",
+                "internalDate": "3000",
+                "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "From", "value": from},
+                    {"name": "Subject", "value": subject}
+                ], "body": {"data": "bmV3"}}
+            })))
+            .mount(&server)
+            .await;
+    }
+
+    let (engine, _storage, _directory, events) = engine_with_seed();
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+
+    let fired = events.lock().unwrap().clone();
+    let new_mail = fired
+        .iter()
+        .find(|(name, _)| name == "mail://new")
+        .map(|(_, payload)| payload.clone())
+        .expect("mail://new is emitted for the arrival");
+    assert_eq!(
+        new_mail.get("arrivals"),
+        Some(&serde_json::json!([
+            {"sender": "Carol <carol@example.com>", "subject": "New mail"}
+        ]))
+    );
+}
+
 /// Gmail's history stream is only eventually consistent with delivery: a
 /// message can be listable (and visible in Gmail's own UI) while
 /// `history.list` still reports nothing. Incremental sync must notice it

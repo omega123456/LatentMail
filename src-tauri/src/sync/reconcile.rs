@@ -317,6 +317,9 @@ pub async fn run(
         added_count: new_ids.len() as u32,
         thread_ids,
         changed: true,
+        // A reconcile rediscovers whole swathes of the mailbox — none of it
+        // is "new mail" to announce. See `MailArrival`.
+        arrivals: Vec::new(),
     })
 }
 

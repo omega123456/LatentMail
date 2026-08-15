@@ -19,6 +19,7 @@ pub fn run() {
     ipc::register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle();
             let directory = handle.path().app_log_dir()?;
