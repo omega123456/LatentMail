@@ -82,9 +82,7 @@ export function useComposeAutosave() {
           if (accepted.draftId) setDraftId(accepted.draftId);
           markSaved();
         })
-        .catch(() =>
-          setStatus('failed', 'Couldn’t save draft.'),
-        );
+        .catch(() => setStatus('failed', 'Couldn’t save draft.'));
     }, AUTOSAVE_DELAY_MS);
     return () => {
       if (timer.current !== null) window.clearTimeout(timer.current);

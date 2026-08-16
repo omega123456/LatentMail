@@ -33,4 +33,21 @@ describe('BodyFrame', () => {
     link?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(openExternal).toHaveBeenCalledWith({ url: 'https://example.com' });
   });
+
+  it('cancels the native right-click menu inside the message frame', async () => {
+    render(<BodyFrame html={'<p>Body</p>'} text={null} />);
+    const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
+    frame.contentDocument?.write('<p>Body</p>');
+    await act(async () => {
+      fireEvent.load(frame);
+      await Promise.resolve();
+    });
+    const paragraph = frame.contentDocument?.querySelector('p');
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    paragraph?.dispatchEvent(menu);
+    // The sandboxed frame runs no scripts of its own and the Rust
+    // prevent-default script never reaches it, so this listener is the only
+    // thing standing between a right-click and the webview's own menu.
+    expect(menu.defaultPrevented).toBe(true);
+  });
 });

@@ -112,7 +112,7 @@ export function LabelsMenu(props: LabelsMenuProps) {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Filter labels…"
           aria-label="Filter labels"
-          className="mb-1 rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface"
+          className="mb-1 select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface"
         />
       )}
       {labels.length === 0 ? (

@@ -84,12 +84,19 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       const labels = new Map((labelsQuery.data ?? []).map((label) => [label.id, label.name]));
       const message = mapConversation(keyboardConversation.data, labels).messages.at(-1);
       if (!message) return;
-      if (action === 'reply') void openReply('reply', activeAccount.id, activeAccount.email, message);
+      if (action === 'reply')
+        void openReply('reply', activeAccount.id, activeAccount.email, message);
       else if (action === 'reply-all')
         void openReply('reply-all', activeAccount.id, activeAccount.email, message);
-      else if (action === 'forward') void openForward(activeAccount.id, activeAccount.email, message);
+      else if (action === 'forward')
+        void openForward(activeAccount.id, activeAccount.email, message);
       else if (message.isDraft)
-        void openEditDraft(activeAccount.id, activeAccount.email, keyboardConversation.data.subject, message);
+        void openEditDraft(
+          activeAccount.id,
+          activeAccount.email,
+          keyboardConversation.data.subject,
+          message,
+        );
     },
     [activeAccount, keyboardConversation.data, keyboardMultiSelect, labelsQuery.data],
   );
@@ -98,10 +105,22 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       event.preventDefault();
       compose();
     },
-    replyToMessage: (event) => { event.preventDefault(); composeTarget('reply'); },
-    replyAllToMessage: (event) => { event.preventDefault(); composeTarget('reply-all'); },
-    forwardMessage: (event) => { event.preventDefault(); composeTarget('forward'); },
-    editDraft: (event) => { event.preventDefault(); composeTarget('edit-draft'); },
+    replyToMessage: (event) => {
+      event.preventDefault();
+      composeTarget('reply');
+    },
+    replyAllToMessage: (event) => {
+      event.preventDefault();
+      composeTarget('reply-all');
+    },
+    forwardMessage: (event) => {
+      event.preventDefault();
+      composeTarget('forward');
+    },
+    editDraft: (event) => {
+      event.preventDefault();
+      composeTarget('edit-draft');
+    },
   });
   // System mailboxes carry the display name the sidebar shows; a user label
   // falls back to its own name, and an unknown id to the raw value.

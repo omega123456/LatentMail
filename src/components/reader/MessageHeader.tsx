@@ -15,8 +15,11 @@ export function MessageHeader({
   onComposeTo?: (participant: Participant) => void;
 }) {
   const timestamp = formatDistanceToNowStrict(sentAt, { addSuffix: true });
+  // `select-text` opts the whole header back out of the app-wide
+  // `select-none` (index.html): sender, address, recipients and timestamp are
+  // all things a user legitimately copies out of a message.
   return (
-    <header className="flex items-start justify-between gap-4">
+    <header className="flex select-text items-start justify-between gap-4">
       <div className="flex min-w-0 items-center gap-4">
         <div
           aria-hidden="true"

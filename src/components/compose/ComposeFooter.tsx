@@ -62,35 +62,35 @@ export function ComposeFooter({
             {failed ? '' : status}
           </span>
           <button
-          type="button"
-          aria-label="Attach files"
-          title="Attach files"
-          onClick={onAttach}
-          className={iconButtonClass}
-        >
-          <Paperclip aria-hidden="true" size={18} />
-        </button>
-        <button
-          type="button"
-          aria-label="Insert image"
-          title="Insert image"
-          onClick={onInsertImage}
-          className={iconButtonClass}
-        >
-          <Image aria-hidden="true" size={18} />
-        </button>
-        <button
-          type="button"
-          aria-label="Send"
-          title="Send"
-          disabled={!ready || blocked || sending}
-          data-recipient-ready={ready}
-          onClick={onSend}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 text-label-md text-on-primary-container hover:bg-primary hover:text-on-primary disabled:cursor-not-allowed disabled:opacity-40 dark:bg-dark-primary-container dark:text-dark-on-primary-container dark:hover:bg-dark-primary dark:hover:text-dark-on-primary"
-        >
-          Send
-          <Send aria-hidden="true" size={18} />
-        </button>
+            type="button"
+            aria-label="Attach files"
+            title="Attach files"
+            onClick={onAttach}
+            className={iconButtonClass}
+          >
+            <Paperclip aria-hidden="true" size={18} />
+          </button>
+          <button
+            type="button"
+            aria-label="Insert image"
+            title="Insert image"
+            onClick={onInsertImage}
+            className={iconButtonClass}
+          >
+            <Image aria-hidden="true" size={18} />
+          </button>
+          <button
+            type="button"
+            aria-label="Send"
+            title="Send"
+            disabled={!ready || blocked || sending}
+            data-recipient-ready={ready}
+            onClick={onSend}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 text-label-md text-on-primary-container hover:bg-primary hover:text-on-primary disabled:cursor-not-allowed disabled:opacity-40 dark:bg-dark-primary-container dark:text-dark-on-primary-container dark:hover:bg-dark-primary dark:hover:text-dark-on-primary"
+          >
+            Send
+            <Send aria-hidden="true" size={18} />
+          </button>
         </div>
       </div>
     </div>

@@ -100,7 +100,7 @@ export function LabelForm({
         onChange={(event) => setName(event.target.value)}
         onBlur={() => setTouched(true)}
         placeholder="Label name"
-        className="rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface"
+        className="select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface"
       />
       <div className="flex items-center gap-2">
         <div role="radiogroup" aria-label="Label colour" className="flex flex-wrap gap-1">

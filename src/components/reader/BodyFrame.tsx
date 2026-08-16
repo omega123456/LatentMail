@@ -14,7 +14,7 @@ export function BodyFrame({ html, text }: { html: string | null; text: string | 
     );
   if (!html)
     return (
-      <pre className="whitespace-pre-wrap font-inter text-body-sm text-on-surface dark:text-dark-on-surface">
+      <pre className="select-text whitespace-pre-wrap font-inter text-body-sm text-on-surface dark:text-dark-on-surface">
         {text}
       </pre>
     );
@@ -32,6 +32,13 @@ export function BodyFrame({ html, text }: { html: string | null; text: string | 
         const document = event.currentTarget.contentDocument;
         if (!document) return;
         setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
+        // The message body is its own document, so neither the app-wide
+        // `select-none` nor `tauri-plugin-prevent-default`'s injected script
+        // reaches it — the script only runs in the main frame, and this frame
+        // has no `allow-scripts` to run anything of its own. Selection is
+        // wanted here, the native right-click menu is not, so the parent
+        // cancels it from the outside (same-origin makes that reachable).
+        document.addEventListener('contextmenu', (menu) => menu.preventDefault());
         document.addEventListener('click', (click) => {
           const link = (click.target as Element | null)?.closest('a[href]');
           if (!link) return;

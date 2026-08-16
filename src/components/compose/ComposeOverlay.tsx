@@ -156,7 +156,11 @@ export function ComposeOverlay() {
               height: 'var(--compose-h)',
             } as CSSProperties
           }
-          className="fixed bottom-container-padding right-container-padding z-50 flex flex-col overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
+          // `select-text` covers the whole compose window (recipients,
+          // subject, body, quoted original) — it is all text the user is
+          // authoring or quoting, so the app-wide `select-none` from
+          // index.html must not reach in here.
+          className="fixed bottom-container-padding right-container-padding z-50 flex select-text flex-col overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
         >
           <Dialog.Description className="sr-only">
             Compose panel. The mailbox behind it stays interactive.

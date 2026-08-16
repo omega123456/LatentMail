@@ -5,7 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LatentMail</title>
   </head>
-  <body>
+  <!-- Text selection is opt-in, not opt-out: a desktop mail client should not
+       let a drag across the sidebar or a conversation row highlight chrome the
+       way a web page does. Surfaces that carry real content the user may want
+       to copy re-enable it with `select-text` (reading pane subject/header/
+       body, the compose window, free-text inputs). Declared here rather than on
+       the React root so portalled overlays — dialogs, context menus, toasts —
+       inherit it too. -->
+  <body class="select-none">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

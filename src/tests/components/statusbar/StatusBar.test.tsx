@@ -127,12 +127,14 @@ describe('StatusBar', () => {
   it('does not show Syncing… on a background tick; a manual refresh does', async () => {
     const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const user = userEvent.setup();
-    let finish: ((value: {
-      accountId: string;
-      state: 'idle';
-      lastSyncedAt: number;
-      lastError: null;
-    }) => void) | undefined;
+    let finish:
+      | ((value: {
+          accountId: string;
+          state: 'idle';
+          lastSyncedAt: number;
+          lastError: null;
+        }) => void)
+      | undefined;
     ipc.override(
       'trigger_sync',
       () =>

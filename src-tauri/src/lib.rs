@@ -7,6 +7,7 @@ pub mod logging;
 pub mod queue;
 pub mod sanitize;
 pub mod settings;
+pub mod shell;
 pub mod storage;
 pub mod sync;
 
@@ -20,6 +21,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(shell::prevent_default_plugin())
         .setup(|app| {
             let handle = app.handle();
             let directory = handle.path().app_log_dir()?;

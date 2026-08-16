@@ -159,7 +159,7 @@ export function ReadingPane({
     >
       <div className="min-h-full w-full rounded-md border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest">
         <div className="mb-container-padding flex items-start justify-between gap-4">
-          <h1 className="text-display-sm leading-tight text-on-surface dark:text-dark-on-surface">
+          <h1 className="select-text text-display-sm leading-tight text-on-surface dark:text-dark-on-surface">
             {conversation.subject}
           </h1>
           <div className="flex shrink-0 gap-2">
