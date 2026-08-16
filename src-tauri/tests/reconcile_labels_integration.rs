@@ -479,3 +479,107 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
          regardless of listing order"
     );
 }
+
+/// A locally-known message that reconciliation discovers carries `SENT`
+/// observes its `to`/`cc` recipients as contacts, exactly like the
+/// mutation-driven contact-observation path — proving reconciliation's own
+/// commit transaction (not just live sync) keeps the contacts table current
+/// for messages the user sent.
+#[tokio::test]
+async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/profile"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "emailAddress": "me@example.com", "messagesTotal": 1, "threadsTotal": 1, "historyId": "50"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "labels": [{"id": "SENT", "name": "Sent", "type": "system"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .and(query_param_is_missing("labelIds"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "messages": [{"id": "sent-1", "threadId": "sent-thread"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .and(query_param("labelIds", "SENT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "messages": [{"id": "sent-1", "threadId": "sent-thread"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let (storage, _directory) = temp_storage(Some(1));
+    let connection = storage.connection().unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &row("sent-1", "sent-thread", "Reply to team"),
+    )
+    .unwrap();
+    MessageRepository::set_recipient_roles(
+        &connection,
+        "account",
+        "sent-1",
+        "First Recipient <first@example.com>",
+        "second@example.com",
+        "",
+        None,
+    )
+    .unwrap();
+    ThreadRepository::upsert(
+        &connection,
+        &Thread {
+            account_id: "account".into(),
+            id: "sent-thread".into(),
+            subject: "Reply to team".into(),
+            participants: "sender@example.com".into(),
+            latest_at: 1,
+            message_count: 1,
+            is_unread: false,
+            is_starred: false,
+            has_attachments: false,
+            has_draft: false,
+        },
+    )
+    .unwrap();
+    drop(connection);
+
+    let registry = WorkRegistry::new();
+    let engine = SyncEngine::new(
+        storage.clone(),
+        create_queue_engine(250, 250, registry.clone()),
+        registry,
+        noop_event_sink(),
+    );
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+
+    server.verify().await;
+
+    let connection = storage.connection().unwrap();
+    let contacts = latentmail_lib::contacts::lookup(&connection, "account", "first").unwrap();
+    assert_eq!(contacts.len(), 1, "the `to` recipient must be observed");
+    assert_eq!(contacts[0].address, "first@example.com");
+    assert_eq!(contacts[0].display_name.as_deref(), Some("First Recipient"));
+
+    let cc_contacts = latentmail_lib::contacts::lookup(&connection, "account", "second").unwrap();
+    assert_eq!(cc_contacts.len(), 1, "the `cc` recipient must be observed too");
+    assert_eq!(cc_contacts[0].address, "second@example.com");
+}
