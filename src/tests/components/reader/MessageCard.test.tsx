@@ -89,4 +89,24 @@ describe('MessageCard', () => {
     expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
     expect(screen.getByLabelText('Message body')).toBeInTheDocument();
   });
+
+  it('toggles the message from a click on its row without hijacking the sender button', async () => {
+    const user = userEvent.setup();
+    const onComposeTo = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present' }}
+        expanded={false}
+        newest={false}
+        onComposeTo={onComposeTo}
+      />,
+    );
+    await user.click(screen.getByText('Preview'));
+    expect(screen.getByLabelText('Message body')).toBeInTheDocument();
+    await user.click(screen.getByText('Alex'));
+    expect(onComposeTo).toHaveBeenCalledWith(message.sender);
+    expect(screen.getByLabelText('Message body')).toBeInTheDocument();
+    await user.click(screen.getByRole('time'));
+    expect(screen.queryByLabelText('Message body')).not.toBeInTheDocument();
+  });
 });
