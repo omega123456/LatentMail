@@ -211,11 +211,12 @@ fn html_presence_carries_three_distinguishable_states() {
         HtmlPresence::NeverFetched
     );
 
-    MessageRepository::set_html_body(
+    MessageRepository::set_body(
         &connection,
         "account",
         "backfilled",
         None,
+        Some("hi"),
         HtmlPresence::Absent,
     )
     .unwrap();
@@ -225,11 +226,12 @@ fn html_presence_carries_three_distinguishable_states() {
     assert_eq!(absent.html_presence, HtmlPresence::Absent);
     assert!(absent.html_body.is_none());
 
-    MessageRepository::set_html_body(
+    MessageRepository::set_body(
         &connection,
         "account",
         "backfilled",
         Some("<p>hi</p>"),
+        None,
         HtmlPresence::Present,
     )
     .unwrap();

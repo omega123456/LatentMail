@@ -293,6 +293,14 @@ pub struct Message {
     pub html_presence: HtmlPresence,
 }
 
+impl Message {
+    /// True when neither body part is stored, i.e. the reader has nothing to
+    /// show regardless of what `html_presence` claims.
+    pub fn body_is_empty(&self) -> bool {
+        self.html_body.is_none() && self.plain_body.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeMessageContext {
     pub message: Message,
@@ -666,16 +674,20 @@ impl MessageRepository {
         )?;
         Ok(())
     }
-    pub fn set_html_body(
+    /// Writes both parts of a just-fetched body. Storing only the HTML would
+    /// leave a plain-text-only message (bounce notices, mailing-list digests)
+    /// marked fetched with nothing to render.
+    pub fn set_body(
         connection: &Connection,
         account_id: &str,
         id: &str,
         html_body: Option<&str>,
+        plain_body: Option<&str>,
         presence: HtmlPresence,
     ) -> Result<()> {
         connection.execute(
-            "UPDATE messages SET html_body=?1, html_presence=?2 WHERE account_id=?3 AND id=?4",
-            params![html_body, presence.as_db_str(), account_id, id],
+            "UPDATE messages SET html_body=?1, plain_body=?2, html_presence=?3 WHERE account_id=?4 AND id=?5",
+            params![html_body, plain_body, presence.as_db_str(), account_id, id],
         )?;
         Ok(())
     }

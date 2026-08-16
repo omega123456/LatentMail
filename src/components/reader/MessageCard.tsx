@@ -63,12 +63,16 @@ export function MessageCard({
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
   const requested = useRef<string | null>(null);
+  // A row marked fetched but holding neither part is a body an earlier build
+  // dropped (it stored only the HTML, so plain-text-only mail such as a bounce
+  // notice ended up blank) — refetching repairs it rather than rendering "no
+  // content" forever.
+  const needsBody = message.htmlPresence === 'neverFetched' || (!message.html && !message.text);
   useEffect(() => {
-    if (!open || message.htmlPresence !== 'neverFetched' || requested.current === message.id)
-      return;
+    if (!open || !needsBody || requested.current === message.id) return;
     requested.current = message.id;
     onFetchBody?.(message.id);
-  }, [message.htmlPresence, message.id, onFetchBody, open]);
+  }, [message.id, needsBody, onFetchBody, open]);
   return (
     <article
       className={`relative pb-6 ${newest ? '' : 'mb-6 border-b border-outline-variant/30 dark:border-dark-outline-variant/50'}`}

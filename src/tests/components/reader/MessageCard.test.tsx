@@ -42,6 +42,34 @@ describe('MessageCard', () => {
     expect(onFetchBody).toHaveBeenCalledTimes(2);
   });
 
+  it('refetches a message marked fetched that stored neither body part', () => {
+    const onFetchBody = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, htmlPresence: 'absent' }}
+        expanded
+        newest
+        onFetchBody={onFetchBody}
+      />,
+    );
+    expect(onFetchBody).toHaveBeenCalledWith('message-1');
+    expect(screen.getByText('This message has no content.')).toBeInTheDocument();
+  });
+
+  it('leaves a message that already has a plain body alone', () => {
+    const onFetchBody = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, htmlPresence: 'absent', text: 'Undelivered mail' }}
+        expanded
+        newest
+        onFetchBody={onFetchBody}
+      />,
+    );
+    expect(onFetchBody).not.toHaveBeenCalled();
+    expect(screen.getByText('Undelivered mail')).toBeInTheDocument();
+  });
+
   it('expands an older message and shows blocked-image notice', async () => {
     const user = userEvent.setup();
     renderWithQueryClient(

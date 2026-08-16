@@ -53,11 +53,16 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
             .html_presence,
         HtmlPresence::NeverFetched
     );
-    MessageRepository::set_html_body(
+    assert!(MessageRepository::get(&connection, "account", "message")
+        .unwrap()
+        .unwrap()
+        .body_is_empty());
+    MessageRepository::set_body(
         &connection,
         "account",
         "message",
         Some("<p>full body</p>"),
+        None,
         HtmlPresence::Present,
     )
     .unwrap();
@@ -66,11 +71,13 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
         .unwrap();
     assert_eq!(cached.html_body.as_deref(), Some("<p>full body</p>"));
     assert_eq!(cached.html_presence, HtmlPresence::Present);
-    MessageRepository::set_html_body(
+    assert!(!cached.body_is_empty());
+    MessageRepository::set_body(
         &connection,
         "account",
         "message",
         None,
+        Some("plain-only bounce notice"),
         HtmlPresence::Absent,
     )
     .unwrap();
@@ -79,4 +86,8 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
         .unwrap();
     assert_eq!(absent.html_presence, HtmlPresence::Absent);
     assert!(absent.html_body.is_none());
+    // An HTML-less message keeps its plain part, so the reader has something
+    // to render instead of "This message has no content".
+    assert_eq!(absent.plain_body.as_deref(), Some("plain-only bounce notice"));
+    assert!(!absent.body_is_empty());
 }

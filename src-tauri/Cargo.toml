@@ -28,6 +28,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 lettre = { version = "0.11", default-features = false, features = ["builder"] }
 html2text = "0.13"
+mime = "0.3"
 oauth2 = "5"
 psl = "2.1.224"
 refinery = { version = "0.8", features = ["rusqlite"] }

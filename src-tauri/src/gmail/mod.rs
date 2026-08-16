@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
+use mime::Mime;
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
@@ -1028,11 +1029,16 @@ struct Content {
     inline: Vec<InlinePart>,
 }
 fn collect_part(part: &RawPart, content: &mut Content) {
+    // Parsed once, so every decision below is a comparison of typed
+    // type/subtype names rather than string surgery on a header value that
+    // legitimately carries parameters (`text/plain; charset=us-ascii`) and
+    // arbitrary case. An unparseable or missing type is treated as opaque
+    // bytes, which is what it is.
     let mime = part
         .mime_type
         .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+        .and_then(|value| value.parse::<Mime>().ok())
+        .unwrap_or(mime::APPLICATION_OCTET_STREAM);
     let data = part
         .body
         .as_ref()
@@ -1044,7 +1050,8 @@ fn collect_part(part: &RawPart, content: &mut Content) {
             .find(|header| header.name.eq_ignore_ascii_case("content-id"))
             .map(|header| header.value.trim_matches(['<', '>']).to_owned())
     });
-    if !part.filename.as_deref().unwrap_or_default().is_empty() {
+    let is_attachment = !part.filename.as_deref().unwrap_or_default().is_empty();
+    if is_attachment {
         content.attachments = true;
         if let Some(attachment_id) = part
             .body
@@ -1054,27 +1061,97 @@ fn collect_part(part: &RawPart, content: &mut Content) {
             content.attachment_parts.push(AttachmentPart {
                 attachment_id: attachment_id.to_owned(),
                 filename: part.filename.clone().unwrap_or_default(),
-                mime_type: mime.clone(),
+                mime_type: mime.essence_str().to_owned(),
             });
         }
     }
     if let (Some(content_id), Some(bytes)) = (cid, data.clone()) {
         content.inline.push(InlinePart {
             content_id,
-            mime_type: mime.clone(),
+            // The essence, not the raw header: this is spliced straight into a
+            // `data:` URL by the sanitizer, where a `name="…"` parameter would
+            // corrupt it.
+            mime_type: mime.essence_str().to_owned(),
             bytes,
         });
     }
-    if mime.starts_with("text/html") {
-        content.html = data.map(bytes_to_text);
-    } else if mime.starts_with("text/plain") {
-        content.plain = data.map(bytes_to_text);
+    // The outermost text part of each type is this message's own body; deeper
+    // ones belong to something it carries. A `multipart/report` bounce nests
+    // the returned mail as `message/rfc822`, so last-wins rendered the
+    // original message where the delivery notice should be. Attachments never
+    // qualify at all — a `.txt` or `.html` file is not the body.
+    let slot = match (is_attachment, mime.type_(), mime.subtype()) {
+        (false, mime::TEXT, mime::HTML) => Some(&mut content.html),
+        (false, mime::TEXT, mime::PLAIN) => Some(&mut content.plain),
+        _ => None,
+    };
+    if let (Some(slot), Some(bytes)) = (slot, data) {
+        if slot.is_none() {
+            *slot = Some(bytes_to_text(bytes));
+        }
+    }
+    // A `message/*` part is a whole other mail this one carries — a bounce's
+    // returned original, a forwarded attachment. Its parts are that message's
+    // body, never this one's, so the walk stops at the boundary and the
+    // carried mail is appended instead of merged.
+    //
+    // Only `message/rfc822` is a carried *mail*. The rest of the type —
+    // `delivery-status`, `disposition-notification`, `partial` — are
+    // machine-readable reports whose substance the human-readable part of the
+    // same message already states in prose, which is why Gmail renders none of
+    // them either.
+    if mime.type_() == mime::MESSAGE {
+        if let Some(block) = (mime.subtype() == "rfc822")
+            .then(|| embedded_message(part))
+            .flatten()
+        {
+            match &mut content.plain {
+                Some(plain) => plain.push_str(&block),
+                slot => *slot = Some(block.trim_start().to_owned()),
+            }
+        }
+        return;
     }
     if let Some(parts) = &part.parts {
         for child in parts {
             collect_part(child, content);
         }
     }
+}
+/// Renders a carried `message/rfc822` the way Gmail's own client does — a
+/// rule, the carried mail's headers, then its text. Without it a bounce shows
+/// the delivery notice and silently drops the message the notice is about.
+///
+/// The rendering is ours because the API has none to give: `messages.get`
+/// returns the MIME tree (`format=raw` returns RFC822 source), and the
+/// separator Gmail's web UI draws is that client's presentation, not a field.
+/// What the API does supply is the only input here — the carried mail's own
+/// `headers`, which Gmail hangs on the single child part that *is* that
+/// message's root, so the child is both where the headers come from and where
+/// the recursive walk resumes.
+///
+/// ponytail: appended to the plain body only — an HTML parent carrying an
+/// attached message still drops it. Bounces and forward-as-attachment are
+/// plain text; do the HTML side when something real needs it.
+fn embedded_message(part: &RawPart) -> Option<String> {
+    let root = part.parts.as_deref()?.first()?;
+    let mut carried = Content::default();
+    collect_part(root, &mut carried);
+    let carried_headers = headers(root.headers.as_deref().unwrap_or_default());
+    let mut block = String::from("\n\n---------- Forwarded message ----------\n");
+    for name in ["From", "To", "Cc", "Bcc", "Date", "Subject"] {
+        if let Some(value) = carried_headers.get(&name.to_ascii_lowercase()) {
+            block.push_str(&format!("{name}: {value}\n"));
+        }
+    }
+    let body = carried.plain.or_else(|| {
+        carried
+            .html
+            .and_then(|html| html2text::from_read(html.as_bytes(), 80).ok())
+    });
+    block.push('\n');
+    block.push_str(body.unwrap_or_default().trim_end());
+    Some(block)
 }
 fn decode(value: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD

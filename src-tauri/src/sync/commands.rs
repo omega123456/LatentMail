@@ -612,16 +612,20 @@ pub async fn fetch_message_body<R: Runtime>(
 ) -> Result<(), String> {
     let account = account_id.clone();
     let id = message_id.clone();
-    let presence = string_try!(
+    let stored = string_try!(
         storage
             .run(move |connection| {
                 MessageRepository::get(connection, &account, &id)
-                    .map(|message| message.map(|value| value.html_presence))
+                    .map(|message| message.map(|value| (value.html_presence, value.body_is_empty())))
             })
             .await
     )
     .ok_or_else(|| "Message is unavailable".to_owned())?;
-    if !matches!(presence, crate::storage::HtmlPresence::NeverFetched) {
+    // An earlier build stored only the HTML part, so an HTML-less message (a
+    // `multipart/report` bounce notice, say) was marked fetched with both body
+    // columns still empty and rendered as "no content" forever. Refetching
+    // those repairs them in place.
+    if !matches!(stored.0, crate::storage::HtmlPresence::NeverFetched) && !stored.1 {
         return Ok(());
     }
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
@@ -629,6 +633,7 @@ pub async fn fetch_message_body<R: Runtime>(
     let html_presence =
         crate::storage::HtmlPresence::from_fetched_body(message.html_body.as_deref());
     let html_body = message.html_body;
+    let plain_body = message.plain_body;
     let parts = message
         .inline_parts
         .into_iter()
@@ -642,11 +647,12 @@ pub async fn fetch_message_body<R: Runtime>(
         storage
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
-                MessageRepository::set_html_body(
+                MessageRepository::set_body(
                     &transaction,
                     &account_id,
                     &message_id,
                     html_body.as_deref(),
+                    plain_body.as_deref(),
                     html_presence,
                 )?;
                 MessageRepository::replace_inline_parts(

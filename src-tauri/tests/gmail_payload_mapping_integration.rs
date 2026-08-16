@@ -14,6 +14,7 @@ struct Shape {
     expect_html: Option<String>,
     attachment: Option<bool>,
     inline: Option<String>,
+    expect_inline_mime: Option<String>,
     payload: Value,
 }
 
@@ -21,7 +22,7 @@ struct Shape {
 async fn committed_message_corpus_maps_payload_trees() {
     let shapes: Vec<Shape> =
         serde_json::from_str(include_str!("fixtures/gmail_payload_corpus.json")).unwrap();
-    assert_eq!(shapes.len(), 8);
+    assert_eq!(shapes.len(), 9);
     for shape in shapes {
         let server = MockServer::start().await;
         let body = serde_json::json!({"id":shape.name,"threadId":"thread","historyId":"7","payload":shape.payload});
@@ -54,6 +55,11 @@ async fn committed_message_corpus_maps_payload_trees() {
         );
         if let Some(cid) = shape.inline {
             assert_eq!(message.inline_parts[0].content_id, cid);
+        }
+        // The sanitizer splices this into a `data:` URL, so it must be the
+        // bare essence however the part declared itself.
+        if let Some(expected) = shape.expect_inline_mime {
+            assert_eq!(message.inline_parts[0].mime_type, expected, "{}", shape.name);
         }
         if shape.name == "missing_headers" {
             assert!(message.sender.is_empty() && message.subject.is_empty());
