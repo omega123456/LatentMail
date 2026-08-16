@@ -14,6 +14,19 @@ LatentMail v2 is a ground-up rewrite of a desktop Gmail client as a **Tauri v2 �
 - Events follow the `domain://event` naming convention (e.g. `sync://progress`, `queue://summary`, `account://state`).
 - A runtime `forbidden`/permission error almost always means a missing or mistyped entry in `capabilities/default.json`, or a mismatch between the TOML `commands.allow` name and the registered Rust command name.
 
+### SQLite conventions
+
+The database is a rebuildable cache of Gmail, but it is also the thing the UI reads on every keystroke, so read paths are held to query-plan standards, not just correctness.
+
+- **`thread_labels` is derived data with exactly one writer.** It answers "which threads carry label X, newest first" for the mailbox listing, because the filter (`message_labels`) and the sort key (`threads.latest_at`) live in different tables and no index over the normalised schema serves both — see `V10__thread_label_index.sql` for the measurements. It is maintained **only** by `ThreadRepository::write_summary`, and thread deletion is handled by the FK cascade, never by hand.
+  - Consequence: **any code path that changes label membership must call `ThreadRepository::recompute`/`recompute_many` for the touched threads in the same transaction as the change.** Every existing path does. Skipping it does not fail a test or corrupt a row — the thread just silently stops appearing under a label in the UI.
+  - Consequence for tests: a fixture that hand-writes `ThreadRepository::upsert` plus `set_label_membership` builds a state production cannot produce, and will not appear in a label-filtered listing. Write messages and memberships first, then `recompute`.
+- **Repository statements executed in a loop use `prepare_cached`, not `connection.execute`.** `execute` re-compiles its SQL on every call; the per-message write path runs ~12 statements per message, so a backfill page paid thousands of avoidable compiles. `STATEMENT_CACHE_CAPACITY` in `storage/mod.rs` is sized for the widest transaction (sync/backfill) — if you add statements to that path, check it still fits. Never build a statement with `format!` where a fixed set of literals would do; a formatted string defeats the cache.
+- **Epoch units are a boundary contract**: SQLite stores seconds, IPC DTOs emit milliseconds via `sync::dto::to_millis`. See the date/time rule below.
+- **Every hot query's plan is asserted**, not assumed: `storage_schema_integration::hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts` runs `EXPLAIN QUERY PLAN` against the real migrated schema and fails on `TEMP B-TREE` or a lost index. Extend it when you add a read path, and prefer it over reasoning about plans in review.
+- **Indexes are replaced, not stacked** (`V8`, `V10`). Before adding one, check whether an existing composite already provides the prefix; before removing one, grep for every query that could use it, including FK cascades — an un-indexed `ON DELETE CASCADE` turns a bulk delete quadratic.
+- Migrations are forward-only and numbered `V<n>__snake_case.sql`; `refinery` wraps each in a transaction. Validate a new one against a *populated* database (`PRAGMA foreign_key_check` plus a set-equivalence query against the query it replaces), not just the empty one the tests build.
+
 ### Security
 
 - OAuth uses PKCE (S256) with `access_type=offline` and `prompt=consent`; redirects go to `127.0.0.1`, never `localhost`. Refresh tokens live in the OS keychain only — never in the database or on disk in plaintext.

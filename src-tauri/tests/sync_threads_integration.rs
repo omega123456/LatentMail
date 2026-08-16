@@ -433,7 +433,6 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
         },
     )
     .unwrap();
-    ThreadRepository::upsert(&connection, &thread("t1", seconds, false)).unwrap();
     MessageRepository::write_full_state(
         &connection,
         &Message {
@@ -458,6 +457,7 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
     )
     .unwrap();
     MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);
     let application = app();
     application.manage(storage);

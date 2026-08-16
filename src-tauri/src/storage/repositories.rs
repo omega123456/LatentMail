@@ -8,6 +8,9 @@ use super::addresses;
 
 const BIND_BATCH_SIZE: usize = 500;
 
+const INSERT_MESSAGE_LABEL: &str =
+    "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
     pub id: String,
@@ -107,7 +110,7 @@ impl LabelRepository {
             Some(color) => (Some(color.text.as_str()), Some(color.background.as_str())),
             None => (None, None),
         };
-        connection.execute("INSERT INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,kind=excluded.kind,color_text=excluded.color_text,color_background=excluded.color_background,message_count=excluded.message_count,unread_count=excluded.unread_count", params![label.account_id,label.id,label.name,label.kind,color_text,color_background,label.message_count,label.unread_count])?;
+        connection.prepare_cached("INSERT INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,kind=excluded.kind,color_text=excluded.color_text,color_background=excluded.color_background,message_count=excluded.message_count,unread_count=excluded.unread_count")?.execute(params![label.account_id,label.id,label.name,label.kind,color_text,color_background,label.message_count,label.unread_count])?;
         Ok(())
     }
     pub fn list(connection: &Connection, account_id: &str) -> Result<Vec<Label>> {
@@ -127,10 +130,11 @@ impl LabelRepository {
     /// A subsequent `labels.list` refresh upserts the real name/counts over
     /// this placeholder.
     pub fn ensure_placeholder(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
-        connection.execute(
-            "INSERT OR IGNORE INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?2,'system',NULL,NULL,0,0)",
-            params![account_id, id],
-        )?;
+        connection
+            .prepare_cached(
+                "INSERT OR IGNORE INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?2,'system',NULL,NULL,0,0)",
+            )?
+            .execute(params![account_id, id])?;
         Ok(())
     }
     /// Trims and validates a candidate label name against every rule in one
@@ -369,14 +373,15 @@ impl MessageRepository {
         bcc: &str,
         references: Option<&str>,
     ) -> Result<()> {
-        connection.execute(
-            "UPDATE messages SET to_recipients=?1,cc_recipients=?2,bcc_recipients=?3,rfc_references=?4 WHERE account_id=?5 AND id=?6",
-            params![to, cc, bcc, references, account_id, id],
-        )?;
+        connection
+            .prepare_cached(
+                "UPDATE messages SET to_recipients=?1,cc_recipients=?2,bcc_recipients=?3,rfc_references=?4 WHERE account_id=?5 AND id=?6",
+            )?
+            .execute(params![to, cc, bcc, references, account_id, id])?;
         Ok(())
     }
     pub fn write_full_state(connection: &Connection, message: &Message) -> Result<bool> {
-        let changed = connection.execute("INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(account_id,id) DO UPDATE SET thread_id=excluded.thread_id,rfc_message_id=excluded.rfc_message_id,sender=excluded.sender,recipients=excluded.recipients,subject=excluded.subject,sent_at=excluded.sent_at,snippet=excluded.snippet,html_body=excluded.html_body,plain_body=excluded.plain_body,has_attachments=excluded.has_attachments,is_unread=excluded.is_unread,is_starred=excluded.is_starred,history_id=excluded.history_id,truncated_body=excluded.truncated_body,html_presence=excluded.html_presence WHERE excluded.history_id > messages.history_id", params![message.account_id,message.id,message.thread_id,message.rfc_message_id,message.sender,message.recipients,message.subject,message.sent_at,message.snippet,message.html_body,message.plain_body,message.has_attachments,message.is_unread,message.is_starred,message.history_id,message.truncated_body,message.html_presence.as_db_str()])?;
+        let changed = connection.prepare_cached("INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(account_id,id) DO UPDATE SET thread_id=excluded.thread_id,rfc_message_id=excluded.rfc_message_id,sender=excluded.sender,recipients=excluded.recipients,subject=excluded.subject,sent_at=excluded.sent_at,snippet=excluded.snippet,html_body=excluded.html_body,plain_body=excluded.plain_body,has_attachments=excluded.has_attachments,is_unread=excluded.is_unread,is_starred=excluded.is_starred,history_id=excluded.history_id,truncated_body=excluded.truncated_body,html_presence=excluded.html_presence WHERE excluded.history_id > messages.history_id")?.execute(params![message.account_id,message.id,message.thread_id,message.rfc_message_id,message.sender,message.recipients,message.subject,message.sent_at,message.snippet,message.html_body,message.plain_body,message.has_attachments,message.is_unread,message.is_starred,message.history_id,message.truncated_body,message.html_presence.as_db_str()])?;
         Ok(changed == 1)
     }
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Message>> {
@@ -598,7 +603,7 @@ impl MessageRepository {
     /// backfill alone has ever seen. Gated by the same strict
     /// `history_id`-freshness rule as every other write path.
     pub fn write_traversal_state(connection: &Connection, message: &Message) -> Result<bool> {
-        let changed = connection.execute(
+        let changed = connection.prepare_cached(
             "INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,NULL,?10,?11,?12,?13,?14,?15)
              ON CONFLICT(account_id,id) DO UPDATE SET
@@ -615,7 +620,8 @@ impl MessageRepository {
                history_id=excluded.history_id,
                truncated_body=excluded.truncated_body
              WHERE excluded.history_id > messages.history_id",
-            params![
+        )?
+            .execute(params![
                 message.account_id,
                 message.id,
                 message.thread_id,
@@ -631,8 +637,7 @@ impl MessageRepository {
                 message.history_id,
                 message.truncated_body,
                 message.html_presence.as_db_str()
-            ],
-        )?;
+            ])?;
         Ok(changed == 1)
     }
     /// The Gmail draft id resolved and cached for this message (V5), if any
@@ -703,25 +708,24 @@ impl MessageRepository {
         message_id: &str,
         label_ids: &[String],
     ) -> Result<()> {
-        connection.execute(
-            "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2",
-            params![account_id, message_id],
-        )?;
-        let mut statement = connection.prepare(
-            "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)",
-        )?;
+        connection
+            .prepare_cached("DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2")?
+            .execute(params![account_id, message_id])?;
+        let mut statement = connection.prepare_cached(INSERT_MESSAGE_LABEL)?;
         for label_id in label_ids {
             statement.execute(params![account_id, message_id, label_id])?;
         }
-        connection.execute(
-            "UPDATE messages SET is_unread=?1,is_starred=?2 WHERE account_id=?3 AND id=?4",
-            params![
+        drop(statement);
+        connection
+            .prepare_cached(
+                "UPDATE messages SET is_unread=?1,is_starred=?2 WHERE account_id=?3 AND id=?4",
+            )?
+            .execute(params![
                 label_ids.iter().any(|id| id == "UNREAD"),
                 label_ids.iter().any(|id| id == "STARRED"),
                 account_id,
                 message_id
-            ],
-        )?;
+            ])?;
         Ok(())
     }
     pub fn write_mutation_history(
@@ -747,23 +751,25 @@ impl MessageRepository {
         present: bool,
     ) -> Result<()> {
         if present {
-            connection.execute("INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)", params![account_id,message_id,label_id])?;
+            connection
+                .prepare_cached(INSERT_MESSAGE_LABEL)?
+                .execute(params![account_id, message_id, label_id])?;
         } else {
-            connection.execute(
-                "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2 AND label_id=?3",
-                params![account_id, message_id, label_id],
-            )?;
+            connection
+                .prepare_cached(
+                    "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2 AND label_id=?3",
+                )?
+                .execute(params![account_id, message_id, label_id])?;
         }
-        if matches!(label_id, "UNREAD" | "STARRED") {
-            let column = if label_id == "UNREAD" {
-                "is_unread"
-            } else {
-                "is_starred"
-            };
-            connection.execute(
-                &format!("UPDATE messages SET {column}=?1 WHERE account_id=?2 AND id=?3"),
-                params![present, account_id, message_id],
-            )?;
+        let denormalised = match label_id {
+            "UNREAD" => Some("UPDATE messages SET is_unread=?1 WHERE account_id=?2 AND id=?3"),
+            "STARRED" => Some("UPDATE messages SET is_starred=?1 WHERE account_id=?2 AND id=?3"),
+            _ => None,
+        };
+        if let Some(sql) = denormalised {
+            connection
+                .prepare_cached(sql)?
+                .execute(params![present, account_id, message_id])?;
         }
         Ok(())
     }
@@ -812,15 +818,22 @@ impl MessageRepository {
         message_id: &str,
         parts: &[InlinePart],
     ) -> Result<()> {
-        connection.execute(
-            "DELETE FROM message_inline_parts WHERE account_id=?1 AND message_id=?2",
-            params![account_id, message_id],
+        connection
+            .prepare_cached(
+                "DELETE FROM message_inline_parts WHERE account_id=?1 AND message_id=?2",
+            )?
+            .execute(params![account_id, message_id])?;
+        let mut statement = connection.prepare_cached(
+            "INSERT INTO message_inline_parts (account_id,message_id,content_id,mime_type,bytes) VALUES (?1,?2,?3,?4,?5)",
         )?;
         for part in parts {
-            connection.execute(
-                "INSERT INTO message_inline_parts (account_id,message_id,content_id,mime_type,bytes) VALUES (?1,?2,?3,?4,?5)",
-                params![account_id, message_id, part.content_id, part.mime_type, part.bytes],
-            )?;
+            statement.execute(params![
+                account_id,
+                message_id,
+                part.content_id,
+                part.mime_type,
+                part.bytes
+            ])?;
         }
         Ok(())
     }
@@ -1004,7 +1017,7 @@ struct ThreadMessageRow {
 pub struct ThreadRepository;
 impl ThreadRepository {
     pub fn upsert(connection: &Connection, thread: &Thread) -> Result<()> {
-        connection.execute("INSERT INTO threads (account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft,sender_identity,recipient_identity) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(account_id,id) DO UPDATE SET subject=excluded.subject,participants=excluded.participants,latest_at=excluded.latest_at,message_count=excluded.message_count,is_unread=excluded.is_unread,is_starred=excluded.is_starred,has_attachments=excluded.has_attachments,has_draft=excluded.has_draft,sender_identity=excluded.sender_identity,recipient_identity=excluded.recipient_identity", params![thread.account_id,thread.id,thread.subject,thread.participants,thread.latest_at,thread.message_count,thread.is_unread,thread.is_starred,thread.has_attachments,thread.has_draft,thread.sender_identity.encode(),thread.recipient_identity.as_ref().map(ThreadIdentity::encode)])?;
+        connection.prepare_cached("INSERT INTO threads (account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft,sender_identity,recipient_identity) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(account_id,id) DO UPDATE SET subject=excluded.subject,participants=excluded.participants,latest_at=excluded.latest_at,message_count=excluded.message_count,is_unread=excluded.is_unread,is_starred=excluded.is_starred,has_attachments=excluded.has_attachments,has_draft=excluded.has_draft,sender_identity=excluded.sender_identity,recipient_identity=excluded.recipient_identity")?.execute(params![thread.account_id,thread.id,thread.subject,thread.participants,thread.latest_at,thread.message_count,thread.is_unread,thread.is_starred,thread.has_attachments,thread.has_draft,thread.sender_identity.encode(),thread.recipient_identity.as_ref().map(ThreadIdentity::encode)])?;
         Ok(())
     }
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Thread>> {
@@ -1075,10 +1088,9 @@ impl ThreadRepository {
         rows: &[ThreadMessageRow],
     ) -> Result<()> {
         if rows.is_empty() {
-            connection.execute(
-                "DELETE FROM threads WHERE account_id=?1 AND id=?2",
-                params![account_id, thread_id],
-            )?;
+            connection
+                .prepare_cached("DELETE FROM threads WHERE account_id=?1 AND id=?2")?
+                .execute(params![account_id, thread_id])?;
             return Ok(());
         }
         let mut participants = Vec::new();
@@ -1119,7 +1131,29 @@ impl ThreadRepository {
                 sender_identity,
                 recipient_identity,
             },
-        )
+        )?;
+        Self::write_label_index(connection, account_id, thread_id, latest.sent_at)
+    }
+
+    fn write_label_index(
+        connection: &Connection,
+        account_id: &str,
+        thread_id: &str,
+        latest_at: i64,
+    ) -> Result<()> {
+        connection
+            .prepare_cached("DELETE FROM thread_labels WHERE account_id=?1 AND thread_id=?2")?
+            .execute(params![account_id, thread_id])?;
+        connection
+            .prepare_cached(
+                "INSERT INTO thread_labels (account_id,label_id,thread_id,latest_at)
+                 SELECT DISTINCT ?1,ml.label_id,?2,?3
+                 FROM messages m CROSS JOIN message_labels ml
+                 WHERE m.account_id=?1 AND m.thread_id=?2
+                   AND ml.account_id=m.account_id AND ml.message_id=m.id",
+            )?
+            .execute(params![account_id, thread_id, latest_at])?;
+        Ok(())
     }
     /// Cursor-paginated, newest first, optionally filtered to threads that
     /// have at least one message carrying `label_id`.
@@ -1130,38 +1164,30 @@ impl ThreadRepository {
         cursor: Option<(i64, String)>,
         limit: i64,
     ) -> Result<Vec<ThreadListRow>> {
+        let source = match label_id {
+            Some(_) => {
+                "thread_labels tl CROSS JOIN threads t
+                 ON t.account_id=tl.account_id AND t.id=tl.thread_id
+                 WHERE tl.account_id=?1 AND tl.label_id=?2"
+            }
+            None => "threads t WHERE t.account_id=?1",
+        };
+        let (order_at, order_id) = match label_id {
+            Some(_) => ("tl.latest_at", "tl.thread_id"),
+            None => ("t.latest_at", "t.id"),
+        };
         let cursor_sql = cursor
             .as_ref()
-            .map_or("", |_| "AND (t.latest_at,t.id)<(?3,?4)");
+            .map_or_else(String::new, |_| format!("AND ({order_at},{order_id})<(?3,?4)"));
         let sql = format!(
             "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
                     COALESCE((SELECT m.snippet FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1),'')
-             FROM threads t
-             WHERE t.account_id=?1
-               -- Nested rather than a flat join ON PURPOSE. A flat join lets
-               -- SQLite drive the label filter from `message_labels_by_label`
-               -- (account_id, label_id), which enumerates *every* message
-               -- carrying the label and probes each one's `thread_id` — so a
-               -- thread that does not carry the label costs a full walk of
-               -- the label's entire membership, once per thread scanned. On a
-               -- backfilled mailbox (4.5k Inbox messages, 5.6k threads) that
-               -- turned this one query into 5.5s, which the UI experienced as
-               -- new mail appearing ~40s after a sync had already stored it.
-               -- Nesting forces the messages-by-thread index first and reduces
-               -- the label test to a primary-key probe: same rows, ~0.02s.
-               AND (?2 IS NULL OR EXISTS(
-                 SELECT 1 FROM messages m
-                 WHERE m.account_id=t.account_id AND m.thread_id=t.id
-                   AND EXISTS(
-                     SELECT 1 FROM message_labels ml
-                     WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id=?2
-                   )
-               ))
+             FROM {source}
                {cursor_sql}
-             ORDER BY t.latest_at DESC, t.id DESC
+             ORDER BY {order_at} DESC, {order_id} DESC
              LIMIT ?5"
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare_cached(&sql)?;
         let (cursor_at, cursor_id) = match cursor {
             Some((at, id)) => (Some(at), Some(id)),
             None => (None, None),

@@ -418,6 +418,72 @@ fn bulk_membership_overwrite_keeps_denormalised_flags_consistent() {
     assert!(!thread.is_starred);
 }
 
+fn indexed_labels(connection: &rusqlite::Connection, thread_id: &str) -> Vec<(String, i64)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT label_id,latest_at FROM thread_labels WHERE account_id='account' AND thread_id=?1 ORDER BY label_id",
+        )
+        .unwrap();
+    statement
+        .query_map([thread_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
+/// `thread_labels` is what the mailbox listing reads instead of walking
+/// `message_labels` per thread, so it has to track membership exactly —
+/// including the removals and the thread deletion that a listing would
+/// otherwise keep showing.
+#[test]
+fn thread_label_index_tracks_membership_through_recompute() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    for label_id in ["INBOX", "UNREAD", "TRASH"] {
+        LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
+    }
+    let mut stored = message();
+    stored.sent_at = 4_100;
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "message", "INBOX", true)
+        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "message", "UNREAD", true)
+        .unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread").unwrap();
+    assert_eq!(
+        indexed_labels(&connection, "thread"),
+        vec![("INBOX".to_owned(), 4_100), ("UNREAD".to_owned(), 4_100)],
+        "the index carries the thread's sort key alongside every label it holds"
+    );
+
+    MessageRepository::overwrite_membership(
+        &connection,
+        "account",
+        "message",
+        &["TRASH".to_owned()],
+    )
+    .unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread").unwrap();
+    assert_eq!(
+        indexed_labels(&connection, "thread"),
+        vec![("TRASH".to_owned(), 4_100)],
+        "labels the message no longer carries leave the index"
+    );
+
+    MessageRepository::delete(&connection, "account", "message").unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread").unwrap();
+    assert!(
+        ThreadRepository::get(&connection, "account", "thread")
+            .unwrap()
+            .is_none(),
+        "a thread with no messages left is removed"
+    );
+    assert!(
+        indexed_labels(&connection, "thread").is_empty(),
+        "and the cascade takes its index rows with it"
+    );
+}
+
 /// The reconciliation diff (Phase 5) needs the universe of locally stored
 /// ids; no prior method exposed one.
 #[test]
@@ -473,6 +539,33 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("threads_by_latest")));
     assert!(!cursor_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+
+    let labelled_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id='account' AND tl.label_id='INBOX' ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT 51",
+    );
+    assert!(labelled_plan
+        .iter()
+        .any(|step| step.contains("SEARCH tl USING PRIMARY KEY")));
+    assert!(!labelled_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(!labelled_plan.iter().any(|step| step.contains("SCAN")));
+    let labelled_cursor_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id='account' AND tl.label_id='INBOX' AND (tl.latest_at,tl.thread_id)<(10,'thread') ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT 51",
+    );
+    assert!(labelled_cursor_plan
+        .iter()
+        .any(|step| step.contains("(latest_at,thread_id)<(?,?)")));
+    assert!(!labelled_cursor_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    let thread_cascade_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN DELETE FROM thread_labels WHERE account_id='account' AND thread_id='thread'",
+    );
+    assert!(thread_cascade_plan
+        .iter()
+        .any(|step| step.contains("thread_labels_by_thread")));
 
     let message_plan = query_plan(
         &connection,

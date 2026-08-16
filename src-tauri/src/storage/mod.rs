@@ -24,11 +24,14 @@ use thiserror::Error;
 /// single write lock while readers proceed under WAL.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+const STATEMENT_CACHE_CAPACITY: usize = 48;
+
 /// Applied to every file-backed connection: foreign keys and a busy timeout
 /// so a momentary lock conflict waits instead of erroring immediately.
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
+    connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     Ok(())
 }
 
@@ -76,6 +79,7 @@ impl Storage {
     pub fn in_memory() -> Result<Connection, StorageError> {
         let mut connection = Connection::open_in_memory()?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         embedded::migrations::runner().run(&mut connection)?;
         repositories::rebuild_thread_identities_once(&connection)?;
         Ok(connection)
