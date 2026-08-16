@@ -18,7 +18,8 @@ function renderWithClient() {
 const threadA = {
   id: 'thread-a',
   subject: 'First page',
-  participants: ['A'],
+  sender: { display: 'A', address: 'a@example.com' },
+  sentRecipient: null,
   latestAt: Date.parse('2026-08-11T10:00:00Z'),
   messageCount: 1,
   isUnread: false,
@@ -29,7 +30,8 @@ const threadA = {
 const threadB = {
   id: 'thread-b',
   subject: 'Second page',
-  participants: ['B'],
+  sender: { display: 'B', address: 'b@example.com' },
+  sentRecipient: null,
   latestAt: Date.parse('2026-08-01T10:00:00Z'),
   messageCount: 1,
   isUnread: false,

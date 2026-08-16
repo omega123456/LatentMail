@@ -80,6 +80,7 @@ describe('theme store', () => {
       syncOnStartup: true,
       showUnreadCounts: true,
       syncIntervalSeconds: 30,
+      showSenderAvatars: true,
     });
     const { useThemeStore } = await loadThemeStore();
     const writes: Array<{ key: string; value: unknown }> = [];

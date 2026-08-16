@@ -72,6 +72,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ("syncOnStartup", serde_json::json!(false)),
         ("showUnreadCounts", serde_json::json!(false)),
         ("syncIntervalSeconds", serde_json::json!(45)),
+        ("showSenderAvatars", serde_json::json!(false)),
     ] {
         write_setting(app.handle().clone(), app.state(), key.into(), value)
             .await
@@ -98,6 +99,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
     assert!(!settings.sync_on_startup);
     assert!(!settings.show_unread_counts);
     assert_eq!(settings.sync_interval_seconds, 45);
+    assert!(!settings.show_sender_avatars);
 }
 
 #[tokio::test]

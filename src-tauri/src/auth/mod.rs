@@ -30,6 +30,13 @@ use crate::storage::{Account, AccountRepository, Storage};
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+/// The OpenID Connect userinfo endpoint, confirmed against Google's
+/// published discovery document. Supplies the account's real display name
+/// and photograph once the authorization carries the `profile` scope. Only
+/// the real (non-`test-utils`) [`userinfo`] uses this — the fake never
+/// makes an HTTP request at all.
+#[cfg(not(feature = "test-utils"))]
+const USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 
 /// Reads an OAuth endpoint from an override env var, falling back to `default`.
 /// Lets integration tests point the token/profile exchange at a local mock
@@ -98,6 +105,19 @@ pub struct GmailProfile {
     pub email_address: String,
 }
 
+/// The OpenID userinfo document's shape (D-scoped to what this slice uses).
+/// Both fields are optional: Google omits `picture` for an account with no
+/// photo, and a scope-deficient token never reaches this struct at all
+/// (D11 — `start()` only requests it when the granted scopes include
+/// `profile`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserInfo {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub picture: Option<String>,
+}
+
 impl AuthService {
     pub fn new(storage: Storage) -> Self {
         Self {
@@ -142,6 +162,25 @@ impl AuthService {
                     account_id,
                 )
                 .await?;
+            // D11: a token that was granted before this change (or whose
+            // consent screen was declined for the new scope) simply carries
+            // no `profile` scope. That is never an error — the account keeps
+            // its placeholder name and letter avatar silently, with no
+            // banner, no retry and no forced re-authentication.
+            let account = if token_has_scope(&token, "profile") {
+                match userinfo(token.access_token().secret()).await {
+                    Ok(info) => self
+                        .apply_profile(&account.id, info.name, info.picture)
+                        .await?
+                        .unwrap_or(account),
+                    Err(error) => {
+                        tracing::warn!(target: "auth", "userinfo fetch failed, keeping placeholder identity: {error}");
+                        account
+                    }
+                }
+            } else {
+                account
+            };
             // The accounts query only refetches off this event, so without it
             // a successful sign-in leaves the UI on the sign-in screen.
             string_try!(app.emit("account://state", account));
@@ -206,6 +245,40 @@ impl AuthService {
             .map_err(|error| error.to_string())?;
         save_refresh_token(&account.id, &refresh_token)?;
         Ok(account_dto(account))
+    }
+
+    /// Applies a userinfo document's real display name and photograph URL
+    /// over an existing account's placeholder values (D11's "when it does
+    /// arrive" half). `None` fields leave the existing value untouched;
+    /// returns `Ok(None)` if the account no longer exists (e.g. removed
+    /// mid-flow), in which case the caller keeps whatever `AccountDto` it
+    /// already had.
+    pub async fn apply_profile(
+        &self,
+        account_id: &str,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+    ) -> Result<Option<AccountDto>, String> {
+        let account_id = account_id.to_owned();
+        let updated = self
+            .storage
+            .run(move |connection| {
+                let Some(mut account) = AccountRepository::get(connection, &account_id)? else {
+                    return Ok(None);
+                };
+                if let Some(name) = display_name.filter(|name| !name.is_empty()) {
+                    account.display_name = name;
+                }
+                if avatar_url.is_some() {
+                    account.avatar_url = avatar_url;
+                }
+                account.updated_at = chrono::Utc::now().timestamp();
+                AccountRepository::upsert(connection, &account)?;
+                Ok(Some(account))
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(updated.map(account_dto))
     }
 
     pub async fn mark_needs_reauthentication<R: Runtime>(
@@ -329,6 +402,13 @@ pub fn authorization(client_id: &str, redirect: &str) -> Result<Authorization, S
         .add_scope(Scope::new(
             "https://www.googleapis.com/auth/gmail.labels".to_owned(),
         ))
+        // Extends (never reverses) the Gmail scope set for the account
+        // profile photograph — see auth-adjacent ADR for the relationship to
+        // the original PKCE/scope decision. Existing accounts keep working
+        // with their unchanged Gmail scopes; only a fresh or re-authorized
+        // sign-in gains these.
+        .add_scope(Scope::new("openid".to_owned()))
+        .add_scope(Scope::new("profile".to_owned()))
         .add_extra_param("access_type", "offline")
         .add_extra_param("prompt", "consent")
         .set_pkce_challenge(challenge)
@@ -431,6 +511,72 @@ pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
         .json()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Fetches the OpenID userinfo document over real HTTPS. Public for the same
+/// test reasons as [`exchange_code`]/[`profile`]; see
+/// `LATENTMAIL_GOOGLE_USERINFO_URL`. This is a machine-facing outbound-HTTP
+/// boundary exactly like `avatars::resolver`'s DNS/download boundary, so it
+/// follows the same real-versus-fake split: real `reqwest` here, an
+/// in-memory fake under `feature = "test-utils"` below. No test performs a
+/// real HTTP request against this endpoint.
+#[cfg(not(feature = "test-utils"))]
+pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
+    reqwest::Client::new()
+        .get(oauth_endpoint("LATENTMAIL_GOOGLE_USERINFO_URL", USERINFO_URL))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "test-utils")]
+fn fake_userinfo_store() -> &'static std::sync::Mutex<HashMap<String, Result<UserInfo, String>>> {
+    static STORE: OnceLock<std::sync::Mutex<HashMap<String, Result<UserInfo, String>>>> =
+        OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Test-only: programs the fake userinfo document [`userinfo`] returns for
+/// `access_token`, with no real HTTP involved.
+#[cfg(feature = "test-utils")]
+pub fn set_fake_userinfo(access_token: &str, info: UserInfo) {
+    fake_userinfo_store()
+        .lock()
+        .expect("fake userinfo lock poisoned")
+        .insert(access_token.to_owned(), Ok(info));
+}
+
+#[cfg(feature = "test-utils")]
+pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
+    fake_userinfo_store()
+        .lock()
+        .expect("fake userinfo lock poisoned")
+        .get(access_token)
+        .cloned()
+        .unwrap_or_else(|| Err("no fake userinfo programmed for this access token".to_owned()))
+}
+
+/// Whether a token's granted scopes (as Google's token endpoint reported
+/// them back) include `name` — D11's "record which scopes a token actually
+/// carries" so a deficient token degrades silently rather than assuming the
+/// requested scope was actually granted.
+pub fn token_has_scope<EF, TT>(
+    token: &oauth2::StandardTokenResponse<EF, TT>,
+    name: &str,
+) -> bool
+where
+    EF: oauth2::ExtraTokenFields,
+    TT: oauth2::TokenType,
+{
+    token
+        .scopes()
+        .is_some_and(|scopes| scopes.iter().any(|scope| scope.to_string().contains(name)))
 }
 
 #[cfg(not(feature = "test-utils"))]

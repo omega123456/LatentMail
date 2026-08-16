@@ -31,6 +31,7 @@ describe('layout store', () => {
       syncOnStartup: false,
       showUnreadCounts: false,
       syncIntervalSeconds: 30,
+      showSenderAvatars: false,
     });
     const store = await loadStore();
     store.getState().setRoute('settings');
@@ -46,6 +47,7 @@ describe('layout store', () => {
       readerHeight: 60,
       route: 'settings',
       hydrated: true,
+      showSenderAvatars: false,
     });
   });
 

@@ -398,8 +398,11 @@ export function ConversationListContainer() {
     (label) => label.id === mailboxId && label.kind === 'user',
   )?.name;
   const rows = useMemo(
-    () => (query.data?.pages ?? []).flatMap((page) => page.items.map(mapThreadToRow)),
-    [query.data],
+    () =>
+      (query.data?.pages ?? []).flatMap((page) =>
+        page.items.map((thread) => mapThreadToRow(thread, mailboxId)),
+      ),
+    [query.data, mailboxId],
   );
   // `?listState=` still lets Playwright screenshot the loading/empty/error
   // states deterministically instead of racing a real (instantly-resolving

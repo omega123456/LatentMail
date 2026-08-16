@@ -3,7 +3,10 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { moveSource, type MoveDestinationId } from '@/components/actions/MoveToMenu';
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { RowContextMenu } from '@/components/actions/RowContextMenu';
+import { Avatar } from '@/components/shared/Avatar';
 import { exactTime, relativeTime } from '@/lib/format/relative-time';
+import { useSenderAvatarQuery } from '@/lib/query/hooks';
+import { useLayoutStore } from '@/stores/layout';
 import type { Conversation } from '@/lib/types/conversation';
 import type { Density } from '@/lib/types/ipc';
 
@@ -48,6 +51,14 @@ export function ConversationRow({
 }: Props) {
   const compact = density === 'compact';
   const spacious = density === 'spacious';
+  // No avatar at compact — no room, and D8 rejects shrinking one to fit
+  // (FR "Presentation" / D8). Also skips issuing this row's own
+  // sender-avatar query at compact, since nothing would render it.
+  const showAvatarSlot = !compact;
+  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
+  const { data: avatarSrc } = useSenderAvatarQuery(
+    showAvatarSlot ? (conversation.avatarDomain ?? null) : null,
+  );
   // The single-active (keyboard-cursor/open) highlight and the
   // multi-selection treatment must never render simultaneously.
   const showActive = active && !multiSelectActive;
@@ -57,6 +68,19 @@ export function ConversationRow({
       ? 'border-primary/20 bg-surface-container-highest shadow-sm dark:border-dark-primary/20 dark:bg-dark-surface-container-highest'
       : 'border-transparent hover:border-outline-variant/30 hover:bg-surface-container-low dark:hover:border-dark-outline-variant/30 dark:hover:bg-dark-surface-container-low';
   const effectiveSelectionCount = selected && multiSelectActive ? selectionCount : 1;
+  // The unread notch's ring must track the row's own current ground, not a
+  // fixed color — otherwise it visibly mismatches on hover/selected rows
+  // (the plan's single most likely screenshot-regression source). Resting
+  // uses `group-hover:` so the ring follows real `:hover`, since the row's
+  // hover background itself is CSS-only (no JS hover state).
+  const notchRingClassName = selected
+    ? 'ring-primary/10 dark:ring-dark-primary/10'
+    : showActive
+      ? 'ring-surface-container-highest dark:ring-dark-surface-container-highest'
+      : 'ring-surface group-hover:ring-surface-container-low dark:ring-dark-surface-container dark:group-hover:ring-dark-surface-container-low';
+  // FR "Preference": off means no avatar element renders at all, not merely
+  // an un-queried one.
+  const renderAvatar = showAvatarSlot && showSenderAvatars;
   const rowLabels: LabelMenuEntry[] = allLabels.map((label) => ({
     ...label,
     membership: (conversation.labels ?? []).includes(label.name) ? 'checked' : 'unchecked',
@@ -103,7 +127,7 @@ export function ConversationRow({
         data-density={density}
         data-active={showActive || undefined}
         data-selected={selected || undefined}
-        className={`relative mb-1 flex shrink-0 items-center gap-2 rounded border p-3 transition-colors ${stateClasses}`}
+        className={`group relative mb-1 flex shrink-0 items-center gap-2 rounded border p-3 transition-colors ${stateClasses}`}
       >
         {selected && (
           <span
@@ -111,16 +135,36 @@ export function ConversationRow({
             className="absolute inset-y-0 left-0 w-accent-border rounded-l bg-primary dark:bg-dark-primary"
           />
         )}
+        {/* The row's only programmatic read-state signal (D16) — always
+            rendered at every density. At compact it's also the visible edge
+            dot (unchanged); at comfortable/spacious the notch on the avatar
+            carries that visual weight instead, so this becomes
+            visually-hidden decoration-free markup that AT still reads. */}
         <span
-          aria-label={conversation.unread ? 'Unread' : 'Read'}
-          className={`absolute left-2 top-4 h-2 w-2 rounded-full ${conversation.unread ? 'bg-primary dark:bg-dark-primary' : 'bg-transparent'}`}
-        />
+          aria-label={compact ? (conversation.unread ? 'Unread' : 'Read') : undefined}
+          className={
+            compact
+              ? `absolute left-2 top-4 h-2 w-2 rounded-full ${conversation.unread ? 'bg-primary dark:bg-dark-primary' : 'bg-transparent'}`
+              : 'sr-only'
+          }
+        >
+          {!compact && (conversation.unread ? 'Unread' : 'Read')}
+        </span>
+        {renderAvatar && (
+          <Avatar
+            size={spacious ? 40 : 32}
+            src={avatarSrc}
+            label={conversation.identityLabel}
+            unread={conversation.unread}
+            notchRingClassName={notchRingClassName}
+          />
+        )}
         {/* `after:inset-0` stretches the open control's hit area over the
             whole row while keeping one real button for keyboard/AT. */}
         <button
           aria-label={`Open ${conversation.subject}`}
           onClick={onOpen}
-          className="flex min-w-0 flex-1 flex-col gap-1 pl-4 text-left after:absolute after:inset-0 focus-visible:outline-2 focus-visible:outline-primary"
+          className={`flex min-w-0 flex-1 flex-col gap-1 text-left after:absolute after:inset-0 focus-visible:outline-2 focus-visible:outline-primary ${compact ? 'pl-4' : ''}`}
         >
           <span className="flex w-full min-w-0 items-baseline justify-between">
             <span

@@ -63,7 +63,8 @@ const workLabel = {
 const threadOne = {
   id: 'thread-1',
   subject: 'Q3 review',
-  participants: ['Elena Rodriguez'],
+  sender: { display: 'Elena Rodriguez', address: 'elena.r@example.com' },
+  sentRecipient: null,
   latestAt: Date.parse('2026-08-10T09:00:00Z'),
   messageCount: 1,
   isUnread: true,

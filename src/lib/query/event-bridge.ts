@@ -181,6 +181,15 @@ export function EventBridge() {
         void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
     });
 
+    subscribe('avatar://resolved', (event) => {
+      void queryClient.invalidateQueries({
+        queryKey:
+          event.pipeline === 'sender'
+            ? queryKeys.senderAvatar(event.key)
+            : queryKeys.accountAvatar(event.key),
+      });
+    });
+
     subscribe('account://state', () => {
       // Without this, the reauth banner (which renders off the accounts
       // query) would not appear live until something else happened to

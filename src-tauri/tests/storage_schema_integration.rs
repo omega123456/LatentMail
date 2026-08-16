@@ -2,7 +2,8 @@ use latentmail_lib::storage::{
     truncate_body, Account, AccountRepository, ComposeDraftMetadata,
     ComposeDraftMetadataRepository, HtmlPresence, Label, LabelColor, LabelNameError,
     LabelRepository, Message, MessageRepository, Operation, OperationRepository, SettingRepository,
-    Storage, Thread, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+    Storage, Thread, ThreadIdentity, ThreadRepository, TraversalCursor, TraversalCursorRepository,
+    TraversalKind,
 };
 
 fn account() -> Account {
@@ -149,6 +150,11 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         is_starred: true,
         has_attachments: true,
         has_draft: false,
+        sender_identity: ThreadIdentity {
+            display: "sender@example.com".into(),
+            address: Some("sender@example.com".into()),
+        },
+        recipient_identity: None,
     };
     ThreadRepository::upsert(&connection, &thread).unwrap();
     assert_eq!(

@@ -18,4 +18,8 @@ export const queryKeys = {
   conversationsForAccount: (accountId: string) => ['conversation', accountId] as const,
   syncStatus: (accountId: string) => ['syncStatus', accountId] as const,
   traversalStatus: (accountId: string) => ['traversalStatus', accountId] as const,
+  /** Keyed by domain, not by full address — addresses sharing a domain
+   * collapse onto one cache entry/query (plan's "API contracts"). */
+  senderAvatar: (domain: string) => ['senderAvatar', domain] as const,
+  accountAvatar: (accountId: string) => ['accountAvatar', accountId] as const,
 };

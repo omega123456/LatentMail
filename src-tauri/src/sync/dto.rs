@@ -4,7 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{
-    HtmlPresence, Label, Message, Thread, TraversalCursor, TraversalKind as StorageTraversalKind,
+    HtmlPresence, Label, Message, Thread, ThreadIdentity, TraversalCursor,
+    TraversalKind as StorageTraversalKind,
 };
 
 use super::SyncState;
@@ -164,12 +165,30 @@ impl From<TraversalCursor> for TraversalStatusDto {
     }
 }
 
+/// A single resolved participant (D12) — a display label the row can render
+/// directly (never a raw `Name <address>` header string) and the bare
+/// address underneath it, used for avatar domain lookup. Shared by the
+/// ordinary-mailbox sender and the Sent-mailbox recipient.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadIdentityDto {
+    pub display: String,
+    pub address: Option<String>,
+}
+impl From<ThreadIdentity> for ThreadIdentityDto {
+    fn from(identity: ThreadIdentity) -> Self {
+        Self {
+            display: identity.display,
+            address: identity.address,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDto {
     pub id: String,
     pub subject: String,
-    pub participants: Vec<String>,
     pub latest_at: i64,
     pub message_count: i64,
     pub is_unread: bool,
@@ -178,6 +197,14 @@ pub struct ThreadDto {
     pub has_draft: bool,
     pub snippet: String,
     pub label_indicators: Vec<String>,
+    /// The thread's newest message's sender — the ordinary-mailbox row
+    /// identity (D12/D13). Never a raw header string; falls back to
+    /// `(No sender)` when no sender data exists.
+    pub sender: ThreadIdentityDto,
+    /// The newest Sent-labelled message's first recipient — the
+    /// Sent-mailbox row identity. `None` when the thread carries no Sent
+    /// message.
+    pub sent_recipient: Option<ThreadIdentityDto>,
 }
 
 impl From<Thread> for ThreadDto {
@@ -185,7 +212,6 @@ impl From<Thread> for ThreadDto {
         Self {
             id: thread.id,
             subject: thread.subject,
-            participants: split_list(&thread.participants),
             latest_at: to_millis(thread.latest_at),
             message_count: thread.message_count,
             is_unread: thread.is_unread,
@@ -194,6 +220,8 @@ impl From<Thread> for ThreadDto {
             has_draft: thread.has_draft,
             snippet: String::new(),
             label_indicators: Vec::new(),
+            sender: thread.sender_identity.into(),
+            sent_recipient: thread.recipient_identity.map(ThreadIdentityDto::from),
         }
     }
 }

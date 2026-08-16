@@ -13,6 +13,7 @@ type LayoutState = Pick<
   | 'listWidth'
   | 'readerHeight'
   | 'showUnreadCounts'
+  | 'showSenderAvatars'
 > & {
   route: Route;
   hydrated: boolean;
@@ -48,6 +49,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   listWidth: 350,
   readerHeight: 40,
   showUnreadCounts: true,
+  showSenderAvatars: true,
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -60,6 +62,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         listWidth: settings.listWidth,
         readerHeight: settings.readerHeight,
         showUnreadCounts: settings.showUnreadCounts,
+        showSenderAvatars: settings.showSenderAvatars,
         hydrated: true,
       });
     });

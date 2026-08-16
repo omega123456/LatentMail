@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod avatars;
 pub mod compose;
 pub mod contacts;
 pub mod gmail;
@@ -28,6 +29,7 @@ pub fn run() {
             handle.manage(logging::init(directory)?);
             settings::initialize(handle).map_err(std::io::Error::other)?;
             auth::initialize(handle).map_err(std::io::Error::other)?;
+            avatars::initialize(handle).map_err(std::io::Error::other)?;
             Ok(sync::initialize(handle).map_err(std::io::Error::other)?)
         })
         .on_window_event(|window, event| {

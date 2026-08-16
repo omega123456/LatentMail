@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationList } from '@/components/list/ConversationList';
@@ -7,6 +7,7 @@ import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { useLayoutStore } from '@/stores/layout';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
+import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
 const nextPage = [
   {
@@ -44,7 +45,7 @@ beforeEach(() => {
 describe('ConversationList', () => {
   it('reflows rows by density and only shows snippets when spacious', async () => {
     const user = userEvent.setup();
-    render(
+    renderWithQueryClient(
       <>
         <ListHeader />
         <ConversationList />
@@ -68,13 +69,13 @@ describe('ConversationList', () => {
   });
 
   it('opens and marks rows read with keyboard navigation, including clamps', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
     expect(useSelectionStore.getState()).toMatchObject({
       keyboardCursor: 0,
       activeThreadId: 'thread-1',
     });
-    expect(screen.getAllByLabelText('Read')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('Read')[0]).toBeInTheDocument();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' })));
     expect(useSelectionStore.getState().keyboardCursor).toBe(0);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
@@ -84,7 +85,7 @@ describe('ConversationList', () => {
   it('renders state-specific copy and retry', async () => {
     const user = userEvent.setup();
     const retry = vi.fn();
-    const { rerender } = render(<ConversationList state="loading" />);
+    const { rerender } = renderWithQueryClient(<ConversationList state="loading" />);
     expect(screen.getByText('Loading conversations…')).toBeInTheDocument();
     rerender(<ConversationList state="empty" />);
     expect(screen.getByText('Your Inbox is clear.')).toBeInTheDocument();
@@ -99,7 +100,7 @@ describe('ConversationList', () => {
   });
 
   it('renders the still-syncing empty state with a spinner and n/total progress counts', () => {
-    render(
+    renderWithQueryClient(
       <ConversationList
         state="syncing"
         syncProgress={{ persistedCount: 12400, discoveredCount: 50000 }}
@@ -111,7 +112,7 @@ describe('ConversationList', () => {
   });
 
   it('loads the next fixture page at the bottom and preserves the scroll anchor across prepends', () => {
-    const { rerender } = render(
+    const { rerender } = renderWithQueryClient(
       <ConversationList
         pages={[
           [
@@ -148,7 +149,7 @@ describe('ConversationList', () => {
     const allLabels: LabelMenuEntry[] = [
       { id: 'Label_1', name: 'Marketing', color: 'blue', membership: 'unchecked' },
     ];
-    render(<ConversationList allLabels={allLabels} onTriage={onTriage} />);
+    renderWithQueryClient(<ConversationList allLabels={allLabels} onTriage={onTriage} />);
     const row = screen.getAllByTestId('conversation-row')[0];
     await user.pointer({ keys: '[MouseRight]', target: row });
     await user.hover(await screen.findByText('Labels'));
@@ -161,7 +162,7 @@ describe('ConversationList', () => {
 
 describe('ConversationList multi-selection', () => {
   it('Cmd/Ctrl-click toggles a row into and out of the selection without opening it', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     const rows = screen.getAllByTestId('conversation-row');
 
     fireEvent.click(screen.getByLabelText('Open Updates to Color Tokens'), { ctrlKey: true });
@@ -173,7 +174,7 @@ describe('ConversationList multi-selection', () => {
   });
 
   it('includes the focused row when the first Cmd/Ctrl-click starts a multi-selection', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     const rows = screen.getAllByTestId('conversation-row');
 
     fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'));
@@ -184,7 +185,7 @@ describe('ConversationList multi-selection', () => {
   });
 
   it('Shift-click selects a contiguous range from the focused row', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     const rows = screen.getAllByTestId('conversation-row');
 
     fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'));
@@ -197,7 +198,7 @@ describe('ConversationList multi-selection', () => {
   });
 
   it('Cmd/Ctrl-A selects exactly the loaded rows', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true })));
     expect(useMultiSelectStore.getState().selectedIds.size).toBe(4);
     for (const row of screen.getAllByTestId('conversation-row'))
@@ -206,7 +207,7 @@ describe('ConversationList multi-selection', () => {
 
   it('a plain click clears the multi-selection and opens the row', async () => {
     const user = userEvent.setup();
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), {
       ctrlKey: true,
     });
@@ -219,7 +220,7 @@ describe('ConversationList multi-selection', () => {
   });
 
   it('Escape clears an active multi-selection before it ever touches the open conversation', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), {
       ctrlKey: true,
     });
@@ -229,7 +230,7 @@ describe('ConversationList multi-selection', () => {
   });
 
   it('no single-active-row highlight renders while more than one row is selected', () => {
-    render(<ConversationList />);
+    renderWithQueryClient(<ConversationList />);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
     expect(useSelectionStore.getState().keyboardCursor).toBe(0);
 
@@ -244,7 +245,7 @@ describe('ConversationList multi-selection', () => {
 describe('ConversationList triage shortcuts', () => {
   it('uses the registry bindings for selected conversations and ignores focused inputs', () => {
     const onTriage = vi.fn();
-    render(
+    renderWithQueryClient(
       <>
         <input aria-label="filter" />
         <ConversationList onTriage={onTriage} />

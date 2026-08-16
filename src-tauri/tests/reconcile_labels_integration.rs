@@ -16,7 +16,7 @@ use latentmail_lib::{
     gmail::GmailClient,
     storage::{
         Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository,
-        Storage, Thread, ThreadRepository,
+        Storage, Thread, ThreadIdentity, ThreadRepository,
     },
     sync::{create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry},
 };
@@ -179,6 +179,11 @@ async fn starred_unread_message_in_trash_survives_reconciliation_via_the_real_pi
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "sender@example.com".into(),
+                address: Some("sender@example.com".into()),
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();
@@ -439,6 +444,11 @@ async fn a_message_whose_label_set_is_unchanged_is_not_touched_despite_differing
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "sender@example.com".into(),
+                address: Some("sender@example.com".into()),
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();
@@ -554,6 +564,11 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "sender@example.com".into(),
+                address: Some("sender@example.com".into()),
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();

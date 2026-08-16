@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageCard } from '@/components/reader/MessageCard';
+import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
 const message = {
   id: 'message-1',
@@ -16,7 +17,7 @@ const message = {
 describe('MessageCard', () => {
   it('fetches a newly opened lazy body once and exposes loading and retry states', async () => {
     const onFetchBody = vi.fn();
-    const { rerender } = render(
+    const { rerender } = renderWithQueryClient(
       <MessageCard
         message={{ ...message, htmlPresence: 'neverFetched' }}
         expanded
@@ -43,7 +44,7 @@ describe('MessageCard', () => {
 
   it('expands an older message and shows blocked-image notice', async () => {
     const user = userEvent.setup();
-    render(
+    renderWithQueryClient(
       <MessageCard
         message={{
           ...message,

@@ -1,10 +1,12 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@/lib/ipc/commands';
+import { dispatchConvertFileSrc, dispatchInvoke } from '@/lib/ipc/dispatch';
 import type { ThreadCursor } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
+import { useLayoutStore } from '@/stores/layout';
 import type { MailThread, ThreadPage } from '@/lib/types/ipc';
 
 // Rust already renders from SQLite immediately and reconciles after network
@@ -69,6 +71,59 @@ export function useTraversalStatusQuery(accountId: string | null) {
   return useQuery({
     queryKey: queryKeys.traversalStatus(accountId ?? ''),
     queryFn: () => invoke('read_traversal_status', { accountId: accountId as string }),
+    enabled: accountId !== null,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+/** Cache-first sender-avatar lookup, keyed by domain (D-series: addresses
+ * sharing a domain collapse onto one query). Gated on `showSenderAvatars` —
+ * `enabled: false` means the query function never runs and no lookup is
+ * issued, which is the privacy guarantee (D14), not just an ignored result.
+ * A rejected invoke (the command is unregistered until Phase 1 lands, and
+ * any future capability mistype produces the same rejection) is treated
+ * identically to "no image": swallowed inside `queryFn`, never surfaced as
+ * an error state. Uses `dispatchInvoke` directly rather than
+ * `@/lib/ipc/commands`'s `invoke` — that wrapper logs every rejection
+ * through `appLog.error` (a real `console.error`), which a routine, expected
+ * "not registered yet" rejection must never produce (mirrors `app-log.ts`'s
+ * own reason for bypassing it). */
+export function useSenderAvatarQuery(domain: string | null) {
+  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
+  return useQuery({
+    queryKey: queryKeys.senderAvatar(domain ?? ''),
+    queryFn: async () => {
+      try {
+        const result = await dispatchInvoke<string | null>('read_sender_avatar', {
+          domain: domain as string,
+        });
+        return result ? dispatchConvertFileSrc(result) : null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: domain !== null && showSenderAvatars,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+/** Cache-first account profile-photo lookup. Not gated by
+ * `showSenderAvatars` — the account photograph involves no third-party
+ * lookup (FR "Preference"). Same silent-degrade-on-rejection contract as
+ * `useSenderAvatarQuery` above. */
+export function useAccountAvatarQuery(accountId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.accountAvatar(accountId ?? ''),
+    queryFn: async () => {
+      try {
+        const result = await dispatchInvoke<string | null>('read_account_avatar', {
+          accountId: accountId as string,
+        });
+        return result ? dispatchConvertFileSrc(result) : null;
+      } catch {
+        return null;
+      }
+    },
     enabled: accountId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });

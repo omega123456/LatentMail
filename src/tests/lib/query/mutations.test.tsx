@@ -11,7 +11,8 @@ import { queryKeys } from '@/lib/query/keys';
 const thread = {
   id: 'thread-1',
   subject: 'Mutation',
-  participants: ['A'],
+  sender: { display: 'A', address: 'a@example.com' },
+  sentRecipient: null,
   latestAt: 0,
   messageCount: 1,
   isUnread: true,

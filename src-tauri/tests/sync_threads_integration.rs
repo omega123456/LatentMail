@@ -7,7 +7,7 @@ use std::sync::Arc;
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, InlinePart, Label, LabelRepository, Message,
-    MessageRepository, Storage, Thread, ThreadRepository,
+    MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::commands::{
     list_labels, list_threads, load_conversation, read_sync_status, trigger_sync,
@@ -60,6 +60,11 @@ fn thread(id: &str, latest_at: i64, has_draft: bool) -> Thread {
         is_starred: false,
         has_attachments: false,
         has_draft,
+        sender_identity: ThreadIdentity {
+            display: "Alice".into(),
+            address: Some("a@example.com".into()),
+        },
+        recipient_identity: None,
     }
 }
 

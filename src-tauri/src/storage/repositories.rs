@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Result};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use super::addresses;
 
 const BIND_BATCH_SIZE: usize = 500;
 
@@ -912,6 +915,42 @@ pub struct InlinePart {
     pub bytes: Vec<u8>,
 }
 
+/// A resolved participant identity stored on a thread summary (D12): a
+/// display label (never a raw `Name <address>` header string) and a bare
+/// address. Encoded to/from a single JSON `TEXT` column — see the V9
+/// migration's comment on why this is one column, not two.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadIdentity {
+    pub display: String,
+    pub address: Option<String>,
+}
+impl ThreadIdentity {
+    fn no_sender() -> Self {
+        Self {
+            display: "(No sender)".to_owned(),
+            address: None,
+        }
+    }
+    fn no_recipient() -> Self {
+        Self {
+            display: "(No recipient)".to_owned(),
+            address: None,
+        }
+    }
+    fn from_header(header: &str, fallback: fn() -> Self) -> Self {
+        addresses::first_identity(header).map_or_else(fallback, |identity| Self {
+            display: identity.display,
+            address: Some(identity.address),
+        })
+    }
+    fn encode(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+    fn decode(text: &str, fallback: fn() -> Self) -> Self {
+        serde_json::from_str(text).unwrap_or_else(|_| fallback())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thread {
     pub account_id: String,
@@ -924,6 +963,11 @@ pub struct Thread {
     pub is_starred: bool,
     pub has_attachments: bool,
     pub has_draft: bool,
+    /// The newest message's sender, resolved once at write time (D12/D13).
+    pub sender_identity: ThreadIdentity,
+    /// The newest Sent-labelled message's first recipient, when the thread
+    /// carries at least one Sent message; `None` otherwise.
+    pub recipient_identity: Option<ThreadIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -941,16 +985,18 @@ struct ThreadMessageRow {
     is_unread: bool,
     is_starred: bool,
     is_draft: bool,
+    to_recipients: String,
+    is_sent: bool,
 }
 
 pub struct ThreadRepository;
 impl ThreadRepository {
     pub fn upsert(connection: &Connection, thread: &Thread) -> Result<()> {
-        connection.execute("INSERT INTO threads (account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(account_id,id) DO UPDATE SET subject=excluded.subject,participants=excluded.participants,latest_at=excluded.latest_at,message_count=excluded.message_count,is_unread=excluded.is_unread,is_starred=excluded.is_starred,has_attachments=excluded.has_attachments,has_draft=excluded.has_draft", params![thread.account_id,thread.id,thread.subject,thread.participants,thread.latest_at,thread.message_count,thread.is_unread,thread.is_starred,thread.has_attachments,thread.has_draft])?;
+        connection.execute("INSERT INTO threads (account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft,sender_identity,recipient_identity) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(account_id,id) DO UPDATE SET subject=excluded.subject,participants=excluded.participants,latest_at=excluded.latest_at,message_count=excluded.message_count,is_unread=excluded.is_unread,is_starred=excluded.is_starred,has_attachments=excluded.has_attachments,has_draft=excluded.has_draft,sender_identity=excluded.sender_identity,recipient_identity=excluded.recipient_identity", params![thread.account_id,thread.id,thread.subject,thread.participants,thread.latest_at,thread.message_count,thread.is_unread,thread.is_starred,thread.has_attachments,thread.has_draft,thread.sender_identity.encode(),thread.recipient_identity.as_ref().map(ThreadIdentity::encode)])?;
         Ok(())
     }
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Thread>> {
-        connection.query_row("SELECT account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft FROM threads WHERE account_id=?1 AND id=?2", params![account_id,id], thread).optional()
+        connection.query_row("SELECT account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft,sender_identity,recipient_identity FROM threads WHERE account_id=?1 AND id=?2", params![account_id,id], thread).optional()
     }
     /// Recomputes one thread's aggregate summary from its current messages,
     /// or removes the thread row entirely once it has none left. Callers
@@ -960,7 +1006,9 @@ impl ThreadRepository {
     pub fn recompute(connection: &Connection, account_id: &str, thread_id: &str) -> Result<()> {
         let mut statement = connection.prepare(
             "SELECT m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
-                    EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT')
+                    EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'),
+                    m.to_recipients,
+                    EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='SENT')
              FROM messages m WHERE m.account_id=?1 AND m.thread_id=?2 ORDER BY m.sent_at,m.id",
         )?;
         let rows = statement
@@ -983,7 +1031,9 @@ impl ThreadRepository {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let sql = format!(
                 "SELECT m.thread_id,m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
-                        EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT')
+                        EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'),
+                        m.to_recipients,
+                        EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='SENT')
                  FROM messages m WHERE m.account_id=? AND m.thread_id IN ({placeholders})
                  ORDER BY m.thread_id,m.sent_at,m.id"
             );
@@ -1032,6 +1082,15 @@ impl ThreadRepository {
             has_draft |= row.is_draft;
         }
         let latest = rows.last().expect("checked non-empty above");
+        // D13: the row names the *newest* message's sender, not the first
+        // participant — rows arrive in ascending `sent_at` order, so the
+        // last row is the newest.
+        let sender_identity = ThreadIdentity::from_header(&latest.sender, ThreadIdentity::no_sender);
+        // The newest Sent-labelled message's first recipient, if any — walk
+        // from the end so "newest" matches the sender rule above.
+        let recipient_identity = rows.iter().rev().find(|row| row.is_sent).map(|row| {
+            ThreadIdentity::from_header(&row.to_recipients, ThreadIdentity::no_recipient)
+        });
         Self::upsert(
             connection,
             &Thread {
@@ -1045,6 +1104,8 @@ impl ThreadRepository {
                 is_starred,
                 has_attachments,
                 has_draft,
+                sender_identity,
+                recipient_identity,
             },
         )
     }
@@ -1061,7 +1122,7 @@ impl ThreadRepository {
             .as_ref()
             .map_or("", |_| "AND (t.latest_at,t.id)<(?3,?4)");
         let sql = format!(
-            "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,
+            "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
                     COALESCE((SELECT m.snippet FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1),'')
              FROM threads t
              WHERE t.account_id=?1
@@ -1099,7 +1160,7 @@ impl ThreadRepository {
                 |row| {
                     Ok(ThreadListRow {
                         thread: thread(row)?,
-                        snippet: row.get(10)?,
+                        snippet: row.get(12)?,
                         label_indicators: Vec::new(),
                     })
                 },
@@ -1166,6 +1227,8 @@ fn thread_message_row_offset(row: &rusqlite::Row<'_>, offset: usize) -> Result<T
         is_unread: row.get(offset + 4)?,
         is_starred: row.get(offset + 5)?,
         is_draft: row.get(offset + 6)?,
+        to_recipients: row.get(offset + 7)?,
+        is_sent: row.get(offset + 8)?,
     })
 }
 
@@ -1287,6 +1350,101 @@ impl SettingRepository {
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect();
         settings
+    }
+}
+
+/// A one-off internal marker recording that the V9 thread-summary rebuild
+/// (D12) has already run against this database, so restarts don't pay the
+/// recompute cost again. Not a user-facing setting — never surfaced through
+/// `SettingsService`.
+const AVATAR_IDENTITY_REBUILD_MARKER: &str = "internal.avatarThreadIdentityRebuildV9";
+
+/// Rebuilds every existing thread's stored identity once after the V9
+/// migration lands, reusing [`ThreadRepository::recompute_many`] rather than
+/// inventing a second aggregation path (D12). A no-op on every subsequent
+/// open once the marker is set, and a cheap no-op on a fresh/empty database.
+pub(super) fn rebuild_thread_identities_once(connection: &Connection) -> Result<()> {
+    if SettingRepository::get(connection, AVATAR_IDENTITY_REBUILD_MARKER)?.is_some() {
+        return Ok(());
+    }
+    let mut statement = connection.prepare("SELECT DISTINCT account_id FROM threads")?;
+    let account_ids: Vec<String> = statement.query_map([], |row| row.get(0))?.collect::<Result<_>>()?;
+    drop(statement);
+    for account_id in account_ids {
+        let mut statement =
+            connection.prepare("SELECT id FROM threads WHERE account_id=?1")?;
+        let thread_ids: HashSet<String> = statement
+            .query_map([&account_id], |row| row.get(0))?
+            .collect::<Result<_>>()?;
+        drop(statement);
+        ThreadRepository::recompute_many(connection, &account_id, &thread_ids)?;
+    }
+    SettingRepository::set(connection, AVATAR_IDENTITY_REBUILD_MARKER, "true")?;
+    Ok(())
+}
+
+/// Whether a cached avatar lookup found something (D2's negative caching).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvatarCacheOutcome {
+    Hit,
+    Miss,
+}
+impl AvatarCacheOutcome {
+    fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+        }
+    }
+    fn from_db_str(value: &str) -> Self {
+        match value {
+            "hit" => Self::Hit,
+            _ => Self::Miss,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvatarCacheRecord {
+    pub cache_key: String,
+    pub outcome: AvatarCacheOutcome,
+    /// Path to the cached PNG, relative to the avatar cache root. `None` on
+    /// a miss.
+    pub image_path: Option<String>,
+    pub looked_up_at: i64,
+}
+
+pub struct AvatarCacheRepository;
+impl AvatarCacheRepository {
+    pub fn upsert(connection: &Connection, record: &AvatarCacheRecord) -> Result<()> {
+        connection.execute(
+            "INSERT INTO avatar_cache (cache_key,outcome,image_path,looked_up_at) VALUES (?1,?2,?3,?4)
+             ON CONFLICT(cache_key) DO UPDATE SET outcome=excluded.outcome,image_path=excluded.image_path,looked_up_at=excluded.looked_up_at",
+            params![
+                record.cache_key,
+                record.outcome.as_db_str(),
+                record.image_path,
+                record.looked_up_at
+            ],
+        )?;
+        Ok(())
+    }
+    pub fn get(connection: &Connection, cache_key: &str) -> Result<Option<AvatarCacheRecord>> {
+        connection
+            .query_row(
+                "SELECT cache_key,outcome,image_path,looked_up_at FROM avatar_cache WHERE cache_key=?1",
+                [cache_key],
+                |row| {
+                    let outcome: String = row.get(1)?;
+                    Ok(AvatarCacheRecord {
+                        cache_key: row.get(0)?,
+                        outcome: AvatarCacheOutcome::from_db_str(&outcome),
+                        image_path: row.get(2)?,
+                        looked_up_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
     }
 }
 
@@ -1441,6 +1599,8 @@ fn message(row: &rusqlite::Row<'_>) -> Result<Message> {
     })
 }
 fn thread(row: &rusqlite::Row<'_>) -> Result<Thread> {
+    let sender_identity: String = row.get(10)?;
+    let recipient_identity: Option<String> = row.get(11)?;
     Ok(Thread {
         account_id: row.get(0)?,
         id: row.get(1)?,
@@ -1452,6 +1612,9 @@ fn thread(row: &rusqlite::Row<'_>) -> Result<Thread> {
         is_starred: row.get(7)?,
         has_attachments: row.get(8)?,
         has_draft: row.get(9)?,
+        sender_identity: ThreadIdentity::decode(&sender_identity, ThreadIdentity::no_sender),
+        recipient_identity: recipient_identity
+            .map(|text| ThreadIdentity::decode(&text, ThreadIdentity::no_recipient)),
     })
 }
 fn operation(row: &rusqlite::Row<'_>) -> Result<Operation> {

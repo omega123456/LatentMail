@@ -112,6 +112,16 @@ export interface IpcCommandMap {
   };
   delete_label: { args: { accountId: string; labelId: string }; result: void };
   read_traversal_status: { args: { accountId: string }; result: TraversalStatus };
+  /** Cache-first: answers from the avatar cache metadata immediately (a path
+   * or `null`) and, on a miss, schedules background BIMI resolution — never
+   * blocks on the network. Refused (never scheduled) while `showSenderAvatars`
+   * is off, enforced Rust-side as well as by the frontend never issuing this
+   * query (D14). Domain must already be lower-cased (`src/lib/avatars/identity.ts`). */
+  read_sender_avatar: { args: { domain: string }; result: string | null };
+  /** Cache-first account profile-photo read, mirroring `read_sender_avatar`.
+   * Not gated by `showSenderAvatars` — the account photograph involves no
+   * third-party lookup. */
+  read_account_avatar: { args: { accountId: string }; result: string | null };
 }
 
 export interface QueueSummary {
@@ -125,6 +135,10 @@ export interface Account {
   id: string;
   email: string;
   displayName: string;
+  /** Google's raw remote photo URL, kept verbatim — never rendered directly
+   * in an `<img>` (CSP/ownership forbid a bare `googleusercontent.com` URL
+   * crossing into the webview). The locally cached copy is fetched
+   * separately via `read_account_avatar` (see `useAccountAvatarQuery`). */
   avatarUrl: string | null;
   needsReauthentication: boolean;
 }
@@ -144,6 +158,11 @@ export interface Settings {
   syncOnStartup: boolean;
   showUnreadCounts: boolean;
   syncIntervalSeconds: number;
+  /** Governs whether list/reader sender avatars render at all — and, more
+   * importantly, whether their domain lookups happen at all. Defaults on.
+   * No Settings UI exists yet; the key is hydrated and read like every other
+   * setting that predates its own control. */
+  showSenderAvatars: boolean;
 }
 
 export type SettingKey = keyof Settings;
@@ -263,10 +282,27 @@ export interface TraversalStatus {
   isResumed: boolean;
 }
 
+/** A resolved participant identity — `display` is always a finished,
+ * ready-to-render string (Rust already applies its own "(No sender)"/
+ * bare-address fallback here); `address` feeds avatar domain lookup only
+ * and may be absent. */
+export interface ThreadIdentity {
+  display: string;
+  address: string | null;
+}
+
 export interface MailThread {
   id: string;
   subject: string;
-  participants: string[];
+  /** Resolved in Rust at summary-write time from the newest message's
+   * sender (D12/D13) — always present, fallback already applied. */
+  sender: ThreadIdentity;
+  /** The same identity for the Sent mailbox: the newest Sent-labelled
+   * message's first recipient. `null` only when the thread has no
+   * Sent-labelled message at all — the frontend applies its own
+   * "(No recipient)" fallback for that case, since Rust never computed
+   * anything to fall back from. */
+  sentRecipient: ThreadIdentity | null;
   latestAt: number;
   messageCount: number;
   isUnread: boolean;
@@ -357,8 +393,20 @@ export interface TraversalProgressEvent {
   completed: boolean;
 }
 
+/** Emitted once background avatar resolution (sender or account) finishes —
+ * `key` is the domain for `pipeline: 'sender'` or the account id for
+ * `pipeline: 'account'`, matching `queryKeys.senderAvatar`/`accountAvatar`
+ * exactly so the event-bridge listener can invalidate the one query that
+ * matters and no other. */
+export interface AvatarResolvedEvent {
+  pipeline: 'sender' | 'account';
+  key: string;
+  resolved: boolean;
+}
+
 export interface IpcEventMap {
   'system://health': { status: 'ok' };
+  'avatar://resolved': AvatarResolvedEvent;
   'queue://item': { id: string; status: string };
   'queue://summary': QueueSummary;
   'account://state': Account;

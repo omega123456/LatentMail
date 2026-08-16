@@ -11,7 +11,8 @@ import type { Conversation, MailLabel, MailThread } from '@/lib/types/ipc';
 const thread: MailThread = {
   id: 'thread-1',
   subject: 'Q3 Marketing Strategy Review',
-  participants: ['Elena Rodriguez', 'Alex'],
+  sender: { display: 'Elena Rodriguez', address: 'elena.r@example.com' },
+  sentRecipient: null,
   latestAt: Date.parse('2026-08-11T09:00:00Z'),
   messageCount: 2,
   isUnread: true,
@@ -34,10 +35,12 @@ const labels: MailLabel[] = [
 ];
 
 describe('mapThreadToRow', () => {
-  it('maps a MailThread onto the conversation row shape', () => {
-    expect(mapThreadToRow(thread)).toMatchObject({
+  it('maps a MailThread onto the conversation row shape, resolving the newest sender', () => {
+    expect(mapThreadToRow(thread, 'INBOX')).toMatchObject({
       id: 'thread-1',
-      sender: 'Elena Rodriguez, Alex',
+      sender: 'Elena Rodriguez',
+      identityLabel: 'Elena Rodriguez',
+      avatarDomain: 'example.com',
       subject: 'Q3 Marketing Strategy Review',
       unread: true,
       starred: false,
@@ -47,11 +50,39 @@ describe('mapThreadToRow', () => {
     });
   });
 
-  it('falls back to placeholder sender/subject text when both are empty', () => {
-    const empty = { ...thread, subject: '', participants: [] };
-    const row = mapThreadToRow(empty);
-    expect(row.sender).toBe('(No sender)');
+  it('renders whatever display string Rust already resolved, without re-deriving it from the address', () => {
+    // Rust bakes its own bare-address fallback into `display` when a sender
+    // has no name — mapThreadToRow must render that string verbatim rather
+    // than re-deriving anything from `address` itself.
+    const bareAddress = {
+      ...thread,
+      sender: { display: 'elena.r@example.com', address: 'elena.r@example.com' },
+    };
+    expect(mapThreadToRow(bareAddress, 'INBOX').sender).toBe('elena.r@example.com');
+  });
+
+  it('falls back to placeholder subject text when empty, without touching the always-present sender display', () => {
+    const empty = { ...thread, subject: '' };
+    const row = mapThreadToRow(empty, 'INBOX');
+    expect(row.sender).toBe('Elena Rodriguez');
     expect(row.subject).toBe('(No subject)');
+  });
+
+  it('names and depicts the recipient in the Sent mailbox, never the account owner', () => {
+    const sent = {
+      ...thread,
+      sender: { display: 'Me', address: 'me@example.com' },
+      sentRecipient: { display: 'Alex Chen', address: 'alex@vendor.example' },
+    };
+    const row = mapThreadToRow(sent, 'SENT');
+    expect(row.sender).toBe('To: Alex Chen');
+    expect(row.identityLabel).toBe('Alex Chen');
+    expect(row.avatarDomain).toBe('vendor.example');
+  });
+
+  it('falls back to "(No recipient)" in the Sent mailbox when the thread has no Sent message at all', () => {
+    const sent = { ...thread, sentRecipient: null };
+    expect(mapThreadToRow(sent, 'SENT').sender).toBe('(No recipient)');
   });
 });
 

@@ -1,11 +1,12 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ReadingPane, readerFixtures } from '@/components/reader/ReadingPane';
+import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
 describe('ReadingPane', () => {
   it('renders reader states', () => {
-    const { rerender } = render(<ReadingPane threadId={null} />);
+    const { rerender } = renderWithQueryClient(<ReadingPane threadId={null} />);
     expect(screen.getByText('Select a conversation to read it.')).toBeInTheDocument();
     rerender(<ReadingPane threadId="thread-1" loading />);
     expect(screen.getByText('Loading conversation…')).toBeInTheDocument();
@@ -15,7 +16,7 @@ describe('ReadingPane', () => {
 
   it('keeps the newest message expanded and toggles older messages', async () => {
     const user = userEvent.setup();
-    render(<ReadingPane threadId="thread-1" />);
+    renderWithQueryClient(<ReadingPane threadId="thread-1" />);
     expect(screen.getByTestId('message-message-1')).toHaveTextContent(
       "I've attached the finalized slides for tomorrow's presentation.",
     );
@@ -36,7 +37,7 @@ describe('ReadingPane', () => {
     const conversation = structuredClone(readerFixtures['thread-1']);
     conversation.messages[1].html =
       '<p>Safe</p><script>window.bad = true</script><img src=x onerror="window.bad = true">';
-    render(<ReadingPane threadId="thread-1" conversation={conversation} />);
+    renderWithQueryClient(<ReadingPane threadId="thread-1" conversation={conversation} />);
     const frame = screen.getByLabelText('Message body');
     expect(frame).toHaveAttribute('sandbox', 'allow-same-origin');
     expect(frame.getAttribute('srcdoc')).not.toContain('script');
@@ -48,7 +49,9 @@ describe('ReadingPane', () => {
     const conversation = structuredClone(readerFixtures['thread-1']);
     conversation.messages[1].html = null;
     conversation.messages[1].text = 'first line\n  second line';
-    const { rerender } = render(<ReadingPane threadId="thread-1" conversation={conversation} />);
+    const { rerender } = renderWithQueryClient(
+      <ReadingPane threadId="thread-1" conversation={conversation} />,
+    );
     expect(
       screen.getByText((_, element) => element?.textContent === 'first line\n  second line'),
     ).toHaveClass('whitespace-pre-wrap');
@@ -59,7 +62,7 @@ describe('ReadingPane', () => {
 
   it('mounts the thread ActionRibbon and a per-message ribbon', async () => {
     const user = userEvent.setup();
-    render(<ReadingPane threadId="thread-1" mailboxId="INBOX" />);
+    renderWithQueryClient(<ReadingPane threadId="thread-1" mailboxId="INBOX" />);
     expect(screen.getByRole('toolbar', { name: 'Conversation actions' })).toBeInTheDocument();
     expect(screen.getAllByRole('toolbar', { name: 'Message actions' })).toHaveLength(2);
     // The stubbed handlers are deliberate no-ops until Phase 8 wires real
@@ -68,7 +71,7 @@ describe('ReadingPane', () => {
   });
 
   it('substitutes the bulk selection panel when a multi-selection is active', () => {
-    render(<ReadingPane threadId={null} mailboxId="INBOX" selectedCount={3} />);
+    renderWithQueryClient(<ReadingPane threadId={null} mailboxId="INBOX" selectedCount={3} />);
     expect(screen.getByTestId('bulk-selection-panel')).toBeInTheDocument();
     expect(screen.getByText('3 conversations selected')).toBeInTheDocument();
   });
@@ -80,7 +83,7 @@ describe('ReadingPane', () => {
       ...readerFixtures['thread-1'],
       messages: [{ ...readerFixtures['thread-1'].messages[1], html: null, text: 'Body' }],
     };
-    render(
+    renderWithQueryClient(
       <ReadingPane
         threadId="thread-1"
         conversation={conversation}

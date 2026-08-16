@@ -41,6 +41,7 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     syncOnStartup: true,
     showUnreadCounts: true,
     syncIntervalSeconds: 30,
+    showSenderAvatars: true,
   },
   write_setting: undefined,
   pause_queue: { pending: 0, active: 0, failed: 0, done: 0, paused: true },
@@ -149,4 +150,6 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     lastAdvancedAt: null,
     isResumed: false,
   },
+  read_sender_avatar: null,
+  read_account_avatar: null,
 };

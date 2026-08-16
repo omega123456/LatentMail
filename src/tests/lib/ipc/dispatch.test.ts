@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
+import { playwrightIpcFixtures } from '@/tests/playwright-fixtures';
+import { playwrightAvatarFixtureMark } from '@/tests/playwright-fixtures/avatars';
 
 describe('IPC dispatch', () => {
   it('uses the Tauri IPC global when it is present', async () => {
@@ -81,6 +83,19 @@ describe('IPC dispatch', () => {
       'ipc health_check failed: Playwright IPC router is not installed',
     );
     error.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it('resolves the avatar Playwright fixtures to the fixture mark, not the grey placeholder', async () => {
+    vi.stubEnv('VITE_PLAYWRIGHT', 'true');
+    const { dispatchConvertFileSrc } = await import('@/lib/ipc/dispatch');
+
+    const senderAvatarPath = playwrightIpcFixtures.read_sender_avatar;
+    const accountAvatarPath = playwrightIpcFixtures.read_account_avatar;
+    expect(senderAvatarPath).toBeTruthy();
+    expect(accountAvatarPath).toBeTruthy();
+    expect(dispatchConvertFileSrc(senderAvatarPath as string)).toBe(playwrightAvatarFixtureMark);
+    expect(dispatchConvertFileSrc(accountAvatarPath as string)).toBe(playwrightAvatarFixtureMark);
     vi.unstubAllEnvs();
   });
 });

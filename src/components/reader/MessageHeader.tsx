@@ -1,5 +1,9 @@
 import { formatDistanceToNowStrict, format, formatISO } from 'date-fns';
+import { Avatar } from '@/components/shared/Avatar';
 import { formatParticipants, type Participant } from '@/lib/format/participants';
+import { domainFor } from '@/lib/avatars/identity';
+import { useSenderAvatarQuery } from '@/lib/query/hooks';
+import { useLayoutStore } from '@/stores/layout';
 
 export type MessageSender = Participant;
 
@@ -15,18 +19,24 @@ export function MessageHeader({
   onComposeTo?: (participant: Participant) => void;
 }) {
   const timestamp = formatDistanceToNowStrict(sentAt, { addSuffix: true });
+  // FR "Preference": governs whether the reader's avatar renders (and is
+  // looked up) too, not just the list's.
+  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
+  const { data: avatarSrc } = useSenderAvatarQuery(
+    showSenderAvatars ? domainFor(sender.address) : null,
+  );
+  // The label shown beside the sender doubles as the avatar's initial input
+  // — a sender with no display name previously produced a blank circle
+  // because only `sender.name` was read; it now falls back to the address
+  // exactly like the visible text does.
+  const senderLabel = sender.name || sender.address;
   // `select-text` opts the whole header back out of the app-wide
   // `select-none` (index.html): sender, address, recipients and timestamp are
   // all things a user legitimately copies out of a message.
   return (
     <header className="flex select-text items-start justify-between gap-4">
       <div className="flex min-w-0 items-center gap-4">
-        <div
-          aria-hidden="true"
-          className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary-fixed text-body-sm font-semibold text-on-primary-fixed ring-2 ring-surface-container dark:bg-dark-primary-fixed dark:text-dark-on-primary-fixed dark:ring-dark-surface-container"
-        >
-          {sender.name.slice(0, 1).toUpperCase()}
-        </div>
+        {showSenderAvatars && <Avatar size={48} src={avatarSrc} label={senderLabel} ring />}
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
             <button

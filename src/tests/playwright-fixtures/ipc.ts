@@ -85,6 +85,15 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   recolor_label: playwrightCreatedLabel,
   delete_label: undefined,
   read_traversal_status: playwrightTraversalStatus,
+  // A real avatar-cache path so `dispatchConvertFileSrc`'s Playwright branch
+  // (which matches on the `avatar-cache` marker — see `dispatch.ts`) resolves
+  // it to the fixture mark instead of falling through to the grey-square
+  // placeholder. Every `playwrightThreads` sender shares the `example.com`
+  // domain (see `threads.ts`), and this fixture map has one static value per
+  // command, so this single path is what every row's sender-avatar query
+  // resolves to — enough for Phase 3's plate/ring dark-theme baseline.
+  read_sender_avatar: 'avatar-cache/senders/example-com.png',
+  read_account_avatar: 'avatar-cache/accounts/account-1.png',
 };
 
 export { playwrightSidebarAccounts };

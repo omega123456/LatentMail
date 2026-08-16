@@ -7,7 +7,7 @@ use latentmail_lib::queue::QueueEngine;
 use latentmail_lib::settings::SettingsService;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, InlinePart, LabelRepository, Message,
-    MessageRepository, Storage, Thread, ThreadRepository,
+    MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
 use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
@@ -99,6 +99,17 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     app.manage(SettingsService::new(
         Storage::open(directory.path().join("mail.sqlite")).unwrap(),
     ));
+    let avatar_storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let avatar_cache = latentmail_lib::avatars::cache::AvatarCache::new(
+        avatar_storage.clone(),
+        directory.path().join("avatar-cache"),
+    )
+    .unwrap();
+    app.manage(latentmail_lib::avatars::AvatarService::new(
+        avatar_cache,
+        avatar_storage,
+        SettingsService::new(Storage::open(directory.path().join("mail.sqlite")).unwrap()),
+    ));
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
@@ -165,6 +176,24 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         serde_json::json!({ "key": "theme", "value": "dark" })
     )
     .is_ok());
+    assert_eq!(
+        invoke(
+            &webview,
+            "read_sender_avatar",
+            serde_json::json!({ "domain": "example.com" })
+        )
+        .unwrap(),
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        invoke(
+            &webview,
+            "read_account_avatar",
+            serde_json::json!({ "accountId": "unknown" })
+        )
+        .unwrap(),
+        serde_json::Value::Null
+    );
 }
 
 #[test]
@@ -325,6 +354,11 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "Alice".into(),
+                address: Some("a@example.com".into()),
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();
@@ -577,6 +611,11 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "Alice".into(),
+                address: Some("a@example.com".into()),
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();
@@ -965,6 +1004,11 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "Alice".into(),
+                address: None,
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();
@@ -1158,6 +1202,11 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
             is_starred: false,
             has_attachments: false,
             has_draft: true,
+            sender_identity: ThreadIdentity {
+                display: "Me".into(),
+                address: None,
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();
@@ -1364,6 +1413,11 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
             is_starred: false,
             has_attachments: false,
             has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "Alice".into(),
+                address: Some("alice@example.com".into()),
+            },
+            recipient_identity: None,
         },
     )
     .unwrap();

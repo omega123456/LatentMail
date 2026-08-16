@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-read-sender-avatar"
+description = "Enables reading a cached sender avatar, scheduling BIMI resolution on a miss."
+commands.allow = ["read_sender_avatar"]
+
+[[permission]]
+identifier = "allow-read-account-avatar"
+description = "Enables reading a cached account profile photograph, scheduling acquisition on a miss."
+commands.allow = ["read_account_avatar"]

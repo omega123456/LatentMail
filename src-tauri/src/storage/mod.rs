@@ -1,11 +1,13 @@
+pub mod addresses;
 mod repositories;
 
 pub use repositories::{
-    truncate_body, Account, AccountRepository, ComposeDraftMetadata,
-    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationMessage, HtmlPresence,
-    InlinePart, Label, LabelColor, LabelNameError, LabelRepository, Message, MessageRepository,
-    Operation, OperationRepository, ReconciliationMessage, SettingRepository, Thread,
-    ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+    truncate_body, Account, AccountRepository, AvatarCacheOutcome, AvatarCacheRecord,
+    AvatarCacheRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository,
+    ComposeMessageContext, ConversationMessage, HtmlPresence, InlinePart, Label, LabelColor,
+    LabelNameError, LabelRepository, Message, MessageRepository, Operation, OperationRepository,
+    ReconciliationMessage, SettingRepository, Thread, ThreadIdentity, ThreadListRow,
+    ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 use std::{
@@ -67,6 +69,7 @@ impl Storage {
         let mut connection = Connection::open(storage.path.as_ref())?;
         configure_database(&connection)?;
         embedded::migrations::runner().run(&mut connection)?;
+        repositories::rebuild_thread_identities_once(&connection)?;
         Ok(storage)
     }
 
@@ -74,6 +77,7 @@ impl Storage {
         let mut connection = Connection::open_in_memory()?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         embedded::migrations::runner().run(&mut connection)?;
+        repositories::rebuild_thread_identities_once(&connection)?;
         Ok(connection)
     }
 

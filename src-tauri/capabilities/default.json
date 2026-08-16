@@ -43,6 +43,8 @@
     "allow-recolor-label",
     "allow-delete-label",
     "allow-read-traversal-status",
+    "allow-read-sender-avatar",
+    "allow-read-account-avatar",
     "dialog:allow-open",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",

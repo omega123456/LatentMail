@@ -3,6 +3,7 @@
 // (src/lib/types/conversation.ts, src/components/reader/ReadingPane.tsx).
 // Kept separate from the fetching hooks so both stay easy to unit test.
 import { parseParticipant } from '@/lib/format/participants';
+import { domainFor } from '@/lib/avatars/identity';
 import { LABEL_COLOR_PALETTE, resolveLabelColorSwatch } from '@/lib/labels/palette';
 import type { Conversation as IpcConversation, MailLabel, MailThread } from '@/lib/types/ipc';
 import type { Conversation } from '@/lib/types/conversation';
@@ -16,10 +17,24 @@ import type { LabelMenuEntry, LabelMembership } from '@/components/actions/Label
 // first swatch rather than rendering colourless.
 const FALLBACK_SWATCH = LABEL_COLOR_PALETTE[0];
 
-export function mapThreadToRow(thread: MailThread): Conversation {
+/** `mailboxId` picks which of the two Rust-resolved identities the row
+ * names: the Sent mailbox names and depicts the recipient, everyone else the
+ * newest sender (D12/D13). `thread.sender.display` is always a finished,
+ * ready-to-render string with Rust's own fallback already applied. The Sent
+ * side's identity is `null` only when the thread has no Sent-labelled
+ * message at all — TS supplies its own "(No recipient)" fallback for that
+ * case, since Rust never computed anything to fall back from. */
+export function mapThreadToRow(thread: MailThread, mailboxId?: string | null): Conversation {
+  const isSent = mailboxId === 'SENT';
+  const identity = isSent ? thread.sentRecipient : thread.sender;
+  const label = identity?.display ?? null;
+  const address = identity?.address ?? null;
+  const sender = isSent ? (label ? `To: ${label}` : '(No recipient)') : (label ?? '(No sender)');
   return {
     id: thread.id,
-    sender: thread.participants.join(', ') || '(No sender)',
+    sender,
+    identityLabel: label,
+    avatarDomain: domainFor(address),
     subject: thread.subject || '(No subject)',
     snippet: thread.snippet ?? '',
     date: new Date(thread.latestAt),

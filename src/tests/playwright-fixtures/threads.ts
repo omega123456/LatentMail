@@ -4,7 +4,8 @@ export const playwrightThreads: MailThread[] = [
   {
     id: 'thread-1',
     subject: 'Q3 Marketing Strategy Review',
-    participants: ['Elena Rodriguez'],
+    sender: { display: 'Elena Rodriguez', address: 'elena.r@example.com' },
+    sentRecipient: null,
     latestAt: Date.parse('2026-08-11T10:42:00Z'),
     messageCount: 3,
     isUnread: true,
@@ -17,7 +18,8 @@ export const playwrightThreads: MailThread[] = [
   {
     id: 'thread-2',
     subject: 'Updates to Color Tokens',
-    participants: ['Design Systems Guild'],
+    sender: { display: 'Design Systems Guild', address: 'design-systems@example.com' },
+    sentRecipient: null,
     latestAt: Date.parse('2026-08-10T09:00:00Z'),
     messageCount: 1,
     isUnread: false,
@@ -30,7 +32,8 @@ export const playwrightThreads: MailThread[] = [
   {
     id: 'thread-3',
     subject: 'Action Required: 2FA Setup',
-    participants: ['Security Team'],
+    sender: { display: 'Security Team', address: 'security@example.com' },
+    sentRecipient: null,
     latestAt: Date.parse('2026-08-07T12:00:00Z'),
     messageCount: 1,
     isUnread: false,
@@ -43,7 +46,8 @@ export const playwrightThreads: MailThread[] = [
   {
     id: 'thread-4',
     subject: 'Lunch next week?',
-    participants: ['Alex Chen'],
+    sender: { display: 'Alex Chen', address: 'alex.chen@example.com' },
+    sentRecipient: null,
     latestAt: Date.parse('2026-07-31T15:30:00Z'),
     messageCount: 1,
     isUnread: false,

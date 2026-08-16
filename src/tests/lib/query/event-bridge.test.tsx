@@ -142,6 +142,46 @@ describe('EventBridge', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.accounts });
   });
 
+  it('invalidates exactly the matching sender-avatar query on resolution, and only that one', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('avatar://resolved', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() =>
+      ipc.emit('avatar://resolved', { pipeline: 'sender', key: 'example.com', resolved: true }),
+    );
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+      queryKey: queryKeys.senderAvatar('example.com'),
+    });
+  });
+
+  it('invalidates exactly the matching account-avatar query on resolution', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('avatar://resolved', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() =>
+      ipc.emit('avatar://resolved', { pipeline: 'account', key: 'account-1', resolved: false }),
+    );
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+      queryKey: queryKeys.accountAvatar('account-1'),
+    });
+  });
+
   it('invalidates threads and labels on mail://new so a new arrival refreshes the list', async () => {
     let client: ReturnType<typeof useQueryClient> | undefined;
     render(

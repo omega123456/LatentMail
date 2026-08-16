@@ -38,6 +38,11 @@ pub struct Settings {
     pub sync_on_startup: bool,
     pub show_unread_counts: bool,
     pub sync_interval_seconds: u32,
+    /// Governs whether list/reader avatars render at all (D14). Enforced
+    /// twice: the frontend does not issue the sender-avatar query when this
+    /// is off, and `avatars::read_sender_avatar` independently refuses to
+    /// schedule a lookup regardless of what the frontend does.
+    pub show_sender_avatars: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,6 +91,7 @@ impl Default for Settings {
             sync_on_startup: true,
             show_unread_counts: true,
             sync_interval_seconds: 30,
+            show_sender_avatars: true,
         }
     }
 }
@@ -153,6 +159,7 @@ impl Settings {
             "syncOnStartup" => set_value(&mut self.sync_on_startup, value),
             "showUnreadCounts" => set_value(&mut self.show_unread_counts, value),
             "syncIntervalSeconds" => set_value(&mut self.sync_interval_seconds, value),
+            "showSenderAvatars" => set_value(&mut self.show_sender_avatars, value),
             _ => false,
         }
     }

@@ -139,6 +139,8 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::sync::commands::rename_label,
         crate::sync::commands::recolor_label,
         crate::sync::commands::delete_label,
-        crate::sync::commands::read_traversal_status
+        crate::sync::commands::read_traversal_status,
+        crate::avatars::read_sender_avatar,
+        crate::avatars::read_account_avatar
     ])
 }

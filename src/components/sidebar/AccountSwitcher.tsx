@@ -1,6 +1,8 @@
 import { ChevronDown, CircleAlert, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { invoke } from '@/lib/ipc/commands';
+import { Avatar } from '@/components/shared/Avatar';
+import { useAccountAvatarQuery } from '@/lib/query/hooks';
 import type { Account } from '@/lib/types/ipc';
 
 export function AccountSwitcher({
@@ -17,6 +19,9 @@ export function AccountSwitcher({
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const active = accounts.find((account) => account.id === activeAccountId) ?? accounts[0];
+  // Not gated by `showSenderAvatars` — the account photograph involves no
+  // third-party lookup (FR "Preference").
+  const { data: activeAvatarSrc } = useAccountAvatarQuery(active?.id ?? null);
   const addAccount = async () => {
     setAdding(true);
     try {
@@ -36,12 +41,15 @@ export function AccountSwitcher({
         onClick={() => setOpen((value) => !value)}
         className={`flex w-full items-center gap-3 rounded px-2 py-2 text-left text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface ${collapsed ? 'justify-center' : ''}`}
       >
-        <span
-          aria-hidden="true"
-          className="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-label-md text-on-primary"
-        >
-          {active.displayName.slice(0, 1)}
-        </span>
+        <Avatar
+          size={collapsed ? 36 : 40}
+          src={activeAvatarSrc}
+          label={active.displayName}
+          // The rail is the sole exception (D-series "collapsed rail keeps a
+          // real label") — expanded, the visible name beside it already
+          // carries identity, so the avatar stays decorative there.
+          ariaLabel={collapsed ? active.email : undefined}
+        />
         {!collapsed && (
           <>
             <span className="min-w-0 flex-1">
@@ -70,9 +78,10 @@ export function AccountSwitcher({
               }}
               className="flex w-full items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-left text-body-sm text-on-surface hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface dark:hover:bg-primary/15"
             >
-              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-label-sm text-on-primary">
-                {account.displayName.slice(0, 1)}
-              </span>
+              {/* Menu rows stay initials-only by policy — a 24px photo is
+                  below the point a face is recognisable, and the address
+                  beside it already identifies the account. */}
+              <Avatar size={24} label={account.displayName} />
               <span className="min-w-0 flex-1 truncate">{account.email}</span>
               {account.needsReauthentication && (
                 <CircleAlert
