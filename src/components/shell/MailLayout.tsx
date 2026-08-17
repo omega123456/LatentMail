@@ -32,9 +32,9 @@ import { useComposeStore } from '@/stores/compose';
 import { useSearchStore } from '@/stores/search';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
+import { navRow } from '@/components/sidebar/rowStyles';
 
-const navItem =
-  'flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-md text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
+const navItem = navRow(false);
 export function MailLayout({ accounts }: { accounts: Account[] }) {
   const shell = useRef<HTMLDivElement>(null);
   const {
@@ -184,20 +184,20 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   ) : (
     <aside
       data-testid="sidebar-slot"
-      className="flex min-h-0 min-w-0 flex-col border-r border-outline-variant bg-background p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-background"
+      className="flex min-h-0 min-w-0 flex-col border-r border-outline-variant bg-surface-container-low p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-surface-container-low"
     >
-      <div className="mb-8 flex items-center gap-stack-gap-sm px-2 text-on-surface dark:text-dark-on-surface">
-        <img src={brandMark} alt="" aria-hidden="true" className="h-5 w-auto" />
-        <span className="text-headline-sm">LatentMail</span>
+      <div className="mb-5 flex items-center gap-stack-gap-sm px-2 text-on-surface dark:text-dark-on-surface">
+        <img src={brandMark} alt="" aria-hidden="true" className="h-4 w-auto" />
+        <span className="text-body-md font-semibold">LatentMail</span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
         <button
           type="button"
           title="Compose"
           onClick={compose}
-          className="mb-8 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+          className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
         >
-          <Pencil aria-hidden="true" size={20} />
+          <Pencil aria-hidden="true" size={16} />
           Compose
         </button>
         {searchActive && (
@@ -232,11 +232,11 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           onClick={() => setSidebarCollapsed(true)}
           className={`mt-auto ${navItem}`}
         >
-          <PanelLeftClose aria-hidden="true" size={20} />
+          <PanelLeftClose aria-hidden="true" size={18} />
           Collapse
         </button>
         <button type="button" onClick={openSettings} className={navItem}>
-          <Settings aria-hidden="true" size={20} />
+          <Settings aria-hidden="true" size={18} />
           Settings
         </button>
       </div>

@@ -4,6 +4,7 @@ import { LABEL_COLOR_BY_ID, type LabelColorId } from '@/lib/labels/palette';
 import { LabelColorPicker } from './LabelColorPicker';
 import { LabelForm } from './LabelForm';
 import { LabelRowConfirm } from './LabelRowConfirm';
+import { navCount, navRail, navRow } from './rowStyles';
 
 export type Label = {
   id: string;
@@ -106,21 +107,22 @@ export function LabelList({
             const swatch = LABEL_COLOR_BY_ID[label.color];
             const rowActive = rowMode?.labelId === label.id;
             return (
-              <div key={label.id} className="group flex flex-col gap-1 px-3">
+              <div key={label.id} className="group flex flex-col gap-1">
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
                     aria-current={active ? 'page' : undefined}
                     onClick={() => onSelect(label.id)}
-                    className={`flex flex-1 cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-sm focus-visible:outline-2 focus-visible:outline-primary ${active ? 'bg-primary-container font-bold text-on-primary-container dark:bg-dark-primary-container dark:text-dark-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-low dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'}`}
+                    className={`${navRow(active)} flex-1`}
                   >
+                    {active && <span aria-hidden="true" className={navRail} />}
                     <span
                       aria-hidden="true"
-                      className={`size-chip-dot rounded-full ${swatch.dotClass}`}
+                      className={`mx-1.5 size-chip-dot rounded-full ${swatch.dotClass}`}
                     />
                     <span className="flex-1 text-left">{label.name}</span>
                     {showUnreadCounts && label.unreadCount > 0 && (
-                      <span className="text-label-md">{label.unreadCount}</span>
+                      <span className={navCount}>{label.unreadCount}</span>
                     )}
                   </button>
                   <button

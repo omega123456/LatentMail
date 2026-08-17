@@ -1,4 +1,5 @@
 import { SYSTEM_BADGES, type SystemBadgeId } from '@/lib/labels/badges';
+import { navCount, navRail, navRow } from './rowStyles';
 
 export type Mailbox = { id: string; name: string; unreadCount: number };
 
@@ -32,18 +33,19 @@ export function FolderList({
             aria-current={active ? 'page' : undefined}
             title={collapsed ? name : undefined}
             onClick={() => onSelect(id)}
-            className={`flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-md focus-visible:outline-2 focus-visible:outline-primary ${active ? 'bg-primary-container font-bold text-on-primary-container dark:bg-dark-primary-container dark:text-dark-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-low dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'} ${collapsed ? 'justify-center px-0' : ''}`}
+            className={`${navRow(active)} ${collapsed ? 'justify-center px-0' : ''}`}
           >
-            <Icon aria-hidden="true" size={20} />
+            {active && !collapsed && <span aria-hidden="true" className={navRail} />}
+            <Icon
+              aria-hidden="true"
+              size={18}
+              className={active ? 'text-primary dark:text-dark-primary' : undefined}
+            />
             {!collapsed && (
               <>
                 <span className="flex-1 text-left">{name}</span>
                 {showUnreadCounts && unreadCount > 0 && (
-                  <span
-                    className={`text-label-sm ${active ? 'rounded-full bg-on-primary-container px-2 py-0.5 text-primary-container dark:bg-dark-on-primary-container dark:text-dark-primary-container' : 'text-secondary dark:text-dark-secondary'}`}
-                  >
-                    {unreadCount}
-                  </span>
+                  <span className={navCount}>{unreadCount}</span>
                 )}
               </>
             )}
