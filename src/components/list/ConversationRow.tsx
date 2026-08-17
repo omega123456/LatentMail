@@ -163,7 +163,7 @@ export function ConversationRow({
                     : ''}
                   {conversation.draft ? ' · Draft' : ''}
                 </span>
-                <span className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
+                <span className="relative z-10 flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
                   {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
                   {(rowBadges.length > 0 || showSource) && (
                     <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
