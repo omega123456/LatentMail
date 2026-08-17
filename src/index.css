@@ -51,10 +51,18 @@
   --color-on-background: #131b2e;
   --color-surface-variant: #dae2fd;
   --color-star: #a45d00;
-  /* The palette had no success role, which is why "Message sent." rendered in
-   * error red. Only the base tone is defined — toasts pair it with a neutral
-   * surface, so no `on-success` foreground is needed yet. */
   --color-success: #146c2e;
+  --color-badge-inbox: #e3f2fd;
+  --color-badge-on-inbox: #1565c0;
+  --color-badge-sent: #f3e5f5;
+  --color-badge-on-sent: #7b1fa2;
+  --color-badge-draft: #fff3e0;
+  --color-badge-on-draft: #bf360c;
+  --color-badge-starred: #fff9c4;
+  --color-badge-trash: #ffebee;
+  --color-badge-on-trash: #c62828;
+  --color-badge-spam: #fce4ec;
+  --color-badge-on-spam: #c2185b;
 
   --color-dark-surface: #131313;
   --color-dark-surface-dim: #131313;
@@ -105,6 +113,17 @@
   --color-dark-surface-variant: #353534;
   --color-dark-star: #ffb95e;
   --color-dark-success: #8ddb98;
+  --color-dark-badge-inbox: #1a237e;
+  --color-dark-badge-on-inbox: #64b5f6;
+  --color-dark-badge-sent: #4a148c;
+  --color-dark-badge-on-sent: #ce93d8;
+  --color-dark-badge-draft: #3a2413;
+  --color-dark-badge-on-draft: #ffb74d;
+  --color-dark-badge-starred: #2e2410;
+  --color-dark-badge-trash: #3a1111;
+  --color-dark-badge-on-trash: #ef5350;
+  --color-dark-badge-spam: #880e4f;
+  --color-dark-badge-on-spam: #f8bbd0;
 
   --font-inter: Inter, sans-serif;
   --text-display-sm: 30px;
@@ -162,13 +181,8 @@
   --spacing-compose-width: 512px;
   --spacing-compose-height: 500px;
   --spacing-compose-status-w: 88px;
-  /* Field rows carry a 1px hairline that thickens to 2px on focus-within;
-   * the focus padding is 1px shorter so the row's content never nudges. */
   --spacing-field-row-y: 6px;
   --spacing-field-row-y-focus: 5px;
-  /* Three named-token chip-row heights (D-series recipient chips): the
-   * container clamps to `chip-rows-3` before collapsing later chips behind
-   * an overflow control. One row ≈ a 28px chip plus vertical gap. */
   --spacing-chip-rows-1: 32px;
   --spacing-chip-rows-2: 64px;
   --spacing-chip-rows-3: 96px;
@@ -177,13 +191,6 @@
   --spacing-accent-border: 3px;
   --spacing-toast-max: 340px;
 
-  /* Toast countdown rail. An *animation* rather than a transition because only
-   * an animation can pause in place: each severity ships a `-hold` twin that
-   * differs from its running form by nothing but the shorthand's `paused`
-   * keyword, so swapping the class freezes the rail without restarting it
-   * (the keyframe name is identical, so the browser keeps the elapsed time).
-   * Tailwind ships no `animation-play-state` utility, which is what makes the
-   * paired-token approach necessary. */
   --animate-toast-success: toast-drain 4s linear forwards;
   --animate-toast-success-hold: toast-drain 4s linear forwards paused;
   --animate-toast-error: toast-drain 30s linear forwards;
@@ -198,11 +205,6 @@
     }
   }
 
-  /* Entrance. Radix mounts the toast already in place, so this runs once on
-   * mount and needs no React state to trigger it — applied through
-   * `motion-safe:` so a reduced-motion viewer simply gets the toast. Slides in
-   * from the right edge the stack is anchored to, which is also the direction
-   * it is swiped away in. */
   --animate-toast-enter: toast-enter 200ms ease-out;
 
   @keyframes toast-enter {
@@ -220,13 +222,6 @@
   --reader-h: 40%;
   --grid-template-rows-app-shell: 1fr auto;
 
-  /* Label colours — an enumerated set proving out the token infrastructure
-   * the real ~24-colour Gmail palette (wired to live data in Phase 3) will
-   * use. Namespaced with `label-`/`dark-label-` prefixes, distinct from the
-   * semantic role tokens above, so a label colour can never collide with a
-   * semantic role like `primary` or `tertiary`. Each hue has a background
-   * and an `on-` foreground, mirroring the `on-primary`-style pairing
-   * already used elsewhere in this file. */
   --color-label-gray: #e0e0e0;
   --color-label-on-gray: #202124;
   --color-label-red: #fbc0aa;
@@ -732,4 +727,208 @@
   --color-label-on-gmail-101: #ffffff;
   --color-dark-label-gmail-101: #16a765;
   --color-dark-label-on-gmail-101: #ffffff;
+  --color-label-ink-0: #000000;
+  --color-dark-label-ink-0: #808080;
+  --color-label-ink-1: #434343;
+  --color-dark-label-ink-1: #858585;
+  --color-label-ink-2: #666666;
+  --color-dark-label-ink-2: #858585;
+  --color-label-ink-3: #6b6b6b;
+  --color-dark-label-ink-3: #999999;
+  --color-label-ink-4: #707070;
+  --color-dark-label-ink-4: #cccccc;
+  --color-label-ink-5: #6c6c6c;
+  --color-dark-label-ink-5: #efefef;
+  --color-label-ink-6: #6d6d6d;
+  --color-dark-label-ink-6: #f3f3f3;
+  --color-label-ink-7: #737373;
+  --color-dark-label-ink-7: #ffffff;
+  --color-label-ink-8: #bc3923;
+  --color-dark-label-ink-8: #fb4c2f;
+  --color-label-ink-9: #8c5f27;
+  --color-dark-label-ink-9: #ffad47;
+  --color-label-ink-10: #7d6933;
+  --color-dark-label-ink-10: #fad165;
+  --color-label-ink-11: #117d4d;
+  --color-dark-label-ink-11: #16a766;
+  --color-label-ink-12: #257650;
+  --color-dark-label-ink-12: #43d692;
+  --color-label-ink-13: #3b6bba;
+  --color-dark-label-ink-13: #538ce9;
+  --color-label-ink-14: #7b5baa;
+  --color-dark-label-ink-14: #a479e2;
+  --color-label-ink-15: #94576b;
+  --color-dark-label-ink-15: #f691b3;
+  --color-label-ink-16: #876c69;
+  --color-dark-label-ink-16: #f6c5be;
+  --color-label-ink-17: #807364;
+  --color-dark-label-ink-17: #ffe6c7;
+  --color-label-ink-18: #726c5e;
+  --color-dark-label-ink-18: #fef1d1;
+  --color-label-ink-19: #5d7268;
+  --color-dark-label-ink-19: #b9e4d0;
+  --color-label-ink-20: #637a6f;
+  --color-dark-label-ink-20: #c6f3de;
+  --color-label-ink-21: #656d7c;
+  --color-dark-label-ink-21: #c9daf8;
+  --color-label-ink-22: #726c7b;
+  --color-dark-label-ink-22: #e4d7f5;
+  --color-label-ink-23: #7e6f74;
+  --color-dark-label-ink-23: #fcdee8;
+  --color-label-ink-24: #8f6058;
+  --color-dark-label-ink-24: #efa093;
+  --color-label-ink-25: #806b51;
+  --color-dark-label-ink-25: #ffd6a2;
+  --color-label-ink-26: #7e745a;
+  --color-dark-label-ink-26: #fce8b3;
+  --color-label-ink-27: #4b7462;
+  --color-dark-label-ink-27: #89d3b2;
+  --color-label-ink-28: #507565;
+  --color-dark-label-ink-28: #a0eac9;
+  --color-label-ink-29: #5a6b86;
+  --color-dark-label-ink-29: #a4c2f4;
+  --color-label-ink-30: #726785;
+  --color-dark-label-ink-30: #d0bcf1;
+  --color-label-ink-31: #7e646d;
+  --color-dark-label-ink-31: #fbc8d9;
+  --color-label-ink-32: #ad4c3c;
+  --color-dark-label-ink-32: #e66550;
+  --color-label-ink-33: #8c673b;
+  --color-dark-label-ink-33: #ffbc6b;
+  --color-label-ink-34: #7e6d42;
+  --color-dark-label-ink-34: #fcda83;
+  --color-label-ink-35: #2c7856;
+  --color-dark-label-ink-35: #44b984;
+  --color-label-ink-36: #397b5d;
+  --color-dark-label-ink-36: #68dfa9;
+  --color-label-ink-37: #4c6fa5;
+  --color-dark-label-ink-37: #6d9eeb;
+  --color-label-ink-38: #766097;
+  --color-dark-label-ink-38: #b694e8;
+  --color-label-ink-39: #946473;
+  --color-dark-label-ink-39: #f7a7c0;
+  --color-label-ink-40: #c2371f;
+  --color-dark-label-ink-40: #d6614d;
+  --color-label-ink-41: #8c6027;
+  --color-dark-label-ink-41: #eaa041;
+  --color-label-ink-42: #856f35;
+  --color-dark-label-ink-42: #f2c960;
+  --color-label-ink-43: #0f7748;
+  --color-dark-label-ink-43: #149e60;
+  --color-label-ink-44: #257752;
+  --color-dark-label-ink-44: #3dc789;
+  --color-label-ink-45: #3366b8;
+  --color-dark-label-ink-45: #598cde;
+  --color-label-ink-46: #7954af;
+  --color-dark-label-ink-46: #9f7ad5;
+  --color-label-ink-47: #9d536a;
+  --color-dark-label-ink-47: #e07798;
+  --color-label-ink-48: #ac2b16;
+  --color-dark-label-ink-48: #c56b5c;
+  --color-label-ink-49: #916024;
+  --color-dark-label-ink-49: #cf8933;
+  --color-label-ink-50: #80682c;
+  --color-dark-label-ink-50: #d5ae49;
+  --color-label-ink-51: #0a7a47;
+  --color-dark-label-ink-51: #3c996f;
+  --color-label-ink-52: #20754e;
+  --color-dark-label-ink-52: #2a9c68;
+  --color-label-ink-53: #285bac;
+  --color-dark-label-ink-53: #5e84c1;
+  --color-label-ink-54: #653e9b;
+  --color-dark-label-ink-54: #9378b9;
+  --color-label-ink-55: #a44e69;
+  --color-dark-label-ink-55: #c1708a;
+  --color-label-ink-56: #822111;
+  --color-dark-label-ink-56: #ae6f64;
+  --color-label-ink-57: #945f1e;
+  --color-dark-label-ink-57: #b28042;
+  --color-label-ink-58: #806625;
+  --color-dark-label-ink-58: #aa8831;
+  --color-label-ink-59: #076239;
+  --color-dark-label-ink-59: #519174;
+  --color-label-ink-60: #1a764d;
+  --color-dark-label-ink-60: #53987a;
+  --color-label-ink-61: #1c4587;
+  --color-dark-label-ink-61: #6b86b1;
+  --color-label-ink-62: #41236d;
+  --color-dark-label-ink-62: #8d7ba7;
+  --color-label-ink-63: #83334c;
+  --color-dark-label-ink-63: #ae7a8b;
+  --color-label-ink-64: #464646;
+  --color-dark-label-ink-64: #878787;
+  --color-label-ink-65: #747474;
+  --color-dark-label-ink-65: #e7e7e7;
+  --color-label-ink-66: #0d3472;
+  --color-dark-label-ink-66: #6e85aa;
+  --color-label-ink-67: #647287;
+  --color-dark-label-ink-67: #b6cff5;
+  --color-label-ink-68: #0d3b44;
+  --color-dark-label-ink-68: #6e898f;
+  --color-label-ink-69: #54767d;
+  --color-dark-label-ink-69: #98d7e4;
+  --color-label-ink-70: #3d188e;
+  --color-dark-label-ink-70: #8b74bb;
+  --color-label-ink-71: #726c80;
+  --color-dark-label-ink-71: #e3d7ff;
+  --color-label-ink-72: #711a36;
+  --color-dark-label-ink-72: #aa7686;
+  --color-label-ink-73: #7e6a70;
+  --color-dark-label-ink-73: #fbd3e0;
+  --color-label-ink-74: #8a1c0a;
+  --color-dark-label-ink-74: #b9776c;
+  --color-label-ink-75: #85625c;
+  --color-dark-label-ink-75: #f2b2a8;
+  --color-label-ink-76: #7a2e0b;
+  --color-dark-label-ink-76: #a97760;
+  --color-label-ink-77: #806458;
+  --color-dark-label-ink-77: #ffc8af;
+  --color-label-ink-78: #7a4706;
+  --color-dark-label-ink-78: #a27e51;
+  --color-label-ink-79: #806f5b;
+  --color-dark-label-ink-79: #ffdeb5;
+  --color-label-ink-80: #594c05;
+  --color-dark-label-ink-80: #8b8250;
+  --color-label-ink-81: #7e7542;
+  --color-dark-label-ink-81: #fbe983;
+  --color-label-ink-82: #684e07;
+  --color-dark-label-ink-82: #958351;
+  --color-label-ink-83: #726b57;
+  --color-dark-label-ink-83: #fdedc1;
+  --color-label-ink-84: #0b4f30;
+  --color-dark-label-ink-84: #608d78;
+  --color-label-ink-85: #5a786a;
+  --color-dark-label-ink-85: #b3efd3;
+  --color-label-ink-86: #04502e;
+  --color-dark-label-ink-86: #5c8d77;
+  --color-label-ink-87: #59796a;
+  --color-dark-label-ink-87: #a2dcc1;
+  --color-label-ink-88: #6b6b6b;
+  --color-dark-label-ink-88: #c2c2c2;
+  --color-label-ink-89: #3a6bb9;
+  --color-dark-label-ink-89: #528ce8;
+  --color-label-ink-90: #1f7183;
+  --color-dark-label-ink-90: #2da2bb;
+  --color-label-ink-91: #7864a6;
+  --color-dark-label-ink-91: #b99aff;
+  --color-label-ink-92: #994a64;
+  --color-dark-label-ink-92: #b3778b;
+  --color-label-ink-93: #94576b;
+  --color-dark-label-ink-93: #f691b2;
+  --color-label-ink-94: #b35227;
+  --color-dark-label-ink-94: #ff7537;
+  --color-label-ink-95: #8c5f27;
+  --color-dark-label-ink-95: #ffad46;
+  --color-label-ink-96: #662e37;
+  --color-dark-label-ink-96: #9c777d;
+  --color-label-ink-97: #766e6f;
+  --color-dark-label-ink-97: #ebdbde;
+  --color-label-ink-98: #7a6467;
+  --color-dark-label-ink-98: #cca6ac;
+  --color-label-ink-99: #094228;
+  --color-dark-label-ink-99: #6b8e7e;
+  --color-label-ink-100: #247650;
+  --color-dark-label-ink-100: #42d692;
+  --color-label-ink-101: #117d4c;
+  --color-dark-label-ink-101: #16a765;
 }

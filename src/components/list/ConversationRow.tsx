@@ -4,11 +4,15 @@ import { moveSource, type MoveDestinationId } from '@/components/actions/MoveToM
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { RowContextMenu } from '@/components/actions/RowContextMenu';
 import { Avatar } from '@/components/shared/Avatar';
+import { Badge } from '@/components/shared/Badge';
+import { userBadgesByName } from '@/lib/labels/badges';
 import { exactTime, relativeTime } from '@/lib/format/relative-time';
 import { useSenderAvatarQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import type { Conversation } from '@/lib/types/conversation';
 import type { Density } from '@/lib/types/ipc';
+
+const ROW_BADGE_LIMIT = 2;
 
 type Props = {
   conversation: Conversation;
@@ -65,6 +69,7 @@ export function ConversationRow({
     ...label,
     membership: (conversation.labels ?? []).includes(label.name) ? 'checked' : 'unchecked',
   }));
+  const rowBadges = userBadgesByName(conversation.labels ?? [], allLabels);
   return (
     <RowContextMenu
       mailboxId={mailboxId ?? 'INBOX'}
@@ -172,22 +177,24 @@ export function ConversationRow({
           )}
         </button>
         {!compact && (
-          <span className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
+          <div className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
             {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
-            {conversation.labels?.map((label) => (
-              <span
-                key={label}
-                title={label}
-                className={
-                  spacious
-                    ? 'rounded-sm bg-tertiary-container px-2 py-0.5 text-label-sm text-on-tertiary-container dark:bg-dark-tertiary-container dark:text-dark-on-tertiary-container'
-                    : 'size-chip-dot rounded-full bg-tertiary-container dark:bg-dark-tertiary-container'
-                }
-              >
-                {spacious ? label : null}
-              </span>
-            ))}
-          </span>
+            {rowBadges.length > 0 && (
+              <ul aria-label="Labels" className="flex items-center gap-1">
+                {rowBadges.slice(0, ROW_BADGE_LIMIT).map((badge) => (
+                  <Badge key={badge.id} badge={badge} iconOnly={!spacious} />
+                ))}
+                {rowBadges.length > ROW_BADGE_LIMIT && (
+                  <li
+                    title={`${rowBadges.length - ROW_BADGE_LIMIT} more labels`}
+                    className="shrink-0 rounded-sm bg-surface-container px-1.5 py-0.5 text-label-sm font-normal text-secondary dark:bg-dark-surface-container dark:text-dark-secondary"
+                  >
+                    +{rowBadges.length - ROW_BADGE_LIMIT}
+                  </li>
+                )}
+              </ul>
+            )}
+          </div>
         )}
         {mailboxId !== 'TRASH' && (
           <button

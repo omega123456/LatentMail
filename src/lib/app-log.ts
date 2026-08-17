@@ -5,7 +5,8 @@ type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 function write(level: LogLevel, message: string) {
   try {
     void dispatchInvoke<void>('write_frontend_log', { level, message }).catch(() => undefined);
-  } catch {
+  } catch (error) {
+    void error;
   }
   console[level](message);
 }

@@ -45,10 +45,13 @@ beforeEach(() => {
 describe('ConversationList', () => {
   it('reflows rows by density and only shows snippets when spacious', async () => {
     const user = userEvent.setup();
+    const marketing: LabelMenuEntry[] = [
+      { id: 'Label_1', name: 'Marketing', color: 'blue', membership: 'unchecked' },
+    ];
     renderWithQueryClient(
       <>
         <ListHeader />
-        <ConversationList />
+        <ConversationList allLabels={marketing} />
       </>,
     );
     expect(screen.getAllByTestId('conversation-row')[0]).toHaveAttribute(
@@ -65,7 +68,7 @@ describe('ConversationList', () => {
       'spacious',
     );
     expect(screen.getByText(/finalized slides/)).toBeInTheDocument();
-    expect(screen.getByText('Marketing')).toBeInTheDocument();
+    expect(screen.getByTitle('Marketing')).toHaveTextContent('Marketing');
   });
 
   it('opens and marks rows read with keyboard navigation, including clamps', () => {
@@ -92,7 +95,6 @@ describe('ConversationList', () => {
     rerender(<ConversationList state="error" onRetry={retry} />);
     await user.click(screen.getByText('Retry'));
     expect(retry).toHaveBeenCalledOnce();
-
 
     rerender(<ConversationList state="error" errorMessage="no such column: snippet" />);
     expect(screen.getByText('no such column: snippet')).toBeInTheDocument();

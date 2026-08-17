@@ -1,15 +1,10 @@
-import { AlertTriangle, FileText, Inbox, Send, Star, Trash2, type LucideIcon } from 'lucide-react';
+import { SYSTEM_BADGES, type SystemBadgeId } from '@/lib/labels/badges';
 
 export type Mailbox = { id: string; name: string; unreadCount: number };
 
-const folders: { id: string; name: string; Icon: LucideIcon }[] = [
-  { id: 'INBOX', name: 'Inbox', Icon: Inbox },
-  { id: 'STARRED', name: 'Starred', Icon: Star },
-  { id: 'DRAFT', name: 'Drafts', Icon: FileText },
-  { id: 'SENT', name: 'Sent', Icon: Send },
-  { id: 'SPAM', name: 'Spam', Icon: AlertTriangle },
-  { id: 'TRASH', name: 'Trash', Icon: Trash2 },
-];
+const folderOrder: SystemBadgeId[] = ['INBOX', 'STARRED', 'DRAFT', 'SENT', 'SPAM', 'TRASH'];
+
+const folders = folderOrder.map((id) => ({ id, ...SYSTEM_BADGES[id] }));
 
 export function FolderList({
   activeMailboxId,

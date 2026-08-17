@@ -1,5 +1,7 @@
 import { formatDistanceToNowStrict, format, formatISO } from 'date-fns';
 import { Avatar } from '@/components/shared/Avatar';
+import { Badge } from '@/components/shared/Badge';
+import type { MessageBadge } from '@/lib/labels/badges';
 import { formatParticipants, type Participant } from '@/lib/format/participants';
 import { domainFor } from '@/lib/avatars/identity';
 import { useSenderAvatarQuery } from '@/lib/query/hooks';
@@ -11,11 +13,13 @@ export function MessageHeader({
   sender,
   recipients,
   sentAt,
+  badges = [],
   onComposeTo,
 }: {
   sender: MessageSender;
   recipients: Participant[];
   sentAt: Date;
+  badges?: MessageBadge[];
   onComposeTo?: (participant: Participant) => void;
 }) {
   const timestamp = formatDistanceToNowStrict(sentAt, { addSuffix: true });
@@ -29,7 +33,7 @@ export function MessageHeader({
       <div className="flex min-w-0 items-center gap-4">
         {showSenderAvatars && <Avatar size={48} src={avatarSrc} label={senderLabel} ring />}
         <div className="flex min-w-0 flex-col">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-2">
             <button
               type="button"
               onClick={() => onComposeTo?.(sender)}
@@ -40,6 +44,13 @@ export function MessageHeader({
             <span className="truncate text-body-sm text-secondary dark:text-dark-secondary">
               &lt;{sender.address}&gt;
             </span>
+            {badges.length > 0 && (
+              <ul aria-label="Labels" className="flex flex-wrap items-center gap-1">
+                {badges.map((badge) => (
+                  <Badge key={badge.id} badge={badge} />
+                ))}
+              </ul>
+            )}
           </div>
           <button
             type="button"

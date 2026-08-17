@@ -81,8 +81,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const composeTarget = useCallback(
     (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => {
       if (!activeAccount || keyboardMultiSelect || !keyboardConversation.data) return;
-      const labels = new Map((labelsQuery.data ?? []).map((label) => [label.id, label.name]));
-      const message = mapConversation(keyboardConversation.data, labels).messages.at(-1);
+      const message = mapConversation(keyboardConversation.data).messages.at(-1);
       if (!message) return;
       if (action === 'reply')
         void openReply('reply', activeAccount.id, activeAccount.email, message);
@@ -98,7 +97,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           message,
         );
     },
-    [activeAccount, keyboardConversation.data, keyboardMultiSelect, labelsQuery.data],
+    [activeAccount, keyboardConversation.data, keyboardMultiSelect],
   );
   useCommands({
     newMessage: (event) => {

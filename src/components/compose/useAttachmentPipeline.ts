@@ -51,7 +51,9 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     },
     [accountId, owner, addReadingAttachment, settleAttachment, failAttachment, bodyRef],
   );
-  stagePathRef.current = stagePath;
+  useEffect(() => {
+    stagePathRef.current = stagePath;
+  }, [stagePath]);
 
   const onAttach = useCallback(async () => {
     const paths = await pickAttachments();
@@ -74,12 +76,13 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     [session?.attachments, removeAttachment, accountId, owner],
   );
 
+  const sessionId = session?.id;
   useEffect(() => {
-    if (!session) return;
+    if (!sessionId) return;
     return subscribeToFileDrop((paths) =>
       paths.forEach((path) => stagePathRef.current(path, null)),
     );
-  }, [session?.id]);
+  }, [sessionId]);
 
   const previousHtml = useRef(session?.html ?? '');
   useEffect(() => {

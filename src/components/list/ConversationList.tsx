@@ -407,7 +407,7 @@ export function ConversationListContainer() {
       }}
       onCompose={(targetThreadId, action) => {
         if (!accountId || targetThreadId !== activeThreadId || !activeConversation.data) return;
-        const conversation = mapConversation(activeConversation.data, new Map());
+        const conversation = mapConversation(activeConversation.data);
         const message = conversation.messages.at(-1);
         if (action === 'reply') void openReply('reply', accountId, accountEmail, message);
         else if (action === 'reply-all')

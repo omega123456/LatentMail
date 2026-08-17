@@ -75,10 +75,7 @@ export function computeThreadLabelMembership(
     });
 }
 
-export function mapConversation(
-  conversation: IpcConversation,
-  labelNamesById: Map<string, string>,
-): ReaderConversation {
+export function mapConversation(conversation: IpcConversation): ReaderConversation {
   return {
     id: conversation.threadId,
     subject: conversation.subject,
@@ -94,9 +91,6 @@ export function mapConversation(
       html: message.htmlBody,
       htmlPresence: message.htmlPresence,
       text: message.plainBody,
-      labels: message.labelIds
-        .map((id) => labelNamesById.get(id))
-        .filter((name): name is string => Boolean(name)),
       labelIds: message.labelIds,
       unread: message.isUnread,
       starred: message.isStarred,

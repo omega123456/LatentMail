@@ -51,7 +51,6 @@ describe('mapThreadToRow', () => {
   });
 
   it('renders whatever display string Rust already resolved, without re-deriving it from the address', () => {
-
     const bareAddress = {
       ...thread,
       sender: { display: 'elena.r@example.com', address: 'elena.r@example.com' },
@@ -103,7 +102,7 @@ describe('mapLabelsToMailboxes / mapLabelsToUserLabels', () => {
 });
 
 describe('mapConversation', () => {
-  it('maps a Conversation DTO into the reader shape, resolving label names', () => {
+  it('maps a Conversation DTO into the reader shape, keeping label ids', () => {
     const conversation: Conversation = {
       threadId: 'thread-1',
       subject: 'Q3 Marketing Strategy Review',
@@ -126,13 +125,13 @@ describe('mapConversation', () => {
         },
       ],
     };
-    const result = mapConversation(conversation, new Map([['Label_1', 'Work']]));
+    const result = mapConversation(conversation);
     expect(result.messages[0]).toMatchObject({
       sender: { name: 'Elena Rodriguez', address: 'elena.r@example.com' },
       recipients: [{ name: 'You', address: 'you@example.com' }],
       html: '<p>Attached slides</p>',
       text: null,
-      labels: ['Work'],
+      labelIds: ['Label_1', 'INBOX'],
       remoteImagesBlocked: true,
     });
   });

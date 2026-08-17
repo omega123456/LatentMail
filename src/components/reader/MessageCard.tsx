@@ -6,6 +6,7 @@ import {
 } from '@/components/actions/MessageActionRibbon';
 import { BodyFrame } from './BodyFrame';
 import { MessageHeader, type MessageSender } from './MessageHeader';
+import type { MessageBadge } from '@/lib/labels/badges';
 import type { Participant } from '@/lib/format/participants';
 
 export type ReaderMessage = {
@@ -20,7 +21,6 @@ export type ReaderMessage = {
   html: string | null;
   htmlPresence?: 'neverFetched' | 'present' | 'absent';
   text: string | null;
-  labels?: string[];
   labelIds?: string[];
   unread?: boolean;
   starred?: boolean;
@@ -35,6 +35,7 @@ export function MessageCard({
   message,
   expanded,
   newest,
+  badges,
   ribbon,
   onFetchBody,
   loadingBody = false,
@@ -44,6 +45,7 @@ export function MessageCard({
   message: ReaderMessage;
   expanded: boolean;
   newest: boolean;
+  badges?: MessageBadge[];
   ribbon?: MessageRibbonProps;
   onFetchBody?: (messageId: string) => void;
   loadingBody?: boolean;
@@ -89,6 +91,7 @@ export function MessageCard({
             sender={message.sender}
             recipients={message.recipients}
             sentAt={message.sentAt}
+            badges={badges}
             onComposeTo={onComposeTo}
           />
           {!open && (

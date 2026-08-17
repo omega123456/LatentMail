@@ -27,6 +27,27 @@ describe('MessageHeader', () => {
     expect(compose).toHaveBeenNthCalledWith(2, { name: 'Me', address: 'me@example.com' });
   });
 
+  it('lists the message badges beside the sender', () => {
+    renderWithQueryClient(
+      <MessageHeader
+        sender={{ name: 'Elena', address: 'elena@example.com' }}
+        recipients={[]}
+        sentAt={parseISO('2026-08-13T12:00:00Z')}
+        badges={[
+          { kind: 'system', id: 'INBOX' },
+          { kind: 'user', id: 'Label_1', name: 'Invoices', color: 'blue' },
+        ]}
+      />,
+    );
+
+    const badges = screen.getByRole('list', { name: 'Labels' });
+    expect(badges).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Inbox',
+      'Invoices',
+    ]);
+  });
+
   it('renders through the shared Avatar component with a visible initial when the sender has no display name', () => {
     renderWithQueryClient(
       <MessageHeader
