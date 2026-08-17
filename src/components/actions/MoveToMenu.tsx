@@ -3,12 +3,6 @@ import { Inbox, ShieldAlert, Trash2 } from 'lucide-react';
 
 export type MoveDestinationId = 'INBOX' | 'SPAM' | 'TRASH';
 
-export function moveSource(mailboxId: string, currentLabelName?: string): string[] {
-  return currentLabelName || DESTINATIONS.some((destination) => destination.id === mailboxId)
-    ? [mailboxId]
-    : [];
-}
-
 const DESTINATIONS: { id: MoveDestinationId; name: string; Icon: typeof Inbox }[] = [
   { id: 'INBOX', name: 'Inbox', Icon: Inbox },
   { id: 'SPAM', name: 'Spam', Icon: ShieldAlert },
@@ -16,14 +10,15 @@ const DESTINATIONS: { id: MoveDestinationId; name: string; Icon: typeof Inbox }[
 ];
 
 export type MoveToMenuProps = {
-  currentMailboxId: string;
-  currentLabelName?: string;
+  currentSystemLabelIds: string[];
   onSelect: (destination: MoveDestinationId) => void;
 };
 
-export function MoveToMenu({ currentMailboxId, currentLabelName, onSelect }: MoveToMenuProps) {
+export function MoveToMenu({ currentSystemLabelIds, onSelect }: MoveToMenuProps) {
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const selectable = DESTINATIONS.filter((destination) => destination.id !== currentMailboxId);
+  const selectable = DESTINATIONS.filter(
+    (destination) => !currentSystemLabelIds.includes(destination.id),
+  );
 
   const focusSelectableAt = (index: number) => {
     const wrapped = ((index % selectable.length) + selectable.length) % selectable.length;
@@ -53,16 +48,8 @@ export function MoveToMenu({ currentMailboxId, currentLabelName, onSelect }: Mov
       data-testid="move-to-menu"
       className="flex flex-col gap-1"
     >
-      {currentLabelName && (
-        <div
-          role="presentation"
-          className="px-2 py-1 text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant"
-        >
-          Removing from {currentLabelName}
-        </div>
-      )}
       {DESTINATIONS.map((destination, index) => {
-        const inert = destination.id === currentMailboxId;
+        const inert = currentSystemLabelIds.includes(destination.id);
         return (
           <button
             key={destination.id}

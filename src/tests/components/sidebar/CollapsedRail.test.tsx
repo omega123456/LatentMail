@@ -64,4 +64,43 @@ describe('CollapsedRail', () => {
     );
     expect(screen.getByRole('img', { name: 'a@example.com' })).toBeInTheDocument();
   });
+
+  it('shows the search icon with the query as its tooltip when search is active', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CollapsedRail
+          accounts={accounts}
+          activeAccountId="account-1"
+          activeMailboxId="INBOX"
+          mailboxes={mailboxes}
+          onSelectAccount={vi.fn()}
+          onSelectMailbox={vi.fn()}
+          onExpand={vi.fn()}
+          onSettings={vi.fn()}
+          searchActive
+          searchQuery="from:anna"
+        />
+      </QueryClientProvider>,
+    );
+    const indicator = screen.getByTestId('collapsed-search-indicator');
+    expect(indicator).toHaveAttribute('title', 'from:anna');
+  });
+
+  it('omits the search indicator when search is not active', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CollapsedRail
+          accounts={accounts}
+          activeAccountId="account-1"
+          activeMailboxId="INBOX"
+          mailboxes={mailboxes}
+          onSelectAccount={vi.fn()}
+          onSelectMailbox={vi.fn()}
+          onExpand={vi.fn()}
+          onSettings={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByTestId('collapsed-search-indicator')).not.toBeInTheDocument();
+  });
 });

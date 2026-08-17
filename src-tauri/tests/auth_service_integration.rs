@@ -317,6 +317,43 @@ fn client_secret_is_optional_and_ignores_an_empty_value() {
 }
 
 #[tokio::test]
+async fn refresh_access_token_forwards_a_configured_client_secret_to_the_token_exchange() {
+    let server = MockServer::start().await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "configured-secret");
+    let (service, _directory) = service_with_storage();
+    let application = app();
+    let handle = application.handle().clone();
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "secret-bearing-access-token",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    save_refresh_token("secret-account", "stored-refresh-token").unwrap();
+
+    let token = service
+        .refresh_access_token(&handle, "secret-account")
+        .await
+        .unwrap();
+    assert_eq!(token, "secret-bearing-access-token");
+
+    let requests = server.received_requests().await.unwrap();
+    let body = String::from_utf8(requests[0].body.clone()).unwrap();
+    assert!(body.contains("client_secret=configured-secret"));
+
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_SECRET", "");
+}
+
+#[tokio::test]
 async fn start_requires_a_configured_client_id() {
     std::env::remove_var("LATENTMAIL_GOOGLE_CLIENT_ID");
     let (service, _directory) = service_with_storage();

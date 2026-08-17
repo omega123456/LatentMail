@@ -36,7 +36,7 @@ const labels: MailLabel[] = [
 
 describe('mapThreadToRow', () => {
   it('maps a MailThread onto the conversation row shape, resolving the newest sender', () => {
-    expect(mapThreadToRow(thread, 'INBOX')).toMatchObject({
+    expect(mapThreadToRow(thread)).toMatchObject({
       id: 'thread-1',
       sender: 'Elena Rodriguez',
       identityLabel: 'Elena Rodriguez',
@@ -55,31 +55,41 @@ describe('mapThreadToRow', () => {
       ...thread,
       sender: { display: 'elena.r@example.com', address: 'elena.r@example.com' },
     };
-    expect(mapThreadToRow(bareAddress, 'INBOX').sender).toBe('elena.r@example.com');
+    expect(mapThreadToRow(bareAddress).sender).toBe('elena.r@example.com');
   });
 
   it('falls back to placeholder subject text when empty, without touching the always-present sender display', () => {
     const empty = { ...thread, subject: '' };
-    const row = mapThreadToRow(empty, 'INBOX');
+    const row = mapThreadToRow(empty);
     expect(row.sender).toBe('Elena Rodriguez');
     expect(row.subject).toBe('(No subject)');
   });
 
-  it('names and depicts the recipient in the Sent mailbox, never the account owner', () => {
+  it('names and depicts the recipient for a thread carrying SENT, never the account owner', () => {
     const sent = {
       ...thread,
       sender: { display: 'Me', address: 'me@example.com' },
       sentRecipient: { display: 'Alex Chen', address: 'alex@vendor.example' },
+      systemLabelIds: ['SENT'],
     };
-    const row = mapThreadToRow(sent, 'SENT');
+    const row = mapThreadToRow(sent);
     expect(row.sender).toBe('To: Alex Chen');
     expect(row.identityLabel).toBe('Alex Chen');
     expect(row.avatarDomain).toBe('vendor.example');
   });
 
-  it('falls back to "(No recipient)" in the Sent mailbox when the thread has no Sent message at all', () => {
-    const sent = { ...thread, sentRecipient: null };
-    expect(mapThreadToRow(sent, 'SENT').sender).toBe('(No recipient)');
+  it('falls back to "(No recipient)" for a Sent thread that carries no Sent message at all', () => {
+    const sent = { ...thread, sentRecipient: null, systemLabelIds: ['SENT'] };
+    expect(mapThreadToRow(sent).sender).toBe('(No recipient)');
+  });
+
+  it('shows the sender, not the recipient, when the thread does not carry SENT even if viewed under mailboxId SENT historically', () => {
+    const notSent = {
+      ...thread,
+      sentRecipient: { display: 'Alex Chen', address: 'alex@vendor.example' },
+      systemLabelIds: ['INBOX'],
+    };
+    expect(mapThreadToRow(notSent).sender).toBe('Elena Rodriguez');
   });
 });
 

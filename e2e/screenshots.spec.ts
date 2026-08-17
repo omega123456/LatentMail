@@ -5,7 +5,10 @@ import { installPlaywrightIpc } from './helpers';
 import {
   playwrightContactSuggestionMatches,
   playwrightMailAccount,
+  playwrightParsedSearchQuery,
   playwrightReauthAccount,
+  playwrightSearchThreadPage,
+  playwrightSettings,
   playwrightSidebarAccounts,
 } from '@/tests/playwright-fixtures';
 
@@ -185,6 +188,85 @@ for (const theme of themes) {
     await screenshot(page, page.getByTestId('mail-layout'), 'full-shell-three-column', theme);
   });
 
+  test(`search field focused ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await page.getByLabel('Search mail').click();
+    await page.getByLabel('Search mail').fill('from:anna');
+    await screenshot(page, page.getByRole('search'), 'search-field-focused', theme);
+  });
+
+  test(`advanced search panel ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      parse_search_query: playwrightParsedSearchQuery,
+    });
+    await page.goto('/');
+    await page.getByLabel('Search mail').fill('from:anna quarterly');
+    await page.getByRole('button', { name: 'Show search options' }).click();
+    await expect(page.getByLabel('From')).toHaveValue('anna');
+    await screenshot(page, page.getByTestId('advanced-search-panel'), 'advanced-search-panel', theme);
+  });
+
+  test(`search results sidebar row ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      search_threads: playwrightSearchThreadPage,
+    });
+    await page.goto('/');
+    await page.getByLabel('Search mail').fill('from:anna');
+    await page.getByLabel('Search mail').press('Enter');
+    await screenshot(page, page.getByTestId('search-results-row'), 'search-results-row', theme);
+  });
+
+  test(`search result row source badge ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      search_threads: playwrightSearchThreadPage,
+      read_settings: { ...playwrightSettings, density: 'spacious' },
+    });
+    await page.goto('/');
+    await page.getByLabel('Search mail').fill('from:anna');
+    await page.getByLabel('Search mail').press('Enter');
+    await expect(page.getByText('Re: Q3 invoice')).toBeVisible();
+    await screenshot(page, page.getByTestId('list-slot'), 'search-result-row-source-badge', theme);
+  });
+
+  test(`search zero results ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      search_threads: { items: [], nextCursor: null, total: 0 },
+    });
+    await page.goto('/');
+    await page.getByLabel('Search mail').fill('from:anna quarterly');
+    await page.getByLabel('Search mail').press('Enter');
+    await screenshot(page, page.getByTestId('empty-state-search'), 'search-zero-results', theme);
+  });
+
+  test(`search incomplete backfill notice ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      search_threads: playwrightSearchThreadPage,
+      read_traversal_status: {
+        accountId: 'mail-account',
+        state: 'backfilling',
+        kind: 'backfill',
+        discoveredCount: 48110,
+        persistedCount: 31402,
+        lastAdvancedAt: getTime(parseISO('2026-08-12T10:00:00Z')),
+        isResumed: false,
+      },
+    });
+    await page.goto('/');
+    await page.getByLabel('Search mail').fill('from:anna');
+    await page.getByLabel('Search mail').press('Enter');
+    await screenshot(
+      page,
+      page.getByTestId('search-incomplete-notice'),
+      'search-incomplete-notice',
+      theme,
+    );
+  });
 
   test(`composer panel ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(

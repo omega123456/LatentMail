@@ -79,11 +79,18 @@ async fn labels_default_missing_type_and_ignore_incomplete_colors() {
     Mock::given(method("GET"))
         .and(path("/users/me/labels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "labels": [{
-                "id": "Label_1",
-                "name": "Clients",
-                "color": { "textColor": "#ffffff" }
-            }]
+            "labels": [
+                {
+                    "id": "Label_1",
+                    "name": "Clients",
+                    "color": { "textColor": "#ffffff" }
+                },
+                {
+                    "id": "Label_2",
+                    "name": "Family",
+                    "color": { "textColor": "#ffffff", "backgroundColor": "#fb4c2f" }
+                }
+            ]
         })))
         .mount(&server)
         .await;
@@ -95,6 +102,13 @@ async fn labels_default_missing_type_and_ignore_incomplete_colors() {
 
     assert_eq!(labels[0].kind, "user");
     assert!(labels[0].color.is_none());
+    assert_eq!(
+        labels[1].color,
+        Some(LabelColorPair {
+            text_color: "#ffffff".into(),
+            background_color: "#fb4c2f".into(),
+        })
+    );
 }
 
 #[tokio::test]

@@ -1,12 +1,13 @@
 import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationList } from '@/components/list/ConversationList';
 import { ListHeader } from '@/components/list/ListHeader';
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { useLayoutStore } from '@/stores/layout';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
+import { useSearchStore } from '@/stores/search';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
 const nextPage = [
@@ -157,7 +158,11 @@ describe('ConversationList', () => {
     const entry = await screen.findByRole('menuitemcheckbox', { name: /Marketing/ });
     expect(entry).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(entry);
-    expect(onTriage).toHaveBeenCalledWith(['thread-1'], { add: [], remove: ['Label_1'] });
+    expect(onTriage).toHaveBeenCalledWith(['thread-1'], {
+      kind: 'label',
+      add: [],
+      remove: ['Label_1'],
+    });
   });
 });
 
@@ -230,6 +235,42 @@ describe('ConversationList multi-selection', () => {
     expect(useMultiSelectStore.getState().selectedIds.size).toBe(0);
   });
 
+  it('derives the right-click context menu from every selected thread, not just the row that was clicked', async () => {
+    const user = userEvent.setup();
+    const threads = [
+      {
+        id: 'thread-trash',
+        sender: 'Anna',
+        subject: 'In trash',
+        snippet: '',
+        date: new Date('2026-08-11T10:00:00Z'),
+        unread: false,
+        starred: false,
+        systemLabelIds: ['TRASH'],
+      },
+      {
+        id: 'thread-inbox',
+        sender: 'Bob',
+        subject: 'In inbox',
+        snippet: '',
+        date: new Date('2026-08-10T10:00:00Z'),
+        unread: false,
+        starred: false,
+        systemLabelIds: ['INBOX'],
+      },
+    ];
+    renderWithQueryClient(<ConversationList threads={threads} />);
+    fireEvent.click(screen.getByLabelText('Open In trash'), { ctrlKey: true });
+    fireEvent.click(screen.getByLabelText('Open In inbox'), { ctrlKey: true });
+
+    await user.pointer({
+      keys: '[MouseRight]',
+      target: screen.getByLabelText('Open In trash').closest('[data-testid="conversation-row"]')!,
+    });
+    expect(await screen.findByText('Delete 2')).toBeInTheDocument();
+    expect(screen.getByText('Star 2')).toBeInTheDocument();
+  });
+
   it('no single-active-row highlight renders while more than one row is selected', () => {
     renderWithQueryClient(<ConversationList />);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
@@ -254,15 +295,64 @@ describe('ConversationList triage shortcuts', () => {
     );
     fireEvent.click(screen.getByLabelText('Open Q3 Marketing Strategy Review'), { ctrlKey: true });
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'I', shiftKey: true })));
-    expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], { add: [], remove: ['UNREAD'] });
+    expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], {
+      kind: 'label',
+      add: [],
+      remove: ['UNREAD'],
+    });
     act(() =>
       window.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'J', ctrlKey: true, shiftKey: true }),
       ),
     );
-    expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], { add: [], remove: ['SPAM'] });
+    expect(onTriage).toHaveBeenLastCalledWith(['thread-1'], {
+      kind: 'move',
+      destination: 'INBOX',
+    });
     screen.getByLabelText('filter').focus();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })));
     expect(onTriage).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ConversationList — search states', () => {
+  afterEach(() =>
+    act(() =>
+      useSearchStore.setState({
+        draft: '',
+        submittedQuery: '',
+        scope: { kind: 'default' },
+        active: false,
+        panelOpen: false,
+      }),
+    ),
+  );
+
+  it('renders the search-specific empty state naming the query', () => {
+    act(() => useSearchStore.setState({ active: true }));
+    renderWithQueryClient(
+      <ConversationList threads={[]} state="searchEmpty" searchQueryText="from:anna" />,
+    );
+    expect(screen.getByTestId('empty-state-search')).toHaveTextContent('from:anna');
+  });
+
+  it('shows the incomplete-backfill notice above rows while search is active and backfill is running, at any result count', () => {
+    act(() => useSearchStore.setState({ active: true }));
+    renderWithQueryClient(<ConversationList searchIncomplete />);
+    expect(screen.getByTestId('search-incomplete-notice')).toBeInTheDocument();
+  });
+
+  it('shows the incomplete notice alongside zero results too', () => {
+    act(() => useSearchStore.setState({ active: true }));
+    renderWithQueryClient(
+      <ConversationList threads={[]} state="searchEmpty" searchQueryText="none" searchIncomplete />,
+    );
+    expect(screen.getByTestId('search-incomplete-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('empty-state-search')).toBeInTheDocument();
+  });
+
+  it('omits the incomplete notice when search is not active even if backfill is running', () => {
+    renderWithQueryClient(<ConversationList searchIncomplete />);
+    expect(screen.queryByTestId('search-incomplete-notice')).not.toBeInTheDocument();
   });
 });

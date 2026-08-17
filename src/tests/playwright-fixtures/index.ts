@@ -21,3 +21,8 @@ export {
   playwrightQueueSummary,
   playwrightResumedQueueSummary,
 } from './queue';
+export {
+  playwrightParsedSearchQuery,
+  playwrightSearchThreadPage,
+  playwrightSearchThreads,
+} from './search';

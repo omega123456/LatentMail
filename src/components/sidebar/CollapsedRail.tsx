@@ -3,6 +3,7 @@ import type { Account } from '@/lib/types/ipc';
 import type { Mailbox } from './FolderList';
 import { AccountSwitcher } from './AccountSwitcher';
 import { FolderList } from './FolderList';
+import { CollapsedSearchIndicator } from './SearchResultsRow';
 
 export function CollapsedRail({
   accounts,
@@ -14,6 +15,8 @@ export function CollapsedRail({
   onExpand,
   onSettings,
   onCompose,
+  searchActive = false,
+  searchQuery = '',
 }: {
   accounts: Account[];
   activeAccountId: string | null;
@@ -24,6 +27,8 @@ export function CollapsedRail({
   onExpand: () => void;
   onSettings: () => void;
   onCompose?: () => void;
+  searchActive?: boolean;
+  searchQuery?: string;
 }) {
   return (
     <aside
@@ -45,6 +50,7 @@ export function CollapsedRail({
       >
         <Plus aria-hidden="true" size={18} />
       </button>
+      {searchActive && <CollapsedSearchIndicator query={searchQuery} />}
       <FolderList
         activeMailboxId={activeMailboxId}
         mailboxes={mailboxes}

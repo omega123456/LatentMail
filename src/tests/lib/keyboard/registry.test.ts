@@ -75,4 +75,20 @@ describe('keyboard command registry', () => {
   it('registers editDraft with no default binding, so it is reachable only programmatically until remapped', () => {
     expect(DEFAULT_COMMAND_BINDINGS.editDraft).toEqual([]);
   });
+
+  it('resolves Cmd/Ctrl-F and the bare slash to focusSearch', () => {
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'f', metaKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('focusSearch');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('focusSearch');
+    expect(commandForKey('/', DEFAULT_COMMAND_BINDINGS)).toBe('focusSearch');
+  });
 });

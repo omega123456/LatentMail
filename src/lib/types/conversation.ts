@@ -12,4 +12,5 @@ export type Conversation = {
   messageCount?: number;
   draft?: boolean;
   labels?: string[];
+  systemLabelIds?: string[];
 };

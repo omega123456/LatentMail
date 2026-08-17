@@ -7,7 +7,8 @@ use latentmail_lib::storage::{
     MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::commands::{
-    list_labels, list_threads, load_conversation, read_sync_status, trigger_sync,
+    fetch_message_body, list_labels, list_threads, load_conversation, read_sync_status,
+    trigger_sync,
 };
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncState, ThreadCursor, WorkRegistry};
 use tauri::Manager;
@@ -469,4 +470,90 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
     assert_eq!(conversation.messages[0].sent_at, seconds * 1000);
 
     assert_eq!(page.next_cursor.map(|cursor| cursor.latest_at), None);
+}
+
+#[tokio::test]
+async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_direct_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-access-token",
+            "token_type": "Bearer",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "m1", "threadId": "t1", "historyId": "2", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "0",
+            "payload": {
+                "mimeType": "text/html",
+                "headers": [],
+                "body": { "data": "aGVsbG8td29ybGQ" }
+            }
+        })))
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    LabelRepository::ensure_placeholder(&connection, "account", "INBOX").unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: "account".into(),
+            id: "m1".into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: "Alice <a@example.com>".into(),
+            recipients: "me@example.com".into(),
+            subject: "Subject".into(),
+            sent_at: 0,
+            snippet: "hello".into(),
+            html_body: None,
+            plain_body: None,
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::NeverFetched,
+        },
+    )
+    .unwrap();
+    drop(connection);
+
+    let sync_engine = engine(&storage);
+    let application = app();
+    application.manage(AuthService::new(storage.clone()));
+    application.manage(sync_engine);
+    application.manage(storage.clone());
+
+    fetch_message_body(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        application.state(),
+        "account".into(),
+        "m1".into(),
+    )
+    .await
+    .unwrap();
+
+    let stored = MessageRepository::get(&storage.connection().unwrap(), "account", "m1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.html_body.as_deref(), Some("hello-world"));
+    assert_eq!(stored.html_presence, HtmlPresence::Present);
 }

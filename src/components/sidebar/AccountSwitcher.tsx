@@ -60,7 +60,7 @@ export function AccountSwitcher({
       {open && (
         <div
           role="menu"
-          className={`absolute bottom-full z-10 mb-stack-gap-sm min-w-56 rounded-md bg-surface-container-lowest p-stack-gap-sm shadow-lg dark:bg-dark-surface-container ${collapsed ? 'left-rail-width' : 'left-0'}`}
+          className={`absolute bottom-full z-20 mb-stack-gap-sm min-w-56 rounded-md bg-surface-container-lowest p-stack-gap-sm shadow-lg dark:bg-dark-surface-container ${collapsed ? 'left-rail-width' : 'left-0'}`}
         >
           {accounts.map((account) => (
             <button

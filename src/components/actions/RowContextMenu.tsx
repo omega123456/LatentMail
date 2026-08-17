@@ -26,11 +26,10 @@ const subTriggerClass = `${itemClass} justify-between`;
 
 export type RowContextMenuProps = {
   children: ReactNode;
-  mailboxId: string;
+  systemLabelIds: string[];
   unread: boolean;
   starred: boolean;
   labels: LabelMenuEntry[];
-  currentLabelName?: string;
   selectionCount?: number;
   onOpen: () => void;
   onToggleRead: () => void;
@@ -47,11 +46,10 @@ export type RowContextMenuProps = {
 
 export function RowContextMenu({
   children,
-  mailboxId,
+  systemLabelIds,
   unread,
   starred,
   labels,
-  currentLabelName,
   selectionCount = 1,
   onOpen,
   onToggleRead,
@@ -66,7 +64,7 @@ export function RowContextMenu({
   onEditDraft,
 }: RowContextMenuProps) {
   const [open, setOpen] = useState(false);
-  const visibility = computeRibbonVisibility(mailboxId);
+  const visibility = computeRibbonVisibility(systemLabelIds);
   const multi = selectionCount > 1;
   const countSuffix = multi ? ` ${selectionCount}` : '';
 
@@ -135,8 +133,7 @@ export function RowContextMenu({
               <ContextMenu.Portal>
                 <ContextMenu.SubContent className={menuContentClass} collisionPadding={8}>
                   <MoveToMenu
-                    currentMailboxId={mailboxId}
-                    currentLabelName={currentLabelName}
+                    currentSystemLabelIds={systemLabelIds}
                     onSelect={(destination) => {
                       setOpen(false);
                       onMoveTo(destination);

@@ -115,6 +115,10 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
   mark_thread_unread: undefined,
   mutate_threads: [],
   mutate_messages: undefined,
+  delete_threads: [],
+  move_threads: [],
+  delete_messages: undefined,
+  move_messages: undefined,
   delete_draft: undefined,
   create_label: {
     id: 'Label_1',
@@ -152,4 +156,14 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
   },
   read_sender_avatar: null,
   read_account_avatar: null,
+  search_threads: { items: [], nextCursor: null, total: 0 },
+  parse_search_query: {
+    hasTextTerm: false,
+    from: null,
+    to: null,
+    subject: null,
+    includes: [],
+    excludes: [],
+    predicates: [],
+  },
 };

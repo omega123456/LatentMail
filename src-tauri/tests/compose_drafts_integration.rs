@@ -659,6 +659,61 @@ fn boot(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile:
     (application, home)
 }
 
+fn boot_with_dead_gmail_base(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var(
+        "LATENTMAIL_GMAIL_BASE_URL",
+        format!("http://127.0.0.1:{dead_port}"),
+    );
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    std::env::set_var("APPDATA", home.path());
+    std::env::set_var("XDG_DATA_HOME", home.path());
+
+    let application = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
+        .visible(false)
+        .build()
+        .unwrap();
+    let handle = application.handle();
+    latentmail_lib::settings::initialize(handle).unwrap();
+    latentmail_lib::auth::initialize(handle).unwrap();
+
+    let directory = application.path().app_data_dir().unwrap();
+    let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let connection = seed_storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    drop(connection);
+    drop(seed_storage);
+    latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
+
+    latentmail_lib::sync::initialize(handle).unwrap();
+    (application, home)
+}
+
 fn mock_token(server: &MockServer) -> Mock {
     let _ = server;
     Mock::given(method("POST"))
@@ -1700,6 +1755,243 @@ async fn a_retryable_gmail_failure_is_reported_as_failed_rather_than_silently_st
             .unwrap()
             .unwrap();
         if operation.status == "failed" {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "operation never reached a terminal failed state"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_gmail_server_error_during_create_is_classified_as_retryable_and_recorded() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    mock_token(&server).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/upload/gmail/v1/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let (app, _home) = boot(&server);
+    let handle = app.handle();
+    let directory = app.path().app_data_dir().unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let staging = handle.state::<std::sync::Arc<Staging>>().inner().clone();
+    staging.snapshot("op-gmail-500", &[]).unwrap();
+
+    let coalescer = handle
+        .state::<std::sync::Arc<SaveCoalescer>>()
+        .inner()
+        .clone();
+    let generation = coalescer.schedule("draft:failing-session").await;
+    let mut payload = base_payload(DraftOperationMode::Create, None);
+    payload.coalescing_generation = generation;
+
+    let queue = handle
+        .state::<std::sync::Arc<QueueEngine>>()
+        .inner()
+        .clone();
+    latentmail_lib::queue::admit_durable(
+        &queue,
+        &storage,
+        QueueOperation {
+            id: "op-gmail-500".into(),
+            account_id: "account".into(),
+            lane: Lane::Interactive,
+            kind: OperationKind::Draft,
+            entity_key: "draft:failing-session".into(),
+            cost: 0,
+            attempts: 9,
+        },
+        serde_json::to_string(&payload).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let operation = storage
+            .run(|connection| OperationRepository::get(connection, "op-gmail-500"))
+            .await
+            .unwrap()
+            .unwrap();
+        if operation.status == "failed" {
+            assert_eq!(
+                operation.error.as_deref(),
+                Some("Gmail request failed with status 500")
+            );
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "operation never reached a terminal failed state"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_connection_refused_during_create_is_classified_as_a_network_error() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    mock_token(&server).mount(&server).await;
+    let (app, _home) = boot_with_dead_gmail_base(&server);
+    let handle = app.handle();
+    let directory = app.path().app_data_dir().unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let staging = handle.state::<std::sync::Arc<Staging>>().inner().clone();
+    staging.snapshot("op-gmail-network", &[]).unwrap();
+
+    let coalescer = handle
+        .state::<std::sync::Arc<SaveCoalescer>>()
+        .inner()
+        .clone();
+    let generation = coalescer.schedule("draft:network-failing-session").await;
+    let mut payload = base_payload(DraftOperationMode::Create, None);
+    payload.coalescing_generation = generation;
+
+    let queue = handle
+        .state::<std::sync::Arc<QueueEngine>>()
+        .inner()
+        .clone();
+    latentmail_lib::queue::admit_durable(
+        &queue,
+        &storage,
+        QueueOperation {
+            id: "op-gmail-network".into(),
+            account_id: "account".into(),
+            lane: Lane::Interactive,
+            kind: OperationKind::Draft,
+            entity_key: "draft:network-failing-session".into(),
+            cost: 0,
+            attempts: 9,
+        },
+        serde_json::to_string(&payload).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let operation = storage
+            .run(|connection| OperationRepository::get(connection, "op-gmail-network"))
+            .await
+            .unwrap()
+            .unwrap();
+        if operation.status == "failed" {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "operation never reached a terminal failed state"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_broken_metadata_table_fails_the_operation_after_a_successful_gmail_exchange() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    mock_token(&server).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/upload/gmail/v1/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(draft_response(
+            "d-meta-fail",
+            "m-meta-fail",
+            "t-meta-fail",
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts/d-meta-fail"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(draft_response(
+            "d-meta-fail",
+            "m-meta-fail",
+            "t-meta-fail",
+        )))
+        .mount(&server)
+        .await;
+    let (app, _home) = boot(&server);
+    let handle = app.handle();
+    let directory = app.path().app_data_dir().unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let staging = handle.state::<std::sync::Arc<Staging>>().inner().clone();
+    staging.snapshot("op-meta-fail", &[]).unwrap();
+
+    {
+        let connection = storage.connection().unwrap();
+        connection
+            .execute("DROP TABLE compose_draft_metadata", [])
+            .unwrap();
+        connection
+            .execute(
+                "CREATE TABLE compose_draft_metadata (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    draft_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    original_message_id TEXT,
+                    original_gmail_message_id TEXT,
+                    target_thread_id TEXT,
+                    in_reply_to TEXT,
+                    rfc_references TEXT,
+                    boundary_version INTEGER NOT NULL,
+                    editable_body_fingerprint TEXT,
+                    quote_html TEXT,
+                    quote_plain TEXT
+                )",
+                [],
+            )
+            .unwrap();
+    }
+
+    let coalescer = handle
+        .state::<std::sync::Arc<SaveCoalescer>>()
+        .inner()
+        .clone();
+    let generation = coalescer.schedule("draft:meta-fail-session").await;
+    let mut payload = base_payload(DraftOperationMode::Create, None);
+    payload.coalescing_generation = generation;
+
+    let queue = handle
+        .state::<std::sync::Arc<QueueEngine>>()
+        .inner()
+        .clone();
+    latentmail_lib::queue::admit_durable(
+        &queue,
+        &storage,
+        QueueOperation {
+            id: "op-meta-fail".into(),
+            account_id: "account".into(),
+            lane: Lane::Interactive,
+            kind: OperationKind::Draft,
+            entity_key: "draft:meta-fail-session".into(),
+            cost: 0,
+            attempts: 0,
+        },
+        serde_json::to_string(&payload).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let operation = storage
+            .run(|connection| OperationRepository::get(connection, "op-meta-fail"))
+            .await
+            .unwrap()
+            .unwrap();
+        if operation.status == "failed" {
+            assert!(operation
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains("conflict"));
             break;
         }
         assert!(

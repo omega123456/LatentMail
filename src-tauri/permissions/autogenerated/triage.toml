@@ -12,3 +12,23 @@ commands.allow = ["mutate_messages"]
 identifier = "allow-delete-draft"
 description = "Enables deleting a draft through Gmail's dedicated drafts endpoint."
 commands.allow = ["delete_draft"]
+
+[[permission]]
+identifier = "allow-delete-threads"
+description = "Enables deleting threads by intent; Rust computes the label arithmetic from real membership."
+commands.allow = ["delete_threads"]
+
+[[permission]]
+identifier = "allow-move-threads"
+description = "Enables moving threads to a destination folder by intent; Rust computes the label arithmetic from real membership."
+commands.allow = ["move_threads"]
+
+[[permission]]
+identifier = "allow-delete-messages"
+description = "Enables deleting individual messages by intent; Rust computes the label arithmetic from real membership."
+commands.allow = ["delete_messages"]
+
+[[permission]]
+identifier = "allow-move-messages"
+description = "Enables moving individual messages to a destination folder by intent; Rust computes the label arithmetic from real membership."
+commands.allow = ["move_messages"]

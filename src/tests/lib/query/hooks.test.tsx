@@ -7,9 +7,13 @@ import {
   useAccountsQuery,
   useContactSuggestionsQuery,
   useConversationQuery,
+  useDeleteThreadsMutation,
   useFetchMessageBodyMutation,
   useLabelsQuery,
   useMessageTriageMutation,
+  useMoveThreadsMutation,
+  useParseSearchQueryQuery,
+  useSearchThreadsQuery,
   useSenderAvatarQuery,
   useThreadMutation,
   useThreadsQuery,
@@ -20,6 +24,7 @@ import { queryKeys } from '@/lib/query/keys';
 import { useLayoutStore } from '@/stores/layout';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
+import { useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { ipc } from '@/tests/ipc-mock';
 
@@ -47,6 +52,13 @@ beforeEach(() => {
     useSelectionStore.setState({ activeMailboxId: 'INBOX' });
     useMultiSelectStore.setState({ selectedIds: new Set(['thread-1']), anchorId: 'thread-1' });
     useToastStore.setState({ toasts: [] });
+    useSearchStore.setState({
+      draft: '',
+      submittedQuery: '',
+      scope: { kind: 'default' },
+      active: false,
+      panelOpen: false,
+    });
   });
 });
 
@@ -235,5 +247,130 @@ describe('avatar queries', () => {
       wrapper: wrapper(new QueryClient()),
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+});
+
+describe('search query hooks', () => {
+  it('stays idle without a non-blank query and fetches once one is supplied', async () => {
+    ipc.override('search_threads', { items: [], nextCursor: null, total: 0 });
+    const client = new QueryClient();
+    const { result, rerender } = renderHook(
+      ({ query }: { query: string }) =>
+        useSearchThreadsQuery('account', query, { kind: 'default' }),
+      { wrapper: wrapper(client), initialProps: { query: '' } },
+    );
+    expect(result.current.fetchStatus).toBe('idle');
+    rerender({ query: 'from:anna' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
+  it('parses a query only once it is non-blank', async () => {
+    ipc.override('parse_search_query', {
+      hasTextTerm: true,
+      from: 'anna',
+      to: null,
+      subject: null,
+      includes: [],
+      excludes: [],
+      predicates: [],
+    });
+    const client = new QueryClient();
+    const { result, rerender } = renderHook(
+      ({ query }: { query: string }) => useParseSearchQueryQuery(query),
+      { wrapper: wrapper(client), initialProps: { query: '' } },
+    );
+    expect(result.current.fetchStatus).toBe('idle');
+    rerender({ query: 'from:anna' });
+    await waitFor(() => expect(result.current.data?.from).toBe('anna'));
+  });
+});
+
+describe('search optimistic removal', () => {
+  const sentThread = {
+    ...thread,
+    id: 'thread-sent',
+    isUnread: false,
+  };
+
+  function seedSearchCache(client: QueryClient) {
+    client.setQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' }), {
+      pages: [{ items: [sentThread], nextCursor: null, total: 1 }],
+      pageParams: [null],
+    });
+  }
+
+  it('removes a row from the default-scoped search cache when it is deleted, mirroring the Sent-mailbox rule', async () => {
+    const client = new QueryClient();
+    seedSearchCache(client);
+    act(() => useSearchStore.setState({ scope: { kind: 'default' } }));
+    const { result } = renderHook(() => useDeleteThreadsMutation('account'), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'] });
+    });
+    const page = (
+      client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
+        pages: Array<{ items: (typeof sentThread)[]; total: number }>;
+      }
+    ).pages[0];
+    expect(page.items).toHaveLength(0);
+    expect(page.total).toBe(0);
+  });
+
+  it('keeps a row in a Trash-scoped search when it is deleted', async () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }), {
+      pages: [{ items: [sentThread], nextCursor: null, total: 1 }],
+      pageParams: [null],
+    });
+    act(() => useSearchStore.setState({ scope: { kind: 'label', labelId: 'TRASH' } }));
+    const { result } = renderHook(() => useDeleteThreadsMutation('account'), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'] });
+    });
+    const page = (
+      client.getQueryData(
+        queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
+      ) as { pages: Array<{ items: (typeof sentThread)[]; total: number }> }
+    ).pages[0];
+    expect(page.items).toHaveLength(1);
+  });
+
+  it('removes a row from a default-scoped search when it is moved to Spam', async () => {
+    const client = new QueryClient();
+    seedSearchCache(client);
+    act(() => useSearchStore.setState({ scope: { kind: 'default' } }));
+    const { result } = renderHook(() => useMoveThreadsMutation('account'), {
+      wrapper: wrapper(client),
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'], destination: 'SPAM' });
+    });
+    const page = (
+      client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
+        pages: Array<{ items: (typeof sentThread)[] }>;
+      }
+    ).pages[0];
+    expect(page.items).toHaveLength(0);
+  });
+
+  it('keeps star/read changes visible in the search cache rather than removing the row', async () => {
+    const client = new QueryClient();
+    seedSearchCache(client);
+    act(() => useSearchStore.setState({ scope: { kind: 'default' } }));
+    const { result } = renderHook(() => useTriageMutation('account'), { wrapper: wrapper(client) });
+    await act(async () => {
+      await result.current.mutateAsync({ threadIds: ['thread-sent'], add: ['STARRED'], remove: [] });
+    });
+    const page = (
+      client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
+        pages: Array<{ items: { id: string; isStarred: boolean }[] }>;
+      }
+    ).pages[0];
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].isStarred).toBe(true);
   });
 });

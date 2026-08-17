@@ -21,7 +21,7 @@ function baseHandlers() {
 
 describe('computeRibbonVisibility', () => {
   it('hides every label-mutating action in Drafts, leaving only delete', () => {
-    const visibility = computeRibbonVisibility('DRAFT');
+    const visibility = computeRibbonVisibility(['DRAFT']);
     expect(visibility).toMatchObject({
       showReadToggle: false,
       showStar: false,
@@ -33,14 +33,20 @@ describe('computeRibbonVisibility', () => {
   });
 
   it('hides star and delete in Trash', () => {
-    const visibility = computeRibbonVisibility('TRASH');
+    const visibility = computeRibbonVisibility(['TRASH']);
     expect(visibility.showStar).toBe(false);
     expect(visibility.showDelete).toBe(false);
   });
 
   it('swaps to notSpam mode in Spam', () => {
-    expect(computeRibbonVisibility('SPAM').spamMode).toBe('notSpam');
-    expect(computeRibbonVisibility('INBOX').spamMode).toBe('markSpam');
+    expect(computeRibbonVisibility(['SPAM']).spamMode).toBe('notSpam');
+    expect(computeRibbonVisibility(['INBOX']).spamMode).toBe('markSpam');
+  });
+
+  it('derives visibility from real label membership, independent of any mailbox selection', () => {
+    expect(computeRibbonVisibility(['TRASH']).showDelete).toBe(false);
+    expect(computeRibbonVisibility(['TRASH']).showMoveTo).toBe(true);
+    expect(computeRibbonVisibility([]).showDelete).toBe(true);
   });
 });
 
@@ -48,7 +54,7 @@ describe('ActionRibbon', () => {
   it('renders the full action set in Inbox and dispatches read/star/delete', async () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
-    render(<ActionRibbon mailboxId="INBOX" unread starred={false} labels={labels} {...handlers} />);
+    render(<ActionRibbon systemLabelIds={[]} unread starred={false} labels={labels} {...handlers} />);
     await user.click(screen.getByRole('button', { name: 'Mark read' }));
     expect(handlers.onToggleRead).toHaveBeenCalledOnce();
     await user.click(screen.getByRole('button', { name: 'Star' }));
@@ -64,7 +70,7 @@ describe('ActionRibbon', () => {
   it('shows Not spam instead of Mark as spam while browsing Spam', () => {
     render(
       <ActionRibbon
-        mailboxId="SPAM"
+        systemLabelIds={['SPAM']}
         unread={false}
         starred={false}
         labels={labels}
@@ -78,7 +84,7 @@ describe('ActionRibbon', () => {
   it('renders only the read toggle and delete in Drafts', () => {
     render(
       <ActionRibbon
-        mailboxId="DRAFT"
+        systemLabelIds={['DRAFT']}
         unread={false}
         starred={false}
         labels={labels}
@@ -94,7 +100,7 @@ describe('ActionRibbon', () => {
   it('hides star and delete in Trash', () => {
     render(
       <ActionRibbon
-        mailboxId="TRASH"
+        systemLabelIds={['TRASH']}
         unread={false}
         starred={false}
         labels={labels}
@@ -111,7 +117,7 @@ describe('ActionRibbon', () => {
     const handlers = baseHandlers();
     render(
       <ActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={labels}
@@ -145,7 +151,7 @@ describe('ActionRibbon', () => {
     const handlers = baseHandlers();
     render(
       <ActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={labels}

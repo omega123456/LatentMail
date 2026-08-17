@@ -1,9 +1,15 @@
+import type { SearchScope } from '@/lib/types/ipc';
+
 export const queryKeys = {
   accounts: ['accounts'] as const,
   labels: (accountId: string) => ['labels', accountId] as const,
   contacts: (accountId: string, query: string) => ['contacts', accountId, query] as const,
   threads: (accountId: string, mailboxId: string) => ['threads', accountId, mailboxId] as const,
   threadsForAccount: (accountId: string) => ['threads', accountId] as const,
+  search: (accountId: string, query: string, scope: SearchScope) =>
+    ['search', accountId, query, JSON.stringify(scope)] as const,
+  searchForAccount: (accountId: string) => ['search', accountId] as const,
+  parsedSearchQuery: (query: string) => ['parsedSearchQuery', query] as const,
   conversation: (accountId: string, threadId: string) =>
     ['conversation', accountId, threadId] as const,
   conversationsForAccount: (accountId: string) => ['conversation', accountId] as const,

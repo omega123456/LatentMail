@@ -171,6 +171,7 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
         )
         .unwrap();
 
+    staging.move_owner("account", "nonexistent-owner", "draft").unwrap();
     staging.move_owner("account", "session", "draft").unwrap();
     staging.move_owner("account", "draft", "draft").unwrap();
     let moved = staging
@@ -273,6 +274,27 @@ fn recovery_cleanup_tolerates_an_absent_operations_directory_and_missing_release
     staging.cleanup_orphan_snapshots(&HashSet::new()).unwrap();
     staging.release_snapshot("already-gone").unwrap();
     staging.release_owner("account", "already-gone").unwrap();
+}
+
+#[test]
+fn snapshot_fails_when_a_staged_part_vanishes_before_it_is_copied() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("report.txt");
+    fs::write(&source, b"attachment").unwrap();
+    let staging = Staging::new(directory.path().join("staged"));
+    let part = staging
+        .stage_path(
+            "account",
+            "draft",
+            &source,
+            "part",
+            "text/plain".into(),
+            None,
+        )
+        .unwrap();
+    fs::remove_file(&part.path).unwrap();
+
+    assert!(staging.snapshot("operation", &[part]).is_err());
 }
 
 #[test]

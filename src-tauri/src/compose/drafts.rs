@@ -405,15 +405,16 @@ async fn run<R: Runtime>(
         return Ok(());
     }
 
-    if created_server_draft && payload.draft_id.is_none() && !consumed {
-
-        if !operation.entity_key.starts_with("draft:") {
-            if let Err(error) =
-                staging.move_owner(&operation.account_id, &operation.entity_key, &draft_id)
-            {
-                terminal_failed(app, storage, &operation, &error.to_string()).await;
-                return Err(QueueError::Permanent);
-            }
+    if created_server_draft
+        && payload.draft_id.is_none()
+        && !consumed
+        && !operation.entity_key.starts_with("draft:")
+    {
+        if let Err(error) =
+            staging.move_owner(&operation.account_id, &operation.entity_key, &draft_id)
+        {
+            terminal_failed(app, storage, &operation, &error.to_string()).await;
+            return Err(QueueError::Permanent);
         }
     }
 

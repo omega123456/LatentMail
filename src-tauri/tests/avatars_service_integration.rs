@@ -100,19 +100,30 @@ async fn read_sender_avatar_records_a_miss_when_no_record_exists() {
     let application = app();
     let handle = emitter(&application);
 
+    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let received_for_listener = Arc::clone(&received);
+    {
+        use tauri::Listener;
+        application
+            .handle()
+            .listen("avatar://resolved", move |event| {
+                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
+            });
+    }
+
     let first = service
         .read_sender_avatar(handle.clone(), "no-record.svc-example.com".into())
         .await
         .unwrap();
     assert_eq!(first, None);
 
-    let key = hash_key("no-record.svc-example.com");
     wait_until(|| {
-        let cache = &cache;
-        let key = key.clone();
-        async move { cache.answer(&key, CacheDomain::Sender).await != CacheAnswer::Stale }
+        let received = Arc::clone(&received);
+        async move { received.lock().unwrap().is_some() }
     })
     .await;
+
+    let key = hash_key("no-record.svc-example.com");
     assert_eq!(
         cache.answer(&key, CacheDomain::Sender).await,
         CacheAnswer::Fresh(None)
@@ -190,6 +201,17 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
     let (service, cache, _settings, storage, _directory) = service();
     let application = app();
     let handle = emitter(&application);
+
+    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let received_for_listener = Arc::clone(&received);
+    {
+        use tauri::Listener;
+        application
+            .handle()
+            .listen("avatar://resolved", move |event| {
+                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
+            });
+    }
     storage
         .run(|connection| {
             AccountRepository::upsert(
@@ -214,13 +236,13 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
         None
     );
 
-    let key = hash_key("acct-3");
     wait_until(|| {
-        let cache = &cache;
-        let key = key.clone();
-        async move { cache.answer(&key, CacheDomain::Account).await != CacheAnswer::Stale }
+        let received = Arc::clone(&received);
+        async move { received.lock().unwrap().is_some() }
     })
     .await;
+
+    let key = hash_key("acct-3");
     assert_eq!(
         cache.answer(&key, CacheDomain::Account).await,
         CacheAnswer::Fresh(None)
@@ -284,6 +306,17 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
     let (service, cache, _settings, storage, _directory) = service();
     let application = app();
     let handle = emitter(&application);
+
+    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let received_for_listener = Arc::clone(&received);
+    {
+        use tauri::Listener;
+        application
+            .handle()
+            .listen("avatar://resolved", move |event| {
+                *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
+            });
+    }
     storage
         .run(|connection| {
             AccountRepository::upsert(
@@ -308,13 +341,13 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
         None
     );
 
-    let key = hash_key("acct-2");
     wait_until(|| {
-        let cache = &cache;
-        let key = key.clone();
-        async move { cache.answer(&key, CacheDomain::Account).await != CacheAnswer::Stale }
+        let received = Arc::clone(&received);
+        async move { received.lock().unwrap().is_some() }
     })
     .await;
+
+    let key = hash_key("acct-2");
     assert_eq!(
         cache.answer(&key, CacheDomain::Account).await,
         CacheAnswer::Fresh(None)

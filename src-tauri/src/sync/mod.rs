@@ -33,11 +33,13 @@ pub mod materialize;
 mod mutations;
 mod reconcile;
 pub mod traversal;
+pub mod triage;
 
 pub use dto::{
     ContactSuggestionDto, ConversationDto, LabelColorDto, LabelDto, MessageDto, MutationOutcomeDto,
-    MutationResultDto, StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage,
-    TraversalKind, TraversalState, TraversalStatusDto,
+    MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto, StagedAttachmentDto, SyncStatusDto,
+    ThreadCursor, ThreadDto, ThreadPage, ThreadSearchPage, TraversalKind, TraversalState,
+    TraversalStatusDto,
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 

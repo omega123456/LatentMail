@@ -88,6 +88,7 @@ export function EventBridge() {
       void queryClient
         .invalidateQueries({ queryKey: queryKeys.threadsForAccount(event.accountId) })
         .then(() => logThreadCache(event.accountId, 'after sync://complete invalidate'));
+      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
     });
@@ -96,6 +97,7 @@ export function EventBridge() {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.threadsForAccount(event.accountId),
       });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
       void notifyArrivals(event.arrivals);
     });
@@ -139,8 +141,10 @@ export function EventBridge() {
       if (item.status !== 'done' && item.status !== 'failed') return;
       if (!item.id.startsWith('mutation:')) return;
       const accountId = item.id.split(':')[1];
-      if (accountId)
+      if (accountId) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId) });
+      }
     });
 
     subscribe('avatar://resolved', (event) => {

@@ -148,3 +148,98 @@ async fn message_prefers_internal_date_over_a_divergent_date_header() {
 
     assert_eq!(message.sent_at, 1_753_267_059);
 }
+
+#[tokio::test]
+async fn list_draft_ids_follows_the_next_page_token_across_multiple_pages() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts"))
+        .and(query_param("pageToken", "page-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "drafts": [{ "id": "d2", "message": { "id": "m2" } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "drafts": [{ "id": "d1", "message": { "id": "m1" } }],
+            "nextPageToken": "page-2"
+        })))
+        .mount(&server)
+        .await;
+
+    let mapping = GmailClient::with_base_url("token", server.uri())
+        .list_draft_ids()
+        .await
+        .unwrap();
+
+    assert_eq!(mapping.get("m1").map(String::as_str), Some("d1"));
+    assert_eq!(mapping.get("m2").map(String::as_str), Some("d2"));
+}
+
+#[tokio::test]
+async fn history_page_forwards_a_supplied_page_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .and(query_param("pageToken", "resume-here"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "12",
+            "history": []
+        })))
+        .mount(&server)
+        .await;
+
+    let page = GmailClient::with_base_url("token", server.uri())
+        .history_page(9, Some("resume-here"))
+        .await
+        .unwrap();
+
+    assert_eq!(page.history_id, 12);
+}
+
+#[tokio::test]
+async fn a_forwarded_message_with_no_plain_text_of_its_own_falls_back_to_its_html_body() {
+    let server = MockServer::start().await;
+    let message = serde_json::json!({
+        "id": "forward",
+        "threadId": "t",
+        "historyId": "10",
+        "labelIds": ["INBOX"],
+        "snippet": "fwd",
+        "internalDate": "1000",
+        "payload": {
+            "mimeType": "message/rfc822",
+            "headers": [
+                {"name": "From", "value": "Sender <s@example.com>"},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Subject", "value": "Hi"}
+            ],
+            "parts": [
+                {
+                    "mimeType": "text/html",
+                    "headers": [
+                        {"name": "From", "value": "Original <original@example.com>"},
+                        {"name": "Subject", "value": "Original subject"}
+                    ],
+                    "body": {"data": "PHA-aGk8L3A-"}
+                }
+            ]
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/forward"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(message))
+        .mount(&server)
+        .await;
+
+    let fetched = GmailClient::with_base_url("token", server.uri())
+        .message("forward")
+        .await
+        .unwrap();
+
+    let plain = fetched.plain_body.expect("falls back to the embedded html body as plain text");
+    assert!(plain.contains("Forwarded message"));
+    assert!(plain.contains("hi"));
+}

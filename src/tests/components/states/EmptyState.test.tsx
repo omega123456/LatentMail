@@ -25,4 +25,13 @@ describe('EmptyState', () => {
     render(<EmptyState variant="syncing">Still arriving</EmptyState>);
     expect(screen.queryByText(/so far/)).not.toBeInTheDocument();
   });
+
+  it('renders the search variant naming the query and suggesting a next step', () => {
+    render(<EmptyState variant="search" query='from:anna quarterly' />);
+    const container = screen.getByTestId('empty-state-search');
+    expect(container).toHaveTextContent('No results for “from:anna quarterly”');
+    expect(
+      screen.getByText(/Try fewer words, check the spelling, or widen Search in/),
+    ).toBeInTheDocument();
+  });
 });

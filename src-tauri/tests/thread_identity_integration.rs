@@ -205,54 +205,30 @@ fn missing_sender_and_recipient_data_produce_both_fallback_strings() {
     assert_eq!(recipient.address, None);
 }
 
+#[test]
+fn a_thread_with_malformed_stored_identity_json_falls_back_instead_of_erroring() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account_row()).unwrap();
+    materialize::persist(
+        &connection,
+        "a",
+        &message("m1", "t1", "sender@example.com", "me@example.com", 100, true),
+    )
+    .unwrap();
+    ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-
-#[tokio::test]
-async fn reopening_storage_rebuilds_stale_thread_identity_from_source_messages() {
-    let directory = tempfile::tempdir().unwrap();
-    let db_path = directory.path().join("mail.sqlite");
-    let storage = Storage::open(&db_path).unwrap();
-
-    {
-        let connection = storage.connection().unwrap();
-        AccountRepository::upsert(&connection, &account_row()).unwrap();
-        materialize::persist(
-            &connection,
-            "a",
-            &message(
-                "m1",
-                "t1",
-                r#""Kovacs, Jozsef" <j@example.com>"#,
-                "me@example.com",
-                100,
-                false,
-            ),
+    connection
+        .execute(
+            "UPDATE threads SET sender_identity='not valid json', recipient_identity='also not valid json' WHERE account_id='a' AND id='t1'",
+            [],
         )
         .unwrap();
-        ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-
-        connection
-            .execute(
-                "UPDATE threads SET sender_identity='{\"display\":\"(No sender)\",\"address\":null}'",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "DELETE FROM settings WHERE key='internal.avatarThreadIdentityRebuildV9'",
-                [],
-            )
-            .unwrap();
-        let corrupted = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
-        assert_eq!(corrupted.sender_identity.display, "(No sender)");
-    }
-    drop(storage);
-
-
-    let reopened = Storage::open(&db_path).unwrap();
-    let connection = reopened.connection().unwrap();
-    let rebuilt = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
-    assert_eq!(rebuilt.sender_identity.display, "Kovacs, Jozsef");
-    assert_eq!(rebuilt.sender_identity.address.as_deref(), Some("j@example.com"));
+    let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
+    assert_eq!(thread.sender_identity.display, "(No sender)");
+    assert_eq!(thread.sender_identity.address, None);
+    let recipient = thread.recipient_identity.expect("still carries an identity slot");
+    assert_eq!(recipient.display, "(No recipient)");
+    assert_eq!(recipient.address, None);
 }
+

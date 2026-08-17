@@ -38,6 +38,76 @@ async fn store_hit_surfaces_a_readable_error_when_the_target_path_cannot_be_writ
     assert!(!error.is_empty());
 }
 
+#[test]
+fn new_surfaces_a_readable_error_when_the_account_cache_directory_cannot_be_created() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+
+    let root = directory.path().join("avatar-cache");
+    std::fs::create_dir_all(&root).unwrap();
+    let blocking_file = root.join("accounts");
+    std::fs::write(&blocking_file, b"x").unwrap();
+
+    assert!(AvatarCache::new(storage, root).is_err());
+}
+
+#[tokio::test]
+async fn store_hit_surfaces_a_readable_error_when_the_cache_record_cannot_be_persisted() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let cache = AvatarCache::new(storage.clone(), directory.path().join("avatar-cache")).unwrap();
+
+    {
+        let connection = storage.connection().unwrap();
+        connection.execute("DROP TABLE avatar_cache", []).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE avatar_cache (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cache_key TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    image_path TEXT,
+                    looked_up_at INTEGER NOT NULL
+                )",
+                [],
+            )
+            .unwrap();
+    }
+
+    let error = cache
+        .store_hit("unindexed-key", CacheDomain::Sender, b"bytes")
+        .await
+        .unwrap_err();
+    assert!(!error.is_empty());
+}
+
+#[tokio::test]
+async fn store_miss_surfaces_a_readable_error_when_the_cache_record_cannot_be_persisted() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let cache = AvatarCache::new(storage.clone(), directory.path().join("avatar-cache")).unwrap();
+
+    {
+        let connection = storage.connection().unwrap();
+        connection.execute("DROP TABLE avatar_cache", []).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE avatar_cache (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cache_key TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    image_path TEXT,
+                    looked_up_at INTEGER NOT NULL
+                )",
+                [],
+            )
+            .unwrap();
+    }
+
+    let error = cache.store_miss("unindexed-miss-key").await.unwrap_err();
+    assert!(!error.is_empty());
+}
+
 #[tokio::test]
 async fn a_record_with_an_out_of_range_timestamp_is_treated_as_expired() {
 

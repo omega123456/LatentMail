@@ -24,7 +24,7 @@ describe('RowContextMenu', () => {
   it('opens at a right-click and lists entries in the wireframe order', async () => {
     const user = userEvent.setup();
     render(
-      <RowContextMenu mailboxId="INBOX" unread starred={false} labels={labels} {...baseHandlers()}>
+      <RowContextMenu systemLabelIds={[]} unread starred={false} labels={labels} {...baseHandlers()}>
         <div>row</div>
       </RowContextMenu>,
     );
@@ -42,7 +42,7 @@ describe('RowContextMenu', () => {
     const handlers = baseHandlers();
     render(
       <RowContextMenu
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={labels}
@@ -69,7 +69,7 @@ describe('RowContextMenu', () => {
     const handlers = baseHandlers();
     render(
       <RowContextMenu
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={labels}
@@ -90,7 +90,7 @@ describe('RowContextMenu', () => {
     const user = userEvent.setup();
     render(
       <RowContextMenu
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={labels}
@@ -110,7 +110,7 @@ describe('RowContextMenu', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <RowContextMenu mailboxId="SPAM" unread={false} starred={false} labels={labels} {...handlers}>
+      <RowContextMenu systemLabelIds={['SPAM']} unread={false} starred={false} labels={labels} {...handlers}>
         <div>row</div>
       </RowContextMenu>,
     );
@@ -123,7 +123,7 @@ describe('RowContextMenu', () => {
     const user = userEvent.setup();
     render(
       <RowContextMenu
-        mailboxId="DRAFT"
+        systemLabelIds={['DRAFT']}
         unread={false}
         starred={false}
         labels={labels}
@@ -137,5 +137,24 @@ describe('RowContextMenu', () => {
     expect(screen.queryByText('Move to')).not.toBeInTheDocument();
     expect(screen.queryByText('Labels')).not.toBeInTheDocument();
     expect(await screen.findByText('Delete')).toBeInTheDocument();
+  });
+
+  it('shows Trash-appropriate affordances for a row carrying TRASH, regardless of which mailbox is currently selected', async () => {
+    const user = userEvent.setup();
+    render(
+      <RowContextMenu
+        systemLabelIds={['TRASH']}
+        unread={false}
+        starred={false}
+        labels={labels}
+        {...baseHandlers()}
+      >
+        <div>row</div>
+      </RowContextMenu>,
+    );
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByText('row') });
+    expect(screen.queryByText('Star')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+    expect(await screen.findByText('Move to')).toBeInTheDocument();
   });
 });

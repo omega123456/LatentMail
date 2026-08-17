@@ -1,0 +1,317 @@
+import { useMemo, useState } from 'react';
+import { format, fromUnixTime } from 'date-fns';
+import type { MailLabel, ParsedSearchQuery, SearchPredicate, SearchScope } from '@/lib/types/ipc';
+import { useParseSearchQueryQuery } from '@/lib/query/hooks';
+
+const DURATION_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Any time' },
+  { value: '1d', label: '1 day' },
+  { value: '7d', label: '1 week' },
+  { value: '14d', label: '2 weeks' },
+  { value: '1m', label: '1 month' },
+  { value: '3m', label: '3 months' },
+  { value: '6m', label: '6 months' },
+  { value: '1y', label: '1 year' },
+];
+
+type PanelFields = {
+  from: string;
+  to: string;
+  subject: string;
+  includesText: string;
+  excludesText: string;
+  durationValue: string;
+  dateValue: string;
+  hasAttachment: boolean;
+  unreadOnly: boolean;
+};
+
+const BLANK_FIELDS: PanelFields = {
+  from: '',
+  to: '',
+  subject: '',
+  includesText: '',
+  excludesText: '',
+  durationValue: '',
+  dateValue: '',
+  hasAttachment: false,
+  unreadOnly: false,
+};
+
+export function quoteIfNeeded(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
+export function predicateToToken(predicate: SearchPredicate): string | null {
+  const prefix = predicate.negated ? '-' : '';
+  switch (predicate.kind) {
+    case 'label':
+      return `${prefix}label:${quoteIfNeeded(predicate.value)}`;
+    case 'starred':
+      return `${prefix}is:starred`;
+    case 'hasAttachment':
+      return `${prefix}has:attachment`;
+    case 'unread':
+      return `${prefix}is:unread`;
+    case 'sentBefore':
+      return `${prefix}before:${format(fromUnixTime(predicate.atSeconds), 'yyyy-MM-dd')}`;
+    case 'sentAfter':
+      return `${prefix}after:${format(fromUnixTime(predicate.atSeconds), 'yyyy-MM-dd')}`;
+    case 'textExcludes':
+      return null;
+  }
+}
+
+export function fieldsFromParsedQuery(parsed: ParsedSearchQuery): PanelFields {
+  let hasAttachment = false;
+  let unreadOnly = false;
+  let dateValue = '';
+  const leftover: string[] = [];
+  for (const predicate of parsed.predicates) {
+    if (predicate.kind === 'hasAttachment' && !predicate.negated) hasAttachment = true;
+    else if (predicate.kind === 'unread' && !predicate.negated) unreadOnly = true;
+    else if (predicate.kind === 'sentBefore' && !predicate.negated && !dateValue)
+      dateValue = format(fromUnixTime(predicate.atSeconds), 'yyyy-MM-dd');
+    else {
+      const token = predicateToToken(predicate);
+      if (token) leftover.push(token);
+    }
+  }
+  return {
+    from: parsed.from ?? '',
+    to: parsed.to ?? '',
+    subject: parsed.subject ?? '',
+    includesText: [...parsed.includes, ...leftover].join(' '),
+    excludesText: parsed.excludes.join(' '),
+    durationValue: '',
+    dateValue,
+    hasAttachment,
+    unreadOnly,
+  };
+}
+
+export function serializeFields(fields: PanelFields): string {
+  const parts: string[] = [];
+  if (fields.from.trim()) parts.push(`from:${quoteIfNeeded(fields.from.trim())}`);
+  if (fields.to.trim()) parts.push(`to:${quoteIfNeeded(fields.to.trim())}`);
+  if (fields.subject.trim()) parts.push(`subject:${quoteIfNeeded(fields.subject.trim())}`);
+  if (fields.includesText.trim()) parts.push(fields.includesText.trim());
+  if (fields.excludesText.trim())
+    parts.push(
+      ...fields.excludesText
+        .trim()
+        .split(/\s+/)
+        .map((word) => (word.startsWith('-') ? word : `-${word}`)),
+    );
+  if (fields.durationValue) parts.push(`newer_than:${fields.durationValue}`);
+  if (fields.dateValue) parts.push(`before:${fields.dateValue}`);
+  if (fields.hasAttachment) parts.push('has:attachment');
+  if (fields.unreadOnly) parts.push('is:unread');
+  return parts.join(' ');
+}
+
+const inputClass =
+  'select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface';
+const labelClass = 'text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant';
+
+export function AdvancedSearchPanel({
+  initialQuery,
+  labels,
+  scope,
+  onScopeChange,
+  onSubmit,
+  onClose,
+}: {
+  initialQuery: string;
+  labels: MailLabel[];
+  scope: SearchScope;
+  onScopeChange: (scope: SearchScope) => void;
+  onSubmit: (query: string) => void;
+  onClose: () => void;
+}) {
+  const parsedQuery = useParseSearchQueryQuery(initialQuery);
+  const baseFields = useMemo<PanelFields>(
+    () =>
+      initialQuery.trim() && parsedQuery.data
+        ? fieldsFromParsedQuery(parsedQuery.data)
+        : BLANK_FIELDS,
+    [initialQuery, parsedQuery.data],
+  );
+  const [overrides, setOverrides] = useState<PanelFields | null>(null);
+  const fields = overrides ?? baseFields;
+  const setFields = (updater: (current: PanelFields) => PanelFields) =>
+    setOverrides((current) => updater(current ?? baseFields));
+
+  const userLabels = labels.filter((label) => label.kind === 'user');
+  const scopeValue = JSON.stringify(scope);
+
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        data-testid="advanced-search-panel-overlay"
+        className="fixed inset-0 z-40 bg-on-surface/20"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-label="Advanced search"
+        data-testid="advanced-search-panel"
+        className="absolute left-0 right-0 top-full z-50 mt-2 flex flex-col gap-3 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-4 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
+      >
+        <label htmlFor="search-panel-from" className="flex flex-col gap-1">
+          <span className={labelClass}>From</span>
+          <input
+            id="search-panel-from"
+            type="text"
+            value={fields.from}
+            onChange={(event) => setFields((current) => ({ ...current, from: event.target.value }))}
+            className={inputClass}
+          />
+        </label>
+        <label htmlFor="search-panel-to" className="flex flex-col gap-1">
+          <span className={labelClass}>To</span>
+          <input
+            id="search-panel-to"
+            type="text"
+            value={fields.to}
+            onChange={(event) => setFields((current) => ({ ...current, to: event.target.value }))}
+            className={inputClass}
+          />
+        </label>
+        <label htmlFor="search-panel-subject" className="flex flex-col gap-1">
+          <span className={labelClass}>Subject</span>
+          <input
+            id="search-panel-subject"
+            type="text"
+            value={fields.subject}
+            onChange={(event) =>
+              setFields((current) => ({ ...current, subject: event.target.value }))
+            }
+            className={inputClass}
+          />
+        </label>
+        <label htmlFor="search-panel-includes" className="flex flex-col gap-1">
+          <span className={labelClass}>Includes the words</span>
+          <input
+            id="search-panel-includes"
+            type="text"
+            value={fields.includesText}
+            onChange={(event) =>
+              setFields((current) => ({ ...current, includesText: event.target.value }))
+            }
+            className={inputClass}
+          />
+        </label>
+        <label htmlFor="search-panel-excludes" className="flex flex-col gap-1">
+          <span className={labelClass}>Doesn&rsquo;t have</span>
+          <input
+            id="search-panel-excludes"
+            type="text"
+            value={fields.excludesText}
+            onChange={(event) =>
+              setFields((current) => ({ ...current, excludesText: event.target.value }))
+            }
+            className={inputClass}
+          />
+        </label>
+        <div className="flex gap-2">
+          <label htmlFor="search-panel-duration" className="flex flex-1 flex-col gap-1">
+            <span className={labelClass}>Date within</span>
+            <select
+              id="search-panel-duration"
+              value={fields.durationValue}
+              onChange={(event) =>
+                setFields((current) => ({ ...current, durationValue: event.target.value }))
+              }
+              className={inputClass}
+            >
+              {DURATION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="search-panel-date" className="flex flex-1 flex-col gap-1">
+            <span className={labelClass}>Date</span>
+            <input
+              id="search-panel-date"
+              type="date"
+              value={fields.dateValue}
+              onChange={(event) =>
+                setFields((current) => ({ ...current, dateValue: event.target.value }))
+              }
+              className={inputClass}
+            />
+          </label>
+        </div>
+        <label htmlFor="search-panel-scope" className="flex flex-col gap-1">
+          <span className={labelClass}>Search in</span>
+          <select
+            id="search-panel-scope"
+            value={scopeValue}
+            onChange={(event) => onScopeChange(JSON.parse(event.target.value) as SearchScope)}
+            className={inputClass}
+          >
+            <option value={JSON.stringify({ kind: 'default' })}>All mail</option>
+            <option value={JSON.stringify({ kind: 'label', labelId: 'INBOX' })}>Inbox</option>
+            <option value={JSON.stringify({ kind: 'label', labelId: 'SENT' })}>Sent</option>
+            {userLabels.map((label) => (
+              <option key={label.id} value={JSON.stringify({ kind: 'label', labelId: label.id })}>
+                {label.name}
+              </option>
+            ))}
+            <option value={JSON.stringify({ kind: 'all' })}>
+              All mail including Trash and Spam
+            </option>
+          </select>
+        </label>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
+            <input
+              type="checkbox"
+              checked={fields.hasAttachment}
+              onChange={(event) =>
+                setFields((current) => ({ ...current, hasAttachment: event.target.checked }))
+              }
+              className="size-4"
+            />
+            Has attachment
+          </label>
+          <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
+            <input
+              type="checkbox"
+              checked={fields.unreadOnly}
+              onChange={(event) =>
+                setFields((current) => ({ ...current, unreadOnly: event.target.checked }))
+              }
+              className="size-4"
+            />
+            Unread only
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-outline-variant/40 pt-3 dark:border-dark-outline-variant">
+          <button
+            type="button"
+            onClick={() => setOverrides(BLANK_FIELDS)}
+            className="cursor-pointer rounded px-3 py-1.5 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const serialized = serializeFields(fields);
+              if (serialized.trim().length === 0) return;
+              onSubmit(serialized);
+            }}
+            className="cursor-pointer rounded bg-primary px-3 py-1.5 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+          >
+            Search
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}

@@ -114,6 +114,9 @@ describe('EventBridge', () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.threadsForAccount('account-1'),
     });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.searchForAccount('account-1'),
+    });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.syncStatus('account-1') });
   });
@@ -199,6 +202,9 @@ describe('EventBridge', () => {
     );
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.threadsForAccount('account-1'),
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.searchForAccount('account-1'),
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
     expect(window.__notifications__).toEqual([]);
@@ -321,6 +327,9 @@ describe('EventBridge', () => {
       vi.advanceTimersByTime(250);
     });
     expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(invalidate).not.toHaveBeenCalledWith({
+      queryKey: queryKeys.searchForAccount('account-1'),
+    });
     vi.useRealTimers();
   });
 
@@ -428,5 +437,8 @@ describe('EventBridge', () => {
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
     act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'done' }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.threadsForAccount('account-1') });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.searchForAccount('account-1'),
+    });
   });
 });

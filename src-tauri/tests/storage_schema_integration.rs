@@ -49,6 +49,48 @@ fn query_plan(connection: &rusqlite::Connection, sql: &str) -> Vec<String> {
         .unwrap()
 }
 
+fn table_columns(connection: &rusqlite::Connection, table: &str) -> Vec<(String, bool, i64)> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(3)? == 1,
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
+fn unique_indexed_column_sets(connection: &rusqlite::Connection, table: &str) -> Vec<Vec<String>> {
+    let mut index_statement = connection
+        .prepare(&format!("PRAGMA index_list({table})"))
+        .unwrap();
+    let indexes: Vec<(String, bool)> = index_statement
+        .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)? == 1)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    indexes
+        .into_iter()
+        .filter(|(_, unique)| *unique)
+        .map(|(name, _)| {
+            let mut column_statement = connection
+                .prepare(&format!("PRAGMA index_info({name})"))
+                .unwrap();
+            column_statement
+                .query_map([], |row| row.get::<_, String>(2))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        })
+        .collect()
+}
+
 #[test]
 fn migrations_are_idempotent_and_repositories_round_trip() {
     let mut connection = Storage::in_memory().unwrap();
@@ -602,6 +644,167 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(!message_indexes
         .iter()
         .any(|name| name == "messages_by_history"));
+
+    let search_text_term_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM message_search JOIN messages m ON m.seq=message_search.rowid JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id WHERE message_search MATCH 'x' AND m.account_id='account' GROUP BY t.id ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
+    );
+    assert!(search_text_term_plan
+        .iter()
+        .any(|step| step.contains("SCAN message_search VIRTUAL TABLE INDEX 0:M4")));
+    assert_eq!(
+        search_text_term_plan
+            .iter()
+            .filter(|step| step.contains("TEMP B-TREE"))
+            .count(),
+        2
+    );
+
+    let search_predicate_only_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
+    );
+    assert!(search_predicate_only_plan
+        .iter()
+        .any(|step| step.contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=?)")));
+    assert!(search_predicate_only_plan
+        .iter()
+        .any(|step| step.contains("SEARCH m USING INDEX messages_by_thread")));
+    assert!(!search_predicate_only_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let search_predicate_cursor_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND (t.latest_at,t.id)<(1,'t') AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
+    );
+    assert!(search_predicate_cursor_plan.iter().any(|step| step
+        .contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=? AND (latest_at,id)<(?,?))")));
+    assert!(!search_predicate_cursor_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+}
+
+#[test]
+fn every_rowid_table_carries_a_leading_autoincrement_seq_and_its_former_key_as_a_unique_constraint()
+{
+    let connection = Storage::in_memory().unwrap();
+
+    let single_key_tables = [
+        ("accounts", "id"),
+        ("settings", "key"),
+        ("operations", "id"),
+        ("avatar_cache", "cache_key"),
+    ];
+    for (table, former_key) in single_key_tables {
+        let columns = table_columns(&connection, table);
+        let (first_name, _, first_pk) = &columns[0];
+        assert_eq!(first_name, "seq", "{table}'s first column must be seq");
+        assert_eq!(*first_pk, 1, "{table}.seq must be the table's primary key");
+        let (_, former_key_not_null, former_key_pk) = columns
+            .iter()
+            .find(|(name, _, _)| name == former_key)
+            .unwrap_or_else(|| panic!("{table} lost its former key column {former_key}"));
+        assert!(
+            *former_key_not_null,
+            "{table}.{former_key} must stay NOT NULL"
+        );
+        assert_eq!(
+            *former_key_pk, 0,
+            "{table}.{former_key} must no longer be the primary key"
+        );
+        let unique_sets = unique_indexed_column_sets(&connection, table);
+        assert!(
+            unique_sets.iter().any(|set| set == &[former_key.to_owned()]),
+            "{table}.{former_key} must be covered by a UNIQUE constraint"
+        );
+    }
+
+    let composite_key_tables = [
+        ("labels", vec!["account_id", "id"]),
+        ("messages", vec!["account_id", "id"]),
+        ("message_labels", vec!["account_id", "message_id", "label_id"]),
+        ("threads", vec!["account_id", "id"]),
+        (
+            "message_inline_parts",
+            vec!["account_id", "message_id", "content_id"],
+        ),
+        ("traversal_cursors", vec!["account_id", "kind"]),
+        ("contacts", vec!["account_id", "address"]),
+        ("compose_draft_metadata", vec!["account_id", "draft_id"]),
+    ];
+    for (table, former_key) in composite_key_tables {
+        let columns = table_columns(&connection, table);
+        let (first_name, _, first_pk) = &columns[0];
+        assert_eq!(first_name, "seq", "{table}'s first column must be seq");
+        assert_eq!(*first_pk, 1, "{table}.seq must be the table's primary key");
+        for column in &former_key {
+            let (_, not_null, pk) = columns
+                .iter()
+                .find(|(name, _, _)| name == column)
+                .unwrap_or_else(|| panic!("{table} lost its former key column {column}"));
+            assert!(*not_null, "{table}.{column} must stay NOT NULL");
+            assert_eq!(*pk, 0, "{table}.{column} must no longer be the primary key");
+        }
+        let expected: Vec<String> = former_key.iter().map(|column| column.to_string()).collect();
+        let unique_sets = unique_indexed_column_sets(&connection, table);
+        assert!(
+            unique_sets.iter().any(|set| set == &expected),
+            "{table} must retain {former_key:?} as a UNIQUE constraint"
+        );
+    }
+}
+
+#[test]
+fn thread_labels_stays_without_rowid_with_no_integer_key() {
+    let connection = Storage::in_memory().unwrap();
+    let columns = table_columns(&connection, "thread_labels");
+    assert!(
+        columns.iter().all(|(name, _, _)| name != "seq"),
+        "thread_labels must not gain an integer key"
+    );
+    let schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='thread_labels'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(schema.contains("WITHOUT ROWID"));
+
+    let mut statement = connection.prepare("PRAGMA index_list(thread_labels)").unwrap();
+    let indexes: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(indexes.iter().any(|name| name == "thread_labels_by_thread"));
+}
+
+#[test]
+fn message_labels_by_label_index_survives_the_squash() {
+    let connection = Storage::in_memory().unwrap();
+    let mut statement = connection
+        .prepare("PRAGMA index_list(message_labels)")
+        .unwrap();
+    let indexes: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(indexes.iter().any(|name| name == "message_labels_by_label"));
+}
+
+#[test]
+fn a_fresh_database_migrates_cleanly_with_no_foreign_key_violations() {
+    let connection = Storage::in_memory().unwrap();
+    let mut statement = connection.prepare("PRAGMA foreign_key_check").unwrap();
+    let violations = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(violations.is_empty(), "unexpected FK violations: {violations:?}");
 }
 
 #[test]

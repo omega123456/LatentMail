@@ -1,13 +1,13 @@
 import { Paperclip, Star } from 'lucide-react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { moveSource, type MoveDestinationId } from '@/components/actions/MoveToMenu';
+import type { MoveDestinationId } from '@/components/actions/MoveToMenu';
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { RowContextMenu } from '@/components/actions/RowContextMenu';
 import { Avatar } from '@/components/shared/Avatar';
 import { Badge } from '@/components/shared/Badge';
-import { userBadgesByName } from '@/lib/labels/badges';
+import { sourceBadge, userBadgesByName } from '@/lib/labels/badges';
 import { exactTime, relativeTime } from '@/lib/format/relative-time';
-import { useSenderAvatarQuery } from '@/lib/query/hooks';
+import { useSenderAvatarQuery, type ThreadTriageIntent } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import type { Conversation } from '@/lib/types/conversation';
 import type { Density } from '@/lib/types/ipc';
@@ -20,13 +20,12 @@ type Props = {
   active: boolean;
   selected?: boolean;
   multiSelectActive?: boolean;
-  mailboxId: string | null;
   allLabels?: LabelMenuEntry[];
   selectionCount?: number;
-  currentLabelName?: string;
+  selectionSystemLabelIds?: string[];
   onOpen: (event: ReactMouseEvent) => void;
   onStar: () => void;
-  onTriage?: (change: { add: string[]; remove: string[] }) => void;
+  onTriage?: (intent: ThreadTriageIntent) => void;
   onCompose?: (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => void;
 };
 
@@ -36,15 +35,20 @@ export function ConversationRow({
   active,
   selected = false,
   multiSelectActive = false,
-  mailboxId,
   allLabels = [],
   selectionCount = 1,
-  currentLabelName,
+  selectionSystemLabelIds,
   onOpen,
   onStar,
   onTriage = () => undefined,
   onCompose,
 }: Props) {
+  const systemLabelIds = conversation.systemLabelIds ?? [];
+  const effectiveSelectionCount = selected && multiSelectActive ? selectionCount : 1;
+  const contextMenuSystemLabelIds =
+    effectiveSelectionCount > 1 ? (selectionSystemLabelIds ?? systemLabelIds) : systemLabelIds;
+  const isSpam = contextMenuSystemLabelIds.includes('SPAM');
+  const isTrash = systemLabelIds.includes('TRASH');
   const compact = density === 'compact';
   const spacious = density === 'spacious';
   const showAvatarSlot = !compact;
@@ -58,7 +62,6 @@ export function ConversationRow({
     : showActive
       ? 'border-primary/20 bg-surface-container-highest shadow-sm dark:border-dark-primary/20 dark:bg-dark-surface-container-highest'
       : 'border-transparent hover:border-outline-variant/30 hover:bg-surface-container-low dark:hover:border-dark-outline-variant/30 dark:hover:bg-dark-surface-container-low';
-  const effectiveSelectionCount = selected && multiSelectActive ? selectionCount : 1;
   const notchRingClassName = selected
     ? 'ring-primary/10 dark:ring-dark-primary/10'
     : showActive
@@ -70,35 +73,29 @@ export function ConversationRow({
     membership: (conversation.labels ?? []).includes(label.name) ? 'checked' : 'unchecked',
   }));
   const rowBadges = userBadgesByName(conversation.labels ?? [], allLabels);
+  const source = sourceBadge(conversation.systemLabelIds);
   return (
     <RowContextMenu
-      mailboxId={mailboxId ?? 'INBOX'}
+      systemLabelIds={contextMenuSystemLabelIds}
       unread={conversation.unread}
       starred={conversation.starred}
       labels={rowLabels}
-      currentLabelName={currentLabelName}
       selectionCount={effectiveSelectionCount}
       onOpen={() => onOpen({ shiftKey: false, metaKey: false, ctrlKey: false } as ReactMouseEvent)}
       onToggleRead={() =>
         onTriage({
+          kind: 'label',
           add: conversation.unread ? [] : ['UNREAD'],
           remove: conversation.unread ? ['UNREAD'] : [],
         })
       }
       onToggleStar={onStar}
-      onMoveTo={(destination: MoveDestinationId) =>
-        onTriage({ add: [destination], remove: moveSource(mailboxId ?? 'INBOX', currentLabelName) })
-      }
+      onMoveTo={(destination: MoveDestinationId) => onTriage({ kind: 'move', destination })}
       onToggleLabel={(labelId, checked) =>
-        onTriage({ add: checked ? [labelId] : [], remove: checked ? [] : [labelId] })
+        onTriage({ kind: 'label', add: checked ? [labelId] : [], remove: checked ? [] : [labelId] })
       }
-      onToggleSpam={() =>
-        onTriage({
-          add: mailboxId === 'SPAM' ? [] : ['SPAM'],
-          remove: mailboxId === 'SPAM' ? ['SPAM'] : [],
-        })
-      }
-      onDelete={() => onTriage({ add: ['TRASH'], remove: [] })}
+      onToggleSpam={() => onTriage({ kind: 'move', destination: isSpam ? 'INBOX' : 'SPAM' })}
+      onDelete={() => onTriage({ kind: 'delete' })}
       onReply={onCompose ? () => onCompose('reply') : undefined}
       onReplyAll={onCompose ? () => onCompose('reply-all') : undefined}
       onForward={onCompose ? () => onCompose('forward') : undefined}
@@ -179,8 +176,9 @@ export function ConversationRow({
         {!compact && (
           <div className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
             {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
-            {rowBadges.length > 0 && (
-              <ul aria-label="Labels" className="flex items-center gap-1">
+            {(rowBadges.length > 0 || source) && (
+              <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
+                {source && <Badge key={`source-${source.id}`} badge={source} iconOnly={!spacious} />}
                 {rowBadges.slice(0, ROW_BADGE_LIMIT).map((badge) => (
                   <Badge key={badge.id} badge={badge} iconOnly={!spacious} />
                 ))}
@@ -196,7 +194,7 @@ export function ConversationRow({
             )}
           </div>
         )}
-        {mailboxId !== 'TRASH' && (
+        {!isTrash && (
           <button
             aria-label={
               conversation.starred

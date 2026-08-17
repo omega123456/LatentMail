@@ -1,13 +1,14 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc, dispatchInvoke } from '@/lib/ipc/dispatch';
-import type { ThreadCursor } from '@/lib/types/ipc';
+import type { MoveDestination, SearchScope, ThreadCursor } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
+import { useSearchStore } from '@/stores/search';
 import { useLayoutStore } from '@/stores/layout';
-import type { MailThread, ThreadPage } from '@/lib/types/ipc';
+import type { MailThread, ThreadPage, ThreadSearchPage } from '@/lib/types/ipc';
 
 const LOCAL_FIRST_STALE_TIME = 15_000;
 
@@ -50,6 +51,37 @@ export function useThreadsQuery(accountId: string | null, mailboxId: string | nu
     initialPageParam: null as ThreadCursor | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: accountId !== null && mailboxId !== null,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+export function useSearchThreadsQuery(
+  accountId: string | null,
+  query: string,
+  scope: SearchScope,
+) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.search(accountId ?? '', query, scope),
+    queryFn: ({ pageParam }) =>
+      invoke('search_threads', {
+        accountId: accountId as string,
+        query,
+        scope,
+        cursor: pageParam,
+        limit: 50,
+      }),
+    initialPageParam: null as ThreadCursor | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    enabled: accountId !== null && query.trim().length > 0,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+export function useParseSearchQueryQuery(query: string) {
+  return useQuery({
+    queryKey: queryKeys.parsedSearchQuery(query),
+    queryFn: () => invoke('parse_search_query', { query }),
+    enabled: query.trim().length > 0,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
 }
@@ -241,6 +273,67 @@ export type MessageTriageChange = {
   remove: string[];
 };
 
+export type ThreadTriageIntent =
+  | { kind: 'label'; add: string[]; remove: string[] }
+  | { kind: 'delete' }
+  | { kind: 'move'; destination: MoveDestination };
+
+export type MessageTriageIntent =
+  | { kind: 'label'; add: string[]; remove: string[] }
+  | { kind: 'delete' }
+  | { kind: 'move'; destination: MoveDestination };
+
+function optimisticallyUpdateThreadPages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  accountId: string | null,
+  threadIds: string[],
+  leavesMailbox: boolean,
+  update: (thread: MailThread) => MailThread,
+) {
+  queryClient.setQueriesData(
+    { queryKey: queryKeys.threadsForAccount(accountId ?? '') },
+    (data: { pages: ThreadPage[] } | undefined) =>
+      data && {
+        ...data,
+        pages: data.pages.map((page) => ({
+          ...page,
+          items: page.items
+            .filter((thread) => !(leavesMailbox && threadIds.includes(thread.id)))
+            .map((thread) => (threadIds.includes(thread.id) ? update(thread) : thread)),
+        })),
+      },
+  );
+}
+
+function optimisticallyUpdateSearchPages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  accountId: string | null,
+  threadIds: string[],
+  leavesSearch: boolean,
+  update: (thread: MailThread) => MailThread,
+) {
+  queryClient.setQueriesData(
+    { queryKey: queryKeys.searchForAccount(accountId ?? '') },
+    (data: { pages: ThreadSearchPage[] } | undefined) =>
+      data && {
+        ...data,
+        pages: data.pages.map((page) => ({
+          ...page,
+          items: page.items
+            .filter((thread) => !(leavesSearch && threadIds.includes(thread.id)))
+            .map((thread) => (threadIds.includes(thread.id) ? update(thread) : thread)),
+          total: leavesSearch ? Math.max(0, page.total - threadIds.length) : page.total,
+        })),
+      },
+  );
+}
+
+function virtualMailboxIdForScope(scope: SearchScope): string | null {
+  if (scope.kind === 'default') return 'INBOX';
+  if (scope.kind === 'all') return null;
+  return scope.labelId;
+}
+
 export function useTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
   const showError = useToastStore((state) => state.showError);
@@ -249,41 +342,26 @@ export function useTriageMutation(accountId: string | null) {
       invoke('mutate_threads', { accountId: accountId as string, ...change }),
     onMutate: async ({ threadIds, add, remove }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      await queryClient.cancelQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
       const mailboxId = useSelectionStore.getState().activeMailboxId;
       const leavesMailbox =
         mailboxId !== null &&
         (remove.includes(mailboxId) ||
           (mailboxId === 'INBOX' && add.includes('TRASH')) ||
           (mailboxId === 'INBOX' && add.includes('SPAM')));
-      queryClient.setQueriesData(
-        { queryKey: queryKeys.threadsForAccount(accountId ?? '') },
-        (data: { pages: ThreadPage[] } | undefined) =>
-          data && {
-            ...data,
-            pages: data.pages.map((page) => ({
-              ...page,
-              items: page.items
-                .filter((thread) => !(leavesMailbox && threadIds.includes(thread.id)))
-                .map((thread) =>
-                  threadIds.includes(thread.id)
-                    ? {
-                        ...thread,
-                        isStarred: add.includes('STARRED')
-                          ? true
-                          : remove.includes('STARRED')
-                            ? false
-                            : thread.isStarred,
-                        isUnread: add.includes('UNREAD')
-                          ? true
-                          : remove.includes('UNREAD')
-                            ? false
-                            : thread.isUnread,
-                      }
-                    : thread,
-                ),
-            })),
-          },
-      );
+      const update = (thread: MailThread) => ({
+        ...thread,
+        isStarred: add.includes('STARRED') ? true : remove.includes('STARRED') ? false : thread.isStarred,
+        isUnread: add.includes('UNREAD') ? true : remove.includes('UNREAD') ? false : thread.isUnread,
+      });
+      optimisticallyUpdateThreadPages(queryClient, accountId, threadIds, leavesMailbox, update);
+      const scopeMailboxId = virtualMailboxIdForScope(useSearchStore.getState().scope);
+      const leavesSearch =
+        scopeMailboxId !== null &&
+        (remove.includes(scopeMailboxId) ||
+          (scopeMailboxId === 'INBOX' && add.includes('TRASH')) ||
+          (scopeMailboxId === 'INBOX' && add.includes('SPAM')));
+      optimisticallyUpdateSearchPages(queryClient, accountId, threadIds, leavesSearch, update);
     },
     onError: (_error, { threadIds }) =>
       showError(
@@ -298,9 +376,117 @@ export function useTriageMutation(accountId: string | null) {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
       });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
       useMultiSelectStore.getState().clear();
     },
   });
+}
+
+export function useDeleteThreadsMutation(accountId: string | null) {
+  const queryClient = useQueryClient();
+  const showError = useToastStore((state) => state.showError);
+  return useMutation({
+    mutationFn: (change: { threadIds: string[] }) =>
+      invoke('delete_threads', { accountId: accountId as string, ...change }),
+    onMutate: async ({ threadIds }) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      await queryClient.cancelQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
+      const mailboxId = useSelectionStore.getState().activeMailboxId;
+      const leavesMailbox = mailboxId !== 'TRASH';
+      optimisticallyUpdateThreadPages(queryClient, accountId, threadIds, leavesMailbox, (thread) => thread);
+      const scopeMailboxId = virtualMailboxIdForScope(useSearchStore.getState().scope);
+      const leavesSearch = scopeMailboxId !== null && scopeMailboxId !== 'TRASH';
+      optimisticallyUpdateSearchPages(queryClient, accountId, threadIds, leavesSearch, (thread) => thread);
+    },
+    onError: (_error, { threadIds }) =>
+      showError(
+        threadIds.length > 1
+          ? `Couldn’t delete ${threadIds.length} conversations.`
+          : 'Couldn’t delete conversation.',
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
+      useMultiSelectStore.getState().clear();
+    },
+  });
+}
+
+export function useMoveThreadsMutation(accountId: string | null) {
+  const queryClient = useQueryClient();
+  const showError = useToastStore((state) => state.showError);
+  return useMutation({
+    mutationFn: (change: { threadIds: string[]; destination: MoveDestination }) =>
+      invoke('move_threads', { accountId: accountId as string, ...change }),
+    onMutate: async ({ threadIds, destination }) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      await queryClient.cancelQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
+      const mailboxId = useSelectionStore.getState().activeMailboxId;
+      const leavesMailbox = mailboxId !== destination;
+      optimisticallyUpdateThreadPages(queryClient, accountId, threadIds, leavesMailbox, (thread) => thread);
+      const scopeMailboxId = virtualMailboxIdForScope(useSearchStore.getState().scope);
+      const leavesSearch = scopeMailboxId !== null && scopeMailboxId !== destination;
+      optimisticallyUpdateSearchPages(queryClient, accountId, threadIds, leavesSearch, (thread) => thread);
+    },
+    onError: (_error, { threadIds }) =>
+      showError(
+        threadIds.length > 1
+          ? `Couldn’t move ${threadIds.length} conversations.`
+          : 'Couldn’t move conversation.',
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
+      useMultiSelectStore.getState().clear();
+    },
+  });
+}
+
+export function useThreadTriageIntentMutation(accountId: string | null) {
+  const labelMutation = useTriageMutation(accountId);
+  const deleteMutation = useDeleteThreadsMutation(accountId);
+  const moveMutation = useMoveThreadsMutation(accountId);
+  return {
+    isPending: labelMutation.isPending || deleteMutation.isPending || moveMutation.isPending,
+    mutate: (threadIds: string[], intent: ThreadTriageIntent) => {
+      if (intent.kind === 'label') labelMutation.mutate({ threadIds, add: intent.add, remove: intent.remove });
+      else if (intent.kind === 'delete') deleteMutation.mutate({ threadIds });
+      else moveMutation.mutate({ threadIds, destination: intent.destination });
+    },
+  };
+}
+
+type ReaderMessageCacheEntry = {
+  id: string;
+  labelIds: string[];
+  isUnread: boolean;
+  isStarred: boolean;
+};
+
+function optimisticallyUpdateConversationMessages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  accountId: string | null,
+  threadId: string,
+  messageIds: string[],
+  removesMessage: boolean,
+  update: (message: ReaderMessageCacheEntry) => ReaderMessageCacheEntry,
+) {
+  queryClient.setQueriesData(
+    { queryKey: queryKeys.conversation(accountId ?? '', threadId) },
+    (data: { messages: ReaderMessageCacheEntry[] } | undefined) =>
+      data && {
+        ...data,
+        messages: data.messages
+          .filter((message) => !(removesMessage && messageIds.includes(message.id)))
+          .map((message) => (messageIds.includes(message.id) ? update(message) : message)),
+      },
+  );
 }
 
 export function useMessageTriageMutation(accountId: string | null) {
@@ -311,52 +497,22 @@ export function useMessageTriageMutation(accountId: string | null) {
       invoke('mutate_messages', { accountId: accountId as string, ...change }),
     onMutate: async ({ threadId, messageIds, add, remove }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
-      queryClient.setQueriesData(
-        { queryKey: queryKeys.conversation(accountId ?? '', threadId) },
-        (
-          data:
-            | {
-                messages: Array<{
-                  id: string;
-                  labelIds: string[];
-                  isUnread: boolean;
-                  isStarred: boolean;
-                }>;
-              }
-            | undefined,
-        ) =>
-          data && {
-            ...data,
-            messages: data.messages
-              .filter(
-                (message) =>
-                  !(add.includes('TRASH') || add.includes('SPAM')) ||
-                  !messageIds.includes(message.id),
-              )
-              .map((message) =>
-                messageIds.includes(message.id)
-                  ? {
-                      ...message,
-                      isUnread: add.includes('UNREAD')
-                        ? true
-                        : remove.includes('UNREAD')
-                          ? false
-                          : message.isUnread,
-                      isStarred: add.includes('STARRED')
-                        ? true
-                        : remove.includes('STARRED')
-                          ? false
-                          : message.isStarred,
-                      labelIds: [
-                        ...new Set([
-                          ...message.labelIds.filter((id) => !remove.includes(id)),
-                          ...add,
-                        ]),
-                      ],
-                    }
-                  : message,
-              ),
-          },
+      optimisticallyUpdateConversationMessages(
+        queryClient,
+        accountId,
+        threadId,
+        messageIds,
+        add.includes('TRASH') || add.includes('SPAM'),
+        (message) => ({
+          ...message,
+          isUnread: add.includes('UNREAD') ? true : remove.includes('UNREAD') ? false : message.isUnread,
+          isStarred: add.includes('STARRED')
+            ? true
+            : remove.includes('STARRED')
+              ? false
+              : message.isStarred,
+          labelIds: [...new Set([...message.labelIds.filter((id) => !remove.includes(id)), ...add])],
+        }),
       );
     },
     onError: (_error, { messageIds }) =>
@@ -374,4 +530,87 @@ export function useMessageTriageMutation(accountId: string | null) {
       });
     },
   });
+}
+
+export function useDeleteMessagesMutation(accountId: string | null) {
+  const queryClient = useQueryClient();
+  const showError = useToastStore((state) => state.showError);
+  return useMutation({
+    mutationFn: (change: { threadId: string; messageIds: string[] }) =>
+      invoke('delete_messages', { accountId: accountId as string, messageIds: change.messageIds }),
+    onMutate: async ({ threadId, messageIds }) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      optimisticallyUpdateConversationMessages(
+        queryClient,
+        accountId,
+        threadId,
+        messageIds,
+        true,
+        (message) => message,
+      );
+    },
+    onError: (_error, { messageIds }) =>
+      showError(
+        messageIds.length > 1
+          ? `Couldn’t delete ${messageIds.length} messages.`
+          : 'Couldn’t delete message.',
+      ),
+    onSettled: (_result, _error, { threadId }) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversation(accountId ?? '', threadId),
+      });
+    },
+  });
+}
+
+export function useMoveMessagesMutation(accountId: string | null) {
+  const queryClient = useQueryClient();
+  const showError = useToastStore((state) => state.showError);
+  return useMutation({
+    mutationFn: (change: { threadId: string; messageIds: string[]; destination: MoveDestination }) =>
+      invoke('move_messages', {
+        accountId: accountId as string,
+        messageIds: change.messageIds,
+        destination: change.destination,
+      }),
+    onMutate: async ({ threadId, messageIds }) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      optimisticallyUpdateConversationMessages(
+        queryClient,
+        accountId,
+        threadId,
+        messageIds,
+        true,
+        (message) => message,
+      );
+    },
+    onError: (_error, { messageIds }) =>
+      showError(
+        messageIds.length > 1
+          ? `Couldn’t move ${messageIds.length} messages.`
+          : 'Couldn’t move message.',
+      ),
+    onSettled: (_result, _error, { threadId }) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversation(accountId ?? '', threadId),
+      });
+    },
+  });
+}
+
+export function useMessageTriageIntentMutation(accountId: string | null) {
+  const labelMutation = useMessageTriageMutation(accountId);
+  const deleteMutation = useDeleteMessagesMutation(accountId);
+  const moveMutation = useMoveMessagesMutation(accountId);
+  return {
+    isPending: labelMutation.isPending || deleteMutation.isPending || moveMutation.isPending,
+    mutate: (threadId: string, messageIds: string[], intent: MessageTriageIntent) => {
+      if (intent.kind === 'label')
+        labelMutation.mutate({ threadId, messageIds, add: intent.add, remove: intent.remove });
+      else if (intent.kind === 'delete') deleteMutation.mutate({ threadId, messageIds });
+      else moveMutation.mutate({ threadId, messageIds, destination: intent.destination });
+    },
+  };
 }

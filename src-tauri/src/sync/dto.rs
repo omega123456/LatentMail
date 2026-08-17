@@ -162,6 +162,7 @@ pub struct ThreadDto {
     pub has_draft: bool,
     pub snippet: String,
     pub label_indicators: Vec<String>,
+    pub system_label_ids: Vec<String>,
     pub sender: ThreadIdentityDto,
     pub sent_recipient: Option<ThreadIdentityDto>,
 }
@@ -179,6 +180,7 @@ impl From<Thread> for ThreadDto {
             has_draft: thread.has_draft,
             snippet: String::new(),
             label_indicators: Vec::new(),
+            system_label_ids: Vec::new(),
             sender: thread.sender_identity.into(),
             sent_recipient: thread.recipient_identity.map(ThreadIdentityDto::from),
         }
@@ -186,9 +188,15 @@ impl From<Thread> for ThreadDto {
 }
 
 impl ThreadDto {
-    pub fn with_row_details(mut self, snippet: String, label_indicators: Vec<String>) -> Self {
+    pub fn with_row_details(
+        mut self,
+        snippet: String,
+        label_indicators: Vec<String>,
+        system_label_ids: Vec<String>,
+    ) -> Self {
         self.snippet = snippet;
         self.label_indicators = label_indicators;
+        self.system_label_ids = system_label_ids;
         self
     }
 }
@@ -205,6 +213,38 @@ pub struct ThreadCursor {
 pub struct ThreadPage {
     pub items: Vec<ThreadDto>,
     pub next_cursor: Option<ThreadCursor>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchPage {
+    pub items: Vec<ThreadDto>,
+    pub next_cursor: Option<ThreadCursor>,
+    pub total: i64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SearchPredicateDto {
+    Label { value: String, negated: bool },
+    Unread { negated: bool },
+    Starred { negated: bool },
+    HasAttachment { negated: bool },
+    SentBefore { at_seconds: i64, negated: bool },
+    SentAfter { at_seconds: i64, negated: bool },
+    TextExcludes { negated: bool },
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedSearchQueryDto {
+    pub has_text_term: bool,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub subject: Option<String>,
+    pub includes: Vec<String>,
+    pub excludes: Vec<String>,
+    pub predicates: Vec<SearchPredicateDto>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

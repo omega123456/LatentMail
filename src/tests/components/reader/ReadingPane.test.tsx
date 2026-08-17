@@ -62,7 +62,7 @@ describe('ReadingPane', () => {
 
   it('mounts the thread ActionRibbon and a per-message ribbon', async () => {
     const user = userEvent.setup();
-    renderWithQueryClient(<ReadingPane threadId="thread-1" mailboxId="INBOX" />);
+    renderWithQueryClient(<ReadingPane threadId="thread-1" />);
     expect(screen.getByRole('toolbar', { name: 'Conversation actions' })).toBeInTheDocument();
     expect(screen.getAllByRole('toolbar', { name: 'Message actions' })).toHaveLength(2);
 
@@ -70,7 +70,7 @@ describe('ReadingPane', () => {
   });
 
   it('substitutes the bulk selection panel when a multi-selection is active', () => {
-    renderWithQueryClient(<ReadingPane threadId={null} mailboxId="INBOX" selectedCount={3} />);
+    renderWithQueryClient(<ReadingPane threadId={null} selectedCount={3} />);
     expect(screen.getByTestId('bulk-selection-panel')).toBeInTheDocument();
     expect(screen.getByText('3 conversations selected')).toBeInTheDocument();
   });
@@ -92,7 +92,53 @@ describe('ReadingPane', () => {
     const ribbon = within(screen.getByRole('toolbar', { name: 'Message actions' }));
     await user.click(ribbon.getByRole('button', { name: 'Mark as spam' }));
     await user.click(ribbon.getByRole('button', { name: 'Delete' }));
-    expect(onMessageTriage).toHaveBeenCalledWith('message-2', { add: ['SPAM'], remove: [] });
-    expect(onMessageTriage).toHaveBeenCalledWith('message-2', { add: ['TRASH'], remove: [] });
+    expect(onMessageTriage).toHaveBeenCalledWith('message-2', { kind: 'move', destination: 'SPAM' });
+    expect(onMessageTriage).toHaveBeenCalledWith('message-2', { kind: 'delete' });
+  });
+
+  it('keeps the full action surface for a thread with one trashed reply among live messages', async () => {
+    const conversation = {
+      ...readerFixtures['thread-1'],
+      messages: [
+        { ...readerFixtures['thread-1'].messages[0], labelIds: ['INBOX'] },
+        { ...readerFixtures['thread-1'].messages[1], labelIds: ['TRASH'] },
+      ],
+    };
+    renderWithQueryClient(<ReadingPane threadId="thread-1" conversation={conversation} />);
+    const ribbon = within(screen.getByRole('toolbar', { name: 'Conversation actions' }));
+    expect(ribbon.getByRole('button', { name: 'Star' })).toBeInTheDocument();
+    expect(ribbon.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByLabelText('Message body').length).toBeGreaterThan(0));
+  });
+
+  it('keeps the full action surface for a thread with one draft reply among live messages', async () => {
+    const conversation = {
+      ...readerFixtures['thread-1'],
+      messages: [
+        { ...readerFixtures['thread-1'].messages[0], labelIds: ['INBOX'] },
+        { ...readerFixtures['thread-1'].messages[1], labelIds: ['DRAFT'] },
+      ],
+    };
+    renderWithQueryClient(<ReadingPane threadId="thread-1" conversation={conversation} />);
+    const ribbon = within(screen.getByRole('toolbar', { name: 'Conversation actions' }));
+    expect(ribbon.getByRole('button', { name: 'Star' })).toBeInTheDocument();
+    expect(ribbon.getByRole('button', { name: 'Mark as spam' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByLabelText('Message body').length).toBeGreaterThan(0));
+  });
+
+  it('derives the thread ribbon from the messages own label membership, not any external mailbox selection', async () => {
+    const conversation = {
+      ...readerFixtures['thread-1'],
+      messages: readerFixtures['thread-1'].messages.map((message) => ({
+        ...message,
+        labelIds: ['TRASH'],
+      })),
+    };
+    renderWithQueryClient(<ReadingPane threadId="thread-1" conversation={conversation} />);
+    const ribbon = within(screen.getByRole('toolbar', { name: 'Conversation actions' }));
+    expect(ribbon.queryByRole('button', { name: 'Star' })).not.toBeInTheDocument();
+    expect(ribbon.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    expect(await ribbon.findByRole('button', { name: 'Move to' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByLabelText('Message body').length).toBeGreaterThan(0));
   });
 });

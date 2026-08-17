@@ -6,8 +6,8 @@ pub use repositories::{
     AvatarCacheRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository,
     ComposeMessageContext, ConversationMessage, HtmlPresence, InlinePart, Label, LabelColor,
     LabelNameError, LabelRepository, Message, MessageRepository, Operation, OperationRepository,
-    ReconciliationMessage, SettingRepository, Thread, ThreadIdentity, ThreadListRow,
-    ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+    ReconciliationMessage, SearchRepository, SettingRepository, Thread, ThreadIdentity,
+    ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 use std::{
@@ -67,7 +67,6 @@ impl Storage {
         let mut connection = Connection::open(storage.path.as_ref())?;
         configure_database(&connection)?;
         embedded::migrations::runner().run(&mut connection)?;
-        repositories::rebuild_thread_identities_once(&connection)?;
         Ok(storage)
     }
 
@@ -76,7 +75,6 @@ impl Storage {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         embedded::migrations::runner().run(&mut connection)?;
-        repositories::rebuild_thread_identities_once(&connection)?;
         Ok(connection)
     }
 

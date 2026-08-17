@@ -14,7 +14,8 @@ export type CommandName =
   | 'replyToMessage'
   | 'replyAllToMessage'
   | 'forwardMessage'
-  | 'editDraft';
+  | 'editDraft'
+  | 'focusSearch';
 
 export type CommandBindings = Record<CommandName, string[]>;
 
@@ -35,6 +36,7 @@ export const DEFAULT_COMMAND_BINDINGS: CommandBindings = {
   replyAllToMessage: ['a', 'A'],
   forwardMessage: ['f', 'F'],
   editDraft: [],
+  focusSearch: ['Meta+F', 'Control+F', '/'],
 };
 
 export type CommandOverrides = Partial<CommandBindings>;

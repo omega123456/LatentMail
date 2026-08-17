@@ -88,3 +88,11 @@ export function userBadgesByName(names: string[], userLabels: UserLabel[]): Mess
     .sort(byName)
     .map(toUserBadge);
 }
+
+const SOURCE_BADGE_PRECEDENCE: SystemBadgeId[] = ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM'];
+
+export function sourceBadge(systemLabelIds: string[] | undefined): MessageBadge | null {
+  const ids = systemLabelIds ?? [];
+  const id = SOURCE_BADGE_PRECEDENCE.find((candidate) => ids.includes(candidate));
+  return id ? { kind: 'system', id } : null;
+}

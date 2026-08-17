@@ -7,6 +7,7 @@ pub mod ipc;
 pub mod logging;
 pub mod queue;
 pub mod sanitize;
+pub mod search;
 pub mod settings;
 pub mod shell;
 pub mod storage;

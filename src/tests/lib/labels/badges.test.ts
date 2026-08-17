@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SYSTEM_BADGES, messageBadges, userBadgesByName } from '@/lib/labels/badges';
+import { SYSTEM_BADGES, messageBadges, sourceBadge, userBadgesByName } from '@/lib/labels/badges';
 import type { UserLabel } from '@/lib/labels/badges';
 
 const userLabels: UserLabel[] = [
@@ -52,6 +52,24 @@ describe('userBadgesByName', () => {
       { kind: 'user', id: 'Label_1', name: 'invoices', color: 'green' },
       { kind: 'user', id: 'Label_2', name: 'Work', color: 'blue' },
     ]);
+  });
+});
+
+describe('sourceBadge', () => {
+  it('follows Inbox, Sent, Drafts, Trash, Spam precedence', () => {
+    expect(sourceBadge(['SPAM', 'INBOX'])).toEqual({ kind: 'system', id: 'INBOX' });
+    expect(sourceBadge(['TRASH', 'SENT'])).toEqual({ kind: 'system', id: 'SENT' });
+    expect(sourceBadge(['SPAM', 'TRASH'])).toEqual({ kind: 'system', id: 'TRASH' });
+    expect(sourceBadge(['SPAM'])).toEqual({ kind: 'system', id: 'SPAM' });
+  });
+
+  it('ignores Starred and unrecognised labels', () => {
+    expect(sourceBadge(['STARRED', 'Label_1'])).toBeNull();
+  });
+
+  it('shows no badge for a thread with no system label at all', () => {
+    expect(sourceBadge([])).toBeNull();
+    expect(sourceBadge(undefined)).toBeNull();
   });
 });
 

@@ -18,10 +18,10 @@ import {
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
 
-export function computeRibbonVisibility(mailboxId: string) {
-  const isDrafts = mailboxId === 'DRAFT';
-  const isTrash = mailboxId === 'TRASH';
-  const isSpam = mailboxId === 'SPAM';
+export function computeRibbonVisibility(systemLabelIds: string[]) {
+  const isDrafts = systemLabelIds.includes('DRAFT');
+  const isTrash = systemLabelIds.includes('TRASH');
+  const isSpam = systemLabelIds.includes('SPAM');
   return {
     showReadToggle: !isDrafts,
     showStar: !isDrafts && !isTrash,
@@ -34,11 +34,11 @@ export function computeRibbonVisibility(mailboxId: string) {
 }
 
 export type ActionRibbonProps = {
-  mailboxId: string;
+  systemLabelIds: string[];
+  moveToCurrentLabelIds?: string[];
   unread: boolean;
   starred: boolean;
   labels: LabelMenuEntry[];
-  currentLabelName?: string;
   onToggleRead: () => void;
   onToggleStar: () => void;
   onApplyLabels: (changes: { add: string[]; remove: string[] }) => void;
@@ -82,11 +82,11 @@ function useMeasuredOverflow() {
 }
 
 export function ActionRibbon({
-  mailboxId,
+  systemLabelIds,
+  moveToCurrentLabelIds,
   unread,
   starred,
   labels,
-  currentLabelName,
   onToggleRead,
   onToggleStar,
   onApplyLabels,
@@ -103,7 +103,7 @@ export function ActionRibbon({
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState(false);
-  const visibility = computeRibbonVisibility(mailboxId);
+  const visibility = computeRibbonVisibility(systemLabelIds);
 
   const composeGroup = onReply && onReplyAll && onForward && (
     <ComposeGroup
@@ -180,8 +180,7 @@ export function ActionRibbon({
           className="z-50 min-w-52 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-2 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
         >
           <MoveToMenu
-            currentMailboxId={mailboxId}
-            currentLabelName={currentLabelName}
+            currentSystemLabelIds={moveToCurrentLabelIds ?? systemLabelIds}
             onSelect={(destination) => {
               onMoveTo(destination);
               setMoveOpen(false);

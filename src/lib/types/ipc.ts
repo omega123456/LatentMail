@@ -92,6 +92,22 @@ export interface IpcCommandMap {
     args: { accountId: string; messageIds: string[]; add: string[]; remove: string[] };
     result: void;
   };
+  delete_threads: {
+    args: { accountId: string; threadIds: string[] };
+    result: MutationResult[];
+  };
+  move_threads: {
+    args: { accountId: string; threadIds: string[]; destination: MoveDestination };
+    result: MutationResult[];
+  };
+  delete_messages: {
+    args: { accountId: string; messageIds: string[] };
+    result: void;
+  };
+  move_messages: {
+    args: { accountId: string; messageIds: string[]; destination: MoveDestination };
+    result: void;
+  };
   delete_draft: { args: { accountId: string; messageId: string }; result: void };
   create_label: {
     args: { accountId: string; name: string; colorId?: string | null };
@@ -109,6 +125,17 @@ export interface IpcCommandMap {
   read_traversal_status: { args: { accountId: string }; result: TraversalStatus };
   read_sender_avatar: { args: { domain: string }; result: string | null };
   read_account_avatar: { args: { accountId: string }; result: string | null };
+  search_threads: {
+    args: {
+      accountId: string;
+      query: string;
+      scope?: SearchScope | null;
+      cursor?: ThreadCursor | null;
+      limit?: number | null;
+    };
+    result: ThreadSearchPage;
+  };
+  parse_search_query: { args: { query: string }; result: ParsedSearchQuery };
 }
 
 export interface QueueSummary {
@@ -227,6 +254,8 @@ export type DragDropEvent =
   | { type: 'drop'; paths: string[]; position: { x: number; y: number } }
   | { type: 'leave' };
 
+export type MoveDestination = 'INBOX' | 'SPAM' | 'TRASH';
+
 export type MutationOutcome = 'applied' | 'superseded';
 
 export interface MutationResult {
@@ -266,6 +295,7 @@ export interface MailThread {
   hasDraft: boolean;
   snippet?: string;
   labelIndicators?: string[];
+  systemLabelIds?: string[];
 }
 
 export interface ThreadCursor {
@@ -276,6 +306,36 @@ export interface ThreadCursor {
 export interface ThreadPage {
   items: MailThread[];
   nextCursor: ThreadCursor | null;
+}
+
+export interface ThreadSearchPage {
+  items: MailThread[];
+  nextCursor: ThreadCursor | null;
+  total: number;
+}
+
+export type SearchScope =
+  | { kind: 'default' }
+  | { kind: 'all' }
+  | { kind: 'label'; labelId: string };
+
+export type SearchPredicate =
+  | { kind: 'label'; value: string; negated: boolean }
+  | { kind: 'unread'; negated: boolean }
+  | { kind: 'starred'; negated: boolean }
+  | { kind: 'hasAttachment'; negated: boolean }
+  | { kind: 'sentBefore'; atSeconds: number; negated: boolean }
+  | { kind: 'sentAfter'; atSeconds: number; negated: boolean }
+  | { kind: 'textExcludes'; negated: boolean };
+
+export interface ParsedSearchQuery {
+  hasTextTerm: boolean;
+  from: string | null;
+  to: string | null;
+  subject: string | null;
+  includes: string[];
+  excludes: string[];
+  predicates: SearchPredicate[];
 }
 
 export interface ConversationMessage {

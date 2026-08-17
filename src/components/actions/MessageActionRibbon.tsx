@@ -19,11 +19,10 @@ import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
 
 export type MessageActionRibbonProps = {
-  mailboxId: string;
+  systemLabelIds: string[];
   unread: boolean;
   starred: boolean;
   labels: LabelMenuEntry[];
-  currentLabelName?: string;
   onToggleRead: () => void;
   onToggleStar: () => void;
   onApplyLabels: (changes: { add: string[]; remove: string[] }) => void;
@@ -41,11 +40,10 @@ const iconButtonClass =
   'inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface cursor-pointer';
 
 export function MessageActionRibbon({
-  mailboxId,
+  systemLabelIds,
   unread,
   starred,
   labels,
-  currentLabelName,
   onToggleRead,
   onToggleStar,
   onApplyLabels,
@@ -60,7 +58,7 @@ export function MessageActionRibbon({
 }: MessageActionRibbonProps) {
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
-  const visibility = computeRibbonVisibility(mailboxId);
+  const visibility = computeRibbonVisibility(systemLabelIds);
 
   return (
     <div
@@ -176,8 +174,7 @@ export function MessageActionRibbon({
               className="z-50 min-w-52 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-2 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
             >
               <MoveToMenu
-                currentMailboxId={mailboxId}
-                currentLabelName={currentLabelName}
+                currentSystemLabelIds={systemLabelIds}
                 onSelect={(destination) => {
                   onMoveTo(destination);
                   setMoveOpen(false);

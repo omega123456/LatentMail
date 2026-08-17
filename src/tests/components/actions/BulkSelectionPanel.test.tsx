@@ -21,7 +21,7 @@ describe('BulkSelectionPanel', () => {
     render(
       <BulkSelectionPanel
         count={12}
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[]}
@@ -38,7 +38,7 @@ describe('BulkSelectionPanel', () => {
     render(
       <BulkSelectionPanel
         count={1}
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[]}

@@ -516,7 +516,13 @@ pub async fn list_threads(
     };
     let items = rows
         .into_iter()
-        .map(|row| ThreadDto::from(row.thread).with_row_details(row.snippet, row.label_indicators))
+        .map(|row| {
+            ThreadDto::from(row.thread).with_row_details(
+                row.snippet,
+                row.label_indicators,
+                row.system_label_ids,
+            )
+        })
         .collect();
     Ok(ThreadPage { items, next_cursor })
 }
@@ -845,7 +851,7 @@ pub async fn mutate_messages<R: Runtime>(
 }
 
 
-fn reject_protected_label_mutation(add: &[String], remove: &[String]) -> Result<(), String> {
+pub(super) fn reject_protected_label_mutation(add: &[String], remove: &[String]) -> Result<(), String> {
     if add
         .iter()
         .chain(remove)

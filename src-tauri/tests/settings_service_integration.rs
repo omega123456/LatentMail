@@ -151,6 +151,30 @@ async fn save_window_persists_the_current_window_geometry() {
     assert!(service.window_state().unwrap().is_some());
 }
 
+#[tokio::test]
+async fn write_surfaces_a_storage_error_when_the_settings_table_cannot_accept_an_upsert() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    {
+        let connection = storage.connection().unwrap();
+        connection.execute("DROP TABLE settings", []).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE settings (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, value TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+    }
+    let service = SettingsService::new(storage);
+
+    assert!(service.read().await.is_ok());
+    let error = service
+        .write("theme".into(), serde_json::json!("dark"))
+        .await
+        .unwrap_err();
+    assert!(error.to_lowercase().contains("conflict"));
+}
+
 #[test]
 fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window() {
 

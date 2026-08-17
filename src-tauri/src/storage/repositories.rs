@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, types::Value, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -441,6 +441,60 @@ impl MessageRepository {
         }
         Ok(drafts)
     }
+    pub fn label_ids_by_thread(
+        connection: &Connection,
+        account_id: &str,
+        thread_ids: &[String],
+    ) -> Result<HashMap<String, HashSet<String>>> {
+        let mut membership: HashMap<String, HashSet<String>> = HashMap::new();
+        for chunk in thread_ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT DISTINCT m.thread_id,ml.label_id
+                 FROM messages m CROSS JOIN message_labels ml
+                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                   AND ml.account_id=m.account_id AND ml.message_id=m.id"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            for (thread_id, label_id) in rows {
+                membership.entry(thread_id).or_default().insert(label_id);
+            }
+        }
+        Ok(membership)
+    }
+
+    pub fn label_ids_by_message(
+        connection: &Connection,
+        account_id: &str,
+        message_ids: &[String],
+    ) -> Result<HashMap<String, HashSet<String>>> {
+        let mut membership: HashMap<String, HashSet<String>> = HashMap::new();
+        for chunk in message_ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT message_id,label_id FROM message_labels
+                 WHERE account_id=? AND message_id IN ({placeholders})"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            for (message_id, label_id) in rows {
+                membership.entry(message_id).or_default().insert(label_id);
+            }
+        }
+        Ok(membership)
+    }
+
     pub fn list_conversation(
         connection: &Connection,
         account_id: &str,
@@ -923,11 +977,14 @@ pub struct Thread {
     pub recipient_identity: Option<ThreadIdentity>,
 }
 
+pub const SYSTEM_FOLDER_LABEL_IDS: [&str; 5] = ["INBOX", "SENT", "DRAFT", "TRASH", "SPAM"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadListRow {
     pub thread: Thread,
     pub snippet: String,
     pub label_indicators: Vec<String>,
+    pub system_label_ids: Vec<String>,
 }
 
 struct ThreadMessageRow {
@@ -1067,11 +1124,30 @@ impl ThreadRepository {
             .execute(params![account_id, thread_id])?;
         connection
             .prepare_cached(
-                "INSERT INTO thread_labels (account_id,label_id,thread_id,latest_at)
-                 SELECT DISTINCT ?1,ml.label_id,?2,?3
-                 FROM messages m CROSS JOIN message_labels ml
-                 WHERE m.account_id=?1 AND m.thread_id=?2
-                   AND ml.account_id=m.account_id AND ml.message_id=m.id",
+                "WITH message_folder_state AS (
+                   SELECT m.id AS message_id,
+                          MAX(ml.label_id='TRASH') AS is_trashed,
+                          MAX(ml.label_id='SPAM') AS is_spammed
+                   FROM messages m
+                   LEFT JOIN message_labels ml
+                     ON ml.account_id=m.account_id AND ml.message_id=m.id
+                   WHERE m.account_id=?1 AND m.thread_id=?2
+                   GROUP BY m.id
+                 )
+                 INSERT INTO thread_labels (account_id,label_id,thread_id,latest_at)
+                 SELECT DISTINCT ?1,
+                        CASE
+                          WHEN mfs.is_trashed THEN 'TRASH'
+                          WHEN mfs.is_spammed THEN 'SPAM'
+                          ELSE ml.label_id
+                        END,
+                        ?2,?3
+                 FROM messages m
+                 CROSS JOIN message_labels ml
+                   ON ml.account_id=m.account_id AND ml.message_id=m.id
+                 CROSS JOIN message_folder_state mfs
+                   ON mfs.message_id=m.id
+                 WHERE m.account_id=?1 AND m.thread_id=?2",
             )?
             .execute(params![account_id, thread_id, latest_at])?;
         Ok(())
@@ -1112,7 +1188,7 @@ impl ThreadRepository {
             Some((at, id)) => (Some(at), Some(id)),
             None => (None, None),
         };
-        let mut rows = statement
+        let rows = statement
             .query_map(
                 params![account_id, label_id, cursor_at, cursor_id, limit],
                 |row| {
@@ -1120,55 +1196,284 @@ impl ThreadRepository {
                         thread: thread(row)?,
                         snippet: row.get(12)?,
                         label_indicators: Vec::new(),
+                        system_label_ids: Vec::new(),
                     })
                 },
             )?
             .collect::<Result<Vec<_>>>()?;
-        if rows.is_empty() {
-            return Ok(rows);
-        }
+        enrich_thread_rows(connection, account_id, rows)
+    }
+}
 
-        let positions: HashMap<String, usize> = rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| (row.thread.id.clone(), index))
-            .collect();
-        let mut all_labels = Vec::new();
-        for chunk in rows.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT m.thread_id,l.name
-                 FROM messages m
-                 CROSS JOIN message_labels ml
-                 CROSS JOIN labels l
-                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
-                   AND ml.account_id=m.account_id AND ml.message_id=m.id
-                   AND l.account_id=ml.account_id AND l.id=ml.label_id AND l.kind='user'"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters =
-                std::iter::once(account_id).chain(chunk.iter().map(|row| row.thread.id.as_str()));
-            all_labels.extend(
-                statement
-                    .query_map(rusqlite::params_from_iter(parameters), |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })?
-                    .collect::<Result<Vec<_>>>()?,
-            );
+fn enrich_thread_rows(
+    connection: &Connection,
+    account_id: &str,
+    mut rows: Vec<ThreadListRow>,
+) -> Result<Vec<ThreadListRow>> {
+    if rows.is_empty() {
+        return Ok(rows);
+    }
+
+    let positions: HashMap<String, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.thread.id.clone(), index))
+        .collect();
+    let mut all_labels = Vec::new();
+    for chunk in rows.chunks(BIND_BATCH_SIZE) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!(
+            "SELECT m.thread_id,l.name
+             FROM messages m
+             CROSS JOIN message_labels ml
+             CROSS JOIN labels l
+             WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+               AND ml.account_id=m.account_id AND ml.message_id=m.id
+               AND l.account_id=ml.account_id AND l.id=ml.label_id AND l.kind='user'"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let parameters =
+            std::iter::once(account_id).chain(chunk.iter().map(|row| row.thread.id.as_str()));
+        all_labels.extend(
+            statement
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    let mut seen = HashSet::new();
+    for (thread_id, label) in all_labels {
+        if seen.insert((thread_id.clone(), label.clone())) {
+            let index = positions
+                .get(&thread_id)
+                .expect("label query only returns requested threads");
+            rows[*index].label_indicators.push(label);
         }
-        let mut seen = HashSet::new();
-        for (thread_id, label) in all_labels {
-            if seen.insert((thread_id.clone(), label.clone())) {
-                let index = positions
-                    .get(&thread_id)
-                    .expect("label query only returns requested threads");
-                rows[*index].label_indicators.push(label);
-            }
+    }
+    for row in &mut rows {
+        row.label_indicators.sort();
+    }
+
+    let mut all_system_labels = Vec::new();
+    for chunk in rows.chunks(BIND_BATCH_SIZE) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let system_placeholders = vec!["?"; SYSTEM_FOLDER_LABEL_IDS.len()].join(",");
+        let sql = format!(
+            "SELECT tl.thread_id,tl.label_id
+             FROM thread_labels tl
+             WHERE tl.account_id=? AND tl.thread_id IN ({placeholders})
+               AND tl.label_id IN ({system_placeholders})"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let parameters = std::iter::once(account_id)
+            .chain(chunk.iter().map(|row| row.thread.id.as_str()))
+            .chain(SYSTEM_FOLDER_LABEL_IDS.iter().copied());
+        all_system_labels.extend(
+            statement
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    for (thread_id, label_id) in all_system_labels {
+        let index = positions
+            .get(&thread_id)
+            .expect("system label query only returns requested threads");
+        rows[*index].system_label_ids.push(label_id);
+    }
+    for row in &mut rows {
+        row.system_label_ids.sort();
+    }
+    Ok(rows)
+}
+
+pub struct SearchRepository;
+
+impl SearchRepository {
+    pub fn search(
+        connection: &Connection,
+        account_id: &str,
+        parsed: &crate::search::query::ParsedQuery,
+        scope: &crate::search::scope::ScopeFilter,
+        cursor: Option<(i64, String)>,
+        limit: i64,
+    ) -> Result<Vec<ThreadListRow>> {
+        let (sql, values) = if parsed.has_text_term {
+            search_text_sql(account_id, parsed, scope, cursor, limit)
+        } else {
+            search_thread_driven_sql(account_id, parsed, scope, cursor, limit)
+        };
+        let mut statement = connection.prepare_cached(&sql)?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                Ok(ThreadListRow {
+                    thread: thread(row)?,
+                    snippet: row.get(12)?,
+                    label_indicators: Vec::new(),
+                    system_label_ids: Vec::new(),
+                })
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        enrich_thread_rows(connection, account_id, rows)
+    }
+
+    pub fn count(
+        connection: &Connection,
+        account_id: &str,
+        parsed: &crate::search::query::ParsedQuery,
+        scope: &crate::search::scope::ScopeFilter,
+    ) -> Result<i64> {
+        let (where_sql, values) = search_predicate_sql(account_id, parsed, scope);
+        let from = if parsed.has_text_term {
+            "message_search JOIN messages m ON m.seq=message_search.rowid"
+        } else {
+            "messages m"
+        };
+        let sql = format!("SELECT COUNT(DISTINCT m.thread_id) FROM {from} WHERE {where_sql}");
+        let mut statement = connection.prepare_cached(&sql)?;
+        statement.query_row(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
+    }
+}
+
+const THREAD_LIST_COLUMNS: &str = "t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
+                    COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'')";
+
+fn search_text_sql(
+    account_id: &str,
+    parsed: &crate::search::query::ParsedQuery,
+    scope: &crate::search::scope::ScopeFilter,
+    cursor: Option<(i64, String)>,
+    limit: i64,
+) -> (String, Vec<Value>) {
+    let (mut where_sql, mut values) = search_predicate_sql(account_id, parsed, scope);
+    if let Some((at, id)) = cursor {
+        where_sql.push_str(" AND (t.latest_at,t.id)<(?,?)");
+        values.push(Value::Integer(at));
+        values.push(Value::Text(id));
+    }
+    values.push(Value::Integer(limit));
+    let sql = format!(
+        "SELECT {THREAD_LIST_COLUMNS}
+             FROM message_search
+             JOIN messages m ON m.seq=message_search.rowid
+             JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id
+             WHERE {where_sql}
+             GROUP BY t.id
+             ORDER BY t.latest_at DESC, t.id DESC
+             LIMIT ?"
+    );
+    (sql, values)
+}
+
+fn search_thread_driven_sql(
+    account_id: &str,
+    parsed: &crate::search::query::ParsedQuery,
+    scope: &crate::search::scope::ScopeFilter,
+    cursor: Option<(i64, String)>,
+    limit: i64,
+) -> (String, Vec<Value>) {
+    let mut values = vec![Value::Text(account_id.to_owned())];
+    let cursor_sql = match cursor {
+        Some((at, id)) => {
+            values.push(Value::Integer(at));
+            values.push(Value::Text(id));
+            " AND (t.latest_at,t.id)<(?,?)"
         }
-        for row in &mut rows {
-            row.label_indicators.sort();
+        None => "",
+    };
+    let (conditions, condition_values) = search_message_conditions(parsed, scope);
+    values.extend(condition_values);
+    values.push(Value::Integer(limit));
+    let sql = format!(
+        "SELECT {THREAD_LIST_COLUMNS}
+             FROM threads t
+             WHERE t.account_id=?{cursor_sql}
+               AND EXISTS(SELECT 1 FROM messages m
+                          WHERE m.account_id=t.account_id AND m.thread_id=t.id{conditions})
+             ORDER BY t.latest_at DESC, t.id DESC
+             LIMIT ?"
+    );
+    (sql, values)
+}
+
+fn search_predicate_sql(
+    account_id: &str,
+    parsed: &crate::search::query::ParsedQuery,
+    scope: &crate::search::scope::ScopeFilter,
+) -> (String, Vec<Value>) {
+    let mut sql = String::new();
+    let mut values: Vec<Value> = Vec::new();
+    if parsed.has_text_term {
+        sql.push_str("message_search MATCH ? AND ");
+        values.push(Value::Text(
+            parsed.match_expression.clone().unwrap_or_default(),
+        ));
+    }
+    sql.push_str("m.account_id=?");
+    values.push(Value::Text(account_id.to_owned()));
+
+    let (conditions, condition_values) = search_message_conditions(parsed, scope);
+    sql.push_str(&conditions);
+    values.extend(condition_values);
+    (sql, values)
+}
+
+fn search_message_conditions(
+    parsed: &crate::search::query::ParsedQuery,
+    scope: &crate::search::scope::ScopeFilter,
+) -> (String, Vec<Value>) {
+    let mut sql = String::new();
+    let mut values: Vec<Value> = Vec::new();
+    if let Some(label) = &scope.required_label {
+        sql.push_str(" AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id=?)");
+        values.push(Value::Text(label.clone()));
+    }
+    if !scope.excluded_labels.is_empty() {
+        let placeholders = vec!["?"; scope.excluded_labels.len()].join(",");
+        sql.push_str(&format!(" AND NOT EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ({placeholders}))"));
+        for label in &scope.excluded_labels {
+            values.push(Value::Text(label.clone()));
         }
-        Ok(rows)
+    }
+    for predicate in &parsed.predicates {
+        let (fragment, predicate_values) = search_predicate_fragment(predicate);
+        sql.push_str(" AND ");
+        sql.push_str(&fragment);
+        values.extend(predicate_values);
+    }
+    (sql, values)
+}
+
+fn search_predicate_fragment(
+    predicate: &crate::search::query::Predicate,
+) -> (String, Vec<Value>) {
+    use crate::search::query::PredicateKind;
+    let (inner, values): (String, Vec<Value>) = match &predicate.kind {
+        PredicateKind::Label(label) => (
+            "EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id=?)".to_owned(),
+            vec![Value::Text(label.clone())],
+        ),
+        PredicateKind::Unread => ("m.is_unread=1".to_owned(), Vec::new()),
+        PredicateKind::Starred => ("m.is_starred=1".to_owned(), Vec::new()),
+        PredicateKind::HasAttachment => ("m.has_attachments=1".to_owned(), Vec::new()),
+        PredicateKind::SentBefore(cutoff) => {
+            ("m.sent_at<?".to_owned(), vec![Value::Integer(*cutoff)])
+        }
+        PredicateKind::SentAfter(cutoff) => {
+            ("m.sent_at>=?".to_owned(), vec![Value::Integer(*cutoff)])
+        }
+        PredicateKind::TextExcludes(expression) => (
+            "NOT EXISTS(SELECT 1 FROM message_search WHERE message_search.rowid=m.seq AND message_search MATCH ?)"
+                .to_owned(),
+            vec![Value::Text(expression.clone())],
+        ),
+    };
+    if predicate.negated {
+        (format!("NOT ({inner})"), values)
+    } else {
+        (inner, values)
     }
 }
 
@@ -1296,30 +1601,6 @@ impl SettingRepository {
             .collect();
         settings
     }
-}
-
-
-const AVATAR_IDENTITY_REBUILD_MARKER: &str = "internal.avatarThreadIdentityRebuildV9";
-
-
-pub(super) fn rebuild_thread_identities_once(connection: &Connection) -> Result<()> {
-    if SettingRepository::get(connection, AVATAR_IDENTITY_REBUILD_MARKER)?.is_some() {
-        return Ok(());
-    }
-    let mut statement = connection.prepare("SELECT DISTINCT account_id FROM threads")?;
-    let account_ids: Vec<String> = statement.query_map([], |row| row.get(0))?.collect::<Result<_>>()?;
-    drop(statement);
-    for account_id in account_ids {
-        let mut statement =
-            connection.prepare("SELECT id FROM threads WHERE account_id=?1")?;
-        let thread_ids: HashSet<String> = statement
-            .query_map([&account_id], |row| row.get(0))?
-            .collect::<Result<_>>()?;
-        drop(statement);
-        ThreadRepository::recompute_many(connection, &account_id, &thread_ids)?;
-    }
-    SettingRepository::set(connection, AVATAR_IDENTITY_REBUILD_MARKER, "true")?;
-    Ok(())
 }
 
 

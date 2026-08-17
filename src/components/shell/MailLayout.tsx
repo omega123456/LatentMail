@@ -10,6 +10,7 @@ import {
   useRecolorLabelMutation,
   useRenameLabelMutation,
   useConversationQuery,
+  useSearchThreadsQuery,
 } from '@/lib/query/hooks';
 import { mapConversation, mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
 import { useLayoutStore } from '@/stores/layout';
@@ -28,6 +29,9 @@ import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/com
 import { useCommands } from '@/lib/keyboard/useCommands';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useComposeStore } from '@/stores/compose';
+import { useSearchStore } from '@/stores/search';
+import { SearchField } from '@/components/search/SearchField';
+import { SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
 
 const navItem =
   'flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-md text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
@@ -68,6 +72,13 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const labelsQuery = useLabelsQuery(activeAccountId);
   const keyboardConversation = useConversationQuery(activeAccountId, activeThreadId);
   const keyboardMultiSelect = useMultiSelectStore(selectIsMultiSelectActive);
+  const searchActive = useSearchStore((state) => state.active);
+  const searchSubmittedQuery = useSearchStore((state) => state.submittedQuery);
+  const searchScope = useSearchStore((state) => state.scope);
+  const searchClear = useSearchStore((state) => state.clear);
+  const searchResults = useSearchThreadsQuery(activeAccountId, searchSubmittedQuery, searchScope);
+  const searchTotal = searchResults.data?.pages.at(-1)?.total ?? 0;
+  const searchFieldRef = useRef<HTMLInputElement>(null);
   const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
   const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
   const createLabelMutation = useCreateLabelMutation(activeAccountId);
@@ -121,19 +132,27 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       event.preventDefault();
       composeTarget('edit-draft');
     },
+    focusSearch: (event) => {
+      event.preventDefault();
+      searchFieldRef.current?.focus();
+    },
   });
   const mailboxName =
     mailboxes.find((mailbox) => mailbox.id === activeMailbox)?.name ??
     labels.find((label) => label.id === activeMailbox)?.name ??
     activeMailbox;
-  const selectMailbox = (id: string) => setActiveMailboxId(id);
+  const selectMailbox = (id: string) => {
+    searchClear();
+    setActiveMailboxId(id);
+  };
   const selectAccount = useCallback(
     (id: string) => {
+      searchClear();
       setActiveAccountId(id);
       setActiveMailboxId('INBOX');
       clearSelection();
     },
-    [setActiveAccountId, setActiveMailboxId, clearSelection],
+    [searchClear, setActiveAccountId, setActiveMailboxId, clearSelection],
   );
   useEffect(() => {
     if (activeAccountId === null && accounts.length > 0) selectAccount(accounts[0].id);
@@ -155,6 +174,8 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       onExpand={() => setSidebarCollapsed(false)}
       onSettings={openSettings}
       onCompose={compose}
+      searchActive={searchActive}
+      searchQuery={searchSubmittedQuery}
     />
   ) : (
     <aside
@@ -175,6 +196,9 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           <Pencil aria-hidden="true" size={20} />
           Compose
         </button>
+        {searchActive && (
+          <SearchResultsRow query={searchSubmittedQuery} total={searchTotal} onClose={searchClear} />
+        )}
         <FolderList
           activeMailboxId={activeMailboxId ?? 'INBOX'}
           mailboxes={mailboxes}
@@ -218,7 +242,9 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     </aside>
   );
   const topBar = (
-    <header className="h-16 shrink-0 border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface" />
+    <header className="flex h-16 shrink-0 items-center border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface">
+      <SearchField ref={searchFieldRef} labels={labelsQuery.data ?? []} />
+    </header>
   );
   const list = (
     <section

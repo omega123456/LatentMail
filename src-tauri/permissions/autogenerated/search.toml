@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-search-threads"
+description = "Enables local keyword search over the account's whole mailbox, scoped by folder membership."
+commands.allow = ["search_threads"]
+
+[[permission]]
+identifier = "allow-parse-search-query"
+description = "Exposes the search operator parser so the advanced search panel can round-trip a query string into structured fields."
+commands.allow = ["parse_search_query"]

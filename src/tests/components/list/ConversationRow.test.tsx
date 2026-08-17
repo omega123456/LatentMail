@@ -1,4 +1,4 @@
-import { act, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ConversationRow } from '@/components/list/ConversationRow';
@@ -25,7 +25,6 @@ describe('ConversationRow', () => {
         conversation={conversation}
         density="comfortable"
         active
-        mailboxId="INBOX"
         onOpen={vi.fn()}
         onStar={vi.fn()}
       />,
@@ -40,7 +39,6 @@ describe('ConversationRow', () => {
         density="comfortable"
         active
         multiSelectActive
-        mailboxId="INBOX"
         onOpen={vi.fn()}
         onStar={vi.fn()}
       />,
@@ -56,7 +54,6 @@ describe('ConversationRow', () => {
         active
         selected
         multiSelectActive
-        mailboxId="INBOX"
         onOpen={vi.fn()}
         onStar={vi.fn()}
       />,
@@ -74,7 +71,6 @@ describe('ConversationRow', () => {
         conversation={conversation}
         density="comfortable"
         active={false}
-        mailboxId="INBOX"
         onOpen={onOpen}
         onStar={vi.fn()}
       />,
@@ -92,7 +88,6 @@ describe('ConversationRow', () => {
         conversation={conversation}
         density="comfortable"
         active={false}
-        mailboxId="INBOX"
         onOpen={onOpen}
         onStar={vi.fn()}
       />,
@@ -110,7 +105,6 @@ describe('ConversationRow', () => {
         conversation={{ ...conversation, unread: true }}
         density="comfortable"
         active={false}
-        mailboxId="INBOX"
         onOpen={vi.fn()}
         onStar={vi.fn()}
         onTriage={onTriage}
@@ -118,18 +112,17 @@ describe('ConversationRow', () => {
     );
     await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
     await user.click(await screen.findByText('Mark read'));
-    expect(onTriage).toHaveBeenCalledWith({ add: [], remove: ['UNREAD'] });
+    expect(onTriage).toHaveBeenCalledWith({ kind: 'label', add: [], remove: ['UNREAD'] });
   });
 
-  it('dispatches reply and forward actions from its context menu', async () => {
+  it('dispatches reply, reply-all, forward and edit-draft actions from its context menu', async () => {
     const user = userEvent.setup();
     const onCompose = vi.fn();
     renderWithQueryClient(
       <ConversationRow
-        conversation={conversation}
+        conversation={{ ...conversation, draft: true }}
         density="comfortable"
         active={false}
-        mailboxId="INBOX"
         onOpen={vi.fn()}
         onStar={vi.fn()}
         onCompose={onCompose}
@@ -139,8 +132,41 @@ describe('ConversationRow', () => {
     await user.click(await screen.findByText('Reply'));
     expect(onCompose).toHaveBeenCalledWith('reply');
     await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.click(await screen.findByText('Reply all'));
+    expect(onCompose).toHaveBeenCalledWith('reply-all');
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
     await user.click(await screen.findByText('Forward'));
     expect(onCompose).toHaveBeenCalledWith('forward');
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.click(await screen.findByText('Edit draft'));
+    expect(onCompose).toHaveBeenCalledWith('edit-draft');
+  });
+
+  it('dispatches move-to, mark-as-spam and delete from its context menu', async () => {
+    const user = userEvent.setup();
+    const onTriage = vi.fn();
+    renderWithQueryClient(
+      <ConversationRow
+        conversation={conversation}
+        density="comfortable"
+        active={false}
+        onOpen={vi.fn()}
+        onStar={vi.fn()}
+        onTriage={onTriage}
+      />,
+    );
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.hover(await screen.findByText('Move to'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Spam/ }));
+    expect(onTriage).toHaveBeenCalledWith({ kind: 'move', destination: 'SPAM' });
+
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.click(await screen.findByText('Mark as spam'));
+    expect(onTriage).toHaveBeenCalledWith({ kind: 'move', destination: 'SPAM' });
+
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByTestId('conversation-row') });
+    await user.click(await screen.findByText('Delete'));
+    expect(onTriage).toHaveBeenCalledWith({ kind: 'delete' });
   });
 
   describe('avatar presence and read-state accessibility', () => {
@@ -150,7 +176,6 @@ describe('ConversationRow', () => {
           conversation={conversation}
           density="comfortable"
           active={false}
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
@@ -166,7 +191,6 @@ describe('ConversationRow', () => {
           conversation={conversation}
           density="spacious"
           active={false}
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
@@ -180,7 +204,6 @@ describe('ConversationRow', () => {
           conversation={{ ...conversation, unread: true }}
           density="compact"
           active={false}
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
@@ -197,7 +220,6 @@ describe('ConversationRow', () => {
           conversation={conversation}
           density="comfortable"
           active={false}
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
@@ -216,7 +238,6 @@ describe('ConversationRow', () => {
           conversation={unreadConversation}
           density="comfortable"
           active={false}
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
@@ -232,7 +253,6 @@ describe('ConversationRow', () => {
           conversation={unreadConversation}
           density="comfortable"
           active
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
@@ -249,13 +269,104 @@ describe('ConversationRow', () => {
           active={false}
           selected
           multiSelectActive
-          mailboxId="INBOX"
           onOpen={vi.fn()}
           onStar={vi.fn()}
         />,
       );
       const notch = screen.getByTestId('conversation-row').querySelector('.bg-primary.ring-2');
       expect(notch).toHaveClass('ring-primary/10');
+    });
+  });
+
+  describe('source-folder badge', () => {
+    const sentFromInbox: Conversation = {
+      ...conversation,
+      systemLabelIds: ['SENT'],
+      labels: ['Receipts'],
+    };
+    const labelEntries = [
+      { id: 'Label_1', name: 'Receipts', color: 'blue' as const, membership: 'checked' as const },
+    ];
+
+    it('is absent in compact density', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={sentFromInbox}
+          density="compact"
+          active={false}
+          allLabels={labelEntries}
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      expect(screen.queryByText('Sent')).not.toBeInTheDocument();
+    });
+
+    it('renders icon-only in comfortable density', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={sentFromInbox}
+          density="comfortable"
+          active={false}
+          allLabels={labelEntries}
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      const badge = screen.getByTitle('Sent');
+      expect(badge.querySelector('span')).toHaveClass('sr-only');
+    });
+
+    it('renders a full text chip in spacious density', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={sentFromInbox}
+          density="spacious"
+          active={false}
+          allLabels={labelEntries}
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      expect(screen.getByText('Sent')).toBeVisible();
+    });
+
+    it('shows no source badge for a thread carrying no system label', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={{ ...conversation, systemLabelIds: [] }}
+          density="spacious"
+          active={false}
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      expect(screen.queryByTitle('Sent')).not.toBeInTheDocument();
+      expect(screen.queryByTitle('Inbox')).not.toBeInTheDocument();
+    });
+
+    it('is never evicted by ROW_BADGE_LIMIT and widens the badge list accessible name', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={{
+            ...conversation,
+            systemLabelIds: ['SENT'],
+            labels: ['Receipts', 'Work', 'Personal'],
+          }}
+          density="spacious"
+          active={false}
+          allLabels={[
+            { id: 'Label_1', name: 'Receipts', color: 'blue', membership: 'checked' },
+            { id: 'Label_2', name: 'Work', color: 'green', membership: 'checked' },
+            { id: 'Label_3', name: 'Personal', color: 'red', membership: 'checked' },
+          ]}
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      const list = screen.getByRole('list', { name: 'Labels and source mailbox' });
+      expect(list).toContainElement(screen.getByText('Sent'));
+      expect(screen.getByText('+1')).toBeInTheDocument();
     });
   });
 });

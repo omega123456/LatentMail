@@ -10,8 +10,9 @@ import type { LabelMenuEntry, LabelMembership } from '@/components/actions/Label
 
 const FALLBACK_SWATCH = LABEL_COLOR_PALETTE[0];
 
-export function mapThreadToRow(thread: MailThread, mailboxId?: string | null): Conversation {
-  const isSent = mailboxId === 'SENT';
+export function mapThreadToRow(thread: MailThread): Conversation {
+  const systemLabelIds = thread.systemLabelIds ?? [];
+  const isSent = systemLabelIds.includes('SENT');
   const identity = isSent ? thread.sentRecipient : thread.sender;
   const label = identity?.display ?? null;
   const address = identity?.address ?? null;
@@ -30,6 +31,7 @@ export function mapThreadToRow(thread: MailThread, mailboxId?: string | null): C
     messageCount: thread.messageCount,
     draft: thread.hasDraft,
     labels: thread.labelIndicators ?? [],
+    systemLabelIds,
   };
 }
 

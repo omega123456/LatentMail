@@ -1,6 +1,6 @@
 import { ActionRibbon, type ActionRibbonProps } from './ActionRibbon';
 
-export type BulkSelectionPanelProps = Omit<ActionRibbonProps, 'currentLabelName'> & {
+export type BulkSelectionPanelProps = ActionRibbonProps & {
   count: number;
 };
 

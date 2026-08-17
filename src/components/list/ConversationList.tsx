@@ -7,6 +7,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { Info } from 'lucide-react';
 import { useMailVirtualizer } from '@/lib/react-virtual';
 import { ErrorState } from '@/components/states/ErrorState';
 import { EmptyState } from '@/components/states/EmptyState';
@@ -17,20 +18,23 @@ import {
   useLabelsQuery,
   useAccountsQuery,
   useConversationQuery,
+  useSearchThreadsQuery,
   useThreadsQuery,
-  useTriageMutation,
+  useThreadTriageIntentMutation,
   useTraversalStatusQuery,
+  type ThreadTriageIntent,
 } from '@/lib/query/hooks';
 import { mapConversation, mapLabelsToUserLabels, mapThreadToRow } from '@/lib/query/mappers';
 import { openEditDraft, openForward, openReply } from '@/lib/compose/entry';
 import { useLayoutStore } from '@/stores/layout';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
+import { useSearchStore } from '@/stores/search';
 import type { Conversation } from '@/lib/types/conversation';
 import { conversationFixtures } from './conversation-fixtures';
 import { ConversationRow } from './ConversationRow';
 
-type ListState = 'ready' | 'loading' | 'empty' | 'syncing' | 'error';
+type ListState = 'ready' | 'loading' | 'empty' | 'syncing' | 'error' | 'searchEmpty';
 const emptyCopy: Record<string, string> = {
   INBOX: 'Your Inbox is clear.',
   STARRED: 'No starred conversations.',
@@ -42,6 +46,14 @@ const fixtureState = (): ListState =>
     ? (new URLSearchParams(window.location.search).get('listState') as ListState) || 'ready'
     : 'ready';
 
+function intersectSystemLabelIds(conversations: Conversation[]): string[] {
+  if (conversations.length === 0) return [];
+  const [first, ...rest] = conversations;
+  return (first.systemLabelIds ?? []).filter((id) =>
+    rest.every((conversation) => (conversation.systemLabelIds ?? []).includes(id)),
+  );
+}
+
 export function ConversationList({
   threads = conversationFixtures,
   pages,
@@ -50,11 +62,12 @@ export function ConversationList({
   onLoadMore,
   errorMessage,
   allLabels = [],
-  currentLabelName,
   onTriage,
   syncProgress,
   onCompose,
   composeTargetThreadId,
+  searchQueryText,
+  searchIncomplete = false,
 }: {
   threads?: Conversation[];
   pages?: Conversation[][];
@@ -63,11 +76,12 @@ export function ConversationList({
   errorMessage?: string;
   onLoadMore?: () => void;
   allLabels?: LabelMenuEntry[];
-  currentLabelName?: string;
-  onTriage?: (threadIds: string[], change: { add: string[]; remove: string[] }) => void;
+  onTriage?: (threadIds: string[], intent: ThreadTriageIntent) => void;
   syncProgress?: { persistedCount: number; discoveredCount: number };
   onCompose?: (threadId: string, action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => void;
   composeTargetThreadId?: string | null;
+  searchQueryText?: string;
+  searchIncomplete?: boolean;
 }) {
   'use no memo';
   const parentRef = useRef<HTMLDivElement>(null);
@@ -75,6 +89,7 @@ export function ConversationList({
   const previousHeight = useRef(0);
   const density = useLayoutStore((value) => value.density);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
+  const searchActive = useSearchStore((value) => value.active);
   const cursor = useSelectionStore((value) => value.keyboardCursor);
   const setCursor = useSelectionStore((value) => value.setKeyboardCursor);
   const setThread = useSelectionStore((value) => value.setActiveThreadId);
@@ -124,11 +139,15 @@ export function ConversationList({
       if (!row) return;
       setCursor(index);
       setThread(row.id);
-      if (row.unread) onTriage?.([row.id], { add: [], remove: ['UNREAD'] });
+      if (row.unread) onTriage?.([row.id], { kind: 'label', add: [], remove: ['UNREAD'] });
     },
     [onTriage, rows, setCursor, setThread],
   );
   const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
+  const selectionSystemLabelIds = useMemo(
+    () => intersectSystemLabelIds(rows.filter((row) => selectedIds.has(row.id))),
+    [rows, selectedIds],
+  );
   useCommands({
     moveCursorDown: (event) => {
       event.preventDefault();
@@ -165,7 +184,11 @@ export function ConversationList({
           : ([rows[cursor]?.id].filter(Boolean) as string[]);
       if (!ids.length) return;
       const starred = rows.some((row) => ids.includes(row.id) && row.starred);
-      onTriage?.(ids, { add: starred ? [] : ['STARRED'], remove: starred ? ['STARRED'] : [] });
+      onTriage?.(ids, {
+        kind: 'label',
+        add: starred ? [] : ['STARRED'],
+        remove: starred ? ['STARRED'] : [],
+      });
     },
     markRead: () =>
       onTriage?.(
@@ -174,7 +197,7 @@ export function ConversationList({
           : cursor === null
             ? []
             : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { add: [], remove: ['UNREAD'] },
+        { kind: 'label', add: [], remove: ['UNREAD'] },
       ),
     markUnread: () =>
       onTriage?.(
@@ -183,7 +206,7 @@ export function ConversationList({
           : cursor === null
             ? []
             : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { add: ['UNREAD'], remove: [] },
+        { kind: 'label', add: ['UNREAD'], remove: [] },
       ),
     markSpam: () =>
       onTriage?.(
@@ -192,7 +215,7 @@ export function ConversationList({
           : cursor === null
             ? []
             : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { add: ['SPAM'], remove: [] },
+        { kind: 'move', destination: 'SPAM' },
       ),
     markNotSpam: () =>
       onTriage?.(
@@ -201,7 +224,7 @@ export function ConversationList({
           : cursor === null
             ? []
             : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { add: [], remove: ['SPAM'] },
+        { kind: 'move', destination: 'INBOX' },
       ),
     deleteConversation: () =>
       onTriage?.(
@@ -210,7 +233,7 @@ export function ConversationList({
           : cursor === null
             ? []
             : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { add: ['TRASH'], remove: [] },
+        { kind: 'delete' },
       ),
   });
   useEffect(() => {
@@ -235,10 +258,27 @@ export function ConversationList({
     },
     [cursor, multiSelectActive, rows, rowIds, selectRange, toggleSelected, open],
   );
+  const incompleteStrip = searchActive && searchIncomplete && (
+    <div
+      role="status"
+      data-testid="search-incomplete-notice"
+      className="mb-1 flex items-center gap-2 rounded bg-badge-draft px-3 py-2 text-label-sm text-badge-on-draft dark:bg-dark-badge-draft dark:text-dark-badge-on-draft"
+    >
+      <Info aria-hidden="true" size={14} />
+      Results may be incomplete — mail is still syncing.
+    </div>
+  );
   const content = (() => {
     if (state === 'loading') return <LoadingState>Loading conversations…</LoadingState>;
     if (state === 'empty')
       return <EmptyState>{emptyCopy[mailboxId] ?? 'No conversations in this mailbox.'}</EmptyState>;
+    if (state === 'searchEmpty')
+      return (
+        <>
+          {incompleteStrip}
+          <EmptyState variant="search" query={searchQueryText ?? ''} />
+        </>
+      );
     if (state === 'syncing')
       return (
         <EmptyState
@@ -268,6 +308,7 @@ export function ConversationList({
       : rows.map((_, index) => ({ key: index, index, start: index * rowHeight }));
     return (
       <>
+        {incompleteStrip}
         <div style={{ height: `${virtualizer.getTotalSize()}px` }} className="relative">
           {visible.map((item) => (
             <div
@@ -283,10 +324,9 @@ export function ConversationList({
                 active={cursor === item.index}
                 selected={selectedIds.has(rows[item.index].id)}
                 multiSelectActive={multiSelectActive}
-                mailboxId={mailboxId}
                 allLabels={allLabels}
-                currentLabelName={currentLabelName}
                 selectionCount={selectedIds.size}
+                selectionSystemLabelIds={selectionSystemLabelIds}
                 onOpen={(event) => handleRowClick(event, item.index)}
                 onStar={() => {
                   const row = rows[item.index];
@@ -296,16 +336,17 @@ export function ConversationList({
                     (candidate) => ids.includes(candidate.id) && candidate.starred,
                   );
                   onTriage?.(ids, {
+                    kind: 'label',
                     add: starred ? [] : ['STARRED'],
                     remove: starred ? ['STARRED'] : [],
                   });
                 }}
-                onTriage={(change) => {
+                onTriage={(intent) => {
                   const ids =
                     selectedIds.has(rows[item.index].id) && multiSelectActive
                       ? [...selectedIds]
                       : [rows[item.index].id];
-                  onTriage?.(ids, change);
+                  onTriage?.(ids, intent);
                 }}
                 onCompose={
                   !multiSelectActive && rows[item.index].id === composeTargetThreadId
@@ -353,9 +394,14 @@ export function ConversationListContainer() {
   const accountId = useSelectionStore((value) => value.activeAccountId);
   const activeThreadId = useSelectionStore((value) => value.activeThreadId);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
+  const searchActive = useSearchStore((value) => value.active);
+  const searchQuery = useSearchStore((value) => value.submittedQuery);
+  const searchScope = useSearchStore((value) => value.scope);
   const query = useThreadsQuery(accountId, mailboxId);
+  const searchResultsQuery = useSearchThreadsQuery(accountId, searchQuery, searchScope);
+  const activeQuery = searchActive ? searchResultsQuery : query;
   const traversal = useTraversalStatusQuery(accountId);
-  const triage = useTriageMutation(accountId);
+  const triage = useThreadTriageIntentMutation(accountId);
   const labelsQuery = useLabelsQuery(accountId);
   const accountsQuery = useAccountsQuery();
   const activeConversation = useConversationQuery(accountId, activeThreadId);
@@ -368,42 +414,43 @@ export function ConversationListContainer() {
       })),
     [labelsQuery.data],
   );
-  const currentLabelName = labelsQuery.data?.find(
-    (label) => label.id === mailboxId && label.kind === 'user',
-  )?.name;
   const rows = useMemo(
     () =>
-      (query.data?.pages ?? []).flatMap((page) =>
-        page.items.map((thread) => mapThreadToRow(thread, mailboxId)),
-      ),
-    [query.data, mailboxId],
+      (activeQuery.data?.pages ?? []).flatMap((page) => page.items.map((thread) => mapThreadToRow(thread))),
+    [activeQuery.data],
   );
+  const backfillIncomplete =
+    traversal.data?.state === 'backfilling' || traversal.data?.state === 'reconciling';
   const forcedState = fixtureState();
   const state: ListState =
     forcedState !== 'ready'
       ? forcedState
-      : query.isError
+      : activeQuery.isError
         ? 'error'
-        : query.isPending
+        : activeQuery.isPending
           ? 'loading'
           : rows.length === 0
-            ? traversal.data?.state === 'backfilling' || traversal.data?.state === 'reconciling'
-              ? 'syncing'
-              : 'empty'
+            ? searchActive
+              ? 'searchEmpty'
+              : backfillIncomplete
+                ? 'syncing'
+                : 'empty'
             : 'ready';
   return (
     <ConversationList
       threads={rows}
       state={state}
-      errorMessage={query.error ? query.error.message : undefined}
-      onRetry={() => void query.refetch()}
+      searchQueryText={searchActive ? searchQuery : undefined}
+      searchIncomplete={backfillIncomplete}
+      errorMessage={activeQuery.error ? activeQuery.error.message : undefined}
+      onRetry={() => void activeQuery.refetch()}
       onLoadMore={() => {
-        if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage();
+        if (activeQuery.hasNextPage && !activeQuery.isFetchingNextPage)
+          void activeQuery.fetchNextPage();
       }}
       allLabels={allLabels}
-      currentLabelName={currentLabelName}
-      onTriage={(threadIds, change) => {
-        triage.mutate({ threadIds, ...change });
+      onTriage={(threadIds, intent) => {
+        triage.mutate(threadIds, intent);
       }}
       onCompose={(targetThreadId, action) => {
         if (!accountId || targetThreadId !== activeThreadId || !activeConversation.data) return;

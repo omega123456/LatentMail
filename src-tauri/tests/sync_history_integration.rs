@@ -4,7 +4,7 @@ use std::time::Duration;
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
-    Storage, ThreadRepository,
+    Operation, OperationRepository, Storage, ThreadRepository,
 };
 use latentmail_lib::sync::{EventSink, SyncEngine, SyncScheduler, WorkRegistry};
 use tauri::Manager;
@@ -688,4 +688,111 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[tokio::test]
+async fn startup_recovery_marks_an_interrupted_send_uncertain_and_requeues_an_interrupted_draft() {
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    std::env::set_var("APPDATA", home.path());
+    std::env::set_var("XDG_DATA_HOME", home.path());
+
+    let application = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
+        .visible(false)
+        .build()
+        .unwrap();
+    let handle = application.handle();
+
+    latentmail_lib::settings::initialize(handle).unwrap();
+    latentmail_lib::auth::initialize(handle).unwrap();
+
+    let directory = application.path().app_data_dir().unwrap();
+    let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let connection = seed_storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    OperationRepository::upsert(
+        &connection,
+        &Operation {
+            id: "op-send-interrupted".into(),
+            account_id: "account".into(),
+            lane: "interactive".into(),
+            kind: "send".into(),
+            entity_key: "send:session".into(),
+            payload: "{}".into(),
+            status: "active".into(),
+            attempts: 0,
+            next_attempt_at: None,
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    OperationRepository::upsert(
+        &connection,
+        &Operation {
+            id: "op-draft-interrupted".into(),
+            account_id: "account".into(),
+            lane: "interactive".into(),
+            kind: "draft".into(),
+            entity_key: "draft:session".into(),
+            payload: "{}".into(),
+            status: "active".into(),
+            attempts: 0,
+            next_attempt_at: None,
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    drop(connection);
+    drop(seed_storage);
+
+    latentmail_lib::sync::initialize(handle).unwrap();
+
+    let poll_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let send_status = {
+            let connection = poll_storage.connection().unwrap();
+            OperationRepository::get(&connection, "op-send-interrupted")
+                .unwrap()
+                .unwrap()
+                .status
+        };
+        if send_status == "failed" {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "startup recovery never marked the interrupted send uncertain"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let connection = poll_storage.connection().unwrap();
+    let send_op = OperationRepository::get(&connection, "op-send-interrupted")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        send_op.error.as_deref(),
+        Some("May have been sent; retry manually")
+    );
 }

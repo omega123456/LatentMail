@@ -275,6 +275,44 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
         )
         .is_err());
     }
+
+    for (command, body) in [
+        (
+            "delete_threads",
+            serde_json::json!({ "accountId": "account", "threadIds": ["thread"] }),
+        ),
+        (
+            "move_threads",
+            serde_json::json!({ "accountId": "account", "threadIds": ["thread"], "destination": "SPAM" }),
+        ),
+        (
+            "delete_messages",
+            serde_json::json!({ "accountId": "account", "messageIds": ["message"] }),
+        ),
+        (
+            "move_messages",
+            serde_json::json!({ "accountId": "account", "messageIds": ["message"], "destination": "SPAM" }),
+        ),
+    ] {
+        assert!(
+            invoke(&webview, command, body).is_err(),
+            "{command} must surface storage failure"
+        );
+    }
+
+    for (command, body) in [
+        (
+            "move_threads",
+            serde_json::json!({ "accountId": "account", "threadIds": ["thread"], "destination": "DRAFT" }),
+        ),
+        (
+            "move_messages",
+            serde_json::json!({ "accountId": "account", "messageIds": ["message"], "destination": "DRAFT" }),
+        ),
+    ] {
+        let error = invoke(&webview, command, body).unwrap_err();
+        assert!(error.to_string().contains("not a valid move destination"));
+    }
 }
 
 
@@ -373,6 +411,52 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
         .unwrap();
+    ThreadRepository::upsert(
+        &connection,
+        &Thread {
+            account_id: account_id.clone(),
+            id: "thread-2".into(),
+            subject: "Subject".into(),
+            participants: "Alice <a@example.com>".into(),
+            latest_at: 2,
+            message_count: 1,
+            is_unread: false,
+            is_starred: false,
+            has_attachments: false,
+            has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "Alice".into(),
+                address: Some("a@example.com".into()),
+            },
+            recipient_identity: None,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: account_id.clone(),
+            id: "message-2".into(),
+            thread_id: "thread-2".into(),
+            rfc_message_id: None,
+            sender: "alice@example.com".into(),
+            recipients: "me@example.com".into(),
+            subject: "Subject".into(),
+            sent_at: 2,
+            snippet: "hi".into(),
+            html_body: None,
+            plain_body: Some("hi".into()),
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(&connection, &account_id, "message-2", "INBOX", true)
+        .unwrap();
     drop(connection);
 
     Mock::given(method("GET"))
@@ -445,6 +529,124 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     assert_eq!(status["state"], "notStarted");
 
+    let search_results = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({ "accountId": account_id, "query": "hi" }),
+    )
+    .unwrap();
+    assert_eq!(search_results["items"][0]["id"], "thread-2");
+    assert_eq!(search_results["items"][1]["id"], "thread-1");
+    assert_eq!(search_results["total"], 2);
+    assert!(search_results["nextCursor"].is_null());
+
+    let first_page = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({ "accountId": account_id, "query": "hi", "limit": 1 }),
+    )
+    .unwrap();
+    assert_eq!(first_page["items"][0]["id"], "thread-2");
+    assert_eq!(first_page["total"], 2);
+    let cursor = first_page["nextCursor"].clone();
+    assert!(!cursor.is_null());
+
+    let second_page = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({ "accountId": account_id, "query": "hi", "limit": 1, "cursor": cursor }),
+    )
+    .unwrap();
+    assert_eq!(second_page["items"][0]["id"], "thread-1");
+    assert!(second_page["nextCursor"].is_null());
+
+    let scoped_search = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({
+            "accountId": account_id,
+            "query": "hi",
+            "scope": { "kind": "all" }
+        }),
+    )
+    .unwrap();
+    assert_eq!(scoped_search["total"], 2);
+
+    let blank_search = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({ "accountId": account_id, "query": "   " }),
+    )
+    .unwrap();
+    assert_eq!(blank_search["items"].as_array().unwrap().len(), 0);
+    assert_eq!(blank_search["total"], 0);
+
+    let empty_search = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({ "accountId": account_id, "query": "nonexistentterm" }),
+    )
+    .unwrap();
+    assert_eq!(empty_search["items"].as_array().unwrap().len(), 0);
+    assert_eq!(empty_search["total"], 0);
+
+    let parsed = invoke(
+        &webview,
+        "parse_search_query",
+        serde_json::json!({ "query": "from:alice is:unread" }),
+    )
+    .unwrap();
+    assert_eq!(parsed["from"], "alice");
+    assert_eq!(parsed["hasTextTerm"], true);
+
+    let fully_parsed = invoke(
+        &webview,
+        "parse_search_query",
+        serde_json::json!({
+            "query": "to:alice subject:invoice label:INBOX is:starred has:attachment after:2020-01-01 before:2026-01-01 bareword"
+        }),
+    )
+    .unwrap();
+    assert_eq!(fully_parsed["to"], "alice");
+    assert_eq!(fully_parsed["subject"], "invoice");
+    assert!(fully_parsed["includes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|term| term == "bareword"));
+    let predicate_kinds: Vec<String> = fully_parsed["predicates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|predicate| predicate["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(predicate_kinds.contains(&"label".to_owned()));
+    assert!(predicate_kinds.contains(&"starred".to_owned()));
+    assert!(predicate_kinds.contains(&"hasAttachment".to_owned()));
+    assert!(predicate_kinds.contains(&"sentAfter".to_owned()));
+    assert!(predicate_kinds.contains(&"sentBefore".to_owned()));
+
+    let lone_negation_parsed = invoke(
+        &webview,
+        "parse_search_query",
+        serde_json::json!({ "query": "is:starred has:attachment -promo" }),
+    )
+    .unwrap();
+    let lone_negation_kinds: Vec<String> = lone_negation_parsed["predicates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|predicate| predicate["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(lone_negation_kinds.contains(&"textExcludes".to_owned()));
+
+    assert!(invoke(
+        &webview,
+        "parse_search_query",
+        serde_json::json!({ "query": "a".repeat(2049) })
+    )
+    .is_err());
+
 
     let created = invoke(
         &webview,
@@ -500,6 +702,50 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     assert_eq!(results[0]["threadId"], "thread-1");
     assert_eq!(results[0]["outcome"], "applied");
+
+    let moved = invoke(
+        &webview,
+        "move_threads",
+        serde_json::json!({
+            "accountId": account_id,
+            "threadIds": ["thread-1"],
+            "destination": "SPAM"
+        }),
+    )
+    .unwrap();
+    assert_eq!(moved[0]["threadId"], "thread-1");
+
+    let deleted = invoke(
+        &webview,
+        "delete_threads",
+        serde_json::json!({
+            "accountId": account_id,
+            "threadIds": ["thread-1"]
+        }),
+    )
+    .unwrap();
+    assert_eq!(deleted[0]["threadId"], "thread-1");
+
+    assert!(invoke(
+        &webview,
+        "move_messages",
+        serde_json::json!({
+            "accountId": account_id,
+            "messageIds": ["message-1"],
+            "destination": "INBOX"
+        })
+    )
+    .is_ok());
+
+    assert!(invoke(
+        &webview,
+        "delete_messages",
+        serde_json::json!({
+            "accountId": account_id,
+            "messageIds": ["message-1"]
+        })
+    )
+    .is_ok());
 
 
     assert!(invoke(

@@ -21,7 +21,7 @@ describe('MessageActionRibbon', () => {
   it('is present without any hover interaction and is reachable by keyboard', () => {
     render(
       <MessageActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[]}
@@ -41,7 +41,7 @@ describe('MessageActionRibbon', () => {
     const handlers = baseHandlers();
     render(
       <MessageActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[]}
@@ -59,7 +59,7 @@ describe('MessageActionRibbon', () => {
     const handlers = baseHandlers();
     render(
       <MessageActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[{ id: 'Label_1', name: 'Clients', color: 'blue', membership: 'unchecked' }]}
@@ -77,7 +77,7 @@ describe('MessageActionRibbon', () => {
     const handlers = baseHandlers();
     render(
       <MessageActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[]}
@@ -94,7 +94,7 @@ describe('MessageActionRibbon', () => {
     const handlers = baseHandlers();
     render(
       <MessageActionRibbon
-        mailboxId="INBOX"
+        systemLabelIds={[]}
         unread={false}
         starred={false}
         labels={[]}
@@ -109,7 +109,7 @@ describe('MessageActionRibbon', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <MessageActionRibbon mailboxId="INBOX" unread starred={false} labels={[]} {...handlers} />,
+      <MessageActionRibbon systemLabelIds={[]} unread starred={false} labels={[]} {...handlers} />,
     );
     await user.click(screen.getByRole('button', { name: 'Mark read' }));
     expect(handlers.onToggleRead).toHaveBeenCalledOnce();
@@ -118,7 +118,7 @@ describe('MessageActionRibbon', () => {
   it('hides every label-mutating action in Drafts', () => {
     render(
       <MessageActionRibbon
-        mailboxId="DRAFT"
+        systemLabelIds={['DRAFT']}
         unread={false}
         starred={false}
         labels={[]}
@@ -128,5 +128,20 @@ describe('MessageActionRibbon', () => {
     expect(screen.queryByRole('button', { name: 'Star' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Labels' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+  });
+
+  it('hides star and delete for a message carrying TRASH, based on its own label membership', () => {
+    render(
+      <MessageActionRibbon
+        systemLabelIds={['TRASH']}
+        unread={false}
+        starred={false}
+        labels={[]}
+        {...baseHandlers()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Star' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move to' })).toBeInTheDocument();
   });
 });

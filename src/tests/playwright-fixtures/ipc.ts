@@ -76,6 +76,10 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   mark_thread_unread: undefined,
   mutate_threads: playwrightMutationResults,
   mutate_messages: undefined,
+  delete_threads: playwrightMutationResults,
+  move_threads: playwrightMutationResults,
+  delete_messages: undefined,
+  move_messages: undefined,
   delete_draft: undefined,
   create_label: playwrightCreatedLabel,
   rename_label: playwrightCreatedLabel,
@@ -84,6 +88,16 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   read_traversal_status: playwrightTraversalStatus,
   read_sender_avatar: 'avatar-cache/senders/example-com.png',
   read_account_avatar: 'avatar-cache/accounts/account-1.png',
+  search_threads: { items: [], nextCursor: null, total: 0 },
+  parse_search_query: {
+    hasTextTerm: false,
+    from: null,
+    to: null,
+    subject: null,
+    includes: [],
+    excludes: [],
+    predicates: [],
+  },
 };
 
 export { playwrightSidebarAccounts };
