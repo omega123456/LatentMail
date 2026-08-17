@@ -112,7 +112,12 @@ export function serializeFields(fields: PanelFields): string {
 
 const inputClass =
   'select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface';
+const selectClass = `${inputClass} appearance-none pr-8`;
 const labelClass = 'text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant';
+const selectWrapperClass = 'relative flex flex-col gap-1';
+const selectLabelClass = 'flex flex-col gap-1';
+const selectChevronClass =
+  'pointer-events-none absolute bottom-1.5 right-2 text-on-surface-variant dark:text-dark-on-surface-variant';
 
 export function AdvancedSearchPanel({
   initialQuery,
@@ -216,23 +221,28 @@ export function AdvancedSearchPanel({
           />
         </label>
         <div className="flex gap-2">
-          <label htmlFor="search-panel-duration" className="flex flex-1 flex-col gap-1">
-            <span className={labelClass}>Date within</span>
-            <select
-              id="search-panel-duration"
-              value={fields.durationValue}
-              onChange={(event) =>
-                setFields((current) => ({ ...current, durationValue: event.target.value }))
-              }
-              className={inputClass}
-            >
-              {DURATION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className={`flex-1 ${selectWrapperClass}`}>
+            <label htmlFor="search-panel-duration" className={selectLabelClass}>
+              <span className={labelClass}>Date within</span>
+              <select
+                id="search-panel-duration"
+                value={fields.durationValue}
+                onChange={(event) =>
+                  setFields((current) => ({ ...current, durationValue: event.target.value }))
+                }
+                className={selectClass}
+              >
+                {DURATION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span aria-hidden="true" className={selectChevronClass}>
+              ▾
+            </span>
+          </div>
           <label htmlFor="search-panel-date" className="flex flex-1 flex-col gap-1">
             <span className={labelClass}>Date</span>
             <input
@@ -246,27 +256,32 @@ export function AdvancedSearchPanel({
             />
           </label>
         </div>
-        <label htmlFor="search-panel-scope" className="flex flex-col gap-1">
-          <span className={labelClass}>Search in</span>
-          <select
-            id="search-panel-scope"
-            value={scopeValue}
-            onChange={(event) => onScopeChange(JSON.parse(event.target.value) as SearchScope)}
-            className={inputClass}
-          >
-            <option value={JSON.stringify({ kind: 'default' })}>All mail</option>
-            <option value={JSON.stringify({ kind: 'label', labelId: 'INBOX' })}>Inbox</option>
-            <option value={JSON.stringify({ kind: 'label', labelId: 'SENT' })}>Sent</option>
-            {userLabels.map((label) => (
-              <option key={label.id} value={JSON.stringify({ kind: 'label', labelId: label.id })}>
-                {label.name}
+        <div className={selectWrapperClass}>
+          <label htmlFor="search-panel-scope" className={selectLabelClass}>
+            <span className={labelClass}>Search in</span>
+            <select
+              id="search-panel-scope"
+              value={scopeValue}
+              onChange={(event) => onScopeChange(JSON.parse(event.target.value) as SearchScope)}
+              className={selectClass}
+            >
+              <option value={JSON.stringify({ kind: 'default' })}>All mail</option>
+              <option value={JSON.stringify({ kind: 'label', labelId: 'INBOX' })}>Inbox</option>
+              <option value={JSON.stringify({ kind: 'label', labelId: 'SENT' })}>Sent</option>
+              {userLabels.map((label) => (
+                <option key={label.id} value={JSON.stringify({ kind: 'label', labelId: label.id })}>
+                  {label.name}
+                </option>
+              ))}
+              <option value={JSON.stringify({ kind: 'all' })}>
+                All mail including Trash and Spam
               </option>
-            ))}
-            <option value={JSON.stringify({ kind: 'all' })}>
-              All mail including Trash and Spam
-            </option>
-          </select>
-        </label>
+            </select>
+          </label>
+          <span aria-hidden="true" className={selectChevronClass}>
+            ▾
+          </span>
+        </div>
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">
             <input
