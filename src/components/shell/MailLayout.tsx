@@ -19,7 +19,8 @@ import { AccountSwitcher } from '@/components/sidebar/AccountSwitcher';
 import { CollapsedRail } from '@/components/sidebar/CollapsedRail';
 import { FolderList } from '@/components/sidebar/FolderList';
 import { LabelList } from '@/components/sidebar/LabelList';
-import { Mail, PanelLeftClose, Pencil, Settings } from 'lucide-react';
+import { PanelLeftClose, Pencil, Settings } from 'lucide-react';
+import brandMark from '@/assets/brand-mark.png';
 import { ResizeHandle } from './ResizeHandle';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
 import { StatusBar } from '@/components/statusbar/StatusBar';
@@ -160,9 +161,9 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       data-testid="sidebar-slot"
       className="flex min-h-0 min-w-0 flex-col border-r border-outline-variant bg-background p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-background"
     >
-      <div className="mb-8 flex items-center gap-3 px-2 text-primary dark:text-dark-primary">
-        <Mail aria-hidden="true" size={30} />
-        <span className="text-headline-md">LatentMail</span>
+      <div className="mb-8 flex items-center gap-stack-gap-sm px-2 text-on-surface dark:text-dark-on-surface">
+        <img src={brandMark} alt="" aria-hidden="true" className="h-5 w-auto" />
+        <span className="text-headline-sm">LatentMail</span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
         <button
