@@ -143,7 +143,7 @@ export function ConversationRow({
             </span>
             <time
               title={exactTime(conversation.date)}
-              className={`shrink-0 text-label-sm ${conversation.unread || showActive ? 'text-primary dark:text-dark-primary' : 'text-secondary dark:text-dark-secondary'}`}
+              className={`relative z-10 shrink-0 text-label-sm ${conversation.unread || showActive ? 'text-primary dark:text-dark-primary' : 'text-secondary dark:text-dark-secondary'}`}
             >
               {relativeTime(conversation.date)}
             </time>

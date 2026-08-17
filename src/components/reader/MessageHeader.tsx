@@ -1,4 +1,4 @@
-import { formatDistanceToNowStrict, format, formatISO } from 'date-fns';
+import { format, formatISO } from 'date-fns';
 import { Avatar } from '@/components/shared/Avatar';
 import { Badge } from '@/components/shared/Badge';
 import type { MessageBadge } from '@/lib/labels/badges';
@@ -22,7 +22,7 @@ export function MessageHeader({
   badges?: MessageBadge[];
   onComposeTo?: (participant: Participant) => void;
 }) {
-  const timestamp = formatDistanceToNowStrict(sentAt, { addSuffix: true });
+  const timestamp = format(sentAt, 'PPpp');
   const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
   const { data: avatarSrc } = useSenderAvatarQuery(
     showSenderAvatars ? domainFor(sender.address) : null,
@@ -63,7 +63,6 @@ export function MessageHeader({
         </div>
       </div>
       <time
-        title={format(sentAt, 'PPpp')}
         className="shrink-0 text-body-sm text-secondary dark:text-dark-secondary"
         dateTime={formatISO(sentAt)}
       >
