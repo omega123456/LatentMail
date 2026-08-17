@@ -133,14 +133,10 @@ export function ConversationRow({
             notchRingClassName={notchRingClassName}
           />
         )}
-        <button
-          aria-label={`Open ${conversation.subject}`}
-          onClick={onOpen}
-          className={`flex min-w-0 flex-1 cursor-pointer flex-col gap-1 text-left after:absolute after:inset-0 focus-visible:outline-2 focus-visible:outline-primary ${compact ? 'pl-4' : ''}`}
-        >
-          <span className="flex w-full min-w-0 items-baseline justify-between">
+        <div className={`flex min-w-0 flex-1 flex-col gap-1 ${compact ? 'pl-4' : ''}`}>
+          <span className="flex w-full min-w-0 items-baseline justify-between gap-2">
             <span
-              className={`truncate pr-2 text-label-md ${conversation.unread ? 'font-bold text-on-surface dark:text-dark-on-surface' : 'font-normal text-secondary dark:text-dark-secondary'}`}
+              className={`truncate text-label-md ${conversation.unread ? 'font-bold text-on-surface dark:text-dark-on-surface' : 'font-normal text-secondary dark:text-dark-secondary'}`}
             >
               {conversation.sender}
               {compact && ` — ${conversation.subject}`}
@@ -153,15 +149,38 @@ export function ConversationRow({
             </time>
           </span>
           {!compact && (
-            <span className="w-full min-w-0 pr-1">
-              <span
-                className={`mb-0.5 block truncate text-row ${conversation.unread ? 'font-semibold text-on-surface dark:text-dark-on-surface' : 'font-normal text-secondary dark:text-dark-secondary'}`}
-              >
-                {conversation.subject}
-                {conversation.messageCount && conversation.messageCount > 1
-                  ? ` (${conversation.messageCount})`
-                  : ''}
-                {conversation.draft ? ' · Draft' : ''}
+            <>
+              <span className="flex w-full min-w-0 items-center gap-2">
+                <span
+                  className={`min-w-0 flex-1 truncate text-row ${conversation.unread ? 'font-semibold text-on-surface dark:text-dark-on-surface' : 'font-normal text-secondary dark:text-dark-secondary'}`}
+                >
+                  {conversation.subject}
+                  {conversation.messageCount && conversation.messageCount > 1
+                    ? ` (${conversation.messageCount})`
+                    : ''}
+                  {conversation.draft ? ' · Draft' : ''}
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
+                  {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
+                  {(rowBadges.length > 0 || source) && (
+                    <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
+                      {source && (
+                        <Badge key={`source-${source.id}`} badge={source} iconOnly={!spacious} />
+                      )}
+                      {rowBadges.slice(0, ROW_BADGE_LIMIT).map((badge) => (
+                        <Badge key={badge.id} badge={badge} iconOnly={!spacious} />
+                      ))}
+                      {rowBadges.length > ROW_BADGE_LIMIT && (
+                        <li
+                          title={`${rowBadges.length - ROW_BADGE_LIMIT} more labels`}
+                          className="shrink-0 rounded-sm bg-surface-container px-1.5 py-0.5 text-label-sm font-normal text-secondary dark:bg-dark-surface-container dark:text-dark-secondary"
+                        >
+                          +{rowBadges.length - ROW_BADGE_LIMIT}
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                </span>
               </span>
               {spacious && (
                 <span
@@ -170,30 +189,14 @@ export function ConversationRow({
                   {conversation.snippet}
                 </span>
               )}
-            </span>
+            </>
           )}
-        </button>
-        {!compact && (
-          <div className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
-            {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
-            {(rowBadges.length > 0 || source) && (
-              <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
-                {source && <Badge key={`source-${source.id}`} badge={source} iconOnly={!spacious} />}
-                {rowBadges.slice(0, ROW_BADGE_LIMIT).map((badge) => (
-                  <Badge key={badge.id} badge={badge} iconOnly={!spacious} />
-                ))}
-                {rowBadges.length > ROW_BADGE_LIMIT && (
-                  <li
-                    title={`${rowBadges.length - ROW_BADGE_LIMIT} more labels`}
-                    className="shrink-0 rounded-sm bg-surface-container px-1.5 py-0.5 text-label-sm font-normal text-secondary dark:bg-dark-surface-container dark:text-dark-secondary"
-                  >
-                    +{rowBadges.length - ROW_BADGE_LIMIT}
-                  </li>
-                )}
-              </ul>
-            )}
-          </div>
-        )}
+        </div>
+        <button
+          aria-label={`Open ${conversation.subject}`}
+          onClick={onOpen}
+          className="absolute inset-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-primary"
+        />
         {!isTrash && (
           <button
             aria-label={
