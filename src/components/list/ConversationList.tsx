@@ -143,6 +143,7 @@ export function ConversationList({
     },
     [onTriage, rows, setCursor, setThread],
   );
+  const currentFolderId = searchActive ? undefined : mailboxId;
   const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
   const selectionSystemLabelIds = useMemo(
     () => intersectSystemLabelIds(rows.filter((row) => selectedIds.has(row.id))),
@@ -327,6 +328,7 @@ export function ConversationList({
                 allLabels={allLabels}
                 selectionCount={selectedIds.size}
                 selectionSystemLabelIds={selectionSystemLabelIds}
+                currentFolderId={currentFolderId}
                 onOpen={(event) => handleRowClick(event, item.index)}
                 onStar={() => {
                   const row = rows[item.index];

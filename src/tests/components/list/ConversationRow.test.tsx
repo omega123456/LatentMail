@@ -368,5 +368,35 @@ describe('ConversationRow', () => {
       expect(list).toContainElement(screen.getByText('Sent'));
       expect(screen.getByText('+1')).toBeInTheDocument();
     });
+
+    it('hides the source badge when it matches the current folder', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={sentFromInbox}
+          density="spacious"
+          active={false}
+          allLabels={labelEntries}
+          currentFolderId="SENT"
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      expect(screen.queryByText('Sent')).not.toBeInTheDocument();
+    });
+
+    it('shows the source badge when it differs from the current folder', () => {
+      renderWithQueryClient(
+        <ConversationRow
+          conversation={sentFromInbox}
+          density="spacious"
+          active={false}
+          allLabels={labelEntries}
+          currentFolderId="INBOX"
+          onOpen={vi.fn()}
+          onStar={vi.fn()}
+        />,
+      );
+      expect(screen.getByText('Sent')).toBeVisible();
+    });
   });
 });

@@ -23,6 +23,7 @@ type Props = {
   allLabels?: LabelMenuEntry[];
   selectionCount?: number;
   selectionSystemLabelIds?: string[];
+  currentFolderId?: string;
   onOpen: (event: ReactMouseEvent) => void;
   onStar: () => void;
   onTriage?: (intent: ThreadTriageIntent) => void;
@@ -38,6 +39,7 @@ export function ConversationRow({
   allLabels = [],
   selectionCount = 1,
   selectionSystemLabelIds,
+  currentFolderId,
   onOpen,
   onStar,
   onTriage = () => undefined,
@@ -74,6 +76,7 @@ export function ConversationRow({
   }));
   const rowBadges = userBadgesByName(conversation.labels ?? [], allLabels);
   const source = sourceBadge(conversation.systemLabelIds);
+  const showSource = source && source.id !== currentFolderId;
   return (
     <RowContextMenu
       systemLabelIds={contextMenuSystemLabelIds}
@@ -162,9 +165,9 @@ export function ConversationRow({
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
                   {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
-                  {(rowBadges.length > 0 || source) && (
+                  {(rowBadges.length > 0 || showSource) && (
                     <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
-                      {source && (
+                      {showSource && (
                         <Badge key={`source-${source.id}`} badge={source} iconOnly={!spacious} />
                       )}
                       {rowBadges.slice(0, ROW_BADGE_LIMIT).map((badge) => (
