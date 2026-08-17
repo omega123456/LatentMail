@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::ipc::{
     health_check, health_response, open_external_url, pause_queue, read_queue_summary, register,
@@ -572,6 +573,18 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     assert_eq!(scoped_search["total"], 2);
 
+    let label_scoped_search = invoke(
+        &webview,
+        "search_threads",
+        serde_json::json!({
+            "accountId": account_id,
+            "query": "hi",
+            "scope": { "kind": "label", "labelId": "INBOX" }
+        }),
+    )
+    .unwrap();
+    assert_eq!(label_scoped_search["total"], 2);
+
     let blank_search = invoke(
         &webview,
         "search_threads",
@@ -625,6 +638,21 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     assert!(predicate_kinds.contains(&"hasAttachment".to_owned()));
     assert!(predicate_kinds.contains(&"sentAfter".to_owned()));
     assert!(predicate_kinds.contains(&"sentBefore".to_owned()));
+    let sent_after = fully_parsed["predicates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|predicate| predicate["kind"] == "sentAfter")
+        .unwrap();
+    assert_eq!(
+        sent_after["atSeconds"],
+        NaiveDate::from_ymd_opt(2020, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    );
 
     let lone_negation_parsed = invoke(
         &webview,

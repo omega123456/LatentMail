@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -7,6 +7,7 @@ import {
   predicateToToken,
   serializeFields,
 } from '@/components/search/AdvancedSearchPanel';
+import { BLANK_DATE_FILTER } from '@/components/search/DateFilter';
 import type { MailLabel, ParsedSearchQuery } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
@@ -31,13 +32,12 @@ describe('serializeFields', () => {
         subject: 'quarterly',
         includesText: 'invoice',
         excludesText: 'draft -spam',
-        durationValue: '7d',
-        dateValue: '2026-01-08',
+        date: { mode: 'preset', preset: '7d', start: '', end: '' },
         hasAttachment: true,
         unreadOnly: true,
       }),
     ).toBe(
-      'from:"Anna Kim" to:ops@example.com subject:quarterly invoice -draft -spam newer_than:7d before:2026-01-08 has:attachment is:unread',
+      'from:"Anna Kim" to:ops@example.com subject:quarterly invoice -draft -spam newer_than:7d has:attachment is:unread',
     );
   });
 
@@ -49,8 +49,7 @@ describe('serializeFields', () => {
         subject: '',
         includesText: '',
         excludesText: '',
-        durationValue: '',
-        dateValue: '',
+        date: BLANK_DATE_FILTER,
         hasAttachment: true,
         unreadOnly: true,
       }),
@@ -65,8 +64,7 @@ describe('serializeFields', () => {
         subject: '',
         includesText: '',
         excludesText: '',
-        durationValue: '',
-        dateValue: '',
+        date: BLANK_DATE_FILTER,
         hasAttachment: false,
         unreadOnly: false,
       }),
@@ -140,7 +138,7 @@ describe('fieldsFromParsedQuery', () => {
     expect(fields.hasAttachment).toBe(false);
   });
 
-  it('reconstructs the date field from an unnegated sentBefore predicate', () => {
+  it('reconstructs a Before filter from an unnegated sentBefore predicate', () => {
     const parsed: ParsedSearchQuery = {
       hasTextTerm: true,
       from: null,
@@ -150,10 +148,15 @@ describe('fieldsFromParsedQuery', () => {
       excludes: [],
       predicates: [{ kind: 'sentBefore', atSeconds: 1704672000, negated: false }],
     };
-    expect(fieldsFromParsedQuery(parsed).dateValue).toBe('2024-01-08');
+    expect(fieldsFromParsedQuery(parsed).date).toEqual({
+      mode: 'before',
+      preset: '',
+      start: '2024-01-08',
+      end: '',
+    });
   });
 
-  it('cannot reconstruct the relative "Date within" duration from a sentAfter predicate — the parser resolves newer_than:Xd to an absolute epoch, so the round trip keeps it as a literal, re-submittable after: token instead of repopulating the duration select', () => {
+  it('cannot reconstruct the relative preset from a sentAfter predicate — the parser resolves newer_than:Xd to an absolute epoch, so the round trip keeps it as an equivalent After filter rather than re-selecting the preset chip', () => {
     const parsed: ParsedSearchQuery = {
       hasTextTerm: true,
       from: null,
@@ -164,8 +167,8 @@ describe('fieldsFromParsedQuery', () => {
       predicates: [{ kind: 'sentAfter', atSeconds: 1704672000, negated: false }],
     };
     const fields = fieldsFromParsedQuery(parsed);
-    expect(fields.durationValue).toBe('');
-    expect(fields.includesText).toBe('after:2024-01-08');
+    expect(fields.date).toEqual({ mode: 'after', preset: '', start: '2024-01-08', end: '' });
+    expect(fields.includesText).toBe('');
     expect(serializeFields(fields)).toBe('after:2024-01-08');
   });
 });
@@ -211,11 +214,10 @@ describe('AdvancedSearchPanel', () => {
     await user.type(screen.getByLabelText('Subject'), 'quarterly');
     await user.type(screen.getByLabelText('Includes the words'), 'invoice');
     await user.type(screen.getByLabelText('Doesn’t have'), 'draft');
-    await user.selectOptions(screen.getByLabelText('Date within'), '7d');
-    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-01-08' } });
+    await user.click(screen.getByRole('button', { name: '1 week' }));
     await user.click(screen.getByRole('button', { name: 'Search' }));
     expect(onSubmit).toHaveBeenCalledWith(
-      'from:anna to:ops subject:quarterly invoice -draft newer_than:7d before:2026-01-08',
+      'from:anna to:ops subject:quarterly invoice -draft newer_than:7d',
     );
   });
 

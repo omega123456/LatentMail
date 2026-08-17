@@ -197,6 +197,7 @@ for (const theme of themes) {
   });
 
   test(`advanced search panel ${theme}`, async ({ page }) => {
+    await page.clock.setFixedTime(parseISO('2026-08-17T12:00:00'));
     await installPlaywrightIpc(page, {
       list_accounts: [playwrightMailAccount],
       parse_search_query: playwrightParsedSearchQuery,
@@ -205,6 +206,11 @@ for (const theme of themes) {
     await page.getByLabel('Search mail').fill('from:anna quarterly');
     await page.getByRole('button', { name: 'Show search options' }).click();
     await expect(page.getByLabel('From')).toHaveValue('anna');
+    await page.getByRole('button', { name: 'Custom…' }).click();
+    await page.getByRole('button', { name: 'Between' }).click();
+    await page.getByRole('button', { name: '4 August 2026', exact: true }).click();
+    await page.getByRole('button', { name: '13 August 2026', exact: true }).click();
+    await expect(page.getByTestId('date-filter-summary')).toHaveText('4 Aug 2026 – 13 Aug 2026');
     await screenshot(page, page.getByTestId('advanced-search-panel'), 'advanced-search-panel', theme);
   });
 

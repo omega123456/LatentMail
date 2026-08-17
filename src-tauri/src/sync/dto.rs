@@ -224,7 +224,7 @@ pub struct ThreadSearchPage {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum SearchPredicateDto {
     Label { value: String, negated: bool },
     Unread { negated: bool },

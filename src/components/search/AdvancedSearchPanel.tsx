@@ -2,17 +2,13 @@ import { useMemo, useState } from 'react';
 import { format, fromUnixTime } from 'date-fns';
 import type { MailLabel, ParsedSearchQuery, SearchPredicate, SearchScope } from '@/lib/types/ipc';
 import { useParseSearchQueryQuery } from '@/lib/query/hooks';
-
-const DURATION_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'Any time' },
-  { value: '1d', label: '1 day' },
-  { value: '7d', label: '1 week' },
-  { value: '14d', label: '2 weeks' },
-  { value: '1m', label: '1 month' },
-  { value: '3m', label: '3 months' },
-  { value: '6m', label: '6 months' },
-  { value: '1y', label: '1 year' },
-];
+import {
+  BLANK_DATE_FILTER,
+  DateFilter,
+  dateFilterFromPredicates,
+  serializeDateFilter,
+  type DateFilterValue,
+} from './DateFilter';
 
 type PanelFields = {
   from: string;
@@ -20,8 +16,7 @@ type PanelFields = {
   subject: string;
   includesText: string;
   excludesText: string;
-  durationValue: string;
-  dateValue: string;
+  date: DateFilterValue;
   hasAttachment: boolean;
   unreadOnly: boolean;
 };
@@ -32,8 +27,7 @@ const BLANK_FIELDS: PanelFields = {
   subject: '',
   includesText: '',
   excludesText: '',
-  durationValue: '',
-  dateValue: '',
+  date: BLANK_DATE_FILTER,
   hasAttachment: false,
   unreadOnly: false,
 };
@@ -63,15 +57,13 @@ export function predicateToToken(predicate: SearchPredicate): string | null {
 }
 
 export function fieldsFromParsedQuery(parsed: ParsedSearchQuery): PanelFields {
+  const { value: date, remaining } = dateFilterFromPredicates(parsed.predicates);
   let hasAttachment = false;
   let unreadOnly = false;
-  let dateValue = '';
   const leftover: string[] = [];
-  for (const predicate of parsed.predicates) {
+  for (const predicate of remaining) {
     if (predicate.kind === 'hasAttachment' && !predicate.negated) hasAttachment = true;
     else if (predicate.kind === 'unread' && !predicate.negated) unreadOnly = true;
-    else if (predicate.kind === 'sentBefore' && !predicate.negated && !dateValue)
-      dateValue = format(fromUnixTime(predicate.atSeconds), 'yyyy-MM-dd');
     else {
       const token = predicateToToken(predicate);
       if (token) leftover.push(token);
@@ -83,8 +75,7 @@ export function fieldsFromParsedQuery(parsed: ParsedSearchQuery): PanelFields {
     subject: parsed.subject ?? '',
     includesText: [...parsed.includes, ...leftover].join(' '),
     excludesText: parsed.excludes.join(' '),
-    durationValue: '',
-    dateValue,
+    date,
     hasAttachment,
     unreadOnly,
   };
@@ -103,8 +94,7 @@ export function serializeFields(fields: PanelFields): string {
         .split(/\s+/)
         .map((word) => (word.startsWith('-') ? word : `-${word}`)),
     );
-  if (fields.durationValue) parts.push(`newer_than:${fields.durationValue}`);
-  if (fields.dateValue) parts.push(`before:${fields.dateValue}`);
+  parts.push(...serializeDateFilter(fields.date));
   if (fields.hasAttachment) parts.push('has:attachment');
   if (fields.unreadOnly) parts.push('is:unread');
   return parts.join(' ');
@@ -220,42 +210,10 @@ export function AdvancedSearchPanel({
             className={inputClass}
           />
         </label>
-        <div className="flex gap-2">
-          <div className={`flex-1 ${selectWrapperClass}`}>
-            <label htmlFor="search-panel-duration" className={selectLabelClass}>
-              <span className={labelClass}>Date within</span>
-              <select
-                id="search-panel-duration"
-                value={fields.durationValue}
-                onChange={(event) =>
-                  setFields((current) => ({ ...current, durationValue: event.target.value }))
-                }
-                className={selectClass}
-              >
-                {DURATION_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span aria-hidden="true" className={selectChevronClass}>
-              ▾
-            </span>
-          </div>
-          <label htmlFor="search-panel-date" className="flex flex-1 flex-col gap-1">
-            <span className={labelClass}>Date</span>
-            <input
-              id="search-panel-date"
-              type="date"
-              value={fields.dateValue}
-              onChange={(event) =>
-                setFields((current) => ({ ...current, dateValue: event.target.value }))
-              }
-              className={inputClass}
-            />
-          </label>
-        </div>
+        <DateFilter
+          value={fields.date}
+          onChange={(date) => setFields((current) => ({ ...current, date }))}
+        />
         <div className={selectWrapperClass}>
           <label htmlFor="search-panel-scope" className={selectLabelClass}>
             <span className={labelClass}>Search in</span>
