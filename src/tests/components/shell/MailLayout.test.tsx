@@ -178,7 +178,7 @@ describe('MailLayout — search', () => {
     await user.keyboard('{Enter}');
     const row = await screen.findByTestId('search-results-row');
     expect(row).toHaveTextContent('from:anna');
-    expect(row).toHaveTextContent('7');
+    expect(row).toHaveTextContent('7 results');
     expect(useSelectionStore.getState().activeMailboxId).toBe('INBOX');
   });
 
@@ -225,9 +225,10 @@ describe('MailLayout — search', () => {
     await user.type(field, 'from:anna');
     await user.keyboard('{Enter}');
     await screen.findByTestId('search-results-row');
-    await user.click(screen.getByRole('button', { name: 'Close search' }));
+    await user.click(screen.getByRole('button', { name: 'Clear search results' }));
     expect(screen.queryByTestId('search-results-row')).not.toBeInTheDocument();
     expect(field).toHaveValue('');
+    expect(field).toHaveFocus();
 
     await user.type(field, 'from:anna');
     await user.keyboard('{Enter}');

@@ -4,20 +4,33 @@ import { describe, expect, it, vi } from 'vitest';
 import { CollapsedSearchIndicator, SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
 
 describe('SearchResultsRow', () => {
-  it('shows the query text and the true total in a live region', () => {
+  it('shows the query and the true total as a status message', () => {
     render(<SearchResultsRow query="from:anna" total={7} onClose={vi.fn()} />);
     const row = screen.getByTestId('search-results-row');
     expect(row).toHaveTextContent('from:anna');
-    const total = screen.getByText('7');
-    expect(total).toHaveAttribute('aria-live', 'polite');
-    expect(total).toHaveAttribute('aria-atomic', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('Search · 7 results');
   });
 
-  it('calls onClose from the close control', async () => {
+  it('says no results for a zero total', () => {
+    render(<SearchResultsRow query="from:nobody" total={0} onClose={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Search · no results');
+  });
+
+  it('caps a very large total at 999+', () => {
+    render(<SearchResultsRow query="has:attachment" total={5000} onClose={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Search · 999+ results');
+  });
+
+  it('says searching while pending, regardless of a stale total', () => {
+    render(<SearchResultsRow query="from:anna" total={7} pending onClose={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Search · searching…');
+  });
+
+  it('calls onClose from the clear control', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     render(<SearchResultsRow query="from:anna" total={7} onClose={onClose} />);
-    await user.click(screen.getByLabelText('Close search'));
+    await user.click(screen.getByLabelText('Clear search results'));
     expect(onClose).toHaveBeenCalledOnce();
   });
 });

@@ -141,6 +141,10 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     mailboxes.find((mailbox) => mailbox.id === activeMailbox)?.name ??
     labels.find((label) => label.id === activeMailbox)?.name ??
     activeMailbox;
+  const clearSearchAndFocus = () => {
+    searchClear();
+    searchFieldRef.current?.focus();
+  };
   const selectMailbox = (id: string) => {
     searchClear();
     setActiveMailboxId(id);
@@ -197,7 +201,12 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           Compose
         </button>
         {searchActive && (
-          <SearchResultsRow query={searchSubmittedQuery} total={searchTotal} onClose={searchClear} />
+          <SearchResultsRow
+            query={searchSubmittedQuery}
+            total={searchTotal}
+            pending={searchResults.isLoading}
+            onClose={clearSearchAndFocus}
+          />
         )}
         <FolderList
           activeMailboxId={activeMailboxId ?? 'INBOX'}
