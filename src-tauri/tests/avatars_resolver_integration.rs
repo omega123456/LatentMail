@@ -1,8 +1,3 @@
-//! Bounded concurrency (D4): the resolution ceiling is never exceeded,
-//! concurrent requests for one key collapse onto a single in-flight
-//! resolution, and both the DNS and download budgets are honoured — all
-//! under controlled time, with no fixed delay anywhere near the project's
-//! 5-second/1-second limits.
 
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -36,8 +31,7 @@ async fn simultaneous_resolutions_never_exceed_the_configured_ceiling() {
             let _permit = scheduler.acquire_permit().await;
             let now = current.fetch_add(1, Ordering::SeqCst) + 1;
             peak.fetch_max(now, Ordering::SeqCst);
-            // Short, real (not paused) hold so overlapping tasks actually
-            // overlap — small enough to keep this test well under a second.
+
             tokio::time::sleep(Duration::from_millis(20)).await;
             current.fetch_sub(1, Ordering::SeqCst);
         }));
@@ -63,9 +57,7 @@ async fn concurrent_requests_for_the_same_key_collapse_onto_one_resolution() {
         let done = std::sync::Arc::clone(&done);
         handles.push(tokio::spawn(async move {
             let _guard = scheduler.key_guard("shared.example").await;
-            // The same "re-check after acquiring the guard" shape
-            // avatars::AvatarService uses: only the first caller through
-            // ever does the "resolution".
+
             if done.swap(true, Ordering::SeqCst) {
                 return;
             }

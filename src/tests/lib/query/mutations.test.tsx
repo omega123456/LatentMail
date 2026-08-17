@@ -75,9 +75,7 @@ describe('thread mutations', () => {
       messages: [],
     });
     const client = new QueryClient();
-    // Seed a real conversation query for a *different* thread than the one
-    // being triaged — this is exactly the case the old `('account', '')` key
-    // could never match, since it isn't a prefix of `('account', 'thread-9')`.
+
     await client.fetchQuery({
       queryKey: queryKeys.conversation('account', 'thread-9'),
       queryFn: () =>

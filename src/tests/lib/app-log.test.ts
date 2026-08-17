@@ -24,9 +24,7 @@ describe('appLog', () => {
 
     appLog.error('Unreachable backend');
 
-    // The rejection is swallowed asynchronously (`.catch(() => undefined)`);
-    // flush microtasks before asserting nothing escaped as an unhandled
-    // rejection and the console fallback still ran.
+
     await Promise.resolve();
     expect(consoleMethod).toHaveBeenCalledWith('Unreachable backend');
   });

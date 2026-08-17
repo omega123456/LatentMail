@@ -34,21 +34,12 @@ export type MessageActionRibbonProps = {
   onReply: () => void;
   onReplyAll: () => void;
   onForward: () => void;
-  /** Renders only where this exact message is a draft (FR "Entry
-   * surfaces"). */
   onEditDraft?: () => void;
 };
 
 const iconButtonClass =
-  'inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface';
+  'inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface cursor-pointer';
 
-/** Per-message triage and compose actions, applying to the whole
- * conversation for the triage half (star and read/unread are
- * conversation-wide even here — FR "Triage actions") but to *this exact
- * message* for Reply/Reply All/Forward/Edit Draft (FR "Entry surfaces").
- * Always rendered — never hover-revealed, which the plan explicitly rejects
- * for failing keyboard and touch discoverability — and drawn smaller (14px)
- * than the thread-level `ActionRibbon` (18px) to read as subordinate. */
 export function MessageActionRibbon({
   mailboxId,
   unread,
@@ -228,7 +219,7 @@ export function MessageActionRibbon({
             aria-label="Delete"
             title="Delete"
             onClick={onDelete}
-            className="inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error"
+            className="inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error cursor-pointer"
           >
             <Trash2 aria-hidden="true" size={14} />
           </button>

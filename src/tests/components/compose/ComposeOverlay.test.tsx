@@ -59,7 +59,7 @@ describe('ComposeOverlay', () => {
     expect(backdrop).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Mailbox link' }));
     expect(onMailboxClick).toHaveBeenCalledTimes(1);
-    // Clicking through to the mailbox never dismisses the non-modal panel.
+
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
@@ -92,14 +92,11 @@ describe('ComposeOverlay', () => {
 
   it('does not trap focus — tabbing from the last control inside the panel leaves it rather than cycling back to its first control', async () => {
     const user = userEvent.setup();
-    // A real focus trap redirects Tab, at the last focusable element inside
-    // the dialog, back to the *first* focusable element inside it (a resize
-    // handle here) instead of letting it continue past the panel.
+
     renderOverlay(<button type="button">Before mailbox link</button>);
     openSession();
     const panel = screen.getByTestId('compose-overlay');
-    // Send stays disabled throughout this phase (unfocusable), so "Insert
-    // image" is the last real tab stop inside the panel.
+
     const lastControl = screen.getByRole('button', { name: 'Insert image' });
     const firstFocusableInPanel = screen.getByRole('button', { name: 'Resize composer height' });
     lastControl.focus();
@@ -192,7 +189,7 @@ describe('ComposeOverlay', () => {
     renderOverlay();
     openSession('new', { html: '<p><a href="https://example.com">a link</a></p>' });
     await waitFor(() => expect(useComposeStore.getState().session?.html).toContain('href'));
-    // Place the caret inside the existing link before toggling it off.
+
     const linkText = screen.getByText('a link');
     await user.click(linkText);
     await user.click(screen.getByRole('button', { name: 'Link' }));
@@ -204,8 +201,7 @@ describe('ComposeOverlay', () => {
     const user = userEvent.setup();
     renderOverlay();
     openSession();
-    // The click handler itself no-ops when `editor` is still null — this
-    // exercises that guard rather than asserting anything user-visible.
+
     await user.click(screen.getByRole('button', { name: 'Link' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
@@ -276,7 +272,7 @@ describe('ComposeOverlay', () => {
     expect(useComposeStore.getState().session).toMatchObject({ draftStatus: 'failed' });
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
-    // The session stays open — a failed send never discards the draft.
+
     expect(useComposeStore.getState().session).not.toBeNull();
     error.mockRestore();
   });

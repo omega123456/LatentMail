@@ -60,11 +60,6 @@ export interface IpcCommandMap {
     args: { accountId: string; draftId: string };
     result: HydratedComposeDraft;
   };
-  /** The Tauri dialog plugin's own wire contract (`invoke('plugin:dialog|open', { options })`)
-   * — not a Rust command owned by this app, but routed through the same
-   * generic `invoke` and mockable the same way (per CLAUDE.md's "one
-   * generic invoke function keyed on IpcCommandMap" rule) rather than a
-   * bespoke per-command wrapper. */
   'plugin:dialog|open': {
     args: { options: DialogOpenOptions };
     result: string | string[] | null;
@@ -112,15 +107,7 @@ export interface IpcCommandMap {
   };
   delete_label: { args: { accountId: string; labelId: string }; result: void };
   read_traversal_status: { args: { accountId: string }; result: TraversalStatus };
-  /** Cache-first: answers from the avatar cache metadata immediately (a path
-   * or `null`) and, on a miss, schedules background BIMI resolution — never
-   * blocks on the network. Refused (never scheduled) while `showSenderAvatars`
-   * is off, enforced Rust-side as well as by the frontend never issuing this
-   * query (D14). Domain must already be lower-cased (`src/lib/avatars/identity.ts`). */
   read_sender_avatar: { args: { domain: string }; result: string | null };
-  /** Cache-first account profile-photo read, mirroring `read_sender_avatar`.
-   * Not gated by `showSenderAvatars` — the account photograph involves no
-   * third-party lookup. */
   read_account_avatar: { args: { accountId: string }; result: string | null };
 }
 
@@ -135,10 +122,6 @@ export interface Account {
   id: string;
   email: string;
   displayName: string;
-  /** Google's raw remote photo URL, kept verbatim — never rendered directly
-   * in an `<img>` (CSP/ownership forbid a bare `googleusercontent.com` URL
-   * crossing into the webview). The locally cached copy is fetched
-   * separately via `read_account_avatar` (see `useAccountAvatarQuery`). */
   avatarUrl: string | null;
   needsReauthentication: boolean;
 }
@@ -158,19 +141,12 @@ export interface Settings {
   syncOnStartup: boolean;
   showUnreadCounts: boolean;
   syncIntervalSeconds: number;
-  /** Governs whether list/reader sender avatars render at all — and, more
-   * importantly, whether their domain lookups happen at all. Defaults on.
-   * No Settings UI exists yet; the key is hydrated and read like every other
-   * setting that predates its own control. */
   showSenderAvatars: boolean;
 }
 
 export type SettingKey = keyof Settings;
 export type SettingValue = Settings[SettingKey];
 
-/** A label's real Gmail text/background colour pair (D10) — replaces the
- * fabricated 3-colour cycle `mappers.ts` used to apply client-side. Present
- * only on user labels. */
 export interface MailLabelColor {
   text: string;
   background: string;
@@ -239,19 +215,12 @@ export interface HydratedComposeDraft extends ComposeDraftRequest {
   quotePlain: string | null;
 }
 
-/** The subset of `@tauri-apps/plugin-dialog`'s `OpenDialogOptions` this app
- * actually passes — kept local rather than importing the plugin's own type
- * so `IpcCommandMap` doesn't force a hard dependency edge onto every
- * consumer of this file. */
 export interface DialogOpenOptions {
   multiple?: boolean;
   directory?: boolean;
   filters?: { name: string; extensions: string[] }[];
 }
 
-/** Mirrors `@tauri-apps/api/webview`'s `DragDropEvent` union — this app's
- * only native drag-drop consumer (`src/lib/compose/file-drop.ts`). Declared
- * locally for the same reason as `DialogOpenOptions` above. */
 export type DragDropEvent =
   | { type: 'enter'; paths: string[]; position: { x: number; y: number } }
   | { type: 'over'; position: { x: number; y: number } }
@@ -267,7 +236,6 @@ export interface MutationResult {
 
 export type TraversalKind = 'backfill' | 'reconciliation';
 
-/** D11: always a count, never a percentage or estimate. */
 export type TraversalState = 'notStarted' | 'backfilling' | 'reconciling' | 'complete';
 
 export interface TraversalStatus {
@@ -277,15 +245,9 @@ export interface TraversalStatus {
   discoveredCount: number;
   persistedCount: number;
   lastAdvancedAt: number | null;
-  /** True when the traversal is continuing from a saved checkpoint rather
-   * than starting fresh from the first page. */
   isResumed: boolean;
 }
 
-/** A resolved participant identity — `display` is always a finished,
- * ready-to-render string (Rust already applies its own "(No sender)"/
- * bare-address fallback here); `address` feeds avatar domain lookup only
- * and may be absent. */
 export interface ThreadIdentity {
   display: string;
   address: string | null;
@@ -294,14 +256,7 @@ export interface ThreadIdentity {
 export interface MailThread {
   id: string;
   subject: string;
-  /** Resolved in Rust at summary-write time from the newest message's
-   * sender (D12/D13) — always present, fallback already applied. */
   sender: ThreadIdentity;
-  /** The same identity for the Sent mailbox: the newest Sent-labelled
-   * message's first recipient. `null` only when the thread has no
-   * Sent-labelled message at all — the frontend applies its own
-   * "(No recipient)" fallback for that case, since Rust never computed
-   * anything to fall back from. */
   sentRecipient: ThreadIdentity | null;
   latestAt: number;
   messageCount: number;
@@ -371,9 +326,6 @@ export interface SyncCompleteEvent {
   changed: boolean;
 }
 
-/** One newly arrived, still-unread Inbox message. Only the incremental
- * (poll) sync fills these in — a full sync reports the whole mailbox as
- * "added" and must never raise notifications for it. */
 export interface MailArrival {
   sender: string;
   subject: string;
@@ -393,11 +345,6 @@ export interface TraversalProgressEvent {
   completed: boolean;
 }
 
-/** Emitted once background avatar resolution (sender or account) finishes —
- * `key` is the domain for `pipeline: 'sender'` or the account id for
- * `pipeline: 'account'`, matching `queryKeys.senderAvatar`/`accountAvatar`
- * exactly so the event-bridge listener can invalidate the one query that
- * matters and no other. */
 export interface AvatarResolvedEvent {
   pipeline: 'sender' | 'account';
   key: string;
@@ -423,11 +370,5 @@ export interface IpcEventMap {
     kind: 'send' | 'draft';
     error: string;
   };
-  /** Synthetic channel key the shared test harness (`src/tests/ipc-mock.ts`)
-   * uses to fan out `getCurrentWebview().onDragDropEvent` callbacks through
-   * the same `ipc.emit` semantics every other event uses — this key is never
-   * a real Tauri event name (drag-drop is delivered through the Webview
-   * API, not `@tauri-apps/api/event`), it exists purely as the harness's
-   * addressable channel for it. */
   'tauri://drag-drop': DragDropEvent;
 }

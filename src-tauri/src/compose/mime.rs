@@ -86,14 +86,9 @@ pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
             });
     let from = outgoing.from.parse::<Mailbox>()?;
     let mut builder = Message::builder()
-        // Gmail is handed the whole RFC822 document and derives recipients
-        // from its headers — there is no separate envelope to carry them —
-        // so `Bcc` has to survive into the document. lettre strips it by
-        // default, which would drop every bcc recipient silently.
+
         .keep_bcc()
-        // And the envelope lettre would otherwise derive is never used, so
-        // force one: a draft legitimately has no recipients yet, and
-        // `Envelope::new` refuses to build without a destination.
+
         .envelope(Envelope::new(
             Some(from.email.clone()),
             vec![from.email.clone()],

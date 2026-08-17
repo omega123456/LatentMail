@@ -14,7 +14,6 @@ describe('keyboard command registry', () => {
   it('lets a supplied override replace a default key list entirely', () => {
     const bindings = resolveCommandBindings({ moveCursorDown: ['n'] });
     expect(bindings.moveCursorDown).toEqual(['n']);
-    // Untouched commands keep their defaults.
     expect(bindings.moveCursorUp).toEqual(DEFAULT_COMMAND_BINDINGS.moveCursorUp);
   });
 

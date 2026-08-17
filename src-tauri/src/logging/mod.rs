@@ -24,8 +24,6 @@ pub fn subscriber(
         directory,
         "latentmail.log",
     ));
-    // Tee to stdout as well as the rolling file so `pnpm dev` shows logs in the
-    // terminal; a bundled app has no console attached and simply discards them.
     let subscriber = tracing_subscriber::fmt()
         .with_writer(writer.and(std::io::stdout))
         .with_max_level(level)

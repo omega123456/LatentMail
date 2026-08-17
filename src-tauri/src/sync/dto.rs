@@ -1,6 +1,3 @@
-//! IPC-facing shapes for the Mail read commands and sync status, kept
-//! separate from the storage/gmail domain types they're built from.
-
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{
@@ -10,8 +7,6 @@ use crate::storage::{
 
 use super::SyncState;
 
-/// The IPC-facing shape of a label's Gmail colour pair (D10), replacing the
-/// fabricated 3-colour cycle `mappers.ts` used to apply client-side.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelColorDto {
@@ -46,10 +41,6 @@ impl From<Label> for LabelDto {
     }
 }
 
-/// Which whole-mailbox traversal is running — mirrors
-/// [`crate::storage::TraversalKind`], fully defined (including the
-/// reconciliation variant) even though reconciliation itself is Phase 5,
-/// so Phase 6 can render reconciliation wording without depending on it.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TraversalKind {
@@ -65,8 +56,6 @@ impl From<StorageTraversalKind> for TraversalKind {
     }
 }
 
-/// Traversal progress is always a count, never a percentage or estimate
-/// (D11).
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TraversalState {
@@ -85,23 +74,10 @@ pub struct TraversalStatusDto {
     pub discovered_count: i64,
     pub persisted_count: i64,
     pub last_advanced_at: Option<i64>,
-    /// True when the *current run* started from an already-saved checkpoint
-    /// position — i.e. this traversal is picking back up after a previous
-    /// process/run was interrupted, not starting fresh from page one.
-    ///
-    /// Sourced from [`TraversalCursor::resumed`], a flag snapshotted once
-    /// when a run begins (see `sync::traversal::run_backfill_step`) —
-    /// deliberately *not* re-derived from `position.is_some()` on every
-    /// read, because backfill writes a non-null `position` on every
-    /// committed page. Deriving this live would make an uninterrupted run's
-    /// status flip to "resumed" from page 2 onward, even though nothing was
-    /// ever interrupted.
     pub is_resumed: bool,
 }
 
 impl TraversalStatusDto {
-    /// No cursor row exists yet — a mailbox that has never started a
-    /// backfill or reconciliation pass.
     pub fn not_started(account_id: String) -> Self {
         Self {
             account_id,
@@ -116,13 +92,6 @@ impl TraversalStatusDto {
 }
 
 impl TraversalStatusDto {
-    /// Backfill and reconciliation now keep independent cursor rows
-    /// (`(account_id, kind)`, migration `V4__traversal_cursor_composite_key`),
-    /// so `read_traversal_status` has two rows to reconcile into one status
-    /// rather than one. The queue's per-account entity lock (D3) means at
-    /// most one of the two traversals is ever actually running at a time,
-    /// so whichever cursor advanced most recently is the current/last
-    /// activity worth surfacing to the UI.
     pub fn most_recent(
         account_id: String,
         backfill: Option<TraversalCursor>,
@@ -165,10 +134,6 @@ impl From<TraversalCursor> for TraversalStatusDto {
     }
 }
 
-/// A single resolved participant (D12) — a display label the row can render
-/// directly (never a raw `Name <address>` header string) and the bare
-/// address underneath it, used for avatar domain lookup. Shared by the
-/// ordinary-mailbox sender and the Sent-mailbox recipient.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIdentityDto {
@@ -197,13 +162,7 @@ pub struct ThreadDto {
     pub has_draft: bool,
     pub snippet: String,
     pub label_indicators: Vec<String>,
-    /// The thread's newest message's sender — the ordinary-mailbox row
-    /// identity (D12/D13). Never a raw header string; falls back to
-    /// `(No sender)` when no sender data exists.
     pub sender: ThreadIdentityDto,
-    /// The newest Sent-labelled message's first recipient — the
-    /// Sent-mailbox row identity. `None` when the thread carries no Sent
-    /// message.
     pub sent_recipient: Option<ThreadIdentityDto>,
 }
 
@@ -327,8 +286,6 @@ pub struct ConversationDto {
     pub messages: Vec<MessageDto>,
 }
 
-/// The per-thread outcome of a `mutate_threads` request — mirrors
-/// [`super::MutationOutcome`], serialized for IPC.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MutationResultDto {
@@ -367,11 +324,6 @@ pub struct ContactSuggestionDto {
     pub display_name: Option<String>,
 }
 
-/// The staged-attachment payload crossing IPC once a path/bytes source has
-/// been read into Rust-owned canonical staging. Never carries bytes (D3) —
-/// `path` is an app-private, staging-scoped absolute path the frontend uses
-/// only as an opaque handle plus (once Phase 4 wires the asset scope) an
-/// inline-image preview source.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedAttachmentDto {
@@ -396,10 +348,6 @@ impl From<crate::compose::staging::StagedPart> for StagedAttachmentDto {
     }
 }
 
-/// Storage keeps epoch **seconds** (the thread cursor compares against that
-/// column), but every timestamp crossing IPC is fed straight into JavaScript's
-/// `new Date(...)`, which expects **milliseconds** — without this every row
-/// renders as January 1970.
 pub(crate) fn to_millis(seconds: i64) -> i64 {
     chrono::DateTime::from_timestamp(seconds, 0).map_or(0, |value| value.timestamp_millis())
 }

@@ -1,6 +1,3 @@
-//! The Mail read commands (`list_labels`, `list_threads`, `load_conversation`)
-//! and the Sync commands (`trigger_sync`, `read_sync_status`), plus thread
-//! aggregation (read/starred/attachment/draft state) and pagination.
 
 use std::sync::Arc;
 
@@ -370,10 +367,7 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
     assert_eq!(account.history_id, Some(1));
 }
 
-/// The read commands (`list_labels`, `list_threads`, `load_conversation`)
-/// resolve `State<Storage>`, which no test that manages state by hand can
-/// prove is wired: a missing `manage` only shows up at runtime as
-/// "state not managed for field `storage`".
+
 #[tokio::test]
 async fn initialize_manages_the_storage_the_read_commands_resolve() {
     let server = MockServer::start().await;
@@ -387,16 +381,14 @@ async fn initialize_manages_the_storage_the_read_commands_resolve() {
         "LATENTMAIL_GOOGLE_TOKEN_URL",
         format!("{}/token", server.uri()),
     );
-    // Redirects the OS per-user data directory at an isolated temp dir so the
-    // test never touches the real machine, as in the other initialize tests.
+
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
     std::env::set_var("XDG_DATA_HOME", home.path());
 
     let application = app();
-    // `settings::initialize` restores window geometry, so it needs the main
-    // window to exist.
+
     tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
         .visible(false)
         .build()
@@ -410,9 +402,7 @@ async fn initialize_manages_the_storage_the_read_commands_resolve() {
     assert!(application.try_state::<Storage>().is_some());
 }
 
-/// Storage holds epoch seconds, but the frontend hands these straight to
-/// `new Date(...)`, which reads milliseconds — the mismatch rendered every
-/// row as January 1970.
+
 #[tokio::test]
 async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
     let seconds = 1_755_000_000;
@@ -477,7 +467,6 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
 
     assert_eq!(page.items[0].latest_at, seconds * 1000);
     assert_eq!(conversation.messages[0].sent_at, seconds * 1000);
-    // The cursor still travels in the storage unit — it is compared against
-    // the `latest_at` column, not turned into a Date.
+
     assert_eq!(page.next_cursor.map(|cursor| cursor.latest_at), None);
 }

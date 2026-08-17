@@ -83,8 +83,7 @@ describe('layout store', () => {
       writes.push(args);
     });
 
-    // Pointer deltas are fractional; `write_setting` rejects a non-integer
-    // with "Unknown or invalid setting" because the Rust settings are `u32`.
+
     store.getState().setSidebarWidth(300.4);
     store.getState().setListWidth(420.6);
     store.getState().setReaderHeight(60.5);

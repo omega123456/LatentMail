@@ -61,11 +61,8 @@ const listControls: Control[] = [
   },
 ];
 
-/** 28px targets, as the design asset specifies — at the 512px default width
- * the footer's single row has only a few pixels of slack, so a larger
- * button here pushes Send past the panel edge. */
 const buttonClass =
-  'inline-flex size-7 shrink-0 items-center justify-center rounded text-secondary hover:bg-surface-container-high hover:text-on-surface aria-pressed:bg-surface-container-high aria-pressed:text-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high dark:hover:text-dark-on-surface dark:aria-pressed:bg-dark-surface-container-high dark:aria-pressed:text-dark-primary';
+  'inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded text-secondary hover:bg-surface-container-high hover:text-on-surface aria-pressed:bg-surface-container-high aria-pressed:text-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high dark:hover:text-dark-on-surface dark:aria-pressed:bg-dark-surface-container-high dark:aria-pressed:text-dark-primary';
 
 function ToolbarButton({
   control,
@@ -90,10 +87,6 @@ function ToolbarButton({
   );
 }
 
-/** Formatting controls, in the wireframe's exact order: Bold, Italic,
- * Underline, Strikethrough | Bullet List, Numbered List | Link — 18px
- * lucide glyphs, each carrying both an accessible name and a title, with
- * `aria-pressed` (not colour alone) reflecting toggled state. */
 export function EditorToolbar({ editor, onLink }: Props) {
   return (
     <div className="flex items-center" role="toolbar" aria-label="Text formatting">

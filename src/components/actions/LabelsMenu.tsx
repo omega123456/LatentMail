@@ -15,8 +15,6 @@ const FILTER_THRESHOLD = 10;
 
 type BaseProps = {
   labels: LabelMenuEntry[];
-  /** Opens label creation from the zero-labels empty state. Its absence
-   * simply omits the affordance rather than disabling it. */
   onCreateLabel?: () => void;
 };
 
@@ -28,17 +26,11 @@ export type StagedLabelsMenuProps = BaseProps & {
 
 export type ImmediateLabelsMenuProps = BaseProps & {
   variant: 'immediate';
-  /** Commits the toggle immediately — no Apply/Cancel footer. Membership is
-   * always `'checked'`/`'unchecked'` in this variant (row context menu rows
-   * are binary, never tri-state, per the wireframe). */
   onToggle: (labelId: string, nextChecked: boolean) => void;
 };
 
 export type LabelsMenuProps = StagedLabelsMenuProps | ImmediateLabelsMenuProps;
 
-/** Indeterminate/unchecked both move toward "checked" on first touch; a
- * second touch moves to unchecked. There's no way back to indeterminate
- * once touched — matching Gmail's own staged-labels behaviour. */
 function nextBooleanFor(membership: LabelMembership): boolean {
   return membership !== 'checked';
 }
@@ -124,7 +116,7 @@ export function LabelsMenu(props: LabelsMenuProps) {
             <button
               type="button"
               onClick={onCreateLabel}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-label-md text-primary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-primary dark:hover:bg-dark-surface-container"
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-label-md text-primary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-primary dark:hover:bg-dark-surface-container cursor-pointer"
             >
               <Plus aria-hidden="true" size={14} />
               Create label
@@ -187,7 +179,7 @@ export function LabelsMenu(props: LabelsMenuProps) {
             <button
               type="button"
               onClick={props.onCancel}
-              className="rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
+              className="rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container cursor-pointer"
             >
               Cancel
             </button>
@@ -195,7 +187,7 @@ export function LabelsMenu(props: LabelsMenuProps) {
               type="button"
               disabled={changeCount === 0}
               onClick={() => props.onApply(diff)}
-              className="rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
+              className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
             >
               Apply
             </button>

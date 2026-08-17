@@ -2,7 +2,6 @@ import { LayoutPanelLeft, Rows2, Rows3, Rows4 } from 'lucide-react';
 import { useLayoutStore } from '@/stores/layout';
 import type { Density } from '@/lib/types/ipc';
 
-/** More rows in the glyph = tighter rows in the list. */
 const densityIcons: Record<Density, typeof Rows3> = {
   compact: Rows4,
   comfortable: Rows3,
@@ -24,14 +23,14 @@ export function ListHeader({ mailboxName }: { mailboxName?: string }) {
         <button
           aria-label="Cycle conversation density"
           onClick={cycleDensity}
-          className="rounded-full p-stack-gap-sm text-secondary hover:bg-surface-container-high focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high"
+          className="cursor-pointer rounded-full p-stack-gap-sm text-secondary hover:bg-surface-container-high focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high"
         >
           <DensityIcon size={18} />
         </button>
         <button
           aria-label="Cycle mail layout"
           onClick={cycleLayout}
-          className="rounded-full p-stack-gap-sm text-secondary hover:bg-surface-container-high focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high"
+          className="cursor-pointer rounded-full p-stack-gap-sm text-secondary hover:bg-surface-container-high focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container-high"
         >
           <LayoutPanelLeft size={18} />
         </button>

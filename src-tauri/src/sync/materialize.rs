@@ -1,4 +1,3 @@
-//! The one full-message persistence sequence shared by sync and compose.
 use crate::{
     gmail::GmailMessage,
     storage::{
@@ -70,11 +69,6 @@ pub fn replace_draft(
     replacement: &GmailMessage,
     consumed: bool,
 ) -> rusqlite::Result<()> {
-    // `unchecked_transaction` (rather than `Connection::transaction`, which
-    // needs `&mut Connection`) so this is callable from inside
-    // `Storage::run`'s `&Connection` closure — the queue durability
-    // executor persists a completed draft/send from there (see
-    // `compose::drafts`).
     let transaction = connection.unchecked_transaction()?;
     replace_draft_rows(&transaction, account_id, draft_id, replacement, consumed)?;
     transaction.commit()
@@ -90,9 +84,6 @@ pub(crate) fn replace_draft_rows(
     let old_thread = MessageRepository::delete_by_draft_id(connection, account_id, draft_id)?;
     persist(connection, account_id, replacement)?;
     if !consumed {
-        // Gmail assigns a fresh message id on every draft update.  The stable
-        // draft id is therefore the only durable association between those
-        // replacements; keep it on the newly materialized local message.
         MessageRepository::set_draft_id(connection, account_id, &replacement.id, draft_id)?;
     }
     if consumed {

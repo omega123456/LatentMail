@@ -8,8 +8,6 @@ function formatRaw(participant: Participant): string {
   return participant.name ? `${participant.name} <${participant.address}>` : participant.address;
 }
 
-/** A second entry saves qualifying work before replacing it. The save is
- * admitted durably first; retargeting is deliberately not blocked on Gmail. */
 function openOrRetarget(args: OpenComposeArgs): void {
   const state = useComposeStore.getState();
   if (state.session?.dirty) {
@@ -26,8 +24,6 @@ function baseSession(
   return { id: crypto.randomUUID(), mode, accountId, from: accountEmail };
 }
 
-/** Rust is the source for both the opaque original reference and the
- * reader-safe display quote. React never sends reader HTML back to Rust. */
 export async function openReply(
   mode: 'reply' | 'reply-all',
   accountId: string,
@@ -56,9 +52,6 @@ export async function openReply(
   });
 }
 
-/** Forward — begins with no recipients and no thread identity (Rust's
- * `compose::context::forward`); the quote is still derived so the forwarded
- * content is visible. */
 export async function openForward(
   accountId: string,
   accountEmail: string,
@@ -78,15 +71,11 @@ export async function openForward(
     subject: context.subject,
     html: '',
     quote: context.displayQuote,
-    // Forward intentionally retains only an opaque original reference for
-    // quote assembly; no Gmail/RFC threading identity crosses this boundary.
     originalMessageId: context.originalMessageId,
     originalGmailMessageId: context.originalGmailMessageId,
   });
 }
 
-/** Plain new message — optionally pre-addressed (the sender/recipient-line
- * click in `MessageHeader`), with no reply semantics and no quote. */
 export function openNewMessage(
   accountId: string,
   accountEmail: string,
@@ -100,10 +89,6 @@ export function openNewMessage(
   });
 }
 
-/** Edit Draft — reopens using the draft message's own already-loaded
- * content. Full server-backed draft reopening (thread identity, RFC
- * threading metadata, attachment rehydration) is Phase 5's job; this phase
- * only wires the entry point itself (Out of Scope: "draft reopening"). */
 export async function openEditDraft(
   accountId: string,
   accountEmail: string,

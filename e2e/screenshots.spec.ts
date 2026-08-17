@@ -185,12 +185,7 @@ for (const theme of themes) {
     await screenshot(page, page.getByTestId('mail-layout'), 'full-shell-three-column', theme);
   });
 
-  // These scenarios open the composer directly through the Playwright-only
-  // test bridge `installPlaywrightIpc` seeds
-  // (`window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__`, read once by
-  // `MailLayout`) instead of driving the real Compose pill, keyboard
-  // command, or reply/forward ribbons — the same idiom already used for
-  // reader state.
+
   test(`composer panel ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(
       page,
@@ -318,9 +313,7 @@ for (const theme of themes) {
         accountId: 'mail-account',
         from: 'you@example.com',
         recipients: {
-          // Long enough, and enough of them, to reliably wrap past the
-          // three-row boundary at the panel's default width and exercise
-          // the real "+N more" overflow control in a real browser layout.
+
           to: [
             'Priya Raman <priya.raman@example.com>',
             'Tomás Field <tomas.field@example.com>',

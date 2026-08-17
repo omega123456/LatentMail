@@ -58,9 +58,6 @@ async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
         receiver.recv().await.unwrap(),
         receiver.recv().await.unwrap(),
     ];
-    // Interactive always goes first (it's what every other lane yields to);
-    // background and traversal are independent lanes with no dispatch-order
-    // guarantee between them.
     assert_eq!(dispatched.remove(0), "interactive");
     dispatched.sort();
     assert_eq!(

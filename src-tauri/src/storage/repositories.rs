@@ -29,9 +29,6 @@ impl AccountRepository {
         connection.execute("INSERT INTO accounts (id,email,display_name,avatar_url,history_id,needs_reauthentication,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET email=excluded.email, display_name=excluded.display_name, avatar_url=excluded.avatar_url, history_id=excluded.history_id, needs_reauthentication=excluded.needs_reauthentication, updated_at=excluded.updated_at", params![account.id, account.email, account.display_name, account.avatar_url, account.history_id, account.needs_reauthentication, account.created_at, account.updated_at])?;
         Ok(())
     }
-    /// Sets the sync checkpoint directly. Callers are responsible for only
-    /// calling this on successful sync completion (never on queue
-    /// acceptance, never on failure) — that ordering is what D6/D13 rely on.
     pub fn set_history_id(connection: &Connection, id: &str, history_id: i64) -> Result<()> {
         connection.execute(
             "UPDATE accounts SET history_id=?1, updated_at=strftime('%s','now') WHERE id=?2",
@@ -52,8 +49,6 @@ impl AccountRepository {
     }
 }
 
-/// A label's Gmail text/background colour pair (D10). Present only on user
-/// labels, never on system labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelColor {
     pub text: String,
@@ -71,8 +66,6 @@ pub struct Label {
     pub unread_count: i64,
 }
 
-/// Reserved system-label names a user label may not collide with, checked
-/// case-insensitively. Gmail's own category labels share this prefix.
 const RESERVED_LABEL_PREFIX: &str = "CATEGORY_";
 const RESERVED_LABEL_NAMES: &[&str] = &[
     "INBOX",
@@ -86,9 +79,6 @@ const RESERVED_LABEL_NAMES: &[&str] = &[
     "CHAT",
 ];
 
-/// Every rule a label name can fail is reported distinctly (Phase 3 AC6) —
-/// a single generic "invalid name" error would leave the caller unable to
-/// say *why* to the user.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LabelNameError {
     #[error("label name cannot be empty")]
@@ -121,14 +111,7 @@ impl LabelRepository {
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Label>> {
         connection.query_row("SELECT account_id,id,name,kind,color_text,color_background,message_count,unread_count FROM labels WHERE account_id=?1 AND id=?2", params![account_id, id], label).optional()
     }
-    /// Inserts a minimal placeholder row for `id` if one doesn't already
-    /// exist. `message_labels` has a foreign key onto `labels`, and Gmail
-    /// message payloads can reference a label id (a category label, or a
-    /// system label like `UNREAD`/`STARRED` in an edge case) that hasn't
-    /// come back from a `labels.list` call yet in the same sync run —
-    /// without this, that message's membership write would violate the FK.
-    /// A subsequent `labels.list` refresh upserts the real name/counts over
-    /// this placeholder.
+
     pub fn ensure_placeholder(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
         connection
             .prepare_cached(
@@ -137,11 +120,7 @@ impl LabelRepository {
             .execute(params![account_id, id])?;
         Ok(())
     }
-    /// Trims and validates a candidate label name against every rule in one
-    /// pass, checking case-insensitive uniqueness within the account
-    /// (excluding `exclude_id`, so renaming a label to its own current name
-    /// succeeds). Returns the trimmed name on success — callers should
-    /// persist that, not the raw input.
+
     pub fn validate_name(
         connection: &Connection,
         account_id: &str,
@@ -201,8 +180,7 @@ impl LabelRepository {
         )?;
         Ok(())
     }
-    /// Removes the label and, via `ON DELETE CASCADE`, every message's
-    /// membership in it. Never touches the messages themselves.
+
     pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
         connection.execute(
             "DELETE FROM labels WHERE account_id=?1 AND id=?2",
@@ -212,12 +190,7 @@ impl LabelRepository {
     }
 }
 
-/// The HTML-presence marker's three states (Phase 3): whether a message's
-/// full HTML body has ever been fetched, and if so whether Gmail actually
-/// had one to give. Plain `Option<String>` nullability on `html_body` alone
-/// cannot distinguish "never fetched" (the normal state of a backfilled
-/// message, which must trigger a fetch) from "fetched and genuinely empty"
-/// (which must not) — see the plan's Data Models section.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtmlPresence {
     NeverFetched,
@@ -239,10 +212,7 @@ impl HtmlPresence {
             _ => Self::NeverFetched,
         }
     }
-    /// Derives presence from whether a just-fetched message carried an HTML
-    /// part — used by every code path that fetches a message in full
-    /// (`format` always includes `payload`, so presence is always known at
-    /// that point, never "never fetched").
+
     pub fn from_fetched_body(html_body: Option<&str>) -> Self {
         if html_body.is_some() {
             Self::Present
@@ -252,10 +222,7 @@ impl HtmlPresence {
     }
 }
 
-/// Caps plain text at 10,000 characters (D1), preferring the `text/plain`
-/// part and falling back to tag-stripped HTML only when no plain-text part
-/// exists. A pure function so it's testable independent of any Gmail fetch
-/// or storage write.
+
 pub fn truncate_body(plain: Option<&str>, html: Option<&str>) -> Option<String> {
     const MAX_CHARS: usize = 10_000;
     let source = plain.map(str::to_owned).or_else(|| html.map(strip_tags))?;
@@ -298,8 +265,7 @@ pub struct Message {
 }
 
 impl Message {
-    /// True when neither body part is stored, i.e. the reader has nothing to
-    /// show regardless of what `html_presence` claims.
+
     pub fn body_is_empty(&self) -> bool {
         self.html_body.is_none() && self.plain_body.is_none()
     }
@@ -546,10 +512,7 @@ impl MessageRepository {
         }
         Ok(messages)
     }
-    /// Every locally stored message id for an account — the universe
-    /// reconciliation's server-diff (Phase 5) compares against. No existing
-    /// method provided this: the old expired-checkpoint path deleted
-    /// unconditionally and never needed to know what it already had.
+
     pub fn all_ids(connection: &Connection, account_id: &str) -> Result<Vec<String>> {
         let mut statement =
             connection.prepare("SELECT id FROM messages WHERE account_id=?1 ORDER BY id")?;
@@ -558,8 +521,7 @@ impl MessageRepository {
             .collect();
         ids
     }
-    /// Filters a bounded candidate set through batched primary-key lookups,
-    /// preserving first-seen order and removing duplicates before Gmail gets.
+
     pub fn missing_ids(
         connection: &Connection,
         account_id: &str,
@@ -588,20 +550,7 @@ impl MessageRepository {
             .filter(|id| !existing.contains(id))
             .collect())
     }
-    /// Traversal's own upsert (D1/Phase 4): writes the metadata and
-    /// truncated body a whole-mailbox backfill/reconciliation fetch
-    /// discovers for a message. Unlike [`Self::write_full_state`], this
-    /// **never touches `html_body`, `plain_body` or `html_presence` on a
-    /// row that already exists** — those columns may already hold real
-    /// content fetched by initial/incremental sync or the lazy open-time
-    /// fetch (Phase 6), and a whole-mailbox traversal re-encountering that
-    /// same message (which it always will, for every message initial sync
-    /// already pulled into Inbox) must never downgrade it back to
-    /// truncated-only. A brand-new row is inserted with the caller's
-    /// `html_presence` (always [`HtmlPresence::NeverFetched`] for a
-    /// traversal-only fetch), which is the normal state of a message
-    /// backfill alone has ever seen. Gated by the same strict
-    /// `history_id`-freshness rule as every other write path.
+
     pub fn write_traversal_state(connection: &Connection, message: &Message) -> Result<bool> {
         let changed = connection.prepare_cached(
             "INSERT INTO messages (account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence)
@@ -640,11 +589,7 @@ impl MessageRepository {
             ])?;
         Ok(changed == 1)
     }
-    /// The Gmail draft id resolved and cached for this message (V5), if any
-    /// — distinct from the message's own id, and only ever set for a
-    /// message carrying the `DRAFT` label. See
-    /// [`Self::set_draft_id`]/`sync::mutations::delete_draft` for how it's
-    /// populated and consumed.
+
     pub fn draft_id(connection: &Connection, account_id: &str, id: &str) -> Result<Option<String>> {
         connection
             .query_row(
@@ -679,9 +624,7 @@ impl MessageRepository {
         )?;
         Ok(())
     }
-    /// Writes both parts of a just-fetched body. Storing only the HTML would
-    /// leave a plain-text-only message (bounce notices, mailing-list digests)
-    /// marked fetched with nothing to render.
+
     pub fn set_body(
         connection: &Connection,
         account_id: &str,
@@ -696,12 +639,7 @@ impl MessageRepository {
         )?;
         Ok(())
     }
-    /// Replaces a message's entire label membership set with exactly
-    /// `label_ids`, maintaining the denormalised `is_unread`/`is_starred`
-    /// columns via the same [`Self::set_label_membership`] every other
-    /// mutation path uses — so bulk reconciliation overwrite (Phase 5) and
-    /// thread recomputation never drift from actual membership (Phase 3
-    /// AC5).
+
     pub fn overwrite_membership(
         connection: &Connection,
         account_id: &str,
@@ -773,10 +711,7 @@ impl MessageRepository {
         }
         Ok(())
     }
-    /// Removes a message (and, via `ON DELETE CASCADE`, its label
-    /// memberships and inline parts). Returns the message's `thread_id` so
-    /// callers can recompute that thread's summary, or `None` if the
-    /// message was already gone.
+
     pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<Option<String>> {
         connection
             .query_row(
@@ -808,10 +743,7 @@ impl MessageRepository {
             .collect();
         labels
     }
-    /// Replaces the stored inline (Content-ID) parts for a message with the
-    /// set observed in the latest full-state fetch. Delete-then-insert
-    /// rather than a diff — inline parts are small and only refreshed on a
-    /// full message fetch, never partially.
+
     pub fn replace_inline_parts(
         connection: &Connection,
         account_id: &str,
@@ -940,10 +872,7 @@ pub struct InlinePart {
     pub bytes: Vec<u8>,
 }
 
-/// A resolved participant identity stored on a thread summary (D12): a
-/// display label (never a raw `Name <address>` header string) and a bare
-/// address. Encoded to/from a single JSON `TEXT` column — see the V9
-/// migration's comment on why this is one column, not two.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadIdentity {
     pub display: String,
@@ -988,10 +917,9 @@ pub struct Thread {
     pub is_starred: bool,
     pub has_attachments: bool,
     pub has_draft: bool,
-    /// The newest message's sender, resolved once at write time (D12/D13).
+
     pub sender_identity: ThreadIdentity,
-    /// The newest Sent-labelled message's first recipient, when the thread
-    /// carries at least one Sent message; `None` otherwise.
+
     pub recipient_identity: Option<ThreadIdentity>,
 }
 
@@ -1023,11 +951,7 @@ impl ThreadRepository {
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Thread>> {
         connection.query_row("SELECT account_id,id,subject,participants,latest_at,message_count,is_unread,is_starred,has_attachments,has_draft,sender_identity,recipient_identity FROM threads WHERE account_id=?1 AND id=?2", params![account_id,id], thread).optional()
     }
-    /// Recomputes one thread's aggregate summary from its current messages,
-    /// or removes the thread row entirely once it has none left. Callers
-    /// invoke this once per touched `thread_id` after applying a batch of
-    /// message/label writes, rather than keeping counters incrementally in
-    /// sync (aggregation from source rows can't drift).
+
     pub fn recompute(connection: &Connection, account_id: &str, thread_id: &str) -> Result<()> {
         let mut statement = connection.prepare(
             "SELECT m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
@@ -1106,12 +1030,9 @@ impl ThreadRepository {
             has_draft |= row.is_draft;
         }
         let latest = rows.last().expect("checked non-empty above");
-        // D13: the row names the *newest* message's sender, not the first
-        // participant — rows arrive in ascending `sent_at` order, so the
-        // last row is the newest.
+
         let sender_identity = ThreadIdentity::from_header(&latest.sender, ThreadIdentity::no_sender);
-        // The newest Sent-labelled message's first recipient, if any — walk
-        // from the end so "newest" matches the sender rule above.
+
         let recipient_identity = rows.iter().rev().find(|row| row.is_sent).map(|row| {
             ThreadIdentity::from_header(&row.to_recipients, ThreadIdentity::no_recipient)
         });
@@ -1155,8 +1076,7 @@ impl ThreadRepository {
             .execute(params![account_id, thread_id, latest_at])?;
         Ok(())
     }
-    /// Cursor-paginated, newest first, optionally filtered to threads that
-    /// have at least one message carrying `label_id`.
+
     pub fn list_paginated(
         connection: &Connection,
         account_id: &str,
@@ -1299,13 +1219,7 @@ impl OperationRepository {
         let operations = statement.query_map([], operation)?.collect();
         operations
     }
-    /// Flips every send stuck `active` (interrupted mid-promotion — it may
-    /// have delivered and may have consumed its draft) to a terminal,
-    /// non-retried `failed`/uncertain state, returning the distinct account
-    /// ids affected so the caller can schedule exactly one reconciling sync
-    /// per account and emit `send://uncertain` (see
-    /// `queue::recover_durable_operations`). A `queued` send never started
-    /// and is safe to recover ordinarily via [`Self::pending_durable`].
+
     pub fn mark_interrupted_sends_uncertain(connection: &Connection) -> Result<Vec<String>> {
         let mut statement = connection.prepare(
             "UPDATE operations
@@ -1320,11 +1234,7 @@ impl OperationRepository {
         accounts.sort();
         Ok(accounts)
     }
-    /// A draft interrupted mid-execution (crash/kill while `active`) is safe
-    /// to retry — create/update are idempotent from Gmail's perspective, and
-    /// recovery rebuilds the request from the persisted manifest rather than
-    /// any in-memory closure — so it is simply requeued for
-    /// [`Self::pending_durable`] to pick back up.
+
     pub fn requeue_interrupted_drafts(connection: &Connection) -> Result<usize> {
         connection.execute("UPDATE operations SET status='queued', updated_at=strftime('%s','now') WHERE kind='draft' AND status='active'", [])
     }
@@ -1335,8 +1245,7 @@ impl OperationRepository {
         )?;
         Ok(())
     }
-    /// Persists a completed operation's terminal state — `done`, `failed` or
-    /// `superseded` (coalesced away by a newer save for the same session).
+
     pub fn mark_terminal(
         connection: &Connection,
         id: &str,
@@ -1353,9 +1262,7 @@ impl OperationRepository {
         connection.execute("DELETE FROM operations WHERE id=?1", params![id])?;
         Ok(())
     }
-    /// Cancels every not-yet-confirmed create for a compose session. Active
-    /// executors observe `discarded` after Gmail returns and delete that
-    /// just-created draft before exposing it to the rest of the app.
+
     pub fn discard_session_creates(
         connection: &Connection,
         account_id: &str,
@@ -1391,16 +1298,10 @@ impl SettingRepository {
     }
 }
 
-/// A one-off internal marker recording that the V9 thread-summary rebuild
-/// (D12) has already run against this database, so restarts don't pay the
-/// recompute cost again. Not a user-facing setting — never surfaced through
-/// `SettingsService`.
+
 const AVATAR_IDENTITY_REBUILD_MARKER: &str = "internal.avatarThreadIdentityRebuildV9";
 
-/// Rebuilds every existing thread's stored identity once after the V9
-/// migration lands, reusing [`ThreadRepository::recompute_many`] rather than
-/// inventing a second aggregation path (D12). A no-op on every subsequent
-/// open once the marker is set, and a cheap no-op on a fresh/empty database.
+
 pub(super) fn rebuild_thread_identities_once(connection: &Connection) -> Result<()> {
     if SettingRepository::get(connection, AVATAR_IDENTITY_REBUILD_MARKER)?.is_some() {
         return Ok(());
@@ -1421,7 +1322,7 @@ pub(super) fn rebuild_thread_identities_once(connection: &Connection) -> Result<
     Ok(())
 }
 
-/// Whether a cached avatar lookup found something (D2's negative caching).
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvatarCacheOutcome {
     Hit,
@@ -1446,8 +1347,7 @@ impl AvatarCacheOutcome {
 pub struct AvatarCacheRecord {
     pub cache_key: String,
     pub outcome: AvatarCacheOutcome,
-    /// Path to the cached PNG, relative to the avatar cache root. `None` on
-    /// a miss.
+
     pub image_path: Option<String>,
     pub looked_up_at: i64,
 }
@@ -1486,10 +1386,7 @@ impl AvatarCacheRepository {
     }
 }
 
-/// Which whole-mailbox traversal produced a cursor row. Fully defined here
-/// (including `Reconciliation`) even though reconciliation itself doesn't
-/// exist yet (Phase 5) — Phase 6 needs to render reconciliation wording
-/// without depending on that phase landing first.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraversalKind {
     Backfill,
@@ -1519,20 +1416,11 @@ pub struct TraversalCursor {
     pub persisted_count: i64,
     pub completed: bool,
     pub last_advanced_at: i64,
-    /// Snapshotted once per logical run (migration
-    /// `V6__traversal_cursor_resumed_flag`) — whether this row already had a
-    /// saved checkpoint `position` at the moment the current run began, not
-    /// whether `position` happens to be non-null right now. See
-    /// `sync::traversal::run_backfill_step`'s documentation.
+
     pub resumed: bool,
 }
 
-/// Backfill and reconciliation each own an independent row, keyed by
-/// `(account_id, kind)` — see migration `V4__traversal_cursor_composite_key`.
-/// A reconciliation pass's checkpoint writes can therefore never clobber an
-/// in-progress backfill's `position`/counts (or vice versa); the two
-/// traversals remain mutually exclusive only via the queue's per-account
-/// entity lock (`traversal::traversal_entity_key`, D3), not via this table.
+
 pub struct TraversalCursorRepository;
 impl TraversalCursorRepository {
     pub fn upsert(connection: &Connection, cursor: &TraversalCursor) -> Result<()> {

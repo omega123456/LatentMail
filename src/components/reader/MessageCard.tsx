@@ -12,8 +12,6 @@ export type ReaderMessage = {
   id: string;
   sender: MessageSender;
   recipients: Participant[];
-  /** Role-separated recipients (D14) — `toRecipients` falls back to
-   * `recipients` for fixtures/tests that only populate the flattened list. */
   toRecipients?: Participant[];
   ccRecipients?: Participant[];
   bccRecipients?: Participant[];
@@ -27,15 +25,10 @@ export type ReaderMessage = {
   unread?: boolean;
   starred?: boolean;
   remoteImagesBlocked?: boolean;
-  /** True when this message is itself a Gmail draft — governs Edit Draft
-   * visibility on its own ribbon/context-menu entry (FR "Entry surfaces"). */
   isDraft?: boolean;
-  /** Stable Gmail draft id, distinct from the changing Gmail message id. */
   draftId?: string | null;
 };
 
-/** Every prop `MessageActionRibbon` needs besides this message's own
- * read/star state, which `MessageCard` derives from `message` itself. */
 export type MessageRibbonProps = Omit<MessageActionRibbonProps, 'unread' | 'starred'>;
 
 export function MessageCard({
@@ -51,9 +44,6 @@ export function MessageCard({
   message: ReaderMessage;
   expanded: boolean;
   newest: boolean;
-  /** Renders `MessageActionRibbon` when supplied. Always present in the
-   * real reading pane (AC3) — omitted only by standalone/fixture tests that
-   * don't need it. */
   ribbon?: MessageRibbonProps;
   onFetchBody?: (messageId: string) => void;
   loadingBody?: boolean;
@@ -63,10 +53,6 @@ export function MessageCard({
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
   const requested = useRef<string | null>(null);
-  // A row marked fetched but holding neither part is a body an earlier build
-  // dropped (it stored only the HTML, so plain-text-only mail such as a bounce
-  // notice ended up blank) — refetching repairs it rather than rendering "no
-  // content" forever.
   const needsBody = message.htmlPresence === 'neverFetched' || (!message.html && !message.text);
   useEffect(() => {
     if (!open || !needsBody || requested.current === message.id) return;
@@ -93,7 +79,7 @@ export function MessageCard({
             aria-expanded={open}
             aria-label={`${open ? 'Collapse' : 'Expand'} message from ${message.sender.name || message.sender.address}`}
             onClick={() => setExpanded((value) => !value)}
-            className="mt-3 shrink-0 rounded-sm p-1 text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary"
+            className="mt-3 shrink-0 cursor-pointer rounded-sm p-1 text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary"
           >
             {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           </button>
@@ -130,7 +116,7 @@ export function MessageCard({
                 Couldn’t load this message.{' '}
                 <button
                   onClick={() => onFetchBody?.(message.id)}
-                  className="underline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="cursor-pointer underline focus-visible:outline-2 focus-visible:outline-primary"
                 >
                   Retry
                 </button>

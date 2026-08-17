@@ -1,5 +1,3 @@
-//! Cache key derivation, the three expiry lifetimes' boundaries (D3),
-//! negative-record behaviour and the on-disk file lifecycle (D2).
 
 use chrono::{Duration, Utc};
 use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain};
@@ -22,9 +20,7 @@ fn root_exposes_the_cache_directory_the_cache_was_built_with() {
 fn new_surfaces_a_readable_error_when_the_cache_directory_cannot_be_created() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    // A plain file cannot be `mkdir -p`'d through — `create_dir_all` fails
-    // with a real filesystem error, exercising the map_err path both
-    // directory-creation calls in `new` share.
+
     let blocking_file = directory.path().join("not-a-directory");
     std::fs::write(&blocking_file, b"x").unwrap();
     let root = blocking_file.join("avatar-cache");
@@ -34,9 +30,7 @@ fn new_surfaces_a_readable_error_when_the_cache_directory_cannot_be_created() {
 #[tokio::test]
 async fn store_hit_surfaces_a_readable_error_when_the_target_path_cannot_be_written() {
     let (cache, _directory) = cache();
-    // A cache key containing a path separator targets a subdirectory that
-    // was never created, so the write fails — exercising store_hit's error
-    // path without needing to break the filesystem itself.
+
     let error = cache
         .store_hit("nested/missing-dir-key", CacheDomain::Sender, b"bytes")
         .await
@@ -46,10 +40,7 @@ async fn store_hit_surfaces_a_readable_error_when_the_target_path_cannot_be_writ
 
 #[tokio::test]
 async fn a_record_with_an_out_of_range_timestamp_is_treated_as_expired() {
-    // `DateTime::from_timestamp` returns `None` for a value outside
-    // chrono's representable range — an unreachable timestamp in practice,
-    // but `is_expired` must fail safe (treat it as expired) rather than
-    // panic or treat it as eternally fresh.
+
     let (cache, directory) = cache();
     let db_path = directory.path().join("mail.sqlite");
     let storage = Storage::open(&db_path).unwrap();
@@ -69,14 +60,13 @@ async fn a_record_with_an_out_of_range_timestamp_is_treated_as_expired() {
 
 #[test]
 fn hash_key_never_contains_the_raw_identifier() {
-    // Account identifiers are email addresses (D-assumption) and must never
-    // appear literally in a derived key/filename.
+
     let key = hash_key("kovacsjozsef89@hotmail.com");
     assert!(!key.contains('@'));
     assert!(!key.contains("kovacsjozsef89"));
-    // Stable and deterministic for the same input.
+
     assert_eq!(key, hash_key("kovacsjozsef89@hotmail.com"));
-    // Distinct inputs never collide in this test's sample.
+
     assert_ne!(key, hash_key("other@hotmail.com"));
 }
 
@@ -111,7 +101,7 @@ async fn a_stored_miss_answers_fresh_with_no_path_and_writes_no_file() {
         cache.answer(&key, CacheDomain::Sender).await,
         CacheAnswer::Fresh(None)
     );
-    // Never wrote an image file for a miss (D2: files only exist for hits).
+
     let senders_dir = directory.path().join("avatar-cache").join("senders");
     let count = std::fs::read_dir(&senders_dir).unwrap().count();
     assert_eq!(count, 0);
@@ -135,7 +125,7 @@ async fn seeded(
         .run(move |connection| AvatarCacheRepository::upsert(connection, &record))
         .await
         .unwrap();
-    let _ = cache; // cache shares the same on-disk database as `storage`.
+    let _ = cache;
 }
 
 #[tokio::test]

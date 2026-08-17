@@ -21,7 +21,7 @@ export function ReauthBanner({ accountId }: { accountId: string }) {
       <button
         onClick={() => void fix()}
         disabled={fixing}
-        className="rounded-sm bg-error px-3 py-1 text-on-error disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary"
+        className="cursor-pointer rounded-sm bg-error px-3 py-1 text-on-error disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary"
       >
         {fixing ? 'Fixing…' : 'Fix'}
       </button>

@@ -36,7 +36,6 @@ it('renders a resolved account photograph on the expanded trigger without a warn
       />
     </QueryClientProvider>,
   );
-  // No photo resolved (fixture path is null) — falls back to the letter
-  // initial silently, no warning of any kind.
+
   expect(screen.getByRole('button', { name: /Alex Morgan/ })).toHaveTextContent('A');
 });

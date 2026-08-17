@@ -23,10 +23,6 @@ const tauriListen = vi.fn(
   },
 );
 
-/** Deterministic stand-in for the real `convertFileSrc`, which resolves
- * against a live Tauri asset-protocol registration jsdom has no equivalent
- * for. Shaped like the macOS `asset:` form; `file-drop`/`staging` tests
- * assert on the returned URL's *scope*, not its OS-specific host. */
 const tauriConvertFileSrc = vi.fn(
   (path: string, protocol = 'asset') => `${protocol}://localhost/${encodeURIComponent(path)}`,
 );
@@ -36,12 +32,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: tauriListen }));
 
-/** `getCurrentWebview().onDragDropEvent(...)` is the app's only native
- * drag-drop consumer (`src/lib/compose/file-drop.ts`). It doesn't go
- * through `@tauri-apps/api/event`'s `listen`, so it needs its own
- * centralized adapter here rather than an ad hoc per-test mock — routed
- * through the same `listeners` map, keyed by the synthetic
- * `'tauri://drag-drop'` channel, and driven by the same `ipc.emit`. */
 const tauriOnDragDropEvent = vi.fn(async (handler: (event: { payload: unknown }) => void) => {
   const wrapped: Listener = (payload) => handler({ payload });
   const key = 'tauri://drag-drop' as keyof IpcEventMap;

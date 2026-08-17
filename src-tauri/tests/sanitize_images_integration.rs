@@ -24,8 +24,7 @@ fn resolves_cid_images_and_rewrites_remote_images() {
     assert!(result.html.contains("data:image/gif;base64"));
     assert!(!result.html.contains("tracker.example"));
     assert!(!result.html.contains("data:text"));
-    // The reader renders its "Remote images are blocked" notice off this
-    // flag; without it a real message shows placeholder gifs unexplained.
+
     assert!(result.remote_images_blocked);
 }
 

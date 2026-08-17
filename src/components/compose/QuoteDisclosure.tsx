@@ -2,11 +2,6 @@ import { Collapsible } from 'radix-ui';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { BodyFrame } from '@/components/reader/BodyFrame';
 
-/** The collapsed-by-default quoted original. Renders through the existing
- * `BodyFrame` — the reader's dual-sanitized, script-free
- * `sandbox="allow-same-origin"` iframe — so untrusted HTML never enters the
- * editable compose document by any other path (D2). Genuinely non-editable
- * and announced as read-only quoted content, not merely styled inert. */
 export function QuoteDisclosure({
   html,
   attribution,

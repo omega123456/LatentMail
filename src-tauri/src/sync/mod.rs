@@ -1,19 +1,3 @@
-//! Synchronization engine: initial sync, incremental (history-based) sync,
-//! full re-sync fallback, thread derivation, and the Mail-read / Sync IPC
-//! commands that Phase 18 wires the UI against.
-//!
-//! Design note on queue routing: the queue's `Executor` is a single
-//! process-wide closure keyed only by `QueueOperation` (id/kind/entity_key),
-//! with no payload or result channel (see `queue::QueueEngine`). To route
-//! arbitrary async Gmail work through the queue's background lane while
-//! still getting a typed result back, this module registers a one-shot
-//! closure per operation id in [`WorkRegistry`] and pairs it with a oneshot
-//! channel; [`create_queue_engine`] wires the registry into the engine's
-//! executor. `OperationKind::Sync` never retries at the queue layer (the
-//! Gmail client already retries 429/5xx/network internally, and a failed
-//! sync run is simply retried by the next scheduler tick), so the
-//! registered closure is safe to consume as `FnOnce`.
-
 use std::{
     collections::HashSet,
     future::Future,
@@ -57,10 +41,6 @@ pub use dto::{
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 
-// ---------------------------------------------------------------------
-// Queue wiring
-// ---------------------------------------------------------------------
-
 type BoxFuture = Pin<Box<dyn Future<Output = Result<(), QueueError>> + Send>>;
 type OneShotWork = Box<dyn FnOnce() -> BoxFuture + Send>;
 
@@ -70,9 +50,6 @@ struct QueueRoute {
     entity_key: String,
 }
 
-/// Holds pending sync work keyed by the `QueueOperation::id` that was
-/// enqueued for it, so the queue's single global executor can find and run
-/// it. See the module doc for why this indirection exists.
 #[derive(Default)]
 pub struct WorkRegistry {
     work: StdMutex<std::collections::HashMap<String, OneShotWork>>,
@@ -96,9 +73,6 @@ impl WorkRegistry {
     }
 }
 
-/// Builds a `QueueEngine` whose executor dispatches through `registry`.
-/// Every module that wants to run work on the queue (this phase: sync;
-/// future phases: interactive mutations) shares one engine + registry pair.
 pub fn create_queue_engine(
     rate_per_second: u32,
     burst: u32,
@@ -116,13 +90,6 @@ pub fn create_queue_engine_with_events(
     QueueEngine::new_with_events(rate_per_second, burst, registry_executor(registry), events)
 }
 
-/// The `WorkRegistry`-backed executor every non-durable operation kind
-/// dispatches through (in-memory, one-shot closures — fine for kinds that
-/// are never expected to survive a restart). Extracted so production
-/// startup ([`initialize`]) can compose it with
-/// `compose::drafts::build_executor`'s payload-reconstructing executor for
-/// `Draft`/`Send`, which — unlike this one — must never depend on captured
-/// process memory (D15).
 fn registry_executor(registry: Arc<WorkRegistry>) -> Executor {
     Arc::new(move |operation: QueueOperation| -> OperationFuture {
         let registry = Arc::clone(&registry);
@@ -140,11 +107,6 @@ fn gmail_base_url() -> String {
         .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into())
 }
 
-/// Submits `future` as a single background-lane operation for `account_id`
-/// and awaits its result. All operations for the same account share the
-/// entity key `sync:<account_id>`, so an initial sync, a resync and an
-/// incremental poll for the same account can never run concurrently — the
-/// queue's entity lock serializes them.
 async fn run_via_queue<F, T>(
     queue: &Arc<QueueEngine>,
     registry: &Arc<WorkRegistry>,
@@ -171,9 +133,7 @@ where
     .await
 }
 
-/// Like [`run_via_queue`], but for a traversal task which must share
-/// backfill's lane and entity key. Kept separate from the ordinary sync
-/// route so initial and incremental sync retain their established routing.
+
 async fn run_via_traversal_queue<F, T>(
     queue: &Arc<QueueEngine>,
     registry: &Arc<WorkRegistry>,
@@ -234,11 +194,7 @@ where
         lane: route.lane,
         kind: route.kind,
         entity_key: route.entity_key,
-        // ponytail: a flat cost stand-in for the whole sync run — Gmail's
-        // own per-request quota pacing already lives inside `GmailClient`'s
-        // token bucket; this queue-level cost only paces *concurrent sync
-        // runs*, so a nominal value is sufficient. Revisit if per-request
-        // queue-level pacing is ever required.
+
         cost: 0,
         attempts: 0,
     };
@@ -249,14 +205,7 @@ where
     rx.await.map_err(|_| SyncError::QueueStopped)?
 }
 
-/// Best-effort classification of a mutation request's `OperationKind`,
-/// used only for the enqueued flush operation's retry bookkeeping. A flush
-/// now carries heterogeneous deltas once entities are grouped by
-/// `sync::mutations`, so a single label-shaped kind can no longer be
-/// authoritative for the whole flush — every branch here retries
-/// identically regardless (`OperationKind::retries`), so this is purely
-/// informational. Kept here (sync's own star/read vocabulary) rather than
-/// in the generic delta-map machinery in `sync::mutations`.
+
 fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> OperationKind {
     if add.contains("STARRED") {
         OperationKind::Star
@@ -279,9 +228,6 @@ fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> Ope
     }
 }
 
-// ---------------------------------------------------------------------
-// Errors and status
-// ---------------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum SyncError {
@@ -289,8 +235,7 @@ pub enum SyncError {
     Storage(StorageError),
     QueueStopped,
     UnknownAccount,
-    /// A failure fanned out to every waiter of a coalesced batch, kept as a
-    /// string because `GmailError`/`StorageError` are not `Clone`.
+
     Failed(String),
 }
 
@@ -332,13 +277,7 @@ struct AccountStatus {
     last_error: Option<String>,
 }
 
-// ---------------------------------------------------------------------
-// Events (named emitters)
-// ---------------------------------------------------------------------
 
-/// A sink for Rust-emitted events, decoupled from `tauri::AppHandle` so the
-/// engine is unit-testable without standing up a real Tauri app. Production
-/// wiring (`initialize`) supplies one backed by `AppHandle::emit`.
 pub type EventSink = Arc<dyn Fn(&'static str, serde_json::Value) + Send + Sync>;
 
 pub fn noop_event_sink() -> EventSink {
@@ -351,7 +290,7 @@ pub struct SyncProgressEvent {
     pub account_id: String,
     pub state: SyncState,
 }
-/// Named emitter for `sync://progress`.
+
 pub fn emit_progress(sink: &EventSink, event: SyncProgressEvent) {
     sink(
         "sync://progress",
@@ -367,7 +306,7 @@ pub struct SyncCompleteEvent {
     pub added_count: u32,
     pub changed: bool,
 }
-/// Named emitter for `sync://complete`.
+
 pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
     sink(
         "sync://complete",
@@ -375,10 +314,7 @@ pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
     );
 }
 
-/// One newly arrived, still-unread Inbox message, carried on `mail://new`
-/// so the frontend can raise an OS notification without a round trip.
-/// Only the incremental (poll) path fills these in — a full sync's
-/// "additions" are the whole mailbox, which must never be announced.
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailArrival {
@@ -393,7 +329,7 @@ pub struct NewMailEvent {
     pub thread_ids: Vec<String>,
     pub arrivals: Vec<MailArrival>,
 }
-/// Named emitter for `mail://new`.
+
 pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
     sink(
         "mail://new",
@@ -401,9 +337,6 @@ pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
     );
 }
 
-// ---------------------------------------------------------------------
-// Engine
-// ---------------------------------------------------------------------
 
 pub struct SyncEngine {
     storage: Storage,
@@ -412,20 +345,8 @@ pub struct SyncEngine {
     events: EventSink,
     status: AsyncMutex<std::collections::HashMap<String, AccountStatus>>,
     op_counter: Arc<AtomicU64>,
-    /// The per-account, per-entity pending mutation delta map (D5) — see
-    /// `sync::mutations` for the coalescing/flush mechanism built on top of
-    /// it.
     pending: AsyncMutex<mutations::PendingMutations>,
     gmail_limiters: GmailRateLimiters,
-    /// Account ids with a backfill chain currently live (enqueued but not
-    /// yet terminal). Guards [`SyncEngine::enqueue_backfill`] against
-    /// starting a second concurrent chain for the same account — the
-    /// scheduler calls it unconditionally on every tick, and a fresh
-    /// backfill routinely spans more than one `sync_interval_seconds`
-    /// window. This is *in addition to* the queue's own entity-lock
-    /// serialization (`queue::mod`), not a replacement for it: that lock
-    /// only serializes operations once they run, it does not stop a second
-    /// chain from being kicked off and interleaved with the first.
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
 }
 
@@ -523,9 +444,6 @@ impl SyncEngine {
             entry.last_error = Some(error.to_string());
         }
         tracing::error!(target: "sync", "sync for {account_id} failed: {error}");
-        // `set_syncing` announced the run; without a matching announcement
-        // here the frontend keeps rendering "Syncing…" forever, since only
-        // `sync://complete` ever clears it.
         emit_progress(
             &self.events,
             SyncProgressEvent {
@@ -535,10 +453,6 @@ impl SyncEngine {
         );
     }
 
-    /// Runs whichever sync is appropriate for the account's current
-    /// checkpoint: initial sync if none exists yet, otherwise incremental
-    /// (which itself falls back to a full re-sync on an expired checkpoint,
-    /// per D13).
     pub async fn run_sync(&self, account_id: &str, client: GmailClient) -> Result<(), SyncError> {
         let account = self
             .storage
@@ -569,9 +483,6 @@ impl SyncEngine {
         let op_id = self.next_op_id(account_id);
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
-        // Cloned before `client` moves into the queued closure below — kept
-        // around purely to hand to `enqueue_backfill` afterward.
-        // `full_sync_body` itself is untouched by any of this (Phase 4 AC5).
         let backfill_client = client.clone();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
             full_sync_body(&storage, &client, &account_owned).await
@@ -579,62 +490,18 @@ impl SyncEngine {
         .await;
         let result = self.finish(account_id, outcome).await;
         if result.is_ok() {
-            // Whole-mailbox backfill begins only once initial sync has
-            // produced its full-body Inbox (Functional Requirements /
-            // D1) — never in parallel with it, and never in place of it.
             self.enqueue_backfill(account_id, backfill_client).await;
         }
         result
     }
 
-    /// Enqueues whole-mailbox backfill's first discrete unit of work — one
-    /// page — as a traversal-lane operation under the entity key backfill
-    /// and reconciliation (Phase 5) share ([`traversal::traversal_entity_key`],
-    /// D3), so the queue's per-account entity lock keeps the two mutually
-    /// exclusive. Called right after initial sync completes, and again from
-    /// every scheduler tick (see `start_scheduler`) as the resumption path
-    /// for an app restart that lands mid-backfill: once the account already
-    /// has a checkpoint, every later `run_sync` takes the `incremental_sync`
-    /// branch, which never calls this — the scheduler is what re-offers
-    /// backfill a chance to finish. Cheap to call unconditionally either
-    /// way: [`traversal::run_backfill_step`] itself detects an
-    /// already-complete cursor and returns immediately without any Gmail
-    /// request.
-    ///
-    /// Plan-adherence audit item 5 fix: each call to this only enqueues
-    /// *one page's* worth of work rather than the whole multi-hour backfill
-    /// as a single operation. Once that page's step completes, the
-    /// registered closure re-enqueues the next step as a brand-new queue
-    /// operation before returning — so the traversal lane permit and the
-    /// account's entity lock are released between every page, exactly the
-    /// "every unit of work is a discrete operation" requirement, and every
-    /// page automatically gets the queue's own per-operation
-    /// `wait_until_resumed`/`wait_for_interactive` checks (previously only
-    /// evaluated once, before the whole backfill started). Fire-and-forget
-    /// — nothing here awaits backfill's own completion, so this never
-    /// lengthens a sync run it's called after.
     pub async fn enqueue_backfill(&self, account_id: &str, client: GmailClient) {
-        // Guard against a second concurrent chain: the scheduler calls this
-        // unconditionally every tick, and a fresh backfill routinely
-        // outlives one `sync_interval_seconds` window. If a chain is
-        // already live for this account, skip — the live chain's own
-        // recursive `enqueue_backfill_step` calls will keep resuming until
-        // it's done. See `active_backfills`'s doc comment.
         {
             let mut active = self.active_backfills.lock().await;
             if !active.insert(account_id.to_owned()) {
                 return;
             }
         }
-        // Snapshotted once, right here, at the moment this logical backfill
-        // run begins — *not* re-derived from the cursor's `position` on
-        // every later page. `position` becomes non-null the instant this
-        // very run's own first page commits, so deriving "resumed" from it
-        // live would make an uninterrupted run's status bar read "Resuming
-        // backfill" from page 2 onward. `resumed` is true only when this
-        // run is genuinely picking up a checkpoint a *previous* process/run
-        // left behind — exactly what a non-null `position` here, before
-        // this run has written anything of its own, means.
         let resumed = self
             .storage
             .run({
@@ -667,11 +534,6 @@ impl SyncEngine {
         .await;
     }
 
-    /// Polls history from `checkpoint` and applies deltas. On an expired
-    /// checkpoint (D13: `history.list` 404), falls back to a full re-sync
-    /// within the *same* queued operation — the checkpoint's fate (advance
-    /// only on success) is identical either way, so both paths funnel
-    /// through the same completion/error handling below.
     async fn incremental_sync(
         &self,
         account_id: &str,
@@ -701,22 +563,7 @@ impl SyncEngine {
                     arrivals,
                 }),
                 IncrementalOutcome::Expired => {
-                    // ponytail: this still enqueues reconciliation onto the
-                    // traversal lane from *inside* the current background-lane
-                    // operation and awaits it here — if backfill is mid-run and
-                    // holding the traversal entity lock, this await blocks
-                    // until backfill yields that lock, pinning a background-
-                    // lane permit for however long that takes (plan-adherence
-                    // audit item 5, second half; not fully fixed this phase).
-                    // The blast radius is now much smaller than before backfill
-                    // was split into discrete per-page operations (this phase's
-                    // main item 5 fix): the longest a background permit can be
-                    // pinned is one backfill page, not the whole multi-hour
-                    // run. Upgrade path: give incremental sync's expired-
-                    // checkpoint branch its own fire-and-forget enqueue (mirroring
-                    // `enqueue_backfill`) instead of awaiting reconciliation
-                    // inline, if this ever proves to still starve background
-                    // work in practice.
+
                     let reconciliation_client = client.traversal_scoped();
                     let reconciliation_storage = storage.clone();
                     let reconciliation_account = account_owned.clone();
@@ -761,8 +608,7 @@ impl SyncEngine {
         }
     }
 
-    /// Advances the checkpoint (completion only, never on acceptance or
-    /// failure — see D6/D13) and emits completion/new-mail events.
+
     async fn complete(
         &self,
         account_id: &str,
@@ -809,25 +655,7 @@ impl SyncEngine {
     }
 }
 
-/// Enqueues exactly one traversal-lane [`traversal::run_backfill_step`] as
-/// its own `QueueOperation`, and — once that step's closure runs and
-/// reports backfill isn't finished yet — enqueues the *next* step the same
-/// way before the closure returns. A free function (not a `SyncEngine`
-/// method) because the registered closure is `'static` and needs its own
-/// owned/`Arc`'d handles rather than a borrow of `&self`; recursion needs
-/// boxing since `async fn` can't otherwise refer to itself. See
-/// [`SyncEngine::enqueue_backfill`]'s documentation for why this exists.
-///
-/// `resumed` is fixed for the whole logical run this call chain drives — it
-/// is computed exactly once, by [`SyncEngine::enqueue_backfill`], before the
-/// first step, and every recursive call here simply forwards the same value
-/// unchanged. See [`traversal::run_backfill_step`]'s documentation for why
-/// it must *not* be recomputed per page.
-///
-/// `handles` bundles the `'static`, `Arc`'d/cloneable state every step
-/// needs (kept as one struct rather than five loose parameters purely to
-/// stay under clippy's argument-count lint — there's no other reason these
-/// five are grouped).
+
 fn enqueue_backfill_step(
     handles: BackfillHandles,
     account_id: String,
@@ -873,29 +701,16 @@ fn enqueue_backfill_step(
                     let completed = match step_result {
                         Ok(completed) => completed,
                         Err(_) => {
-                            // Terminal (permanent failure): no next step
-                            // will be enqueued, so this account's chain is
-                            // no longer live.
+
                             step_active_backfills.lock().await.remove(&step_account);
                             return Err(QueueError::Permanent);
                         }
                     };
                     if completed {
-                        // Terminal (finished): clear before returning so a
-                        // later scheduler tick's `enqueue_backfill` is free
-                        // to start a brand-new chain (e.g. after new mail
-                        // extends the mailbox again).
+
                         step_active_backfills.lock().await.remove(&step_account);
                     } else {
-                        // Enqueuing the next step here — *before* this
-                        // operation's own closure returns — is what keeps
-                        // each page a genuinely discrete unit: the queue
-                        // only releases this operation's traversal-lane
-                        // permit and the account's entity lock once this
-                        // future resolves, and the next page's operation
-                        // then has to re-acquire both from scratch rather
-                        // than the same operation just looping internally.
-                        // The guard stays set — the chain is still live.
+
                         enqueue_backfill_step(
                             BackfillHandles {
                                 queue: step_queue,
@@ -927,41 +742,30 @@ fn enqueue_backfill_step(
             })
             .await;
         if enqueue_result.is_err() {
-            // The registered closure above will never run (the queue
-            // rejected/dropped this step outright), so it will never get a
-            // chance to clear the guard itself — do it here instead, or a
-            // permanently stopped queue would wedge this account's backfill
-            // out forever.
+
             active_backfills.lock().await.remove(&account_id);
         }
     })
 }
 
-/// The `'static`, cloneable handles [`enqueue_backfill_step`] threads
-/// through its recursive queue-operation chain.
+
 struct BackfillHandles {
     queue: Arc<QueueEngine>,
     registry: Arc<WorkRegistry>,
     storage: Storage,
     events: EventSink,
     op_counter: Arc<AtomicU64>,
-    /// Cleared of this account's id the moment the chain this handles bundle
-    /// belongs to reaches a terminal state (completed, permanently failed,
-    /// or fails to enqueue its next step) — see
-    /// [`SyncEngine::active_backfills`].
+
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
 }
 
-// ---------------------------------------------------------------------
-// Full sync (initial sync + the D13 full re-sync fallback share this body)
-// ---------------------------------------------------------------------
 
 pub(crate) struct FullSyncOutcome {
     history_id: i64,
     added_count: u32,
     thread_ids: Vec<String>,
     changed: bool,
-    /// See [`MailArrival`] — empty for every full-sync path.
+
     arrivals: Vec<MailArrival>,
 }
 
@@ -1000,12 +804,7 @@ async fn full_sync_body(
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            // Wiping and rebuilding (rather than diffing) is what makes this
-            // "full" — it's shared by both initial sync (a no-op wipe, since
-            // the account has no rows yet) and the D13 re-sync fallback
-            // (where it also reconciles messages Gmail deleted while the
-            // checkpoint was expired, which incremental delta application
-            // alone cannot detect).
+
             transaction.execute("DELETE FROM messages WHERE account_id=?1", [&account_owned])?;
             transaction.execute("DELETE FROM threads WHERE account_id=?1", [&account_owned])?;
             for label in &gmail_labels {
@@ -1028,34 +827,10 @@ async fn full_sync_body(
     })
 }
 
-// ---------------------------------------------------------------------
-// Incremental sync (delta application)
-// ---------------------------------------------------------------------
 
-/// How deep into a newest-first Inbox listing [`probe_inbox`] looks. One
-/// page, sized for "what could plausibly have arrived since the last poll"
-/// rather than for completeness — the history stream remains the mechanism
-/// that catches everything else.
-///
-// ponytail: Inbox only, newest 25 — the mailbox users actually watch a sync
-// button for. A lagging history record for Spam, an archived label or
-// beyond the 25th newest Inbox message still waits for history to catch up.
-// Upgrade path: probe the active mailbox instead of a hard-coded INBOX if
-// that lag is ever noticed somewhere else.
 const INBOX_PROBE_SIZE: u32 = 25;
 
-/// Closes the window where Gmail has already delivered a message — it is
-/// listable, and visible in Gmail's own web UI — but no `history.list`
-/// record mentions it yet. That stream is only eventually consistent with
-/// delivery, so an incremental sync that trusted it alone would report
-/// success with nothing new to show and leave the message to surface
-/// "randomly" whenever a later poll happened to catch up.
-///
-/// `messages.list` has no such lag, so one newest-first Inbox page
-/// (`MESSAGES_LIST_COST`, once per incremental sync) is enough to notice.
-/// Only ids neither this run's history deltas nor the local database
-/// already hold cost a `messages.get` — on the overwhelmingly common
-/// nothing-new tick that is exactly zero extra fetches.
+
 async fn probe_inbox(
     storage: &Storage,
     client: &GmailClient,
@@ -1089,11 +864,7 @@ async fn probe_inbox(
     .await
 }
 
-/// Fetches every candidate id that neither this run already holds
-/// (`already`) nor the local database does. Shared by the two paths that
-/// discover an identifier without a usable delta attached: a history record
-/// whose change type we do not model (`HistoryRecord::messages`), and the
-/// Inbox freshness probe. `source` only names the caller in the log line.
+
 async fn fetch_unknown(
     storage: &Storage,
     client: &GmailClient,
@@ -1170,24 +941,7 @@ async fn incremental_body(
         token = page.next_page_token;
     }
 
-    // The checkpoint advances only as far as a record this run actually
-    // applied — deliberately NOT to the response's own `historyId`, which is
-    // the mailbox's *current* counter and routinely runs ahead of the
-    // records the API is willing to hand back. Adopting that counter is what
-    // lets a history record that materializes moments later fall below the
-    // checkpoint and be skipped permanently: `history.list` only ever
-    // returns records *after* `startHistoryId`, so a record we jumped over
-    // is never offered again. Advancing to the highest record we saw makes
-    // "everything newer than what we have" literally true — a late record
-    // still sorts above the checkpoint and arrives on the next poll,
-    // however many of them there are.
-    //
-    // ponytail: an empty response therefore leaves the checkpoint where it
-    // was, so a mailbox with genuinely zero history records for longer than
-    // Gmail's retention window (documented as at least a week) expires it.
-    // That path is already handled non-destructively by the expired-
-    // checkpoint reconciliation below, and any activity at all — a read, a
-    // label change, a delete — produces a record that moves it along.
+
     let final_history_id = records
         .iter()
         .map(|record| record.id)
@@ -1197,9 +951,7 @@ async fn incremental_body(
     let mut added_messages = Vec::new();
     for record in &records {
         for reference in &record.messages_added {
-            // History reports the draft message a promotion just deleted as
-            // added; fetching it 404s. Skipping keeps one vanished id from
-            // aborting the whole incremental run.
+
             added_messages.extend(client.message_if_present(&reference.id).await?);
         }
     }
@@ -1211,12 +963,7 @@ async fn incremental_body(
         records.iter().map(|record| record.labels_added.len() + record.labels_removed.len()).sum::<usize>(),
         records.iter().map(|record| record.messages_deleted.len()).sum::<usize>(),
     );
-    // Every message a record touches, including records whose change type
-    // the four typed lists above do not express — Gmail does emit those, and
-    // reading only the typed lists made such a record a silent no-op that the
-    // checkpoint then advanced past. Anything here we do not already hold is
-    // fetched like an addition; ids the typed lists already covered are
-    // filtered out by `fetch_unknown`.
+
     let untyped = fetch_unknown(
         storage,
         client,
@@ -1231,10 +978,7 @@ async fn incremental_body(
     .await?;
     added_messages.extend(untyped);
 
-    // A probe failure is never allowed to fail a sync the history stream
-    // already applied successfully — it is a safety net over that stream,
-    // not a second source of truth. Losing it costs only the freshness this
-    // one poll would have gained.
+
     match probe_inbox(storage, client, account_id, &added_messages).await {
         Ok(probed) => added_messages.extend(probed),
         Err(error) => {
@@ -1243,9 +987,7 @@ async fn incremental_body(
     }
     let added_count = added_messages.len() as u32;
     let changed = !records.is_empty() || !added_messages.is_empty();
-    // Announce only what the user would consider "new mail": still in the
-    // Inbox and still unread. Sent copies, drafts and anything already read
-    // elsewhere (phone) are additions to *us*, not arrivals to them.
+
     let arrivals: Vec<MailArrival> = added_messages
         .iter()
         .filter(|message| {
@@ -1329,14 +1071,9 @@ async fn incremental_body(
     })
 }
 
-// ---------------------------------------------------------------------
-// Gmail -> storage mapping
-// ---------------------------------------------------------------------
 
 pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
-    // Colour is a user-label-only concept (D10) — Gmail generally never
-    // sends one for a system label, but a defensive kind check keeps that
-    // invariant true regardless.
+
     let color = if label.kind == "user" {
         label.color.as_ref().map(|pair| LabelColor {
             text: pair.text_color.clone(),
@@ -1364,15 +1101,7 @@ fn write_message(
     materialize::persist(connection, account_id, message)
 }
 
-// ---------------------------------------------------------------------
-// Scheduler
-// ---------------------------------------------------------------------
 
-/// Drives periodic incremental sync. Interval changes take effect
-/// immediately (D-requirement): a change interrupts the current wait rather
-/// than being picked up only after the stale interval elapses.
-/// `run_immediately` governs whether the very first tick fires right away
-/// (the Sync-on-startup preference) or waits out one interval first.
 pub struct SyncScheduler {
     interval_tx: watch::Sender<Duration>,
 }
@@ -1404,8 +1133,7 @@ impl SyncScheduler {
         Arc::new(Self { interval_tx: tx })
     }
 
-    /// Takes effect on the scheduler's next wait cycle, not after the
-    /// interval that was already in progress finishes.
+
     pub fn set_interval(&self, interval: Duration) {
         let _ = self.interval_tx.send(interval);
     }
@@ -1415,18 +1143,7 @@ impl SyncScheduler {
     }
 }
 
-// ---------------------------------------------------------------------
-// Production wiring
-// ---------------------------------------------------------------------
 
-/// Opens the shared SQLite database, builds the queue + sync engine, manages
-/// both as Tauri state, and starts the background poll scheduler. Called
-/// from `lib.rs` after `auth::initialize`/`settings::initialize`, which this
-/// depends on for the `AuthService`/`SettingsService` state it reads.
-///
-/// The interval is read once here; later changes reach the running scheduler
-/// through `settings::write_setting`, which resolves the managed
-/// `Arc<SyncScheduler>` and calls `set_interval`.
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app
         .path()
@@ -1437,10 +1154,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?;
     let registry = WorkRegistry::new();
     let handle_for_events = app.clone();
-    // Every Rust-emitted event funnels through here, so this one line is the
-    // whole outbound event log. `queue://summary` is excluded on volume
-    // grounds only — it fires on every queue state transition and says
-    // nothing a failure investigation needs.
+
     let events: EventSink = Arc::new(move |event, payload| {
         if event != "queue://summary" {
             tracing::info!(target: "events", "emit {event} {payload}");
@@ -1449,17 +1163,12 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             tracing::error!(target: "events", "emit {event} failed: {error}");
         }
     });
-    // App-private compose staging tree (D3) — the compose commands resolve
-    // `State<Arc<Staging>>`, and the durable Draft/Send executor below reads
-    // its immutable operation snapshots from the same instance.
+
     let staging = Arc::new(crate::compose::staging::Staging::new(
         directory.join("compose-staging"),
     ));
     app.manage(Arc::clone(&staging));
-    // Managed as state (rather than only captured by the executor below) so
-    // a future admission call site — an IPC command, or this module's own
-    // tests — schedules generations on the very instance the executor
-    // checks against.
+
     let coalescer = Arc::new(crate::compose::drafts::SaveCoalescer::new());
     app.manage(Arc::clone(&coalescer));
 
@@ -1479,9 +1188,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         }
     });
     let queue = QueueEngine::new_with_events(250, 250, executor, Arc::clone(&events));
-    // The read commands (`list_labels`, `list_threads`, `load_conversation`)
-    // resolve `State<Storage>`, so it has to be managed and not just buried
-    // inside the engine.
+
     app.manage(storage.clone());
     let engine = SyncEngine::new(
         storage.clone(),
@@ -1496,14 +1203,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// Startup durability recovery (D15): re-enqueues recoverable `Draft`/
-/// `Send` work found `queued` (including drafts requeued from an
-/// interrupted `active` run — see
-/// `OperationRepository::requeue_interrupted_drafts`), and for every
-/// account whose promotion was interrupted mid-flight, emits
-/// `send://uncertain` and schedules exactly one ordinary reconciling sync —
-/// never re-enqueuing the send itself. Runs in the background so it never
-/// delays `initialize` returning.
+
 fn spawn_startup_recovery<R: Runtime>(
     app: AppHandle<R>,
     storage: Storage,
@@ -1547,9 +1247,7 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
     let settings = app.state::<SettingsService>().inner().clone();
     tauri::async_runtime::spawn(async move {
         let preferences = settings.read().await.unwrap_or_default();
-        // ponytail: no jitter, no poll-level backoff: a persistently failing
-        // account retries every interval. The existing per-request retry and
-        // the 3-strike reauth flag are the only brakes.
+
         let interval = Duration::from_secs(
             u64::from(preferences.sync_interval_seconds)
                 .max(crate::settings::MIN_SYNC_INTERVAL_SECS),
@@ -1563,8 +1261,7 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                 let Ok(accounts) = auth.accounts().await else {
                     return;
                 };
-                // ponytail: all accounts are polled serially in one tick —
-                // fine for a handful, not for dozens.
+
                 for account in accounts {
                     if account.needs_reauthentication {
                         continue;
@@ -1576,15 +1273,7 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                         .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
                     let client = engine.gmail_client(&account.id, token, base_url).await;
                     if engine.run_sync(&account.id, client.clone()).await.is_ok() {
-                        // Restart-resumption safety net (Phase 4 scope: wire
-                        // traversal into scheduling): an app restart mid-
-                        // backfill re-enters through `incremental_sync`
-                        // (the account already has a checkpoint), which
-                        // never calls `enqueue_backfill` itself — every
-                        // scheduler tick gets its own chance to resume an
-                        // incomplete cursor instead. See
-                        // `SyncEngine::enqueue_backfill` for why this is
-                        // cheap to call unconditionally.
+
                         engine.enqueue_backfill(&account.id, client).await;
                     } else {
                         auth.invalidate_access_token(&account.id);

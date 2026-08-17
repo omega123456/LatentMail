@@ -1,36 +1,15 @@
-//! Turns untrusted downloaded bytes into a trustworthy square PNG, or
-//! refuses (D1). Format is detected from content, never from a declared
-//! `Content-Type` header — the caller is expected to have already applied
-//! [`MAX_DOWNLOAD_BYTES`] to whatever it downloaded.
-//!
-//! SVG input is rasterized here, in Rust, using `resvg`/`usvg` with system
-//! font discovery never enabled (the `usvg::Options` default font database
-//! is empty and `fontdb::Database::load_system_fonts` is never called) —
-//! raw SVG markup never leaves this module, so it can never cross IPC or
-//! reach the webview (D1, D15).
-
 use image::{DynamicImage, ImageFormat};
 
-/// The maximum accepted download size for a candidate asset (D15).
 pub const MAX_DOWNLOAD_BYTES: usize = 512 * 1024;
-/// The maximum accepted source image dimension, in either axis (D15). Bounds
-/// the rasterization canvas so a pathological `viewBox` cannot be used as a
-/// decompression bomb.
 pub const MAX_SOURCE_DIMENSION: u32 = 4096;
-/// The stored avatar raster's fixed size (D15).
 pub const OUTPUT_SIZE: u32 = 128;
 
-/// A downloaded asset that has passed content-based format validation and
-/// dimension bounding, ready to be normalized into the stored raster.
 #[derive(Debug)]
 pub enum ValidatedImage {
     Png(Box<DynamicImage>),
     Svg(Box<usvg::Tree>),
 }
 
-/// Detects `bytes`' real format by decoding it, and rejects anything that
-/// doesn't decode as a genuine PNG or parse as SVG, or that exceeds the
-/// accepted size/dimension bounds. Never trusts a declared content type.
 pub fn validate(bytes: &[u8]) -> Result<ValidatedImage, String> {
     if bytes.len() > MAX_DOWNLOAD_BYTES {
         return Err("downloaded asset exceeds the maximum accepted size".to_owned());
@@ -55,16 +34,6 @@ pub fn validate(bytes: &[u8]) -> Result<ValidatedImage, String> {
     Ok(ValidatedImage::Svg(Box::new(tree)))
 }
 
-/// Normalizes any validated image into the stored `OUTPUT_SIZE` square PNG
-/// — the one code path that ever produces the bytes written to the avatar
-/// cache. SVG input is rasterized here; its raw markup never survives past
-/// this call.
-///
-/// Infallible by construction: `OUTPUT_SIZE` is a fixed nonzero constant (so
-/// canvas allocation can't fail) and encoding to an in-memory `Vec<u8>`
-/// buffer never fails the way encoding to a real file/socket could — there
-/// is no error a caller could meaningfully recover from, so this returns
-/// bytes directly rather than threading a `Result` no branch can ever take.
 pub fn normalize_to_png(image: ValidatedImage) -> Vec<u8> {
     match image {
         ValidatedImage::Png(decoded) => {

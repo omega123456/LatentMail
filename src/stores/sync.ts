@@ -15,12 +15,7 @@ type Store = {
   accountId: string | null;
   refreshing: boolean;
   hydrate: () => Promise<void>;
-  /** Seeds `lastSynced`/`syncState` from Rust's read-sync-status command so
-   * the status bar shows a correct value before the first `sync://complete`
-   * event arrives (Phase 18 acceptance criterion 9). */
   hydrateSync: (accountId: string) => Promise<void>;
-  /** Wires the status bar's refresh control to the real sync-trigger
-   * command. */
   triggerSync: (accountId: string) => Promise<void>;
   setQueue: (queue: QueueSummary) => void;
   applyStatus: (status: SyncStatus) => void;

@@ -9,9 +9,6 @@ import { useSelectionStore } from '@/stores/selection';
 import { useLayoutStore } from '@/stores/layout';
 import type { MailThread, ThreadPage } from '@/lib/types/ipc';
 
-// Rust already renders from SQLite immediately and reconciles after network
-// (local-first, D-series decision) — a short staleTime avoids fighting that
-// by refetching aggressively on every mount/focus.
 const LOCAL_FIRST_STALE_TIME = 15_000;
 
 export function useAccountsQuery() {
@@ -76,18 +73,6 @@ export function useTraversalStatusQuery(accountId: string | null) {
   });
 }
 
-/** Cache-first sender-avatar lookup, keyed by domain (D-series: addresses
- * sharing a domain collapse onto one query). Gated on `showSenderAvatars` —
- * `enabled: false` means the query function never runs and no lookup is
- * issued, which is the privacy guarantee (D14), not just an ignored result.
- * A rejected invoke (the command is unregistered until Phase 1 lands, and
- * any future capability mistype produces the same rejection) is treated
- * identically to "no image": swallowed inside `queryFn`, never surfaced as
- * an error state. Uses `dispatchInvoke` directly rather than
- * `@/lib/ipc/commands`'s `invoke` — that wrapper logs every rejection
- * through `appLog.error` (a real `console.error`), which a routine, expected
- * "not registered yet" rejection must never produce (mirrors `app-log.ts`'s
- * own reason for bypassing it). */
 export function useSenderAvatarQuery(domain: string | null) {
   const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
   return useQuery({
@@ -107,10 +92,6 @@ export function useSenderAvatarQuery(domain: string | null) {
   });
 }
 
-/** Cache-first account profile-photo lookup. Not gated by
- * `showSenderAvatars` — the account photograph involves no third-party
- * lookup (FR "Preference"). Same silent-degrade-on-rejection contract as
- * `useSenderAvatarQuery` above. */
 export function useAccountAvatarQuery(accountId: string | null) {
   return useQuery({
     queryKey: queryKeys.accountAvatar(accountId ?? ''),
@@ -139,8 +120,6 @@ export function useFetchMessageBodyMutation(accountId: string | null, threadId: 
       queryClient.invalidateQueries({
         queryKey: queryKeys.conversation(accountId ?? '', threadId ?? ''),
       }),
-    // The reader shows a body-shaped hole on failure with nothing to explain
-    // it, so this is the only place the user learns the fetch went wrong.
     onError: () => showError('Couldn’t load this message.'),
   });
 }
@@ -156,19 +135,6 @@ function updateThread(
   };
 }
 
-/** Label lifecycle mutations (create/rename/recolour/delete) — the four
- * label-management IPC calls this phase owns end-to-end (unlike triage
- * mutations over `mutate_threads`, left for Phase 8). No optimistic overlay:
- * per D7, on permanent failure the caller sees the mutation reject and the
- * settled invalidation below refetches server-confirmed state — there's
- * nothing to roll back because nothing was applied ahead of the response.
- * `LabelList` calls these through `.mutateAsync` and surfaces a rejection's
- * `message` inline, matching the Rust-side `LabelNameError` text.
- *
- * A toast rides alongside that inline message rather than replacing it: the
- * label row is a small target in a scrolling sidebar and its inline error is
- * easy to miss, unlike the compose footer or an attachment chip the user is
- * looking straight at when those fail. */
 function useLabelLifecycleMutation<TArgs>(
   accountId: string | null,
   mutationFn: (args: TArgs) => Promise<unknown>,
@@ -275,8 +241,6 @@ export type MessageTriageChange = {
   remove: string[];
 };
 
-/** The single optimistic triage path. Confirmation and rollback both read
- * SQLite again; snapshots are invalid under coalescing. */
 export function useTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
   const showError = useToastStore((state) => state.showError);
@@ -321,9 +285,6 @@ export function useTriageMutation(accountId: string | null) {
           },
       );
     },
-    // One toast for the whole change, not one per thread: a bulk triage over a
-    // selection fails as a single `mutate_threads` call, and reporting it
-    // per-thread would flood the viewport and blow past its cap.
     onError: (_error, { threadIds }) =>
       showError(
         threadIds.length > 1

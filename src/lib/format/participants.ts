@@ -8,19 +8,12 @@ export function formatParticipants(participants: Participant[]) {
 
 const NAME_AND_ADDRESS = /^\s*(.*?)\s*<([^<>]+)>\s*$/;
 
-/** Parses a raw RFC 5322 `From`/`To` header value ("Name <addr>" or a bare
- * address) as stored by Rust into the `{ name, address }` shape the reader
- * components render. */
 export function parseParticipant(raw: string): Participant {
   const match = NAME_AND_ADDRESS.exec(raw);
   if (match) return { name: match[1].replace(/^"|"$/g, ''), address: match[2] };
   return { name: '', address: raw.trim() };
 }
 
-/** Extracts the bare address from a raw recipient string, lower-cased, so a
- * bare address and the same address carrying a display name compare equal —
- * the duplicate-suppression key for recipient chips (mirrors Rust's
- * `compose::context::address_key`). */
 export function addressKey(raw: string): string {
   return parseParticipant(raw).address.trim().toLowerCase();
 }

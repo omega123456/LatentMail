@@ -44,7 +44,7 @@ async fn retries_only_retryable_errors_with_exponential_backoff() {
     tokio::task::yield_now().await;
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(queue.summary().done, 1);
-    // Doubling per attempt, capped at the planned 60s ceiling.
+
     assert_eq!(retry_delay(6).as_secs(), 32);
     assert_eq!(retry_delay(7).as_secs(), 60);
     assert_eq!(retry_delay(10).as_secs(), 60);
@@ -60,9 +60,7 @@ async fn rate_limited_operations_wait_for_the_token_bucket_to_refill() {
             Ok(())
         })
     });
-    // 1 token/second with a burst of 1: the second operation (a different
-    // entity, so it is not blocked by the same-entity lock) must wait for
-    // the bucket to refill before it can run.
+
     let queue = QueueEngine::new(1, 1, executor);
     queue
         .enqueue(QueueOperation {
@@ -108,7 +106,7 @@ async fn non_retryable_operations_increment_the_failed_counter_without_retrying(
         })
     });
     let queue = QueueEngine::new(250, 250, executor);
-    // `Send` operations never retry regardless of the error kind.
+
     queue
         .enqueue(QueueOperation {
             id: "send".into(),

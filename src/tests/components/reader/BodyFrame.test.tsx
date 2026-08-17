@@ -45,9 +45,7 @@ describe('BodyFrame', () => {
     const paragraph = frame.contentDocument?.querySelector('p');
     const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     paragraph?.dispatchEvent(menu);
-    // The sandboxed frame runs no scripts of its own and the Rust
-    // prevent-default script never reaches it, so this listener is the only
-    // thing standing between a right-click and the webview's own menu.
+
     expect(menu.defaultPrevented).toBe(true);
   });
 });

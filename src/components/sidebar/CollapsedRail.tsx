@@ -41,7 +41,7 @@ export function CollapsedRail({
         aria-label="Compose"
         title="Compose"
         onClick={onCompose}
-        className="grid size-9 place-items-center rounded-full bg-primary text-on-primary focus-visible:outline-2 focus-visible:outline-primary"
+        className="grid size-9 cursor-pointer place-items-center rounded-full bg-primary text-on-primary focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Plus aria-hidden="true" size={18} />
       </button>
@@ -57,7 +57,7 @@ export function CollapsedRail({
         type="button"
         aria-label="Expand sidebar"
         onClick={onExpand}
-        className="grid size-9 place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
+        className="grid size-9 cursor-pointer place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
       >
         <PanelLeftOpen aria-hidden="true" size={18} />
       </button>
@@ -65,7 +65,7 @@ export function CollapsedRail({
         type="button"
         aria-label="Settings"
         onClick={onSettings}
-        className="grid size-9 place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
+        className="grid size-9 cursor-pointer place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
       >
         <Settings aria-hidden="true" size={18} />
       </button>

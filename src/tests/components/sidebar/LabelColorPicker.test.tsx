@@ -28,8 +28,7 @@ describe('LabelColorPicker', () => {
     const grid = screen.getByRole('grid', { name: 'Label colour' });
     const rows = within(grid).getAllByRole('row');
     expect(rows.length).toBeGreaterThan(1);
-    // Every direct child of the grid is a row, and every gridcell lives
-    // inside one — no gridcell is ever a direct child of the grid.
+
     expect(Array.from(grid.children).every((child) => child.getAttribute('role') === 'row')).toBe(
       true,
     );
@@ -45,9 +44,7 @@ describe('LabelColorPicker', () => {
     const cellNames = screen
       .getAllByRole('gridcell')
       .map((cell) => cell.getAttribute('aria-label'));
-    // The raw palette's declaration order interleaves black/charcoal/grey
-    // with red/orange before any hue grouping — the displayed order must
-    // differ from it once swatches are grouped by hue family.
+
     expect(cellNames).not.toEqual(LABEL_COLOR_PALETTE.map((swatch) => swatch.name));
   });
 
@@ -55,7 +52,7 @@ describe('LabelColorPicker', () => {
     const user = userEvent.setup();
     render(<LabelColorPicker selectedId="black" onApply={vi.fn()} onCancel={vi.fn()} />);
     const cells = screen.getAllByRole('gridcell');
-    // Ten columns: ArrowDown keeps the column, not list adjacency.
+
     cells[0]!.focus();
     await user.keyboard('{ArrowDown}');
     expect(cells[10]).toHaveFocus();

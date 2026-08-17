@@ -1,8 +1,3 @@
-//! Incremental sync: history-delta application (label add/remove, message
-//! add/delete), plus the poll scheduler's interval-change and
-//! sync-on-startup gating (D-requirements: "takes effect immediately" /
-//! "genuinely governs startup sync").
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -153,7 +148,6 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     engine.run_sync("account", client).await.unwrap();
 
     let connection = storage.connection().unwrap();
-    // Message add.
     assert!(MessageRepository::get(&connection, "account", "new1")
         .unwrap()
         .is_some());
@@ -161,14 +155,12 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
         .unwrap()
         .unwrap();
     assert_eq!(t2.message_count, 1);
-    // Label add.
     assert!(
         MessageRepository::get(&connection, "account", "existing1")
             .unwrap()
             .unwrap()
             .is_starred
     );
-    // Label remove.
     assert!(
         !MessageRepository::get(&connection, "account", "existing2")
             .unwrap()
@@ -180,14 +172,12 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
         .unwrap();
     assert!(t1.is_starred);
     assert!(!t1.is_unread);
-    // Message delete + emptied-thread removal.
     assert!(MessageRepository::get(&connection, "account", "existing3")
         .unwrap()
         .is_none());
     assert!(ThreadRepository::get(&connection, "account", "t3")
         .unwrap()
         .is_none());
-    // Checkpoint advances on completion.
     let account = AccountRepository::get(&connection, "account")
         .unwrap()
         .unwrap();
@@ -206,10 +196,6 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     );
 }
 
-/// The poll is what raises OS notifications, so `mail://new` has to carry
-/// enough to describe the arrival — and only what the user would call one:
-/// their own sent copy and mail already read on another device are
-/// additions to the local database, not arrivals to announce.
 #[tokio::test]
 async fn incremental_sync_reports_only_unread_inbox_arrivals() {
     let server = MockServer::start().await;
@@ -290,11 +276,6 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
     );
 }
 
-/// Gmail's history stream is only eventually consistent with delivery: a
-/// message can be listable (and visible in Gmail's own UI) while
-/// `history.list` still reports nothing. Incremental sync must notice it
-/// anyway, or a user-triggered sync reports success with the new mail
-/// missing until some later poll happens to catch up.
 #[tokio::test]
 async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
     let server = MockServer::start().await;
@@ -303,9 +284,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
         .mount(&server)
         .await;
-    // The mailbox counter has advanced past the delivery, but the stream
-    // still carries no record for it — the exact shape that makes adopting
-    // that counter as the checkpoint skip the record permanently.
     Mock::given(method("GET"))
         .and(path("/users/me/history"))
         .respond_with(
@@ -314,9 +292,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         )
         .mount(&server)
         .await;
-    // The Inbox listing, which has no such lag, already shows it — next to
-    // a message the local database already holds, which must not be
-    // re-fetched.
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -327,8 +302,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         })))
         .mount(&server)
         .await;
-    // Mounted purely as a tripwire: the probe must filter `existing1` out
-    // before spending a fetch on it, so this response must never land.
     Mock::given(method("GET"))
         .and(path("/users/me/messages/existing1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -367,8 +340,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
     assert!(ThreadRepository::get(&connection, "account", "t9")
         .unwrap()
         .is_some());
-    // Already-held ids cost no `messages.get`: the tripwire response above
-    // would have replaced this subject had one been spent.
     assert_eq!(
         MessageRepository::get(&connection, "account", "existing1")
             .unwrap()
@@ -381,10 +352,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         .unwrap()
         .iter()
         .any(|(name, _)| name == "mail://new"));
-    // The checkpoint must NOT adopt the response's `historyId` of 70: the
-    // run applied no history record, so jumping there would drop every
-    // record between 40 and 70 that the stream had not yet materialized —
-    // `history.list` never offers a record below `startHistoryId` again.
     assert_eq!(
         AccountRepository::get(&connection, "account")
             .unwrap()
@@ -393,8 +360,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         Some(40)
     );
 
-    // Second run: everything the probe lists is now held locally, so it
-    // spends no fetch and reports nothing new.
     drop(connection);
     events.lock().unwrap().clear();
     engine
@@ -413,11 +378,6 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
     );
 }
 
-/// Gmail emits history records whose change is carried only by `messages`,
-/// with all four typed lists absent — observed live as record 462497. Read
-/// through the typed lists alone such a record is an empty no-op, and the
-/// checkpoint then advances past it, so whatever it reported is lost for
-/// good.
 #[tokio::test]
 async fn a_history_record_carrying_only_messages_is_not_treated_as_a_no_op() {
     let server = MockServer::start().await;
@@ -470,7 +430,6 @@ async fn a_history_record_carrying_only_messages_is_not_treated_as_a_no_op() {
     assert!(ThreadRepository::get(&connection, "account", "t8")
         .unwrap()
         .is_some());
-    // The record was applied, so the checkpoint may advance to it.
     assert_eq!(
         AccountRepository::get(&connection, "account")
             .unwrap()
@@ -500,12 +459,6 @@ async fn incremental_sync_does_not_advance_the_checkpoint_on_failure() {
     assert_eq!(account.history_id, Some(40));
 }
 
-/// D6: a full-state write only applies when the incoming `historyId` is
-/// strictly greater than what is stored — reusing the Phase 5 gate rather
-/// than reimplementing it. A history record can report a message as
-/// "added" that locally already carries a *newer* `historyId` (e.g. our own
-/// star mutation's write-back landed first); the stale fetched copy must be
-/// rejected, not clobber the row.
 #[tokio::test]
 async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate() {
     let directory = tempfile::tempdir().unwrap();
@@ -635,11 +588,6 @@ async fn sync_on_startup_enabled_ticks_immediately() {
     );
 }
 
-/// Drives `sync::initialize` (and therefore `start_scheduler`'s real tick
-/// closure — settings/account lookup, token refresh, `run_sync`, and the
-/// resumption-safety `enqueue_backfill` call) end to end with a seeded,
-/// non-reauthentication account, rather than just `SyncScheduler` in
-/// isolation as the tests above do.
 #[tokio::test]
 async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
     let server = MockServer::start().await;
@@ -690,8 +638,6 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
     let application = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
-    // `settings::initialize` restores window geometry, so it needs the main
-    // window to exist.
     tauri::WebviewWindowBuilder::new(&application, "main", Default::default())
         .visible(false)
         .build()
@@ -701,9 +647,6 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
     latentmail_lib::settings::initialize(handle).unwrap();
     latentmail_lib::auth::initialize(handle).unwrap();
 
-    // Seeds the account the scheduler's tick will discover through
-    // `AuthService::accounts()` — same on-disk database `auth::initialize`
-    // and `sync::initialize` each open at `directory.join("latentmail.sqlite")`.
     let directory = application.path().app_data_dir().unwrap();
     let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
     let connection = seed_storage.connection().unwrap();
@@ -727,11 +670,6 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
 
     latentmail_lib::sync::initialize(handle).unwrap();
 
-    // Bounded well under the "no fixed delay > 5s" ceiling — generous
-    // headroom for CPU contention from other test binaries running in
-    // parallel, which this real (unpaused) scheduler tick is exposed to.
-    // Reuses one connection rather than re-running `Storage::open`'s
-    // migrations on every poll.
     let poll_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {

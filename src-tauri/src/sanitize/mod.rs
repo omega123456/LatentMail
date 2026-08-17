@@ -17,15 +17,11 @@ pub struct CidPart {
 pub struct SanitizedHtml {
     pub html: String,
     pub truncated: bool,
-    /// At least one remote `<img>` was rewritten to a placeholder. The reader
-    /// needs this to explain the gap rather than showing silent blank images.
     pub remote_images_blocked: bool,
 }
 
 pub fn sanitize(html: &str, cid_parts: &HashMap<String, CidPart>) -> SanitizedHtml {
     let cid_parts = cid_parts.clone();
-    // `attribute_filter` takes an `Fn`, so the rewrite count has to travel out
-    // through shared state rather than a captured `mut` flag.
     let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let blocked_in_filter = std::sync::Arc::clone(&blocked);
     let mut builder = Builder::default();

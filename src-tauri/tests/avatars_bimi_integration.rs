@@ -1,7 +1,3 @@
-//! Candidate-domain ordering (D6), TXT `l=` parsing across quoted,
-//! multi-string, non-`https` and absent forms, and the full per-candidate
-//! resolution sequence against the fake DNS/download boundaries — no real
-//! DNS or HTTP is ever performed.
 
 use latentmail_lib::avatars::bimi::{candidate_domains, parse_logo_url, resolve_logo};
 use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheDomain};
@@ -9,9 +5,7 @@ use latentmail_lib::avatars::image::OUTPUT_SIZE;
 use latentmail_lib::avatars::resolver::{fake_txt_lookup_count, set_fake_download, set_fake_txt};
 use latentmail_lib::storage::Storage;
 
-/// A fresh, isolated cache backing store per test — domains used across
-/// tests in this file are unique, but the cache itself (SQLite + a temp
-/// directory) must not be shared between tests.
+
 fn test_cache() -> (AvatarCache, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -21,7 +15,7 @@ fn test_cache() -> (AvatarCache, tempfile::TempDir) {
 
 #[test]
 fn candidate_domains_walks_from_full_domain_to_registrable_domain_inclusive() {
-    // Multi-part public suffix (D6): must never query `co.uk` itself.
+
     assert_eq!(
         candidate_domains("news.corp.aviva.co.uk"),
         vec![
@@ -103,8 +97,7 @@ async fn a_domain_with_no_record_at_any_candidate_yields_no_logo() {
 #[tokio::test]
 async fn resolution_falls_through_to_a_parent_candidate_when_the_full_domain_has_no_record() {
     let (cache, _dir) = test_cache();
-    // Nothing registered for "news.falls-through.example"; the record lives
-    // on its registrable parent — proves the walk actually advances.
+
     set_fake_txt(
         "default._bimi.falls-through.example",
         vec!["v=BIMI1; l=https://cdn.falls-through.example/logo.svg;".to_owned()],
@@ -133,9 +126,7 @@ async fn a_txt_record_advertising_a_non_https_url_yields_no_logo() {
 #[tokio::test]
 async fn multi_string_txt_records_are_rejoined_before_parsing() {
     let (cache, _dir) = test_cache();
-    // The TXT value is split across two character-strings the way a real
-    // resolver would report a long record; resolver::lookup_txt rejoins
-    // them per-record before bimi ever sees the value.
+
     set_fake_txt(
         "default._bimi.split-record.example",
         vec!["v=BIMI1; l=https://cdn.split-record.example/logo.svg;".to_owned()],
@@ -156,10 +147,7 @@ async fn a_candidate_already_cache_positive_is_reused_by_a_sibling_subdomain_wit
         .store_hit(&parent_key, CacheDomain::Sender, b"pre-cached-parent-logo")
         .await
         .unwrap();
-    // Deliberately nothing programmed for "default._bimi.aviva.co.uk" (nor
-    // for the other two candidates) — if the walk fell back to a real DNS
-    // lookup instead of consulting the cache per-candidate, it would get
-    // "no record" and this resolution would yield `None`.
+
     let lookups_before = fake_txt_lookup_count("default._bimi.aviva.co.uk");
 
     let png = resolve_logo(&cache, "news.corp.aviva.co.uk")

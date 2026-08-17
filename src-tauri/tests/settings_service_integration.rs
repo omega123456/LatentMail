@@ -1,7 +1,3 @@
-//! Exercises the settings IPC commands and window-state helpers that
-//! `settings_persistence_integration.rs` does not reach (that file only
-//! drives `SettingsService` directly, not the Tauri command wrappers or the
-//! window position/size helpers).
 
 use latentmail_lib::settings::{
     initialize, read_settings, restore_window, save_window, write_setting, Settings,
@@ -13,10 +9,7 @@ use tauri::Manager;
 fn app_with_service() -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    // Commands below are called directly as plain async functions (not
-    // dispatched through IPC), so this deliberately skips
-    // `latentmail_lib::ipc::register` to avoid pulling in and
-    // monomorphizing every other command's generic code in this binary.
+
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
@@ -122,9 +115,7 @@ async fn restore_window_applies_saved_position_size_and_maximized_state() {
         .build()
         .unwrap();
 
-    // The mock runtime does not actually track applied geometry, so this
-    // asserts the happy path runs to completion (every `set_*`/`maximize`
-    // call succeeds) rather than the resulting geometry.
+
     restore_window(&window, &service);
 }
 
@@ -139,7 +130,7 @@ async fn restore_window_is_a_no_op_when_no_state_was_saved() {
         .build()
         .unwrap();
 
-    // Must not panic even though `window_state()` returns `Ok(None)`.
+
     restore_window(&window, &service);
 }
 
@@ -162,10 +153,7 @@ async fn save_window_persists_the_current_window_geometry() {
 
 #[test]
 fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window() {
-    // Tauri's path resolver derives `app_data_dir()` from the OS's per-user
-    // data directory (HOME on macOS/Linux, APPDATA on Windows). Redirecting
-    // it to a throwaway temp dir keeps this fully isolated from the real
-    // machine, as nextest runs each test in its own process.
+
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -182,8 +170,7 @@ fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window(
     assert!(app.try_state::<SettingsService>().is_some());
 }
 
-/// The sync-interval preference has to reach the scheduler that is already
-/// running, otherwise it only takes effect after a restart.
+
 #[tokio::test]
 async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     let (app, _directory) = app_with_service();
@@ -223,9 +210,7 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     assert_eq!(scheduler.interval(), std::time::Duration::from_secs(15));
 }
 
-/// Before the scheduler has started (or in any app that never managed one),
-/// writing the sync interval must persist without panicking on the missing
-/// `State`.
+
 #[tokio::test]
 async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() {
     let (app, _directory) = app_with_service();

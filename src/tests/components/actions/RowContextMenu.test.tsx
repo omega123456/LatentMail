@@ -80,11 +80,7 @@ describe('RowContextMenu', () => {
     );
     await user.pointer({ keys: '[MouseRight]', target: screen.getByText('row') });
     await user.hover(await screen.findByText('Move to'));
-    // The submenu's items are plain buttons (`MoveToMenu` is shared,
-    // primitive-agnostic content — see its own module doc), so a direct
-    // `fireEvent.click` avoids user-event's pointer-target resolution
-    // getting confused by jsdom's lack of real layout for the popper-
-    // positioned portal.
+
     fireEvent.click(await screen.findByRole('menuitem', { name: /Trash/ }));
     expect(handlers.onMoveTo).toHaveBeenCalledWith('TRASH');
     expect(screen.queryByRole('menu', { name: 'Move to' })).not.toBeInTheDocument();

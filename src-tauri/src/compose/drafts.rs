@@ -1,11 +1,3 @@
-//! The durable, queue-facing draft lifecycle (D1/D3/D15/D19). Every
-//! create/update/send admission persists its durable [`Operation`] row and
-//! immutable staging snapshot *before* queue admission, and the executor
-//! built by [`build_executor`] reconstructs each run purely from that row's
-//! payload plus the snapshot manifest — never from an in-memory closure —
-//! so an interrupted operation survives a restart. IPC command surfaces for
-//! this lifecycle remain Phase 5's responsibility; this module only owns
-//! backend correctness.
 use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
@@ -34,10 +26,6 @@ use super::{
     staging::Staging,
 };
 
-/// Generates a process-local, timestamp-ordered id (an operation id, a
-/// staged-part id, ...). No `uuid` dependency is warranted for this: the
-/// combination of a millisecond timestamp and one random `u64` is already
-/// unique enough for locally generated, non-security-sensitive identifiers.
 pub fn generate_id(prefix: &str) -> String {
     let random = RandomState::new().build_hasher().finish();
     format!(
@@ -54,15 +42,10 @@ pub enum DraftOperationMode {
     Send,
 }
 
-/// Everything the durable executor needs to reassemble and dispatch one
-/// create/update/send, aside from attachment/inline bytes (which live in
-/// the operation's staging snapshot, keyed by the operation id itself).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftOperationPayload {
     pub mode: DraftOperationMode,
-    /// The existing stable Gmail draft id. Required for `Update`/`Send`;
-    /// absent for `Create`.
     pub draft_id: Option<String>,
     pub thread_id: Option<String>,
     pub from: String,
@@ -79,23 +62,10 @@ pub struct DraftOperationPayload {
     pub original_gmail_message_id: Option<String>,
     pub editable_body_fingerprint: Option<String>,
     pub quote_plain: Option<String>,
-    /// Set by [`admit`] immediately before persisting — the generation this
-    /// save held at admission time. The executor compares it against the
-    /// coalescer's current generation for the same entity key and skips a
-    /// Gmail round trip entirely if a newer save has already superseded it.
     #[serde(default)]
     pub coalescing_generation: u64,
 }
 
-/// Per-entity (per compose session/draft) save coalescing (D19 / Phase 2
-/// scope: "saves ... serialize on a shared key, and a save falling due
-/// while an earlier one is unconfirmed is coalesced rather than dropped").
-/// The scheduler that decides *when* to call [`admit`] — debounce timing,
-/// change detection — is Phase 5's frontend-facing concern; this is the
-/// Rust-side primitive it will drive: each [`admit`] call registers a new
-/// generation for its key, and the executor only actually contacts Gmail
-/// for the latest one, so a rapid run of admissions ends in exactly one
-/// live upload rather than one per keystroke-triggered save.
 #[derive(Default)]
 pub struct SaveCoalescer {
     generations: Mutex<std::collections::HashMap<String, u64>>,
@@ -105,23 +75,16 @@ impl SaveCoalescer {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Registers a new save for `key`, returning its generation.
     pub async fn schedule(&self, key: &str) -> u64 {
         let mut generations = self.generations.lock().await;
         let generation = generations.entry(key.to_owned()).or_insert(0);
         *generation += 1;
         *generation
     }
-    /// True while `generation` is still the latest one scheduled for `key`.
     pub async fn is_current(&self, key: &str, generation: u64) -> bool {
         let generations = self.generations.lock().await;
         generations.get(key).copied() == Some(generation)
     }
-    /// Associates a session serialization key with the stable Gmail draft id
-    /// returned by its first create. A later save admitted while that create
-    /// was active still carries `Create`; the queue serializes it behind the
-    /// create and this mapping promotes it to an update instead of creating a
-    /// duplicate server draft.
     pub async fn set_draft_id(&self, key: &str, draft_id: String) {
         self.draft_ids.lock().await.insert(key.to_owned(), draft_id);
     }
@@ -130,10 +93,6 @@ impl SaveCoalescer {
     }
 }
 
-/// Persists the immutable operation snapshot and durable operation row
-/// *before* queue admission (D15), stamping the payload with its
-/// coalescing generation first. Returns the generation so a caller can
-/// later recognize whether its own save was the one that actually ran.
 #[allow(clippy::too_many_arguments)]
 pub async fn admit(
     engine: &Arc<QueueEngine>,
@@ -175,9 +134,6 @@ pub async fn admit(
     .map_err(str::to_owned)
 }
 
-/// Reuses the existing draft-deletion endpoint (`gmail::labels`) rather
-/// than reimplementing it, then removes the local draft message (if one
-/// was ever materialized) and its compose-draft metadata.
 pub async fn delete(
     client: &GmailClient,
     storage: &Storage,
@@ -205,12 +161,6 @@ pub async fn delete(
         .map_err(|error| error.to_string())
 }
 
-/// Builds the [`Executor`] the production queue dispatches `Draft`/`Send`
-/// operations to. Every invocation reconstructs its work fresh from the
-/// operation's persisted payload and staging manifest — nothing about a
-/// specific operation is captured here at construction time, which is what
-/// makes an interrupted operation recoverable after restart (D15,
-/// acceptance criterion 11).
 pub fn build_executor<R: Runtime>(
     app: AppHandle<R>,
     storage: Storage,
@@ -230,10 +180,6 @@ pub fn build_executor<R: Runtime>(
     })
 }
 
-/// Marks the durable row failed, logs the reason, and tells the frontend —
-/// every failure path in [`run`] routes through here, so a failed
-/// save/send can never end silently (the composer is closed on queue
-/// acceptance, not on delivery, so a toast is the only remaining channel).
 async fn terminal_failed<R: Runtime>(
     app: &AppHandle<R>,
     storage: &Storage,
@@ -284,7 +230,7 @@ async fn run<R: Runtime>(
             .map_err(|_| QueueError::Permanent)?
     };
     let Some(row) = row else {
-        // Already recovered/cleaned up by a previous run — nothing to do.
+
         return Ok(());
     };
     if row.status == "discarded" {
@@ -319,10 +265,7 @@ async fn run<R: Runtime>(
         return Ok(());
     }
 
-    // A second save can be admitted while the first create is awaiting
-    // Gmail, before React receives the stable draft id. Same-entity queue
-    // serialization puts this operation after the create; use the id it
-    // recorded to make this operation an update.
+
     let created_server_draft = matches!(payload.mode, DraftOperationMode::Create);
     if created_server_draft {
         if let Some(draft_id) = coalescer.draft_id(&operation.entity_key).await {
@@ -351,8 +294,7 @@ async fn run<R: Runtime>(
         }
     }
 
-    // The quote is rebuilt from the stored original at send/save time. The
-    // display-safe HTML sent to React is deliberately not in this payload.
+
     let (quote_html, original_inline) = if let Some(original_id) = &payload.original_message_id {
         let account_id = operation.account_id.clone();
         let original_id = original_id.clone();
@@ -430,14 +372,7 @@ async fn run<R: Runtime>(
         Ok(outcome) => outcome,
         Err(error) => {
             let queue_error = classify(&error);
-            // ponytail: this records the row `failed` on every attempt,
-            // including one the queue will still retry (its own attempt
-            // counter, not this row, is authoritative for retry/backoff —
-            // see `OperationKind::retries`/`QueueError::retryable`), so a
-            // durable-operation reader can observe "last known error" but
-            // may see `failed` flip briefly ahead of an eventual retry
-            // success. Upgrade path: thread the queue's attempt count back
-            // in and only persist `failed` once retries are exhausted.
+
             terminal_failed(app, storage, &operation, &error.to_string()).await;
             return Err(queue_error);
         }
@@ -449,8 +384,7 @@ async fn run<R: Runtime>(
             .await;
     }
 
-    // A discard racing an active first create must consume the returned draft
-    // before it can be materialized or reported as saved.
+
     let discarded = {
         let id = id.clone();
         storage
@@ -472,9 +406,7 @@ async fn run<R: Runtime>(
     }
 
     if created_server_draft && payload.draft_id.is_none() && !consumed {
-        // Current IPC uses a literal session id as its entity key. Legacy
-        // `draft:`-namespaced durable rows predate canonical-owner transfer
-        // and retain their original compatibility behavior.
+
         if !operation.entity_key.starts_with("draft:") {
             if let Err(error) =
                 staging.move_owner(&operation.account_id, &operation.entity_key, &draft_id)
@@ -497,8 +429,7 @@ async fn run<R: Runtime>(
         rfc_references: (!payload.references.is_empty()).then(|| payload.references.join(" ")),
         boundary_version: 1,
         editable_body_fingerprint: payload.editable_body_fingerprint.clone(),
-        // Persist the exact sent quote snapshot, not the reader-safe display
-        // copy that crossed IPC when the composer opened.
+
         quote_html: quote_html.clone(),
         quote_plain: payload.quote_plain.clone(),
     };
@@ -518,8 +449,7 @@ async fn run<R: Runtime>(
                 if !consumed {
                     ComposeDraftMetadataRepository::upsert(&transaction, &metadata)?;
                 } else {
-                    // Local delivery is already confirmed; learn the same
-                    // contacts reconciliation would learn on a later sync.
+
                     crate::contacts::observe_now(&transaction, &account_id, &message.sender)?;
                     for mailbox in message
                         .to_recipients
@@ -537,20 +467,15 @@ async fn run<R: Runtime>(
     };
     if let Err(error) = persisted {
         terminal_failed(app, storage, &operation, &error.to_string()).await;
-        // A retry here risks a duplicate Gmail draft/send; the Gmail side
-        // effect already happened, so this is reported rather than retried.
+
         return Err(QueueError::Permanent);
     }
 
     let _ = staging.release_snapshot(&id);
     if consumed {
-        // A promotion always consumes the stable Gmail draft's canonical
-        // parts. The queue entity key is a serialization key (`draft:d1`
-        // in recovery/tests), not a staging owner.
+
         let _ = staging.release_owner(&account_id, &draft_id);
-        // A first-click send has no pre-existing draft. Its canonical parts
-        // are still under the local compose-session owner while Gmail
-        // atomically creates and consumes the transient draft.
+
         if payload.draft_id.is_none() {
             let _ = staging.release_owner(&account_id, &operation.entity_key);
         }
@@ -595,9 +520,7 @@ async fn execute_gmail(
             Ok((full.message, false, full.id))
         }
         DraftOperationMode::Send => {
-            // Send always pushes the freshly-assembled document first — the
-            // draft Gmail promotes must be this send's own content, not
-            // whatever the last autosave happened to persist.
+
             let draft_id = match &payload.draft_id {
                 Some(draft_id) => {
                     client
@@ -612,18 +535,13 @@ async fn execute_gmail(
                 }
             };
             let sent_id = client.send_draft(&draft_id).await?;
-            // Promotion returns a partial resource. Materialize the full
-            // Gmail message before announcing success to Query listeners.
+
             let message = client.message(&sent_id).await?;
             Ok((message, true, draft_id))
         }
     }
 }
 
-// ---------------------------------------------------------------------
-// Thin backend-only wrappers kept for direct (non-queue) Gmail access —
-// used by hydration/reopen paths that don't need durability.
-// ---------------------------------------------------------------------
 
 pub async fn hydrate(
     client: &GmailClient,

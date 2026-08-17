@@ -19,15 +19,12 @@ use std::{
 use rusqlite::Connection;
 use thiserror::Error;
 
-/// How long a connection blocks on a lock held by another connection before
-/// giving up (D8) — matters most for a writer briefly holding SQLite's
-/// single write lock while readers proceed under WAL.
+
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 
 const STATEMENT_CACHE_CAPACITY: usize = 48;
 
-/// Applied to every file-backed connection: foreign keys and a busy timeout
-/// so a momentary lock conflict waits instead of erroring immediately.
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
@@ -35,9 +32,7 @@ fn configure(connection: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// WAL is persistent database state, so set it once when opening the storage
-/// rather than issuing the journal-mode PRAGMA on every short-lived task
-/// connection. In-memory databases cannot use WAL.
+
 fn configure_database(connection: &Connection) -> rusqlite::Result<()> {
     configure(connection)?;
     connection.pragma_update(None, "journal_mode", "WAL")

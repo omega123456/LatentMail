@@ -6,8 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { BodyEditor, type BodyEditorHandle } from '@/components/compose/BodyEditor';
 import { EditorToolbar } from '@/components/compose/EditorToolbar';
 
-/** The toolbar drives the real editor here rather than a stub, so the list
- * controls are exercised end to end — command through rendered markup. */
 function ComposerHarness({ bodyRef }: { bodyRef: RefObject<BodyEditorHandle | null> }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   return (
@@ -48,7 +46,7 @@ describe('BodyEditor', () => {
   it('is inert without an onChange/onSelectionChange listener wired up', async () => {
     const ref = createRef<BodyEditorHandle>();
     const { unmount } = render(<BodyEditor ref={ref} value="<p>Hi</p>" onChange={() => {}} />);
-    // No `onSelectionChange` prop — exercises the optional-callback branch.
+
     await waitFor(() => expect(ref.current?.html()).toContain('Hi'));
     act(() => ref.current?.insertInlineImage('asset://second-image'));
     expect(ref.current?.html()).toContain('asset://second-image');

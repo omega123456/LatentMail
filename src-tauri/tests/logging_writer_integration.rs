@@ -17,8 +17,7 @@ fn writer_records_frontend_messages_but_filters_debug() {
         write_frontend_log(FrontendLogLevel::Error, "error record".into());
         tracing::event!(Level::DEBUG, "filtered record");
     });
-    // `WorkerGuard` has no `flush()` method; its `Drop` impl blocks until all
-    // buffered lines are written to the underlying file.
+
     drop(guard);
 
     let contents = fs::read_to_string(
@@ -36,9 +35,7 @@ fn writer_records_frontend_messages_but_filters_debug() {
     assert!(!contents.contains("filtered record"));
 }
 
-/// `init` sets the process-wide global dispatcher, so it must run in its own
-/// test process — nextest already isolates every test that way — and must be
-/// the only test in this binary that calls it.
+
 #[test]
 fn init_installs_a_global_dispatcher_and_creates_the_log_directory() {
     let directory = tempfile::tempdir().unwrap();

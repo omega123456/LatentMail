@@ -1,4 +1,3 @@
-//! Expired-history reconciliation removes only messages absent from Gmail.
 
 use latentmail_lib::{
     gmail::GmailClient,

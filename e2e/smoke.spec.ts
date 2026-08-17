@@ -8,9 +8,7 @@ test('renders the sign-in screen', async ({ page }) => {
   await expect(page.getByTestId('sign-in-screen')).toBeVisible();
 });
 
-// The row's open control covers the whole row via a stretched `after:inset-0`
-// overlay, and the star escapes it with `z-10` — both are real-layout facts
-// jsdom can't see, so they're asserted here rather than in Vitest.
+
 test('the whole conversation row opens it, except the star', async ({ page }) => {
   await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
   await page.goto('/');
@@ -25,10 +23,7 @@ test('the whole conversation row opens it, except the star', async ({ page }) =>
   await expect(other).not.toHaveAttribute('data-active', 'true');
 });
 
-// The selection policy is a chain — a Tailwind class in index.html, the
-// generated utility, and inheritance through portalled overlays — and only a
-// real browser resolves it. jsdom loads no stylesheet at all, so Vitest can
-// see the class names but never the computed effect.
+
 const userSelectOf = (locator: Locator) =>
   locator.evaluate((element) => getComputedStyle(element).userSelect);
 
@@ -67,8 +62,7 @@ test('text selection is on throughout the compose window', async ({ page }) => {
   await page.goto('/');
   const compose = page.getByTestId('compose-overlay');
   await compose.waitFor();
-  // The composer is portalled onto `body`, so it inherits the app-wide
-  // `select-none` unless it opts out — as do the fields nested inside it.
+
   expect(await userSelectOf(compose)).toBe('text');
   expect(await userSelectOf(compose.getByLabel('Subject'))).toBe('text');
 });

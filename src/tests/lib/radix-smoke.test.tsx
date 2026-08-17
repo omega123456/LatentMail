@@ -3,10 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { DropdownMenu } from 'radix-ui';
 
-// Proves the jsdom pointer-capture polyfill in `src/tests/setup.ts` is
-// sufficient for a real Radix primitive to open and close without throwing
-// — no menu/context-menu component exists yet (that's a later phase), this
-// is purely the substrate smoke test.
 describe('radix-ui smoke test', () => {
   it('opens a Radix dropdown menu and lets an item be activated', async () => {
     const user = userEvent.setup();

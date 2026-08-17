@@ -36,10 +36,6 @@ const workLabel = {
   unreadCount: 0,
 };
 
-/** `MailLayout` binds the four label-lifecycle mutation hooks to
- * `LabelList` — exercised here through the real component tree (rather
- * than `LabelList`'s own unit tests, which stub the calls) so the wiring
- * itself — the actual IPC command invoked per action — is covered. */
 describe('MailLayout — label lifecycle wiring', () => {
   it('creates a label through the real create_label IPC command', async () => {
     const user = userEvent.setup();
@@ -98,11 +94,6 @@ describe('MailLayout — label lifecycle wiring', () => {
   });
 });
 
-/** Phase 3 mounts `ComposeOverlay` over the mail surface but does not yet
- * wire any entry point to open it (Phase 4's job) — the expanded Compose
- * pill and the collapsed rail's stub both stay disabled. The panel itself
- * is still fully exercisable here by driving `useComposeStore` directly,
- * exactly as the plan intends. */
 describe('MailLayout — composer mounting', () => {
   beforeEach(() => act(() => useComposeStore.getState().close()));
 

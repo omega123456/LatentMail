@@ -1,6 +1,3 @@
-//! RFC 5322 address-list splitting (D12), newest-sender selection (D13),
-//! Sent-recipient derivation, both fallback strings, and the post-migration
-//! rebuild's effect on pre-existing summaries.
 
 use latentmail_lib::gmail::GmailMessage;
 use latentmail_lib::storage::addresses::{domain_of, first_identity, parse_address, split_addresses};
@@ -48,7 +45,7 @@ fn account_row() -> Account {
     }
 }
 
-// --- pure address-parsing tests -------------------------------------------------
+
 
 #[test]
 fn split_addresses_respects_a_comma_inside_a_quoted_display_name() {
@@ -112,7 +109,7 @@ fn domain_of_is_none_when_the_domain_portion_is_empty() {
     assert_eq!(domain_of("user@"), None);
 }
 
-// --- thread-summary identity resolution -----------------------------------------
+
 
 #[test]
 fn the_stored_sender_is_the_newest_messages_sender_not_the_first() {
@@ -141,9 +138,7 @@ fn the_stored_sender_is_the_newest_messages_sender_not_the_first() {
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
     let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
-    // The newest message (sent_at=200) is the quoted-name one, not the
-    // first-inserted "old@example.com" (D13) — and its comma-bearing
-    // display name survived whole (D12), with the bare address recovered.
+
     assert_eq!(thread.sender_identity.display, "Kovacs, Jozsef");
     assert_eq!(thread.sender_identity.address.as_deref(), Some("j@example.com"));
 }
@@ -210,7 +205,7 @@ fn missing_sender_and_recipient_data_produce_both_fallback_strings() {
     assert_eq!(recipient.address, None);
 }
 
-// --- migration rebuild -----------------------------------------------------------
+
 
 #[tokio::test]
 async fn reopening_storage_rebuilds_stale_thread_identity_from_source_messages() {
@@ -236,9 +231,7 @@ async fn reopening_storage_rebuilds_stale_thread_identity_from_source_messages()
         .unwrap();
         ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-        // Simulate a database that predates the V9 rebuild: blank out the
-        // stored identity directly (bypassing the normal write path) and
-        // clear the internal marker that records the rebuild already ran.
+
         connection
             .execute(
                 "UPDATE threads SET sender_identity='{\"display\":\"(No sender)\",\"address\":null}'",
@@ -256,8 +249,7 @@ async fn reopening_storage_rebuilds_stale_thread_identity_from_source_messages()
     }
     drop(storage);
 
-    // Reopening reruns the (idempotent) rebuild, reusing
-    // ThreadRepository::recompute_many against the real source messages.
+
     let reopened = Storage::open(&db_path).unwrap();
     let connection = reopened.connection().unwrap();
     let rebuilt = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();

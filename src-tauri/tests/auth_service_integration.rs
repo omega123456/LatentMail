@@ -1,6 +1,3 @@
-//! Exercises `AuthService` and the OAuth helper functions beyond the
-//! PKCE/state-validation coverage in `auth_pkce_integration.rs` and the
-//! keychain-only coverage in `auth_token_refresh_integration.rs`.
 
 use std::sync::{Arc, Mutex};
 
@@ -18,10 +15,7 @@ use wiremock::{
 };
 
 fn app() -> tauri::App<tauri::test::MockRuntime> {
-    // Commands below are called directly as plain async functions (not
-    // dispatched through IPC), so this deliberately skips
-    // `latentmail_lib::ipc::register` to avoid pulling in and
-    // monomorphizing every other command's generic code in this binary.
+
     tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap()
@@ -38,16 +32,14 @@ async fn accounts_lists_what_is_persisted() {
     let (service, _directory) = service_with_storage();
     assert_eq!(service.accounts().await.unwrap(), Vec::new());
 
-    // The returned account is what `start()` announces on `account://state`,
-    // which is the only thing that moves the UI off the sign-in screen.
+
     let saved = service
         .save_account("me@example.com".into(), "refresh-token".into(), None)
         .await
         .unwrap();
     assert_eq!(saved.email, "me@example.com");
     assert!(!saved.needs_reauthentication);
-    // Gmail gives us no display name, so the local part stands in — an empty
-    // one renders a blank account-switcher row and a blank avatar initial.
+
     assert_eq!(saved.display_name, "me");
 
     let accounts = service.accounts().await.unwrap();
@@ -279,7 +271,7 @@ async fn refresh_access_token_marks_reauthentication_after_three_consecutive_fai
         .await
         .unwrap();
     let account_id = "flaky@example.com".to_owned();
-    // save_account() assigns the email as id for brand new accounts.
+
     assert_eq!(service.accounts().await.unwrap()[0].id, account_id);
     save_refresh_token(&account_id, "stored-refresh-token").unwrap();
 
@@ -471,9 +463,7 @@ async fn profile_maps_the_camel_case_email_address_field() {
 
 #[test]
 fn initialize_creates_the_app_data_directory_and_manages_auth_service_state() {
-    // See the matching comment in settings_service_integration.rs: this
-    // redirects the OS per-user data directory to an isolated temp dir so
-    // the test never touches the real machine.
+
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -506,13 +496,7 @@ fn account_repository_round_trip_matches_the_auth_dto_mapping() {
     );
 }
 
-// The tests below were merged in from what used to be
-// `auth_pkce_integration.rs` and `auth_token_refresh_integration.rs` to
-// reduce the number of separate crates that instantiate the same
-// `<R: Runtime>`-generic auth functions (each integration test file is a
-// distinct compiled crate, and Rust monomorphizes generics per instantiating
-// crate) — consolidating keeps coverage instrumentation focused on fewer
-// duplicate copies of the same logical function.
+
 
 #[test]
 fn authorization_uses_pkce_offline_consent_and_gmail_scopes() {

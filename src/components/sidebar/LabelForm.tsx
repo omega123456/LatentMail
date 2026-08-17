@@ -14,9 +14,6 @@ const RESERVED_LABEL_NAMES = new Set([
   'CHAT',
 ]);
 
-/** Mirrors `LabelRepository::validate_name` on the Rust side (same rules,
- * same error text) so a validation failure reads identically whether it's
- * caught client-side before submit or returned by the mutation. */
 export function validateLabelName(
   name: string,
   existingNames: string[],
@@ -41,18 +38,14 @@ export function validateLabelName(
 
 export type LabelFormProps = {
   mode: 'create' | 'rename';
-  /** Current name when renaming; ignored for `create`. */
   initialName?: string;
   existingNames: string[];
-  /** Server-side error surfaced from the mutation itself (e.g. a race with
-   * another client), shown alongside any local validation failure. */
   submitError?: string | null;
   submitting?: boolean;
   onSubmit: (input: { name: string; colorId: LabelColorId }) => void;
   onCancel: () => void;
 };
 
-/** Inline create/rename form (FR "Label management"). */
 export function LabelForm({
   mode,
   initialName = '',
@@ -112,7 +105,7 @@ export function LabelForm({
               aria-checked={colorId === swatch.id}
               aria-label={swatch.name}
               onClick={() => setColorId(swatch.id)}
-              className={`size-6 rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${colorId === swatch.id ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
+              className={`size-6 cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${colorId === swatch.id ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
             />
           ))}
         </div>
@@ -126,14 +119,14 @@ export function LabelForm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
+          className="cursor-pointer rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
         >
           Cancel
         </button>
         <button
           type="submit"
           disabled={submitting}
-          className="rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
+          className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
         >
           {mode === 'create' ? 'Create' : 'Rename'}
         </button>

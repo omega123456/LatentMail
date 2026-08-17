@@ -30,24 +30,13 @@ use crate::storage::{Account, AccountRepository, Storage};
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
-/// The OpenID Connect userinfo endpoint, confirmed against Google's
-/// published discovery document. Supplies the account's real display name
-/// and photograph once the authorization carries the `profile` scope. Only
-/// the real (non-`test-utils`) [`userinfo`] uses this — the fake never
-/// makes an HTTP request at all.
 #[cfg(not(feature = "test-utils"))]
 const USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 
-/// Reads an OAuth endpoint from an override env var, falling back to `default`.
-/// Lets integration tests point the token/profile exchange at a local mock
-/// server instead of the real Google endpoints.
 fn oauth_endpoint(env_key: &str, default: &str) -> String {
     std::env::var(env_key).unwrap_or_else(|_| default.to_owned())
 }
 
-/// Resolves the Google OAuth client ID. A runtime `LATENTMAIL_GOOGLE_CLIENT_ID`
-/// wins (tests and one-off overrides); otherwise the value `build.rs` baked in
-/// from `src-tauri/secrets.json`.
 pub fn client_id() -> Result<String, String> {
     std::env::var("LATENTMAIL_GOOGLE_CLIENT_ID")
         .ok()
@@ -56,11 +45,6 @@ pub fn client_id() -> Result<String, String> {
         .ok_or_else(|| "LATENTMAIL_GOOGLE_CLIENT_ID is not configured".to_owned())
 }
 
-/// Resolves the Google OAuth client secret, same precedence as [`client_id`].
-/// Google's token endpoint rejects a desktop client that omits it
-/// (`invalid_request: client_secret is missing`), so it is sent despite being
-/// a public, non-confidential client — PKCE remains the actual protection.
-/// Optional so tests can exchange codes against a mock endpoint without one.
 pub fn client_secret() -> Option<ClientSecret> {
     std::env::var("LATENTMAIL_GOOGLE_CLIENT_SECRET")
         .ok()
@@ -105,11 +89,6 @@ pub struct GmailProfile {
     pub email_address: String,
 }
 
-/// The OpenID userinfo document's shape (D-scoped to what this slice uses).
-/// Both fields are optional: Google omits `picture` for an account with no
-/// photo, and a scope-deficient token never reaches this struct at all
-/// (D11 — `start()` only requests it when the granted scopes include
-/// `profile`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserInfo {
     #[serde(default)]
@@ -162,11 +141,7 @@ impl AuthService {
                     account_id,
                 )
                 .await?;
-            // D11: a token that was granted before this change (or whose
-            // consent screen was declined for the new scope) simply carries
-            // no `profile` scope. That is never an error — the account keeps
-            // its placeholder name and letter avatar silently, with no
-            // banner, no retry and no forced re-authentication.
+
             let account = if token_has_scope(&token, "profile") {
                 match userinfo(token.access_token().secret()).await {
                     Ok(info) => self
@@ -181,8 +156,7 @@ impl AuthService {
             } else {
                 account
             };
-            // The accounts query only refetches off this event, so without it
-            // a successful sign-in leaves the UI on the sign-in screen.
+
             string_try!(app.emit("account://state", account));
             Ok(())
         }
@@ -190,10 +164,7 @@ impl AuthService {
         .inspect_err(|error: &String| tracing::error!(target: "auth", "sign-in failed: {error}"))
     }
 
-    /// Persists (or updates) the account discovered by a completed OAuth
-    /// exchange and returns it, so the caller can announce it on
-    /// `account://state`. Public so it can be exercised directly by
-    /// integration tests without driving the full browser-based `start()` flow.
+
     pub async fn save_account(
         &self,
         email: String,
@@ -219,10 +190,7 @@ impl AuthService {
                 let id = existing
                     .as_ref()
                     .map_or_else(|| email_for_db.clone(), |account| account.id.clone());
-                // Gmail's profile endpoint returns only the address, and no
-                // userinfo scope is requested, so the local part is the best
-                // available name — an empty one renders a blank switcher row
-                // and a blank avatar initial.
+
                 let display_name = existing
                     .as_ref()
                     .map(|account| account.display_name.clone())
@@ -247,12 +215,7 @@ impl AuthService {
         Ok(account_dto(account))
     }
 
-    /// Applies a userinfo document's real display name and photograph URL
-    /// over an existing account's placeholder values (D11's "when it does
-    /// arrive" half). `None` fields leave the existing value untouched;
-    /// returns `Ok(None)` if the account no longer exists (e.g. removed
-    /// mid-flow), in which case the caller keeps whatever `AccountDto` it
-    /// already had.
+
     pub async fn apply_profile(
         &self,
         account_id: &str,
@@ -402,11 +365,7 @@ pub fn authorization(client_id: &str, redirect: &str) -> Result<Authorization, S
         .add_scope(Scope::new(
             "https://www.googleapis.com/auth/gmail.labels".to_owned(),
         ))
-        // Extends (never reverses) the Gmail scope set for the account
-        // profile photograph — see auth-adjacent ADR for the relationship to
-        // the original PKCE/scope decision. Existing accounts keep working
-        // with their unchanged Gmail scopes; only a fresh or re-authorized
-        // sign-in gains these.
+
         .add_scope(Scope::new("openid".to_owned()))
         .add_scope(Scope::new("profile".to_owned()))
         .add_extra_param("access_type", "offline")
@@ -467,9 +426,7 @@ pub fn parse_callback(target: &str, expected_state: &str) -> Result<Authorizatio
         .ok_or_else(|| "OAuth callback had no code".to_owned())
 }
 
-/// Exchanges an authorization code for a token. Public (rather than
-/// module-private) so integration tests can exercise it directly against a
-/// mock token endpoint via `LATENTMAIL_GOOGLE_TOKEN_URL`.
+
 pub async fn exchange_code(
     client_id: &str,
     redirect: &str,
@@ -497,8 +454,7 @@ pub async fn exchange_code(
         .map_err(|e| e.to_string())
 }
 
-/// Fetches the signed-in user's Gmail profile. Public for the same test
-/// reasons as [`exchange_code`]; see `LATENTMAIL_GOOGLE_PROFILE_URL`.
+
 pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
     reqwest::Client::new()
         .get(oauth_endpoint("LATENTMAIL_GOOGLE_PROFILE_URL", PROFILE_URL))
@@ -513,13 +469,7 @@ pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Fetches the OpenID userinfo document over real HTTPS. Public for the same
-/// test reasons as [`exchange_code`]/[`profile`]; see
-/// `LATENTMAIL_GOOGLE_USERINFO_URL`. This is a machine-facing outbound-HTTP
-/// boundary exactly like `avatars::resolver`'s DNS/download boundary, so it
-/// follows the same real-versus-fake split: real `reqwest` here, an
-/// in-memory fake under `feature = "test-utils"` below. No test performs a
-/// real HTTP request against this endpoint.
+
 #[cfg(not(feature = "test-utils"))]
 pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
     reqwest::Client::new()
@@ -542,8 +492,7 @@ fn fake_userinfo_store() -> &'static std::sync::Mutex<HashMap<String, Result<Use
     STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-/// Test-only: programs the fake userinfo document [`userinfo`] returns for
-/// `access_token`, with no real HTTP involved.
+
 #[cfg(feature = "test-utils")]
 pub fn set_fake_userinfo(access_token: &str, info: UserInfo) {
     fake_userinfo_store()
@@ -562,10 +511,7 @@ pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
         .unwrap_or_else(|| Err("no fake userinfo programmed for this access token".to_owned()))
 }
 
-/// Whether a token's granted scopes (as Google's token endpoint reported
-/// them back) include `name` — D11's "record which scopes a token actually
-/// carries" so a deficient token degrades silently rather than assuming the
-/// requested scope was actually granted.
+
 pub fn token_has_scope<EF, TT>(
     token: &oauth2::StandardTokenResponse<EF, TT>,
     name: &str,
@@ -649,8 +595,7 @@ pub async fn begin_reauthentication<R: Runtime>(
     service.start(app, Some(account_id)).await
 }
 
-/// `alex.morgan@gmail.com` → `alex.morgan`. Falls back to the whole value if
-/// there is no `@`, so a malformed address still yields something readable.
+
 fn local_part(email: &str) -> String {
     email.split('@').next().unwrap_or(email).to_owned()
 }

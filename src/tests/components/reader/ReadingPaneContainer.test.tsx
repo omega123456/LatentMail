@@ -67,14 +67,10 @@ describe('ReadingPaneContainer', () => {
 
     renderWithClient();
 
-    // Scoped to the thread ribbon (`action-ribbon`), not the per-message
-    // ribbon rendered on each `MessageCard` — both expose a "Move to" button.
+
     const ribbon = within(await screen.findByTestId('action-ribbon'));
     await user.click(ribbon.getByRole('button', { name: 'Move to' }));
-    // `MoveToMenu`'s items are plain buttons in a popper-positioned portal —
-    // jsdom's lack of real layout confuses user-event's pointer-target
-    // resolution here, so a direct `fireEvent.click` is used instead (same
-    // workaround `RowContextMenu.test.tsx` already applies).
+
     fireEvent.click(await screen.findByRole('menuitem', { name: /Inbox/ }));
 
     await waitFor(() =>

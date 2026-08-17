@@ -47,7 +47,7 @@ describe('ComposeResizeHandles', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize composer height' }), {
       clientY: 0,
     });
-    // Dragging far down would shrink height below the shared minimum.
+
     fireEvent.pointerMove(window, { clientY: 100000 });
     expect(onResize).toHaveBeenLastCalledWith({ width: 512, height: COMPOSE_MIN_PX });
     fireEvent.pointerUp(window);
@@ -55,7 +55,7 @@ describe('ComposeResizeHandles', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize composer width' }), {
       clientX: 0,
     });
-    // Dragging far right would shrink width below the shared minimum too.
+
     fireEvent.pointerMove(window, { clientX: 100000 });
     expect(onResize).toHaveBeenLastCalledWith({ width: COMPOSE_MIN_PX, height: 500 });
     fireEvent.pointerUp(window);

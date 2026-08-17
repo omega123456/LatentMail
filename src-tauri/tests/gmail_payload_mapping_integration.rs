@@ -56,8 +56,7 @@ async fn committed_message_corpus_maps_payload_trees() {
         if let Some(cid) = shape.inline {
             assert_eq!(message.inline_parts[0].content_id, cid);
         }
-        // The sanitizer splices this into a `data:` URL, so it must be the
-        // bare essence however the part declared itself.
+
         if let Some(expected) = shape.expect_inline_mime {
             assert_eq!(message.inline_parts[0].mime_type, expected, "{}", shape.name);
         }
@@ -114,4 +113,27 @@ async fn message_date_header_is_used_when_internal_date_is_missing() {
             .unwrap()
             .timestamp()
     );
+}
+
+#[tokio::test]
+async fn message_snippet_html_entities_are_decoded() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/entities"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "entities",
+            "threadId": "thread",
+            "historyId": "7",
+            "snippet": "I&#39;m sorry &amp; you &lt;3 &quot;this&quot; &gt; that",
+            "payload": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let message = GmailClient::with_base_url("token", server.uri())
+        .message("entities")
+        .await
+        .unwrap();
+
+    assert_eq!(message.snippet, "I'm sorry & you <3 \"this\" > that");
 }

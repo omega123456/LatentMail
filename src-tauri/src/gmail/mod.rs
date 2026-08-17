@@ -15,16 +15,12 @@ pub const MESSAGES_GET_COST: u32 = 5;
 pub const MESSAGES_MODIFY_COST: u32 = 5;
 pub const MESSAGES_BATCH_MODIFY_COST: u32 = 50;
 pub const HISTORY_LIST_COST: u32 = 2;
-// Label lifecycle and draft-deletion endpoint costs (Phase 3). Declared
-// here alongside the rest so `gmail::labels` references, rather than
-// duplicates, a single source of truth — matching every write endpoint
-// above at Gmail's standard per-write cost.
+
 pub const LABELS_CREATE_COST: u32 = 5;
 pub const LABELS_UPDATE_COST: u32 = 5;
 pub const LABELS_DELETE_COST: u32 = 5;
 pub const DRAFTS_DELETE_COST: u32 = 5;
-/// Cost of `GET /users/me/drafts` — used to resolve a message id to Gmail's
-/// own, distinct draft id (see [`GmailClient::list_draft_ids`]).
+
 pub const DRAFTS_LIST_COST: u32 = 5;
 pub const DRAFTS_CREATE_COST: u32 = 5;
 pub const DRAFTS_UPDATE_COST: u32 = 5;
@@ -32,8 +28,7 @@ pub const DRAFTS_GET_COST: u32 = 5;
 pub const MESSAGES_SEND_COST: u32 = 5;
 pub const ATTACHMENTS_GET_COST: u32 = 5;
 
-/// Gmail's own default listing page size — applies whenever a caller
-/// doesn't request one explicitly. The maximum is 500.
+
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 pub const MAX_PAGE_SIZE: u32 = 500;
 
@@ -49,8 +44,7 @@ pub struct Profile {
     pub threads_total: i64,
     pub history_id: i64,
 }
-/// Gmail's text/background colour pair for a user label (D10). The palette
-/// of valid pairs lives in [`labels::LABEL_PALETTE`].
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelColorPair {
     pub text_color: String,
@@ -76,11 +70,7 @@ pub struct Page<T> {
     pub items: Vec<T>,
     pub next_page_token: Option<String>,
 }
-/// Listing options every enumeration call now takes explicitly (Phase 3):
-/// whether to include Spam and Trash (excluded by default) and the page
-/// size to request (Gmail defaults to 100, capped at [`MAX_PAGE_SIZE`]).
-/// Backfill/reconciliation (Phase 4/5) always set both; ordinary listing
-/// keeps [`ListOptions::default`].
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListOptions {
     pub include_spam_and_trash: bool,
@@ -142,11 +132,7 @@ pub struct HistoryPage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryRecord {
     pub id: i64,
-    /// Every message the record touches, regardless of *how*. Gmail
-    /// populates this on records whose change is not expressible in the four
-    /// typed lists below, and a consumer that reads only those lists sees
-    /// such a record as an empty no-op — then advances its checkpoint past
-    /// it, losing the change permanently.
+
     pub messages: Vec<MessageRef>,
     pub messages_added: Vec<MessageRef>,
     pub messages_deleted: Vec<MessageRef>,
@@ -173,24 +159,13 @@ pub enum GmailError {
     AttachmentData,
 }
 
-/// The account-wide sustained Gmail quota, conservatively calibrated per
-/// D9: Google's published per-user limit disagrees across sources (6,000 or
-/// 15,000 units/minute), so pacing takes the lower, conservative figure —
-/// under-consuming costs throughput, over-consuming produces sustained
-/// rate-limit responses. Replaces the previous hard-coded 250/sec.
+
 pub const ACCOUNT_RATE_PER_SECOND: f64 = 100.0;
 
-/// The fixed share of the account's quota available to traversal-class work
-/// (whole-mailbox backfill/reconciliation). Traversal is capped at this
-/// share so a saturating traversal can never starve non-traversal work —
-/// interactive actions, polling and body fetches — which stays uncapped and
-/// draws from the whole account budget (see D4).
+
 pub const TRAVERSAL_SHARE: f64 = 0.4;
 
-/// Which quota class a [`GmailClient`] draws from. Traversal-class requests
-/// additionally pass through a capped, class-scoped bucket before drawing
-/// from the same account-wide bucket every other request uses — see
-/// [`GmailClient::traversal_scoped`].
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuotaClass {
     Standard,
@@ -234,10 +209,7 @@ impl Bucket {
     }
 }
 
-/// Per-account bucket pair: `shared` paces every request against the whole
-/// account budget; `traversal` additionally paces traversal-class requests
-/// against their capped share. Traversal always draws from both, so its
-/// consumption is still accounted against the shared total.
+
 struct AccountBuckets {
     shared: Bucket,
     traversal: Bucket,
@@ -300,11 +272,7 @@ impl GmailClient {
         client.buckets = limiters.for_account(account_id).await;
         client
     }
-    /// A client that shares this one's account-wide limiter (existing call
-    /// sites are unchanged — see D4) but is tagged traversal-class, so its
-    /// requests are additionally capped at [`TRAVERSAL_SHARE`] of the
-    /// account's rate. Non-traversal work never calls this and stays
-    /// uncapped.
+
     pub fn traversal_scoped(&self) -> Self {
         let mut client = self.clone();
         client.quota_class = QuotaClass::Traversal;
@@ -370,11 +338,7 @@ impl GmailClient {
         self.list_all_messages_matching(label_ids, None, ListOptions::default())
             .await
     }
-    /// Same as [`Self::list_messages_page`] but with an optional Gmail
-    /// search `q` filter (e.g. `newer_than:30d`), used by initial/full sync
-    /// to bound the first fetch to roughly the last 30 days, plus explicit
-    /// [`ListOptions`] — Spam/Trash inclusion and an explicit page size
-    /// (Gmail defaults to 100 and excludes Spam/Trash unless asked).
+
     pub async fn list_messages_page_matching(
         &self,
         label_ids: &[String],
@@ -445,18 +409,6 @@ impl GmailClient {
             .await?;
         Ok(map_message(raw))
     }
-    /// Returns the stable draft id. Gmail answers a draft *write* with a
-    /// minimal resource — `{"id", "message": {"id", "threadId", "labelIds"}}`,
-    /// with no `historyId` and no `payload` — so a caller that needs the
-    /// message itself re-reads it through [`GmailClient::draft`], which is
-    /// the only draft route that returns a complete one.
-    /// [`GmailClient::message`], but `None` when Gmail no longer has the id.
-    /// A message can disappear between being enumerated (listed, or reported
-    /// by history) and being fetched — promoting a draft to a sent message
-    /// leaves exactly that behind, and so does any concurrent delete — so an
-    /// enumerating caller must skip the id rather than abort its whole run.
-    /// Callers acting on one specific message (a body fetch, a mutation
-    /// write-back) want the 404 instead and keep using `message`.
     pub async fn message_if_present(&self, id: &str) -> Result<Option<GmailMessage>, GmailError> {
         match self.message(id).await {
             Err(GmailError::Http(404)) => Ok(None),
@@ -477,8 +429,6 @@ impl GmailClient {
         )
         .await
     }
-    /// Returns the stable draft id — see [`GmailClient::create_draft`] for
-    /// why a write never carries the message back.
     pub async fn update_draft(
         &self,
         draft_id: &str,
@@ -508,9 +458,6 @@ impl GmailClient {
             message: map_message(raw.message.into_raw()?),
         })
     }
-    /// Promotes the draft and returns the sent message's id. Promotion, like
-    /// every other draft write, answers with a partial Message (id, thread,
-    /// labels only), so the full message comes from [`GmailClient::message`].
     pub async fn send_draft(&self, draft_id: &str) -> Result<String, GmailError> {
         let raw: RawId = self
             .send(
@@ -579,12 +526,7 @@ impl GmailClient {
             .await?;
         Ok(())
     }
-    /// Resolves every draft's Gmail message id to its own, *distinct* draft
-    /// id (`GET /users/me/drafts/{id}` is a different resource from
-    /// `GET /users/me/messages/{id}` — nothing about a message id is a valid
-    /// draft id). Callers that need the draft id for exactly one message
-    /// still have to page through the whole list — Gmail's API offers no
-    /// "look up the draft for this message id" endpoint.
+
     pub async fn list_draft_ids(&self) -> Result<HashMap<String, String>, GmailError> {
         let mut mapping = HashMap::new();
         let mut token: Option<String> = None;
@@ -687,9 +629,7 @@ impl GmailClient {
             }
             match request.send().await {
                 Ok(response) if response.status().is_success() => {
-                    // Write endpoints (`batchModify`) answer 204 with an empty
-                    // body, which is not valid JSON — read it as `null` so the
-                    // caller's `T` still deserializes.
+
                     let raw = response.bytes().await?;
                     let body: &[u8] = if raw.is_empty() { b"null" } else { &raw };
                     return Ok(serde_json::from_slice(body)?);
@@ -705,14 +645,7 @@ impl GmailClient {
                         tokio::time::sleep(backoff(attempt + 1)).await;
                         continue;
                     }
-                    // Gmail explains every 4xx in its body ("Invalid JSON
-                    // payload", "Precondition check failed", ...); a bare
-                    // status code is not diagnosable on its own. A 404 is
-                    // routine rather than a fault — an entity can vanish
-                    // between being enumerated and being fetched — so the
-                    // caller decides whether it matters (see
-                    // [`GmailClient::message_if_present`]) and this only
-                    // leaves a debug trace.
+
                     let body = response.text().await.unwrap_or_default();
                     if status == StatusCode::NOT_FOUND {
                         tracing::debug!(target: "gmail", "{method} {path}: {status} {body}");
@@ -738,11 +671,7 @@ impl GmailClient {
         cost: u32,
     ) -> Result<String, GmailError> {
         self.acquire(cost).await;
-        // Gmail's upload endpoints take a `multipart/related` document —
-        // the Draft resource as JSON, then the RFC822 bytes verbatim — and
-        // require `uploadType`. A plain JSON body here (or one carrying
-        // `raw`/`threadId` at the top level rather than under `message`) is
-        // rejected with 400 before the message is ever assembled.
+
         let boundary = crate::compose::drafts::generate_id("latentmail-part");
         let metadata = serde_json::to_vec(&DraftUpload {
             message: DraftUploadMessage { thread_id },
@@ -890,8 +819,7 @@ struct RawDraftRef {
     id: String,
     message: RawRef,
 }
-/// Every draft write (create/update/promote) answers with a resource whose
-/// only dependable field is its id.
+
 #[derive(Deserialize)]
 struct RawId {
     id: String,
@@ -973,6 +901,13 @@ struct RawLabelChange {
     label_ids: Vec<String>,
 }
 
+fn decode_snippet_entities(text: &str) -> String {
+    html2text::from_read(text.as_bytes(), text.len() + 1)
+        .unwrap_or_else(|_| text.to_owned())
+        .trim_end()
+        .to_owned()
+}
+
 fn map_message(raw: RawMessage) -> GmailMessage {
     let raw_headers = raw.payload.headers.as_deref().unwrap_or_default();
     let headers = headers(raw_headers);
@@ -983,13 +918,13 @@ fn map_message(raw: RawMessage) -> GmailMessage {
         thread_id: raw.thread_id,
         history_id: number(&raw.history_id),
         label_ids: raw.label_ids.unwrap_or_default(),
-        snippet: raw.snippet.unwrap_or_default(),
+        snippet: decode_snippet_entities(&raw.snippet.unwrap_or_default()),
         sent_at: received_at(raw_headers)
             .or_else(|| {
                 raw.internal_date
                     .as_deref()
                     .and_then(|value| value.parse::<i64>().ok())
-                    // `internalDate` is epoch milliseconds; storage keeps seconds.
+
                     .and_then(DateTime::from_timestamp_millis)
                     .map(|value| value.timestamp())
             })
@@ -1029,11 +964,7 @@ struct Content {
     inline: Vec<InlinePart>,
 }
 fn collect_part(part: &RawPart, content: &mut Content) {
-    // Parsed once, so every decision below is a comparison of typed
-    // type/subtype names rather than string surgery on a header value that
-    // legitimately carries parameters (`text/plain; charset=us-ascii`) and
-    // arbitrary case. An unparseable or missing type is treated as opaque
-    // bytes, which is what it is.
+
     let mime = part
         .mime_type
         .as_deref()
@@ -1068,18 +999,12 @@ fn collect_part(part: &RawPart, content: &mut Content) {
     if let (Some(content_id), Some(bytes)) = (cid, data.clone()) {
         content.inline.push(InlinePart {
             content_id,
-            // The essence, not the raw header: this is spliced straight into a
-            // `data:` URL by the sanitizer, where a `name="…"` parameter would
-            // corrupt it.
+
             mime_type: mime.essence_str().to_owned(),
             bytes,
         });
     }
-    // The outermost text part of each type is this message's own body; deeper
-    // ones belong to something it carries. A `multipart/report` bounce nests
-    // the returned mail as `message/rfc822`, so last-wins rendered the
-    // original message where the delivery notice should be. Attachments never
-    // qualify at all — a `.txt` or `.html` file is not the body.
+
     let slot = match (is_attachment, mime.type_(), mime.subtype()) {
         (false, mime::TEXT, mime::HTML) => Some(&mut content.html),
         (false, mime::TEXT, mime::PLAIN) => Some(&mut content.plain),
@@ -1090,16 +1015,7 @@ fn collect_part(part: &RawPart, content: &mut Content) {
             *slot = Some(bytes_to_text(bytes));
         }
     }
-    // A `message/*` part is a whole other mail this one carries — a bounce's
-    // returned original, a forwarded attachment. Its parts are that message's
-    // body, never this one's, so the walk stops at the boundary and the
-    // carried mail is appended instead of merged.
-    //
-    // Only `message/rfc822` is a carried *mail*. The rest of the type —
-    // `delivery-status`, `disposition-notification`, `partial` — are
-    // machine-readable reports whose substance the human-readable part of the
-    // same message already states in prose, which is why Gmail renders none of
-    // them either.
+
     if mime.type_() == mime::MESSAGE {
         if let Some(block) = (mime.subtype() == "rfc822")
             .then(|| embedded_message(part))
@@ -1118,21 +1034,7 @@ fn collect_part(part: &RawPart, content: &mut Content) {
         }
     }
 }
-/// Renders a carried `message/rfc822` the way Gmail's own client does — a
-/// rule, the carried mail's headers, then its text. Without it a bounce shows
-/// the delivery notice and silently drops the message the notice is about.
-///
-/// The rendering is ours because the API has none to give: `messages.get`
-/// returns the MIME tree (`format=raw` returns RFC822 source), and the
-/// separator Gmail's web UI draws is that client's presentation, not a field.
-/// What the API does supply is the only input here — the carried mail's own
-/// `headers`, which Gmail hangs on the single child part that *is* that
-/// message's root, so the child is both where the headers come from and where
-/// the recursive walk resumes.
-///
-/// ponytail: appended to the plain body only — an HTML parent carrying an
-/// attached message still drops it. Bounces and forward-as-attachment are
-/// plain text; do the HTML side when something real needs it.
+
 fn embedded_message(part: &RawPart) -> Option<String> {
     let root = part.parts.as_deref()?.first()?;
     let mut carried = Content::default();
@@ -1161,11 +1063,7 @@ fn decode(value: &str) -> Option<Vec<u8>> {
 fn bytes_to_text(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
-/// When Gmail's own MX accepted the message — the timestamp after the final
-/// `;` of the *topmost* `Received:` hop. This is what Gmail's list shows, and
-/// it is the only field that stays right for delayed mail: `internalDate` can
-/// carry the sender's `Date:` instead, which a queued or clock-skewed sender
-/// puts hours out (a bounce queued overnight showed as the previous evening).
+
 fn received_at(values: &[RawHeader]) -> Option<i64> {
     let hop = values
         .iter()

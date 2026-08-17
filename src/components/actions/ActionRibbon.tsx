@@ -18,12 +18,6 @@ import {
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
 
-/** Per-mailbox hide-vs-disable rules (D-series wireframe): every
- * label-mutating action — star, labels, move, spam, and read/unread itself
- * (Gmail's read state is a label) — is hidden in Drafts; Trash hides star
- * and delete; Spam swaps "Mark as spam" for "Not spam". Shared with
- * `RowContextMenu`, whose entry set follows the identical rule so the two
- * surfaces can never drift apart. */
 export function computeRibbonVisibility(mailboxId: string) {
   const isDrafts = mailboxId === 'DRAFT';
   const isTrash = mailboxId === 'TRASH';
@@ -40,17 +34,10 @@ export function computeRibbonVisibility(mailboxId: string) {
 }
 
 export type ActionRibbonProps = {
-  /** The mailbox currently browsed — governs which actions render at all
-   * (hidden, never merely disabled, per the wireframe). */
   mailboxId: string;
-  /** Aggregate read state across the thread(s) this ribbon acts on. */
   unread: boolean;
-  /** Aggregate star state across the thread(s) this ribbon acts on. */
   starred: boolean;
-  /** Every user label in the account, for the Labels menu. */
   labels: LabelMenuEntry[];
-  /** Display name of the current mailbox when it is itself a user label —
-   * threaded into `MoveToMenu` so it can render "the removed source". */
   currentLabelName?: string;
   onToggleRead: () => void;
   onToggleStar: () => void;
@@ -59,31 +46,15 @@ export type ActionRibbonProps = {
   onToggleSpam: () => void;
   onDelete: () => void;
   onCreateLabel?: () => void;
-  /** The leading compose group renders only when `onReply` (and, by
-   * convention, its `onReplyAll`/`onForward` siblings) is supplied — the
-   * mechanism `BulkSelectionPanel` relies on to hide Reply/Reply
-   * All/Forward/Edit Draft entirely while a multi-selection is active (FR
-   * "Entry surfaces"), without a second boolean prop to keep in sync. */
   onReply?: () => void;
   onReplyAll?: () => void;
   onForward?: () => void;
-  /** Edit Draft renders only where the target contains a draft (FR "Entry
-   * surfaces"). Omitted entirely (rather than disabled) when it doesn't. */
   onEditDraft?: () => void;
 };
 
 const iconButtonClass =
-  'inline-flex items-center justify-center gap-1 rounded p-2 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface';
+  'inline-flex items-center justify-center gap-1 rounded p-2 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface cursor-pointer';
 
-/** Measures whether the triage group's natural (fully expanded) width
- * exceeds the space left over once the persistent leading compose group and
- * the overflow control are accounted for (AC4) — replacing the old fixed
- * width threshold. `probeRef` renders an absolutely-positioned, invisible
- * clone of [compose group][triage group, fully expanded][overflow control]
- * so its natural width equals exactly the "everything expanded" requirement
- * the wireframe describes, without measuring the three pieces separately:
- * `requiredWidth > availableWidth` is algebraically the same comparison as
- * `triageWidth > availableWidth - composeWidth - overflowWidth`. */
 function useMeasuredOverflow() {
   const containerRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
@@ -245,23 +216,17 @@ export function ActionRibbon({
       aria-label="Delete"
       title="Delete"
       onClick={onDelete}
-      className="inline-flex items-center justify-center rounded p-2 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error"
+      className="inline-flex items-center justify-center rounded p-2 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error cursor-pointer"
     >
       <Trash2 aria-hidden="true" size={18} />
     </button>
   );
 
-  // Star/Labels/Move-to sit contiguous; Spam gets its own separator before
-  // it per the wireframe (`... Move to | Spam | Delete`) even though all
-  // four collapse into the same overflow menu below the width threshold.
   const contiguousSecondary = [starButton, labelsButton, moveToButton].filter(Boolean);
   const secondaryItems = [...contiguousSecondary, spamButton].filter(Boolean);
 
   return (
     <div ref={containerRef} className="relative w-full">
-      {/* Invisible, absolutely-positioned probe: exactly the leading
-          compose group, fully expanded triage row, and the overflow
-          control's natural width — never interactive, never announced. */}
       <div
         ref={probeRef}
         aria-hidden="true"
@@ -332,9 +297,6 @@ export function ActionRibbon({
   );
 }
 
-/** A layout-only copy for overflow measurement. It intentionally avoids
- * Radix menu roots: mounting hidden menu triggers creates a second portal
- * tree and causes Radix to hide the real menu from assistive technology. */
 function RibbonMeasure({
   includeCompose,
   visibility,
@@ -361,11 +323,6 @@ function RibbonMeasure({
   ));
 }
 
-/** The persistent leading Reply/Reply All/Forward/Edit Draft group (AC1,
- * AC4) — never enters overflow, separated from the triage group by the
- * ribbon's existing hairline convention. Shared verbatim between the real
- * rendering and the width-measurement probe above so their widths always
- * match exactly. */
 function ComposeGroup({
   onReply,
   onReplyAll,

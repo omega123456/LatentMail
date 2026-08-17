@@ -79,7 +79,7 @@ describe('Toast', () => {
     show(() => useToastStore.getState().showSuccess('Message sent.'));
     await waitFor(() => expect(rails()).toHaveLength(2));
 
-    // Past the 4s confirmation window, short of the 30s error one.
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });

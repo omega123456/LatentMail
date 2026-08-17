@@ -25,8 +25,6 @@ export function toDraftRequest(session: ComposeSession): ComposeDraftRequest {
     cc: session.recipients.cc,
     bcc: session.recipients.bcc,
     subject: session.subject,
-    // Preview asset URLs are display-only.  The RFC document must only
-    // reference the persisted CID, never an app-local staging URL.
     html: session.attachments.reduce(
       (html, attachment) =>
         attachment.contentId && attachment.staged
@@ -42,8 +40,6 @@ export function toDraftRequest(session: ComposeSession): ComposeDraftRequest {
     originalGmailMessageId: session.originalGmailMessageId,
     quoteHtml: session.quote?.html ?? null,
     quotePlain: null,
-    // Exact editable snapshot is a stable boundary fingerprint without a
-    // second, subtly different HTML serialization on either side of IPC.
     editableBodyFingerprint: session.html,
     attachments: session.attachments.flatMap((attachment) =>
       attachment.staged
@@ -60,8 +56,6 @@ export function toDraftRequest(session: ComposeSession): ComposeDraftRequest {
   };
 }
 
-/** One session has one timer. A newer change replaces that timer; if a save
- * is already admitted Rust's durable keyed coalescer owns the race. */
 export function useComposeAutosave() {
   const session = useComposeStore((state) => state.session);
   const qualifies = useComposeStore(selectQualifiesForDraft);

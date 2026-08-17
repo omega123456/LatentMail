@@ -13,10 +13,6 @@ export function SignInScreen() {
     try {
       await invoke('begin_sign_in', {});
     } catch (cause) {
-      // `invoke` already logged the failure centrally; this only surfaces it.
-      // The inline block keeps the detailed cause next to the button that
-      // failed; the toast is what catches the eye of a user who has already
-      // looked away waiting for the browser to open.
       setError(
         `Could not start Google sign-in: ${cause instanceof Error ? cause.message : String(cause)}`,
       );
@@ -46,7 +42,7 @@ export function SignInScreen() {
             <span>{error}</span>
             <button
               aria-label="Dismiss sign-in error"
-              className="rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-primary"
+              className="cursor-pointer rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-primary"
               onClick={() => setError(null)}
             >
               Dismiss
@@ -56,7 +52,7 @@ export function SignInScreen() {
         <button
           onClick={() => void signIn()}
           disabled={signingIn}
-          className="mt-8 flex w-full items-center justify-center gap-stack-gap-sm rounded-md bg-primary px-4 py-3 text-body-md text-on-primary disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary"
+          className="mt-8 flex w-full cursor-pointer items-center justify-center gap-stack-gap-sm rounded-md bg-primary px-4 py-3 text-body-md text-on-primary disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary"
         >
           {signingIn && <LoaderCircle className="animate-spin" aria-hidden="true" />}{' '}
           {signingIn ? 'Signing in…' : 'Continue with Google'}

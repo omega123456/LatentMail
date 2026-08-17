@@ -1,8 +1,3 @@
-//! The per-entity delta map and delta-grouped flush (D5, Phase 1 AC7/AC7b):
-//! a move emerges as one batch call carrying both directions, a bulk action
-//! over many threads emerges as one call per distinct delta chunked at
-//! Gmail's 1,000-identifier limit, and mutations outside the coalescing
-//! window never merge into the same Gmail call.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -69,8 +64,7 @@ fn message(id: &str, thread_id: &str) -> Message {
     }
 }
 
-/// Seeds `count` threads, each with a single message named `message-{n}` in
-/// `thread-{n}`, plus the system labels a move/star exercises.
+
 fn seed_many_threads(count: usize) -> (Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -146,24 +140,13 @@ async fn a_move_produces_one_batch_call_carrying_both_directions() {
     assert_eq!(body["removeLabelIds"], serde_json::json!(["INBOX"]));
 }
 
-/// The chunk boundary itself is the exact value Gmail's `batchModify`
-/// documents (1,000 identifiers per call) — proving it here, directly, is
-/// far cheaper than driving 1,000+ real network/storage round trips through
-/// the full engine just to observe a second chunk appear, and every test in
-/// this suite must stay well under a second.
+
 #[test]
 fn batch_modify_chunk_size_matches_gmails_documented_identifier_limit() {
     assert_eq!(latentmail_lib::sync::BATCH_MODIFY_CHUNK_SIZE, 1_000);
 }
 
-/// A bulk star over many threads must produce **one** `batchModify` call
-/// carrying every thread's message, not one call per thread — every thread
-/// here shares an identical delta, so the whole batch groups into a single
-/// call. The 1,000-identifier chunk boundary this call would additionally
-/// split at is covered directly, and far more cheaply, by
-/// `batch_modify_chunk_size_matches_gmails_documented_identifier_limit`
-/// above — the grouping code chunks with plain `slice::chunks`, so once the
-/// boundary value is right, splitting at it is a stdlib guarantee.
+
 #[tokio::test(start_paused = true)]
 async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
     const COUNT: usize = 30;
@@ -173,9 +156,7 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
-    // One dynamic mock answering every `/users/me/messages/message-{n}` GET,
-    // instead of registering (and awaiting the mount of) one mock per
-    // message — the per-mount overhead otherwise dominates this test.
+
     Mock::given(method("GET"))
         .respond_with(move |request: &wiremock::Request| {
             let id = request
@@ -242,10 +223,7 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
     assert_eq!(ids, COUNT);
 }
 
-/// Requests separated by more than the coalescing window never merge into
-/// the same Gmail call — each fully-awaited `mutate` call only returns once
-/// its own flush (sleep, dispatch, write-back) has completed, so two
-/// sequential calls are, by construction, in separate windows.
+
 #[tokio::test(start_paused = true)]
 async fn sequential_mutations_outside_the_coalescing_window_are_separate_batch_calls() {
     let server = MockServer::start().await;
@@ -299,8 +277,7 @@ async fn sequential_mutations_outside_the_coalescing_window_are_separate_batch_c
     assert_eq!(second, MutationOutcome::Applied);
 }
 
-/// Read/unread is expressed the same way star is — as a request to remove
-/// or add the `UNREAD` label — and reaches the same generic mutate path.
+
 #[tokio::test(start_paused = true)]
 async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition() {
     let server = MockServer::start().await;
@@ -333,7 +310,7 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         noop_event_sink(),
     );
 
-    // Mark read: remove UNREAD.
+
     let read = engine
         .mutate(
             "account",
@@ -346,7 +323,7 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         .unwrap();
     assert_eq!(read, MutationOutcome::Applied);
 
-    // Mark unread: add UNREAD back.
+
     let unread = engine
         .mutate(
             "account",
@@ -375,9 +352,7 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
     );
 }
 
-/// A request carrying no labels at all touches nothing in the final delta,
-/// so it is (trivially) superseded and settles without ever reaching the
-/// queue or Gmail — the degenerate edge of the superseded-outcome contract.
+
 #[tokio::test(start_paused = true)]
 async fn a_request_with_no_labels_settles_as_superseded_without_dispatching() {
     let (storage, _directory) = seed_many_threads(1);
@@ -393,8 +368,7 @@ async fn a_request_with_no_labels_settles_as_superseded_without_dispatching() {
     let outcome = engine
         .mutate(
             "account",
-            // No mock server needed: an empty request must never reach the
-            // network.
+
             GmailClient::with_base_url("token", "http://127.0.0.1:0"),
             "thread-0".into(),
             HashSet::new(),

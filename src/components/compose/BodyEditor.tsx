@@ -8,8 +8,6 @@ import { forwardRef, useImperativeHandle, useState } from 'react';
 export type BodyEditorHandle = {
   insertInlineImage: (previewUrl: string) => void;
   html: () => string;
-  /** Imperative focus for the composer's focus-on-open behavior (Reply and
-   * Reply All land focus in the body rather than To). */
   focus: () => void;
 };
 type Props = {
@@ -25,11 +23,6 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
     const [isEmpty, setIsEmpty] = useState(true);
     const editor = useEditor({
       extensions: [
-        // Tailwind's preflight strips list markers and indentation from
-        // `ul`/`ol`, so a toggled list would render identically to a
-        // paragraph. The utilities ride on the nodes themselves — the
-        // styling rules allow no stylesheet rule or arbitrary variant to
-        // reach inside the editor's content.
         StarterKit.configure({
           link: false,
           underline: false,
@@ -41,10 +34,6 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
         Image,
       ],
       content: value,
-      // Classes go on the ProseMirror element itself so it fills the whole
-      // body area — a click anywhere in that area lands in the document
-      // rather than on inert padding — and so its focus ring is suppressed
-      // there rather than in a stylesheet the styling rules forbid.
       editorProps: { attributes: { class: 'flex-1 py-3.5 outline-none' } },
       onCreate: ({ editor }) => {
         onSelectionChange?.(editor);

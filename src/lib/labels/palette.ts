@@ -1,9 +1,3 @@
-/** Gmail's real 102-pair label colour palette (24 base colours + 78 extended "more colours" swatches).
- * Every id/name pair is accurate for its own hex value (Slice audit fix: the old table had 78
- * placeholder-named entries and a duplicate red/pink pair caused by a dropped grey). Position-aligned
- * 1:1 with `--color-label-gmail-{N}` in `src/index.css` and with `gmail::labels::LABEL_PALETTE` in Rust,
- * so a picked swatch id resolves to the identical Gmail colour pair on both sides of IPC. Classes are
- * literal so Tailwind emits every token. */
 export type LabelColorId = string;
 export type LabelColorSwatch = {
   id: LabelColorId;

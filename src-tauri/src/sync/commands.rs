@@ -1,5 +1,3 @@
-//! The Mail read commands and the Sync trigger/status commands (Phase 17's
-//! IPC surface — Phase 18 wires the UI against these).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -95,9 +93,7 @@ async fn admit_compose(
     send: bool,
 ) -> Result<ComposeQueueAcceptance, String> {
     let operation_id = crate::compose::drafts::generate_id(if send { "send" } else { "draft" });
-    // Both ids this session's parts can be filed under — the composer
-    // stages against whichever it knows, and ownership transfers to the
-    // draft id asynchronously, so neither alone is dependable here.
+
     let owners: Vec<&str> = request
         .draft_id
         .as_deref()
@@ -188,9 +184,7 @@ pub async fn send_compose_draft(
     admit_compose(&queue, &storage, &staging, &coalescer, draft, true).await
 }
 
-// Tauri injects each piece of managed state as its own parameter, so the
-// arity is the framework's, not a design choice — same carve-out as
-// `compose::drafts::admit`.
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn discard_compose_draft<R: Runtime>(
@@ -298,9 +292,7 @@ pub async fn hydrate_compose_draft<R: Runtime>(
             .await
             .map_err(|error| error.to_string())?;
     }
-    // Past this point a metadata row that failed the boundary check is
-    // indistinguishable from no row at all — it was just deleted above —
-    // so drop it once rather than re-testing `boundary_matches` per field.
+
     let metadata = boundary_matches.then_some(metadata).flatten();
     let html = if boundary_matches {
         quote_html
@@ -431,9 +423,7 @@ pub async fn reply_context(
     }
 }
 
-/// Reads a user-selected (picker/drop) path once into Rust-owned canonical
-/// staging. `owner` is the local compose session id before a draft exists,
-/// or the stable Gmail draft id once one does (D3).
+
 #[tauri::command]
 pub async fn stage_attachment_from_path(
     staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
@@ -455,10 +445,7 @@ pub async fn stage_attachment_from_path(
     Ok(part.into())
 }
 
-/// Stages inline-image bytes that have no source file on disk (e.g. a
-/// clipboard paste) directly into the same canonical tree. Bytes flow
-/// *into* Rust here, never back out over IPC — previews are authorized
-/// staging-scoped paths, not byte payloads (D3).
+
 #[tauri::command]
 pub async fn stage_attachment_from_bytes(
     staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
@@ -476,15 +463,14 @@ pub async fn stage_attachment_from_bytes(
         mime_type,
         path: std::path::PathBuf::new(),
         content_id,
-        // Recomputed from the real bytes by `stage_bytes` below.
+
         size: 0,
     };
     let part = string_try!(staging.stage_bytes(&account_id, &owner, &descriptor, &bytes));
     Ok(part.into())
 }
 
-/// Removes one canonical staged part — e.g. the user removed an attachment
-/// chip before saving. Never touches an operation's immutable snapshot.
+
 #[tauri::command]
 pub async fn release_staged_attachment(
     staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
@@ -598,9 +584,7 @@ pub async fn load_conversation(
     })
 }
 
-/// Fetches a backfilled message exactly once. The marker, not truncated text,
-/// determines whether Gmail is contacted so a cut-off embedding body can
-/// never be rendered as a complete email.
+
 #[tauri::command]
 pub async fn fetch_message_body<R: Runtime>(
     app: AppHandle<R>,
@@ -621,10 +605,7 @@ pub async fn fetch_message_body<R: Runtime>(
             .await
     )
     .ok_or_else(|| "Message is unavailable".to_owned())?;
-    // An earlier build stored only the HTML part, so an HTML-less message (a
-    // `multipart/report` bounce notice, say) was marked fetched with both body
-    // columns still empty and rendered as "no content" forever. Refetching
-    // those repairs them in place.
+
     if !matches!(stored.0, crate::storage::HtmlPresence::NeverFetched) && !stored.1 {
         return Ok(());
     }
@@ -681,10 +662,7 @@ async fn mutate_thread<R: Runtime>(
     let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
         .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
     let client = engine.gmail_client(&account_id, token, base_url).await;
-    // A single label toggling one direction, expressed as the generalized
-    // add/remove sets `SyncEngine::mutate` accepts (D6). A superseded
-    // outcome is still a success from this command's perspective — the
-    // caller's intent was correctly overtaken by a later action.
+
     let (add, remove) = if present {
         (HashSet::from([label_id.to_owned()]), HashSet::new())
     } else {
@@ -746,9 +724,7 @@ pub async fn trigger_sync<R: Runtime>(
     account_id: String,
 ) -> Result<SyncStatusDto, String> {
     let token = auth.refresh_access_token(&app, &account_id).await?;
-    // Mirrors the `LATENTMAIL_GOOGLE_TOKEN_URL`-style override in `auth`:
-    // lets integration tests point this at a local fake Gmail server
-    // instead of the real API.
+
     let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
         .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
     let client = engine.gmail_client(&account_id, token, base_url).await;
@@ -771,18 +747,7 @@ pub async fn read_sync_status(
     Ok(engine.status(&account_id).await)
 }
 
-// ---------------------------------------------------------------------
-// Triage — the whole slice's label-mutating action surface (Phase 3).
-// Every one delegates to `SyncEngine::mutate` (Phase 1's coalescing path);
-// the drafts exception goes through Gmail's dedicated endpoint instead.
-// ---------------------------------------------------------------------
 
-/// The generalized triage command: an owned add/remove label set (D6)
-/// applied to every thread in `thread_ids`. Every triage action — delete,
-/// move, spam/not-spam, star/unstar, read/unread, and add/remove user
-/// labels — is expressible as one call here; callers (Phase 7/8's UI) pick
-/// the add/remove sets that express their specific action. Threads are
-/// dispatched independently so one thread's outcome never blocks another's.
 #[tauri::command]
 pub async fn mutate_threads<R: Runtime>(
     app: AppHandle<R>,
@@ -846,9 +811,7 @@ pub async fn mutate_threads<R: Runtime>(
     Ok(results)
 }
 
-/// The narrow message-scoped counterpart to `mutate_threads`.  Only the
-/// per-message ribbon uses it for delete/move/spam/labels; star/read remain
-/// conversation-wide by design.
+
 #[tauri::command]
 pub async fn mutate_messages<R: Runtime>(
     app: AppHandle<R>,
@@ -881,8 +844,7 @@ pub async fn mutate_messages<R: Runtime>(
     Ok(())
 }
 
-/// Gmail exposes these as read-only membership states. Keeping the check at
-/// the IPC boundary protects keyboard/UI regressions as well as direct IPC.
+
 fn reject_protected_label_mutation(add: &[String], remove: &[String]) -> Result<(), String> {
     if add
         .iter()
@@ -894,11 +856,7 @@ fn reject_protected_label_mutation(add: &[String], remove: &[String]) -> Result<
     Ok(())
 }
 
-/// Deletes a draft — the one documented exception to the coalescing
-/// mutation path (Gmail rejects label modification on drafts, so it can
-/// only be deleted, never re-labelled). `message_id` doubles as the draft
-/// id, which is how Gmail's own drafts endpoint identifies a compose-time
-/// message.
+
 #[tauri::command]
 pub async fn delete_draft<R: Runtime>(
     app: AppHandle<R>,
@@ -915,11 +873,6 @@ pub async fn delete_draft<R: Runtime>(
     super::mutations::delete_draft(&storage, &client, &account_id, &message_id).await
 }
 
-// ---------------------------------------------------------------------
-// Label lifecycle — create/rename/recolour/delete, validated and dispatched
-// to Gmail before the local row is ever touched, so a rejected write never
-// leaves storage and Gmail disagreeing.
-// ---------------------------------------------------------------------
 
 async fn gmail_client_for<R: Runtime>(
     app: &AppHandle<R>,
@@ -933,8 +886,7 @@ async fn gmail_client_for<R: Runtime>(
     Ok(engine.gmail_client(account_id, token, base_url).await)
 }
 
-/// Resolves a palette colour id to Gmail's wire pair, rejecting an
-/// off-palette value **before** any network call (D10's pre-flight rule).
+
 fn resolve_color_or_error(color_id: Option<&str>) -> Result<Option<LabelColor>, String> {
     match color_id {
         None => Ok(None),
@@ -1099,11 +1051,6 @@ pub async fn delete_label<R: Runtime>(
         .map_err(|error| error.to_string())
 }
 
-// ---------------------------------------------------------------------
-// Traversal status — a real read against the cursor table Phase 3 stands
-// up. Always reports "not started" until Phase 4/5 ever write a row; that
-// is correct, not a stub, for a mailbox that hasn't backfilled yet.
-// ---------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn read_traversal_status(

@@ -18,10 +18,6 @@ pub struct StagedPart {
     pub mime_type: String,
     pub path: PathBuf,
     pub content_id: Option<String>,
-    /// Byte length of the staged file, read once via filesystem metadata at
-    /// staging time so the chip UI never needs a second round trip (or
-    /// client-side `File.size`, which a dropped/picked *path* never carries)
-    /// just to render a size.
     pub size: u64,
 }
 
@@ -43,15 +39,12 @@ pub struct SnapshotManifest {
     pub parts: Vec<StagedPart>,
 }
 
-/// The Gmail message/attachment id pair identifying bytes to hydrate.
 #[derive(Clone, Copy, Debug)]
 pub struct GmailAttachmentSource<'a> {
     pub message_id: &'a str,
     pub attachment_id: &'a str,
 }
 
-/// The descriptor fields a caller supplies for a not-yet-staged part —
-/// [`StagedPart`] minus its resolved `path`, which staging fills in.
 #[derive(Clone, Debug)]
 pub struct NewStagedPart {
     pub id: String,
@@ -98,13 +91,7 @@ impl Staging {
             size,
         })
     }
-    /// Resolves one canonical part, trying each candidate owner in turn.
-    /// A part's owner is not stable for the lifetime of a compose session:
-    /// it is staged under whichever id the composer knew at the time, and
-    /// ownership transfers to the stable Gmail draft id the moment the
-    /// first create returns — so a save admitted anywhere around that
-    /// transfer can legitimately name either id, and only the id that
-    /// actually holds the bytes is authoritative.
+
     pub fn part(
         &self,
         account_id: &str,
@@ -135,10 +122,7 @@ impl Staging {
             std::io::Error::new(std::io::ErrorKind::NotFound, "no candidate owner given")
         }))
     }
-    /// Transfers canonical parts to a new owner. Merges rather than renames
-    /// the directory: the composer can have staged parts under *both* ids
-    /// across the ownership transfer, and a plain rename onto a non-empty
-    /// destination fails.
+
     pub fn move_owner(&self, account_id: &str, from: &str, to: &str) -> std::io::Result<()> {
         if from == to {
             return Ok(());
@@ -175,11 +159,7 @@ impl Staging {
             size: bytes.len() as u64,
         })
     }
-    /// Hydrates a Gmail `attachmentId` into the same canonical staging tree
-    /// picker/drop paths use, producing an identical [`StagedPart`]
-    /// descriptor. This is the bridge acceptance criterion 8 requires:
-    /// selected paths, inline data and Gmail-hydrated parts must be
-    /// indistinguishable once staged.
+
     pub async fn stage_attachment(
         &self,
         client: &GmailClient,
@@ -196,10 +176,7 @@ impl Staging {
             id: descriptor.id,
             filename: descriptor.filename,
             mime_type: descriptor.mime_type,
-            // Unused by `stage_bytes` (which always writes under its own
-            // canonical path and recomputes `size` from the real bytes) —
-            // present only because `StagedPart` couples the descriptor and
-            // its resolved location in one type.
+
             path: PathBuf::new(),
             content_id: descriptor.content_id,
             size: 0,
@@ -207,9 +184,7 @@ impl Staging {
         self.stage_bytes(account_id, owner, &descriptor, &bytes)
             .map_err(|error| error.to_string())
     }
-    /// Removes one canonical staged part by id — the primitive behind
-    /// explicit attachment removal (D3/D15); it never touches operation
-    /// snapshots, which are independent and immutable once taken.
+
     pub fn remove_part(&self, account_id: &str, owner: &str, id: &str) -> std::io::Result<()> {
         let path = self.owner_dir(account_id, owner).join(id);
         if path.exists() {
@@ -249,9 +224,7 @@ impl Staging {
         }
         Ok(())
     }
-    /// Rehydrates the immutable payload recorded before queue admission.
-    /// This intentionally reads only app-private staged files, never the
-    /// user-selected source path that may be gone after a restart.
+
     pub fn snapshot_manifest(&self, operation_id: &str) -> std::io::Result<SnapshotManifest> {
         let path = self
             .root
@@ -261,8 +234,7 @@ impl Staging {
         serde_json::from_slice(&fs::read(path)?)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
     }
-    /// Removes only completed/unreferenced operation snapshots. Canonical
-    /// draft parts are in a separate tree and are never candidates here.
+
     pub fn cleanup_orphan_snapshots(
         &self,
         live_operation_ids: &HashSet<String>,

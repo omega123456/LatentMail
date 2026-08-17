@@ -138,7 +138,7 @@ describe('RecipientField', () => {
     await screen.findByText('Marta Oliveira');
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument());
-    // The typed text is preserved — Escape dismissed suggestions, not input.
+
     expect(input).toHaveValue('ma');
   });
 
@@ -151,7 +151,7 @@ describe('RecipientField', () => {
     }
     expect(useComposeStore.getState().session?.overflow.to).toBe(0);
 
-    // Below the boundary: no overflow control.
+
     act(() => {
       window.__resizeObserverInstances__?.forEach((instance) =>
         instance.callback(
@@ -162,7 +162,7 @@ describe('RecipientField', () => {
     });
     expect(screen.queryByRole('button', { name: /more recipient/ })).not.toBeInTheDocument();
 
-    // At the boundary: still no overflow.
+
     act(() => {
       window.__resizeObserverInstances__?.forEach((instance) =>
         instance.callback(
@@ -173,7 +173,7 @@ describe('RecipientField', () => {
     });
     expect(screen.queryByRole('button', { name: /more recipient/ })).not.toBeInTheDocument();
 
-    // One pixel above the boundary: the observer trims one chip and reports it.
+
     act(() => {
       window.__resizeObserverInstances__?.forEach((instance) =>
         instance.callback(

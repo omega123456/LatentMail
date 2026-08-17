@@ -29,13 +29,8 @@ export type RowContextMenuProps = {
   mailboxId: string;
   unread: boolean;
   starred: boolean;
-  /** Every user label with this row's (or, in a multi-selection, every
-   * selected row's) current binary membership — no indeterminate state,
-   * unlike the staged ribbon/bulk `LabelsMenu`. */
   labels: LabelMenuEntry[];
   currentLabelName?: string;
-  /** Rows selected when the menu opened. >1 relabels every entry with the
-   * count (AC5) and hides "Open", which has no meaning for a set. */
   selectionCount?: number;
   onOpen: () => void;
   onToggleRead: () => void;
@@ -44,15 +39,9 @@ export type RowContextMenuProps = {
   onToggleLabel: (labelId: string, checked: boolean) => void;
   onToggleSpam: () => void;
   onDelete: () => void;
-  /** Compose entries — visible only for a single-item selection, targeting
-   * the last loaded message in that row's conversation (FR "Entry
-   * surfaces"). Omitted (rather than passed as a no-op) when no
-   * conversation is loaded to target, exactly like the ribbons above. */
   onReply?: () => void;
   onReplyAll?: () => void;
   onForward?: () => void;
-  /** Present only when the single selected row's conversation has a
-   * loaded draft to edit. */
   onEditDraft?: () => void;
 };
 

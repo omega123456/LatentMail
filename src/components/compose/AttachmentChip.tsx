@@ -13,10 +13,6 @@ import {
 import { createElement, type ComponentType } from 'react';
 import type { ComposeAttachment } from '@/stores/compose';
 
-/** Category icon lookup, exactly the set the wireframe names — a fallback
- * (`File`) covers everything else rather than growing this list per
- * extension. No thumbnails are ever rendered (FR "Attachments and inline
- * images"), so this icon is the chip's only visual identifier. */
 const categoryIcons: {
   test: (mimeType: string) => boolean;
   Icon: ComponentType<{ size?: number; 'aria-hidden'?: boolean | 'true' | 'false' }>;
@@ -46,9 +42,6 @@ function iconFor(mimeType: string) {
   return categoryIcons.find((entry) => entry.test(mimeType))?.Icon ?? File;
 }
 
-/** `1_048_576 → '1 MB'`, matching the wireframe's short-unit style. Binary
- * (1024-based) units, since that's what the filesystem byte counts Rust
- * hands back actually mean. */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB'];
@@ -61,11 +54,6 @@ function formatSize(bytes: number): string {
   return `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10} ${units[unitIndex]}`;
 }
 
-/** One attachment chip in the composer's `AttachmentStrip` — settled,
- * reading (spinner swatch, cancellation instead of removal) or failed
- * (error-container swatch, message scoped to this chip, never a toast). No
- * thumbnails, ever (wireframe "Attachment chips — settled, reading,
- * failed"). */
 export function AttachmentChip({
   attachment,
   onRemove,
@@ -122,7 +110,7 @@ export function AttachmentChip({
         aria-label={reading ? `Cancel ${attachment.filename}` : `Remove ${attachment.filename}`}
         title={reading ? 'Cancel' : 'Remove'}
         onClick={onRemove}
-        className="shrink-0 rounded p-1 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"
+        className="shrink-0 cursor-pointer rounded p-1 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"
       >
         <X aria-hidden="true" size={14} />
       </button>

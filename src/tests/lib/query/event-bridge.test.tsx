@@ -334,8 +334,7 @@ describe('EventBridge', () => {
       expect(ipc.tauriListen).toHaveBeenCalledWith('sync://traversal', expect.any(Function)),
     );
     vi.useFakeTimers();
-    // Starts the debounce timer without letting it fire, so unmount's
-    // cleanup (not the timer callback) is what clears it.
+
     act(() =>
       ipc.emit('sync://traversal', {
         accountId: 'account-1',
@@ -394,7 +393,7 @@ describe('EventBridge', () => {
       }),
     );
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Message sent.');
-    // A failure for the still-open session belongs inline, not in a toast.
+
     act(() =>
       ipc.emit('compose://failed', {
         accountId: 'account-1',
@@ -408,7 +407,7 @@ describe('EventBridge', () => {
       lifecycleError: 'Couldn’t save draft.',
     });
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Message sent.');
-    // Once the composer has closed, the toast is the only channel left.
+
     act(() => useComposeStore.getState().close());
     act(() =>
       ipc.emit('compose://failed', {
@@ -418,14 +417,12 @@ describe('EventBridge', () => {
         error: 'Gmail request failed with status 400',
       }),
     );
-    // The raw Gmail string is logged, never rendered.
+
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Couldn’t send your message.');
     const beforeUnrelatedItem = invalidate.mock.calls.length;
     act(() => ipc.emit('queue://item', { id: 'queue:account-1:1', status: 'done' }));
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
-    // A mutation that has only been queued or picked up has not written to
-    // SQLite yet; invalidating here refetches the pre-mutation row and
-    // visibly reverts the optimistic update mid-flight.
+
     act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'queued' }));
     act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'active' }));
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);

@@ -116,8 +116,7 @@ describe('LabelList', () => {
       />,
     );
     const deleteButton = screen.getByRole('button', { name: 'Delete Clients' });
-    // Not hover-dependent: focusing it directly (as Tab would) is enough to
-    // interact with it, proving the reveal isn't hover-only.
+
     deleteButton.focus();
     await user.click(deleteButton);
     expect(screen.getByText("Remove 'Clients'?")).toBeInTheDocument();

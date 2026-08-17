@@ -7,10 +7,6 @@ import { parseParticipant } from '@/lib/format/participants';
 import { type RecipientRole, useComposeStore } from '@/stores/compose';
 import type { ContactSuggestion } from '@/lib/types/ipc';
 
-/** The container clamps its natural height to this many pixels — matching
- * `--spacing-chip-rows-3` in `index.css` — before chips collapse behind the
- * overflow control. jsdom never lays elements out, so this comparison is
- * exercised in tests by driving the ResizeObserver harness directly. */
 const CHIP_ROWS_3_PX = 96;
 
 function useDebouncedValue(value: string, delayMs: number) {
@@ -34,10 +30,6 @@ export function RecipientField({
   placeholder,
   inputRef,
 }: {
-  /** Named `fieldRole` rather than `role` — an ARIA-lint false positive
-   * (`jsx-a11y/aria-role`) fires on any JSX attribute literally named
-   * `role`, even on a custom component that never forwards it to a DOM
-   * node's `role` attribute. */
   fieldRole: RecipientRole;
   label: string;
   accountId: string | null;
@@ -55,11 +47,6 @@ export function RecipientField({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dismissed, setDismissed] = useState(false);
   const [visibleCount, setVisibleCount] = useState(chips.length);
-  // Re-attempt showing every chip whenever the committed set changes size —
-  // the observer below trims it back down if it still overflows. Adjusted
-  // during render (React's documented "adjusting state when a prop
-  // changes" pattern) rather than in an effect, so it never causes an
-  // extra committed render.
   const [measuredForLength, setMeasuredForLength] = useState(chips.length);
   if (chips.length !== measuredForLength) {
     setMeasuredForLength(chips.length);
@@ -108,12 +95,6 @@ export function RecipientField({
     setDismissed(true);
   };
 
-  // Radix's Dialog dismisses on Escape via a `document`-level *capture*
-  // listener, which fires before this input's own (bubble-phase) onKeyDown
-  // ever runs — a React `stopPropagation()` there would be too late. A
-  // `window`-level capture listener, registered only while suggestions are
-  // open, intercepts Escape first and stops it reaching `document`, so
-  // Escape dismisses the popover without also closing the composer.
   useEffect(() => {
     if (!open) return;
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -161,8 +142,6 @@ export function RecipientField({
     open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
 
   return (
-    // `gap-2` matches the Subject row's label-to-input gap, so every field's
-    // value starts on the same left edge.
     <div className="flex min-w-0 flex-1 items-center gap-2">
       <span
         id={`${listboxId}-label`}
@@ -171,9 +150,6 @@ export function RecipientField({
         {label}
       </span>
       <Popover.Root open={open}>
-        {/* Anchored to the whole field column rather than the input, so the
-         * suggestion list spans the field the way the design asset draws
-         * it instead of tracking the caret's inline position. */}
         <Popover.Anchor asChild>
           <div className="flex min-w-0 flex-1 flex-col">
             <div ref={chipListRef} className="flex flex-wrap items-center gap-1">
@@ -188,7 +164,7 @@ export function RecipientField({
                     aria-label={`Remove ${chipLabel(chip)}`}
                     title={`Remove ${chipLabel(chip)}`}
                     onClick={() => removeRecipient(fieldRole, index)}
-                    className="rounded-full text-secondary hover:bg-surface-container-highest hover:text-on-surface dark:text-dark-secondary dark:hover:bg-dark-surface-container-highest dark:hover:text-dark-on-surface"
+                    className="cursor-pointer rounded-full text-secondary hover:bg-surface-container-highest hover:text-on-surface dark:text-dark-secondary dark:hover:bg-dark-surface-container-highest dark:hover:text-dark-on-surface"
                   >
                     <X aria-hidden="true" size={12} />
                   </button>
@@ -200,7 +176,7 @@ export function RecipientField({
                   aria-label={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
                   title={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
                   onClick={() => setVisibleCount(chips.length)}
-                  className="rounded-sm px-1.5 py-0.5 text-label-md text-primary hover:bg-surface-container-high dark:text-dark-primary dark:hover:bg-dark-surface-container-high"
+                  className="cursor-pointer rounded-sm px-1.5 py-0.5 text-label-md text-primary hover:bg-surface-container-high dark:text-dark-primary dark:hover:bg-dark-surface-container-high"
                 >
                   +{hiddenCount} more
                 </button>
@@ -233,8 +209,6 @@ export function RecipientField({
             align="start"
             sideOffset={6}
             onOpenAutoFocus={(event) => event.preventDefault()}
-            // Matches the anchored field's width, as the design asset draws
-            // it — the panel is resizable, so this cannot be a fixed token.
             style={{ width: 'var(--radix-popover-trigger-width)' }}
             className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
           >

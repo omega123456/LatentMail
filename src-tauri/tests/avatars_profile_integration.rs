@@ -1,7 +1,4 @@
-//! Scope presence/absence detection, the userinfo document's mapping to a
-//! display name and photograph, and silent degradation for a
-//! scope-deficient token (D11) — plus the account-photograph
-//! download/validate pipeline itself, against the fake download boundary.
+
 
 use latentmail_lib::auth::{self, token_has_scope, UserInfo};
 use latentmail_lib::avatars::profile::acquire_photo;
@@ -42,8 +39,7 @@ fn token_has_scope_is_false_when_profile_was_never_granted() {
 
 #[tokio::test]
 async fn userinfo_maps_name_and_picture_claims() {
-    // Fake userinfo boundary (mirrors `avatars::resolver`'s DNS/download
-    // fake) — no real HTTP, no wiremock, no loopback socket.
+
     auth::set_fake_userinfo(
         "token-with-picture",
         UserInfo {
@@ -96,8 +92,7 @@ async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untou
     assert_eq!(updated.display_name, "Real Name");
     assert_eq!(updated.avatar_url.as_deref(), Some("https://example.com/a.png"));
 
-    // A second call with no new name must not blank out the one already
-    // applied (silent degradation never erases a known-good value).
+
     let unchanged = service
         .apply_profile(&saved.id, None, None)
         .await
@@ -134,8 +129,6 @@ async fn acquire_photo_downloads_validates_and_normalizes_the_account_photograph
 
 #[tokio::test]
 async fn acquire_photo_degrades_silently_when_the_download_fails() {
-    // Nothing programmed for this URL in the fake downloader — a
-    // scope-deficient token, a dead link, and a failed download are all the
-    // same "no photograph" outcome (D11).
+
     assert!(acquire_photo("https://missing.example/me.png").await.is_none());
 }

@@ -1,4 +1,3 @@
-//! An expired `history.list` checkpoint repairs local state in place.
 
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
@@ -28,8 +27,7 @@ fn engine_with_stale_checkpoint() -> (std::sync::Arc<SyncEngine>, Storage, tempf
         },
     )
     .unwrap();
-    // This message remains on the server but is not fetched again: expired
-    // checkpoint recovery must preserve it rather than rebuild local mail.
+
     MessageRepository::write_full_state(
         &connection,
         &Message {

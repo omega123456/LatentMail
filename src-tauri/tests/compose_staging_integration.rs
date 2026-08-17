@@ -36,7 +36,6 @@ fn snapshots_survive_source_removal_and_completed_snapshots_can_be_released() {
         .path()
         .join("staged/operations/operation")
         .exists());
-    // Canonical draft-owned data is intentionally independent of the short-lived snapshot.
     assert!(!snapshot.parts[0].path.exists());
     assert_eq!(
         staging
@@ -101,8 +100,6 @@ async fn gmail_hydrated_attachments_produce_the_same_staged_descriptor_shape_as_
     assert_eq!(hydrated.filename, "photo.png");
     assert_eq!(hydrated.content_id.as_deref(), Some("cid:1"));
 
-    // Same descriptor shape a path-staged part has: readable at a
-    // canonical, staging-owned path — never bytes handed back directly.
     let source = directory.path().join("source.png");
     fs::write(&source, b"bytes").unwrap();
     let path_staged = staging
@@ -206,11 +203,6 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
         .is_err());
 }
 
-/// Ownership transfer, staging and the composer learning its draft id are
-/// three independently timed events, so a save can name the draft id while
-/// the bytes are still filed under the session id (or the reverse). Both
-/// resolve, and a transfer with parts already under the destination merges
-/// instead of failing on a non-empty rename.
 #[test]
 fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
     let directory = tempfile::tempdir().unwrap();
@@ -230,7 +222,6 @@ fn a_part_resolves_under_either_owner_across_the_ownership_transfer() {
         .stage_bytes("account", "draft", &descriptor("late"), b"late")
         .unwrap();
 
-    // Named draft-first, as a save carrying a known draft id does.
     let owners = ["draft", "session"];
     let early = staging
         .part(

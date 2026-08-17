@@ -91,15 +91,9 @@ export function ReadingPane({
   mailboxId?: string;
   currentLabelName?: string;
   labelMenuEntries?: MessageRibbonProps['labels'];
-  /** >0 substitutes `BulkSelectionPanel` for the normal reading pane
-   * content, per the wireframe's "Multi-selection and bulk panel". */
   selectedCount?: number;
   unread?: boolean;
   starred?: boolean;
-  /** Reply/Reply All/Forward/Edit Draft — invoked with the *target*
-   * message id. The thread ribbon always targets the last loaded message;
-   * a per-message ribbon targets that exact message (FR "Entry surfaces").
-   * A no-op default matches every other optional handler here. */
   onCompose?: (action: ComposeAction, messageId: string) => void;
   onComposeTo?: (participant: import('@/lib/format/participants').Participant) => void;
   triageHandlers?: TriageHandlers;
@@ -132,9 +126,6 @@ export function ReadingPane({
   const threadUnread = conversation.messages.some((message) => message.unread);
   const threadStarred = conversation.messages.some((message) => message.starred);
   const threadHandlers = triageHandlers ?? noTriageHandlers;
-  // Thread-level, invoked once and always targeting the last loaded
-  // message (FR "Entry surfaces") — `lastMessage` is guaranteed present
-  // here since `conversation` already passed its own emptiness check above.
   const lastMessage = conversation.messages.at(-1);
   const composeThread = (action: ComposeAction) => {
     if (lastMessage) onCompose?.(action, lastMessage.id);
@@ -144,9 +135,6 @@ export function ReadingPane({
     labels: labelMenuEntries,
     currentLabelName,
     ...threadHandlers,
-    // Placeholders — every message card below overrides these three with a
-    // handler scoped to *that* message's id (FR "Entry surfaces"); nothing
-    // ever calls the base object's own copy.
     onReply: () => undefined,
     onReplyAll: () => undefined,
     onForward: () => undefined,
@@ -261,10 +249,6 @@ function triageHandlersFor(
   };
 }
 
-/** Composition-root wiring: fetches the selected thread's conversation via
- * `useConversationQuery` (already Rust-sanitized, D12's dual-layer sanitize
- * pass happens in `BodyFrame`) and hands it to the presentational
- * `ReadingPane` above. */
 export function ReadingPaneContainer({ threadId }: { threadId: string | null }) {
   const accountId = useSelectionStore((value) => value.activeAccountId);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
@@ -317,9 +301,6 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
           ),
     [conversation, labelsQuery.data, multiSelectActive, selectedThreads],
   );
-  // Only a *user* label counts as "the removed source" (FR "Move to") — a
-  // system mailbox's own display name (e.g. browsing Inbox) must never be
-  // mistaken for one.
   const currentLabelName = labelsQuery.data?.find(
     (label) => label.id === mailboxId && label.kind === 'user',
   )?.name;

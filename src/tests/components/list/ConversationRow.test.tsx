@@ -156,9 +156,7 @@ describe('ConversationRow', () => {
         />,
       );
       expect(screen.getByTestId('conversation-row').querySelector('.size-8')).toBeInTheDocument();
-      // Comfortable/spacious density exposes the read state as real sr-only
-      // text content (not just `aria-label`), so it's reliably exposed by
-      // assistive technology.
+
       expect(screen.getByText('Read')).toBeInTheDocument();
     });
 

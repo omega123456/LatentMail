@@ -1,7 +1,3 @@
-/// Bakes `secrets.json`'s Google OAuth credentials into the binary as
-/// compile-time env vars, so sign-in works in `pnpm dev` and in a bundled app
-/// without shell variables. Skipped under `test-utils` so integration tests
-/// always see an unconfigured client regardless of the developer's local file.
 fn bake_google_credentials() {
     println!("cargo::rerun-if-changed=secrets.json");
     if std::env::var_os("CARGO_FEATURE_TEST_UTILS").is_some() {

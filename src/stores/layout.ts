@@ -31,8 +31,6 @@ type LayoutState = Pick<
 
 let hydration: Promise<void> | undefined;
 
-// Drag offsets are fractional pixels/percentages; the Rust settings are `u32`
-// and reject anything else, so every pane size is rounded before it is stored.
 function clampSize(value: number, min: number, max: number) {
   return Math.round(Math.min(max, Math.max(min, value)));
 }

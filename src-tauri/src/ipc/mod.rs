@@ -36,10 +36,7 @@ pub enum FrontendLogLevel {
     Error,
 }
 
-/// Takes the record's fields as separate parameters on purpose: Tauri maps
-/// invoke arguments by parameter name, so a single `record` parameter would
-/// require the frontend to send `{ record: { level, message } }` — it sends
-/// `{ level, message }`, and the mismatch silently dropped every frontend log.
+
 #[tauri::command]
 pub fn write_frontend_log(level: FrontendLogLevel, message: String) {
     match level {

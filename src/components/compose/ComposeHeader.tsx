@@ -2,13 +2,8 @@ import { Trash2, X } from 'lucide-react';
 import { type ComposeMode, modeTitles } from '@/stores/compose';
 
 const circularButton =
-  'inline-flex size-8 items-center justify-center rounded-full text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary';
+  'inline-flex size-8 cursor-pointer items-center justify-center rounded-full text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary';
 
-/** The mode title also doubles as the dialog's accessible name — the
- * caller (`ComposeOverlay`) wires `titleId` to `Dialog.Content`'s
- * `aria-labelledby` rather than this rendering `Dialog.Title` directly, so
- * the header stays a plain, independently testable component instead of
- * one that throws outside a `Dialog.Root`. */
 export function ComposeHeader({
   mode,
   titleId,

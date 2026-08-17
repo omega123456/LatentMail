@@ -9,13 +9,9 @@ export type Label = {
   id: string;
   name: string;
   unreadCount: number;
-  /** A design-token palette id (see `lib/labels/palette.ts`), resolved from
-   * the label's real Gmail colour pair by `mapLabelsToUserLabels` — never a
-   * fabricated cycle. */
   color: LabelColorId;
 };
 
-// Which row-scoped affordance, if any, is expanded. Only one at a time.
 type RowMode = { kind: 'renaming' | 'recoloring' | 'confirmingDelete'; labelId: string } | null;
 
 export type LabelListProps = {
@@ -23,12 +19,6 @@ export type LabelListProps = {
   labels: Label[];
   showUnreadCounts: boolean;
   onSelect: (id: string) => void;
-  /** Every lifecycle call is async and may reject with the mutation's real
-   * error message (mirrored from `LabelRepository::validate_name` for name
-   * failures) — `LabelList` owns showing that failure inline and, on
-   * success, resets whichever row-scoped affordance triggered it. Omitted
-   * calls default to no-ops so the component still renders standalone (e.g.
-   * in tests that don't exercise the lifecycle). */
   onCreateLabel?: (input: { name: string; colorId: LabelColorId }) => Promise<unknown>;
   onRenameLabel?: (input: { id: string; name: string }) => Promise<unknown>;
   onRecolorLabel?: (input: { id: string; colorId: LabelColorId }) => Promise<unknown>;
@@ -70,7 +60,7 @@ export function LabelList({
             setCreating((value) => !value);
             setError(null);
           }}
-          className="rounded p-1 text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
+          className="cursor-pointer rounded p-1 text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
         >
           <Plus aria-hidden="true" size={16} />
         </button>
@@ -122,7 +112,7 @@ export function LabelList({
                     type="button"
                     aria-current={active ? 'page' : undefined}
                     onClick={() => onSelect(label.id)}
-                    className={`flex flex-1 items-center gap-3 rounded px-3 py-2 text-body-sm focus-visible:outline-2 focus-visible:outline-primary ${active ? 'bg-primary-container font-bold text-on-primary-container dark:bg-dark-primary-container dark:text-dark-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-low dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'}`}
+                    className={`flex flex-1 cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-sm focus-visible:outline-2 focus-visible:outline-primary ${active ? 'bg-primary-container font-bold text-on-primary-container dark:bg-dark-primary-container dark:text-dark-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-low dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'}`}
                   >
                     <span
                       aria-hidden="true"
@@ -133,9 +123,6 @@ export function LabelList({
                       <span className="text-label-md">{label.unreadCount}</span>
                     )}
                   </button>
-                  {/* Revealed on hover AND keyboard focus (`group-focus-within`
-                   * covers the latter) — never hover-only, so a keyboard user
-                   * can reach it without a pointer. */}
                   <button
                     type="button"
                     aria-label={`Edit ${label.name}`}
@@ -143,7 +130,7 @@ export function LabelList({
                       setError(null);
                       setRowMode({ kind: 'renaming', labelId: label.id });
                     }}
-                    className="rounded p-1 text-on-surface-variant opacity-0 hover:bg-surface-container-low focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-focus-within:opacity-100 group-hover:opacity-100 dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
+                    className="cursor-pointer rounded p-1 text-on-surface-variant opacity-0 hover:bg-surface-container-low focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-focus-within:opacity-100 group-hover:opacity-100 dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
                   >
                     <Pencil aria-hidden="true" size={14} />
                   </button>
@@ -154,7 +141,7 @@ export function LabelList({
                       setError(null);
                       setRowMode({ kind: 'confirmingDelete', labelId: label.id });
                     }}
-                    className="rounded p-1 text-on-surface-variant opacity-0 hover:bg-surface-container-low focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-focus-within:opacity-100 group-hover:opacity-100 dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
+                    className="cursor-pointer rounded p-1 text-on-surface-variant opacity-0 hover:bg-surface-container-low focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-focus-within:opacity-100 group-hover:opacity-100 dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
                   >
                     <X aria-hidden="true" size={14} />
                   </button>
@@ -191,7 +178,7 @@ export function LabelList({
                     <button
                       type="button"
                       onClick={() => setRowMode({ kind: 'recoloring', labelId: label.id })}
-                      className="shrink-0 rounded p-1.5 text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
+                      className="shrink-0 cursor-pointer rounded p-1.5 text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
                       aria-label={`Change ${label.name}'s colour`}
                     >
                       <span

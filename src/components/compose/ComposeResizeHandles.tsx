@@ -7,12 +7,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-/** Top edge, left edge and top-left corner drag affordances. The panel is
- * anchored bottom-right via fixed `right`/`bottom` insets, so growing width
- * or height automatically grows up and to the left with no extra
- * repositioning math — native CSS resize would instead grow down-right and
- * push the panel off-screen (D9). There is no keyboard resize, matching
- * every other resizable pane in the app. */
 export function ComposeResizeHandles({
   dimensions,
   onResize,

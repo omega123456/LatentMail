@@ -1,7 +1,3 @@
-//! The traversal lane (D4/D3, Phase 1 AC4): a third lane with independent
-//! concurrency from `Background`, so a saturating traversal can never delay
-//! background work, and — like `Background` — yields to `Interactive`
-//! before taking tokens.
 
 use std::sync::Arc;
 
@@ -22,9 +18,7 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
     }
 }
 
-/// Traversal is a third, independent lane: a saturated background lane must
-/// never hold up traversal work, and vice versa, because each has its own
-/// channel and concurrency permit pool.
+
 #[tokio::test(start_paused = true)]
 async fn traversal_and_background_have_independent_concurrency() {
     let (started, mut receiver) = mpsc::unbounded_channel();
@@ -32,7 +26,7 @@ async fn traversal_and_background_have_independent_concurrency() {
         let started = started.clone();
         Box::pin(async move {
             started.send(operation.id).unwrap();
-            // Never completes — proves the *other* lane isn't waiting on it.
+
             std::future::pending::<Result<(), QueueError>>().await
         })
     });
@@ -58,12 +52,7 @@ async fn traversal_and_background_have_independent_concurrency() {
     );
 }
 
-/// Extends "background yields to interactive" (D4) to the traversal lane:
-/// traversal must not dispatch while interactive work remains pending for
-/// the same account. Five same-entity interactive operations with a
-/// hanging executor keep `interactive_pending` above zero indefinitely —
-/// the first acquires the entity lock and never releases it, so the other
-/// four (and the pending count they represent) never advance to "active".
+
 #[tokio::test(start_paused = true)]
 async fn traversal_yields_to_interactive_like_background() {
     let (started, mut receiver) = mpsc::unbounded_channel();
@@ -99,9 +88,7 @@ async fn traversal_yields_to_interactive_like_background() {
     );
 }
 
-/// A saturated traversal lane must not delay interactive dispatch either —
-/// the mirror of "yields to interactive": interactive never has to wait on
-/// traversal regardless of how much traversal work is queued.
+
 #[tokio::test(start_paused = true)]
 async fn interactive_dispatches_promptly_with_many_traversal_operations_queued() {
     let interactive_started = Arc::new(tokio::sync::Notify::new());

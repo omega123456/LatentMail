@@ -1,4 +1,3 @@
-//! Deferred-body marker persistence: truncated text is never a renderable body.
 
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage,
@@ -86,8 +85,7 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
         .unwrap();
     assert_eq!(absent.html_presence, HtmlPresence::Absent);
     assert!(absent.html_body.is_none());
-    // An HTML-less message keeps its plain part, so the reader has something
-    // to render instead of "This message has no content".
+
     assert_eq!(absent.plain_body.as_deref(), Some("plain-only bounce notice"));
     assert!(!absent.body_is_empty());
 }

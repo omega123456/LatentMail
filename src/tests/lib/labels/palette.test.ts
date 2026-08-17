@@ -11,15 +11,11 @@ describe('label colour palette', () => {
     expect(LABEL_COLOR_PALETTE.length).toBeGreaterThan(0);
     for (const [index, swatch] of LABEL_COLOR_PALETTE.entries()) {
       expect(swatch.name).toMatch(/\S/);
-      // Every class list is a literal string containing the position-aligned
-      // `--color-label-gmail-{N}` Tailwind class, never a template composed
-      // at runtime — position alignment (not the id) is what keeps a picked
-      // swatch resolving to the identical Gmail colour pair on both sides
-      // of IPC (see the palette module doc).
+
       expect(swatch.backgroundClass).toContain(`bg-label-gmail-${index}`);
       expect(swatch.textClass).toContain(`text-label-on-gmail-${index}`);
       expect(swatch.dotClass).toContain(`bg-label-gmail-${index}`);
-      // No bracket/arbitrary-value classes anywhere in the palette.
+
       expect(swatch.backgroundClass).not.toMatch(/\[.*]/);
       expect(swatch.textClass).not.toMatch(/\[.*]/);
       expect(swatch.dotClass).not.toMatch(/\[.*]/);

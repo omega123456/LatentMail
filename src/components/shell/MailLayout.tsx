@@ -29,7 +29,7 @@ import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-s
 import { useComposeStore } from '@/stores/compose';
 
 const navItem =
-  'flex items-center gap-3 rounded px-3 py-2 text-body-md text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
+  'flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-md text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
 export function MailLayout({ accounts }: { accounts: Account[] }) {
   const shell = useRef<HTMLDivElement>(null);
   const {
@@ -122,16 +122,11 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       composeTarget('edit-draft');
     },
   });
-  // System mailboxes carry the display name the sidebar shows; a user label
-  // falls back to its own name, and an unknown id to the raw value.
   const mailboxName =
     mailboxes.find((mailbox) => mailbox.id === activeMailbox)?.name ??
     labels.find((label) => label.id === activeMailbox)?.name ??
     activeMailbox;
   const selectMailbox = (id: string) => setActiveMailboxId(id);
-  // Sync status is re-seeded by `StatusBar`'s own effect whenever the
-  // `accountId` prop it's handed here changes — a single source of truth
-  // instead of a second hydrate call racing it.
   const selectAccount = useCallback(
     (id: string) => {
       setActiveAccountId(id);
@@ -140,16 +135,9 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     },
     [setActiveAccountId, setActiveMailboxId, clearSelection],
   );
-  // Fresh launch selects the first account and Inbox; neither is restored
-  // across launches (selection is Zustand/UI-origin state, never persisted).
   useEffect(() => {
     if (activeAccountId === null && accounts.length > 0) selectAccount(accounts[0].id);
   }, [accounts, activeAccountId, selectAccount]);
-  // Entry-point wiring (the Compose pill, keyboard command, reply/forward
-  // ribbons) covers real usage; Playwright's own screenshot scenarios open
-  // the composer directly through this test-only bridge instead, exactly
-  // the same one-shot-on-mount idiom `ReadingPane` uses for
-  // `__LATENTMAIL_PLAYWRIGHT_READER_STATE__`.
   useEffect(() => {
     if (!window.__LATENTMAIL_PLAYWRIGHT_IPC__) return;
     const session = window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__;
@@ -182,7 +170,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           type="button"
           title="Compose"
           onClick={compose}
-          className="mb-8 flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+          className="mb-8 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
         >
           <Pencil aria-hidden="true" size={20} />
           Compose

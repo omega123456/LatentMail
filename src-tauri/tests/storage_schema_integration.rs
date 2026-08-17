@@ -191,9 +191,7 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
     migrations::runner().run(&mut connection).unwrap();
 }
 
-/// AC2: the three HTML-presence states are distinguishable — not just
-/// `html_body IS NULL` collapsing "never fetched" and "genuinely absent"
-/// into the same thing.
+
 #[test]
 fn html_presence_carries_three_distinguishable_states() {
     let connection = Storage::in_memory().unwrap();
@@ -242,8 +240,7 @@ fn html_presence_carries_three_distinguishable_states() {
     assert_eq!(present.html_body.as_deref(), Some("<p>hi</p>"));
 }
 
-/// AC3: capped at 10,000 characters, preferring plain text over
-/// tag-stripped HTML when both are available.
+
 #[test]
 fn truncated_body_caps_at_ten_thousand_chars_and_prefers_plain_text() {
     let long_plain = "a".repeat(12_000);
@@ -260,12 +257,7 @@ fn truncated_body_caps_at_ten_thousand_chars_and_prefers_plain_text() {
     assert_eq!(truncate_body(None, None), None);
 }
 
-/// AC4: cursor state round-trips and survives reopening the database. Also
-/// covers the D3 fix (migration `V4__traversal_cursor_composite_key`):
-/// backfill and reconciliation cursors for the same account are keyed by
-/// `(account_id, kind)`, so an upsert for one kind updates only that row —
-/// it neither creates nor clobbers the other kind's row — and each can be
-/// deleted independently of the other.
+
 #[test]
 fn traversal_cursor_round_trips_and_survives_reopening() {
     let directory = tempfile::tempdir().unwrap();
@@ -301,7 +293,6 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
     assert!(!cursor.completed);
     assert!(cursor.resumed, "the resumed flag must round-trip too");
 
-    // Upserting the *same* kind updates the existing row in place.
     TraversalCursorRepository::upsert(
         &connection,
         &TraversalCursor {
@@ -317,9 +308,6 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
     assert!(updated.completed);
     assert_eq!(updated.position.as_deref(), Some("page-token-4"));
 
-    // Upserting a *different* kind for the same account creates its own,
-    // independent row rather than overwriting the backfill row above — this
-    // is the exact bug the composite key fixes.
     TraversalCursorRepository::upsert(
         &connection,
         &TraversalCursor {
@@ -349,7 +337,6 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
     assert_eq!(reconciliation.position.as_deref(), Some("universe"));
     assert_eq!(reconciliation.discovered_count, 10);
 
-    // Deleting one kind leaves the other's row intact.
     TraversalCursorRepository::delete(&connection, "account", TraversalKind::Backfill).unwrap();
     assert!(
         TraversalCursorRepository::get(&connection, "account", TraversalKind::Backfill)
@@ -371,9 +358,6 @@ fn traversal_cursor_round_trips_and_survives_reopening() {
     );
 }
 
-/// AC5: bulk membership overwrite leaves the denormalised `is_unread`/
-/// `is_starred` columns consistent with actual membership, and thread
-/// recomputation aggregates from the corrected rows.
 #[test]
 fn bulk_membership_overwrite_keeps_denormalised_flags_consistent() {
     let connection = Storage::in_memory().unwrap();
@@ -392,8 +376,6 @@ fn bulk_membership_overwrite_keeps_denormalised_flags_consistent() {
     MessageRepository::set_label_membership(&connection, "account", "message", "INBOX", true)
         .unwrap();
 
-    // Reconciliation-style overwrite: server says the message is now read,
-    // unstarred, and only in Trash.
     MessageRepository::overwrite_membership(
         &connection,
         "account",
@@ -431,10 +413,6 @@ fn indexed_labels(connection: &rusqlite::Connection, thread_id: &str) -> Vec<(St
         .unwrap()
 }
 
-/// `thread_labels` is what the mailbox listing reads instead of walking
-/// `message_labels` per thread, so it has to track membership exactly —
-/// including the removals and the thread deletion that a listing would
-/// otherwise keep showing.
 #[test]
 fn thread_label_index_tracks_membership_through_recompute() {
     let connection = Storage::in_memory().unwrap();
@@ -484,8 +462,6 @@ fn thread_label_index_tracks_membership_through_recompute() {
     );
 }
 
-/// The reconciliation diff (Phase 5) needs the universe of locally stored
-/// ids; no prior method exposed one.
 #[test]
 fn all_ids_returns_every_locally_stored_message_id() {
     let connection = Storage::in_memory().unwrap();
@@ -654,8 +630,6 @@ fn set_truncated_body_overwrites_and_clears_the_stored_snippet() {
     );
 }
 
-/// AC6 (schema half): a label's colour pair round-trips, present only when
-/// explicitly set.
 #[test]
 fn label_colour_pair_round_trips_and_is_absent_by_default() {
     let connection = Storage::in_memory().unwrap();

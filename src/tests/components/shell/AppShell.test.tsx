@@ -163,8 +163,7 @@ describe('AppShell wired to real data', () => {
 
   it('leaves the sign-in screen for the mail layout when sign-in announces the new account', async () => {
     const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    // Regression: a completed OAuth flow that emits nothing leaves the user
-    // staring at a stuck "Signing in…" button forever.
+
     let accounts: (typeof accountOne)[] = [];
     ipc.override('list_accounts', () => accounts);
     overrideAccount('account-1', []);
@@ -182,10 +181,7 @@ describe('AppShell wired to real data', () => {
 
   it('makes the reauth banner appear live from an account://state event, without any other user action', async () => {
     const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    // Rust already persisted the flag by the time it emits the event; the
-    // event's only job is to nudge the frontend to refetch — so the mocked
-    // `list_accounts` command reflects the post-failure state once invoked
-    // again, exactly like a real refetch would.
+
     let accounts = [accountOne];
     ipc.override('list_accounts', () => accounts);
     overrideAccount('account-1', []);

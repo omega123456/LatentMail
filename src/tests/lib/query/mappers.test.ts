@@ -51,9 +51,7 @@ describe('mapThreadToRow', () => {
   });
 
   it('renders whatever display string Rust already resolved, without re-deriving it from the address', () => {
-    // Rust bakes its own bare-address fallback into `display` when a sender
-    // has no name — mapThreadToRow must render that string verbatim rather
-    // than re-deriving anything from `address` itself.
+
     const bareAddress = {
       ...thread,
       sender: { display: 'elena.r@example.com', address: 'elena.r@example.com' },
@@ -98,8 +96,7 @@ describe('mapLabelsToMailboxes / mapLabelsToUserLabels', () => {
   it('keeps only user-kind labels for the sidebar label list, resolving the real Gmail colour', () => {
     expect(mapLabelsToUserLabels(labels)).toEqual([
       { id: 'Label_1', name: 'Work', unreadCount: 1, color: 'blue' },
-      // No colour set yet (or off the curated palette) falls back to the
-      // first swatch rather than a fabricated cycle.
+
       { id: 'Label_2', name: 'Personal', unreadCount: 0, color: 'black' },
     ]);
   });

@@ -3,12 +3,7 @@ import { Loader2 } from 'lucide-react';
 
 type EmptyStateProps = {
   children: ReactNode;
-  /** `syncing` is visually distinct from the plain empty state (spinner +
-   * progress count) — a mailbox with nothing loaded yet because backfill
-   * hasn't reached it is not the same thing as a genuinely empty mailbox. */
   variant?: 'plain' | 'syncing';
-  /** Traversal progress counts shown as "n of total so far" — only rendered
-   * together, and only for the `syncing` variant. */
   persistedCount?: number;
   discoveredCount?: number;
 };

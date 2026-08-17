@@ -37,7 +37,7 @@ export function FolderList({
             aria-current={active ? 'page' : undefined}
             title={collapsed ? name : undefined}
             onClick={() => onSelect(id)}
-            className={`flex items-center gap-3 rounded px-3 py-2 text-body-md focus-visible:outline-2 focus-visible:outline-primary ${active ? 'bg-primary-container font-bold text-on-primary-container dark:bg-dark-primary-container dark:text-dark-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-low dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'} ${collapsed ? 'justify-center px-0' : ''}`}
+            className={`flex cursor-pointer items-center gap-3 rounded px-3 py-2 text-body-md focus-visible:outline-2 focus-visible:outline-primary ${active ? 'bg-primary-container font-bold text-on-primary-container dark:bg-dark-primary-container dark:text-dark-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-low dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'} ${collapsed ? 'justify-center px-0' : ''}`}
           >
             <Icon aria-hidden="true" size={20} />
             {!collapsed && (

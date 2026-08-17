@@ -1,8 +1,3 @@
-//! Exercises `AvatarService` end to end — the two commands answering from
-//! cache without blocking, scheduling resolution on a miss, the
-//! `showSenderAvatars` gate refusing to schedule any lookup while off
-//! (D14), the resolution-complete event, and `avatars::initialize` itself.
-
 use std::sync::{Arc, Mutex};
 
 use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain};
@@ -20,9 +15,6 @@ fn app() -> tauri::App<tauri::test::MockRuntime> {
         .unwrap()
 }
 
-/// Builds a service plus the same cache/settings/storage handles it was
-/// constructed from, so tests can assert directly against the cache or
-/// flip the preference without reaching into `AvatarService`'s privates.
 fn service() -> (AvatarService, AvatarCache, SettingsService, Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -32,8 +24,6 @@ fn service() -> (AvatarService, AvatarCache, SettingsService, Storage, tempfile:
     (avatar_service, cache, settings, storage, directory)
 }
 
-/// `AvatarService`'s resolution methods take `Arc<dyn AvatarEmitter>` (not a
-/// concrete `AppHandle<R>`) — see the trait's doc comment for why.
 fn emitter(application: &tauri::App<tauri::test::MockRuntime>) -> Arc<dyn AvatarEmitter> {
     Arc::new(application.handle().clone())
 }
@@ -42,13 +32,6 @@ fn tiny_svg() -> Vec<u8> {
     br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="teal"/></svg>"#.to_vec()
 }
 
-/// Polls `condition` on a short real interval until it returns `true` or a
-/// bounded deadline passes. A background `tokio::spawn`ed resolution does
-/// real work on the `spawn_blocking` pool (SQLite writes), so a plain
-/// `yield_now()` loop cannot reliably wait for it under system load —
-/// this is the same bounded real-sleep polling shape already used by
-/// `compose_drafts_integration.rs`, just condition-based rather than a
-/// fixed count.
 async fn wait_until<F, Fut>(mut condition: F)
 where
     F: FnMut() -> Fut,
@@ -79,8 +62,6 @@ async fn read_sender_avatar_answers_from_cache_and_schedules_resolution_on_a_mis
     );
     set_fake_download("https://cdn.svc-example.com/logo.svg", tiny_svg());
 
-    // A genuine miss must answer immediately with nothing, never blocking
-    // on the network.
     let first = service
         .read_sender_avatar(handle.clone(), "svc-example.com".into())
         .await
@@ -106,8 +87,6 @@ async fn read_sender_avatar_answers_from_cache_and_schedules_resolution_on_a_mis
         .unwrap();
     assert!(resolved.is_some(), "the scheduled resolution must have populated the cache");
 
-    // A second request for the same domain answers from cache — no further
-    // lookup is possible since nothing new was ever faked.
     let second = service
         .read_sender_avatar(handle, "svc-example.com".into())
         .await
@@ -170,13 +149,8 @@ async fn showsenderavatars_off_prevents_the_command_from_scheduling_any_lookup()
         .unwrap();
     assert_eq!(answer, None);
 
-    // Proving a negative (no lookup was ever scheduled) has no positive
-    // condition to poll for — give a wrongly-scheduled task a real, bounded
-    // window to run before asserting it never did.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // D14: no lookup was ever scheduled, so no cache record — positive or
-    // negative — exists for this domain at all.
     let key = hash_key("gated-domain.example");
     assert_eq!(cache.answer(&key, CacheDomain::Sender).await, CacheAnswer::Stale);
 }
@@ -216,9 +190,6 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
     let (service, cache, _settings, storage, _directory) = service();
     let application = app();
     let handle = emitter(&application);
-    // A remote URL is on file, but nothing was faked for it — the download
-    // fails, and that degrades to a stored miss exactly like having no URL
-    // at all (D11's silent-degradation posture applies here too).
     storage
         .run(|connection| {
             AccountRepository::upsert(
@@ -348,7 +319,6 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
         cache.answer(&key, CacheDomain::Account).await,
         CacheAnswer::Fresh(None)
     );
-    // Confirms it is a stored miss, not merely "never looked up".
     assert!(
         AvatarCacheRepository::get(&storage.connection().unwrap(), &key)
             .unwrap()
@@ -411,10 +381,6 @@ async fn resolution_complete_emits_avatar_resolved_with_pipeline_key_and_outcome
         .expect("resolution completion must emit avatar://resolved");
     assert!(payload.contains("\"pipeline\":\"sender\""));
     assert!(payload.contains("\"resolved\":true"));
-    // The event's `key` must be the raw domain the frontend's query is
-    // keyed on (`queryKeys.senderAvatar(domain)`), never `hash_key`'s
-    // internal cache key — the whole point of the event is letting the
-    // event-bridge listener recompute the exact live query key.
     assert!(
         payload.contains("\"key\":\"emits-event.example\""),
         "expected the raw domain in the event payload, got: {payload}"
@@ -476,8 +442,6 @@ async fn resolution_complete_emits_the_raw_account_id_for_the_account_pipeline()
         .clone()
         .expect("resolution completion must emit avatar://resolved");
     assert!(payload.contains("\"pipeline\":\"account\""));
-    // Same contract as the sender pipeline: the raw account id, matching
-    // `queryKeys.accountAvatar(accountId)`, not the hashed cache key.
     assert!(
         payload.contains("\"key\":\"acct-event\""),
         "expected the raw account id in the event payload, got: {payload}"
@@ -497,11 +461,6 @@ async fn concurrent_requests_for_the_same_domain_collapse_through_the_full_servi
     );
     set_fake_download("https://cdn.collapse.example/logo.svg", tiny_svg());
 
-    // Both requests hit the same genuine miss before either resolution
-    // starts — this is what actually drives the guard's "someone already
-    // resolved this while I waited" early-return branch, which the raw
-    // `Scheduler` tests exercise directly but never through the full
-    // service (D4).
     let first = service.read_sender_avatar(handle.clone(), "collapse.example".into());
     let second = service.read_sender_avatar(handle.clone(), "collapse.example".into());
     let (first, second) = tokio::join!(first, second);
@@ -576,23 +535,12 @@ fn initialize_surfaces_a_readable_error_when_the_database_path_is_unusable() {
     let storage = Storage::open(storage_directory.path().join("mail.sqlite")).unwrap();
     application.manage(SettingsService::new(storage));
 
-    // Pre-create the app data directory, then block the exact path
-    // `Storage::open` needs for its database file with a directory of the
-    // same name — `Storage::open` cannot open a directory as a SQLite
-    // file, exercising `initialize`'s `Storage::open` error path.
     let data_directory = application.handle().path().app_data_dir().unwrap();
     std::fs::create_dir_all(data_directory.join("latentmail.sqlite")).unwrap();
 
     assert!(initialize(application.handle()).is_err());
 }
 
-/// Every other test in this file calls `read_sender_avatar`/
-/// `read_account_avatar` directly as plain async functions — which
-/// exercises their bodies, but never the `generate_handler!`-generated IPC
-/// dispatch shim `latentmail_lib::ipc::register` builds around them (JSON
-/// arg deserialization, response serialization, command-name routing). That
-/// shim is only executed by a real `tauri::test::get_ipc_response` round
-/// trip, mirroring `ipc_contract_integration.rs`'s real-IPC pattern.
 #[test]
 fn avatar_commands_are_reachable_through_real_ipc_dispatch() {
     let directory = tempfile::tempdir().unwrap();

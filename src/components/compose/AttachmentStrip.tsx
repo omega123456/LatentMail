@@ -1,10 +1,6 @@
 import type { ComposeAttachment } from '@/stores/compose';
 import { AttachmentChip } from './AttachmentChip';
 
-/** Sits between the body and the footer, above the footer hairline
- * (wireframe "Attachment chips — settled, reading, failed"). Renders only
- * ordinary attachments — a `ComposeAttachment` carrying a `contentId` is an
- * inline image already inserted at the caret, not a chip. */
 export function AttachmentStrip({
   attachments,
   onRemove,

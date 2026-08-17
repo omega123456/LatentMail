@@ -1,8 +1,5 @@
-const pillButton = 'shrink-0 rounded-full px-2.5 py-1 text-label-md font-bold';
+const pillButton = 'shrink-0 cursor-pointer rounded-full px-2.5 py-1 text-label-md font-bold';
 
-/** Confirms inline **above the header**, on `error-container`, rather than
- * as a separate dialog — an empty draft discards silently, so this only
- * appears when something could actually be lost, and there is no undo. */
 export function DiscardConfirm({
   onCancel,
   onDiscard,

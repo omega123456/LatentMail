@@ -60,17 +60,11 @@ export function ConversationList({
   pages?: Conversation[][];
   state?: ListState;
   onRetry?: () => void;
-  /** What Rust actually said, shown under the error copy so a failure is
-   * diagnosable without opening the devtools console. */
   errorMessage?: string;
-  /** Real (Query-driven) usage fetches pages lazily instead of slicing an
-   * already-loaded `pages` array — the container passes this instead. */
   onLoadMore?: () => void;
   allLabels?: LabelMenuEntry[];
   currentLabelName?: string;
   onTriage?: (threadIds: string[], change: { add: string[]; remove: string[] }) => void;
-  /** Traversal progress counts for the `syncing` empty-state variant — only
-   * meaningful while `state === 'syncing'`. */
   syncProgress?: { persistedCount: number; discoveredCount: number };
   onCompose?: (threadId: string, action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => void;
   composeTargetThreadId?: string | null;
@@ -91,17 +85,12 @@ export function ConversationList({
   const selectAll = useMultiSelectStore((value) => value.selectAll);
   const pruneSelected = useMultiSelectStore((value) => value.prune);
   const clearMultiSelect = useMultiSelectStore((value) => value.clear);
-  // Only fixture pagination is local. Rust-sourced rows remain owned by Query.
   const [fixturePage, setFixturePage] = useState(0);
   const [source, setSource] = useState(() => ({ pages, threads, mailboxId }));
   if (source.pages !== pages || source.threads !== threads || source.mailboxId !== mailboxId) {
     setSource({ pages, threads, mailboxId });
     setFixturePage(0);
   }
-  // Memoized so its identity is stable across renders that don't actually
-  // change the row set — `rowIds`/multi-select pruning key off this
-  // reference, and `slice().flat()` would otherwise allocate a fresh array
-  // (and re-trigger that pruning) on every render.
   const rows = useMemo(
     () => (pages ? pages.slice(0, fixturePage + 1).flat() : threads),
     [pages, fixturePage, threads],
@@ -119,8 +108,6 @@ export function ConversationList({
     previousRows.current = rows;
     previousHeight.current = parent?.scrollHeight ?? 0;
   }, [rows]);
-  // Only a first-paint estimate — rows size themselves from their own padding
-  // and content (like the design), and `measureElement` corrects this below.
   const rowHeight = density === 'compact' ? 48 : density === 'comfortable' ? 68 : 88;
   const virtualizer = useMailVirtualizer({
     count: rows.length,
@@ -158,9 +145,6 @@ export function ConversationList({
     openConversation: () => {
       if (cursor !== null) open(cursor);
     },
-    // Escape's existing two-level behavior: clear the multi-selection if one
-    // is active, otherwise clear the open conversation — matching the prior
-    // hard-coded handler exactly.
     dismiss: () => {
       if (multiSelectActive) {
         clearMultiSelect();
@@ -229,9 +213,6 @@ export function ConversationList({
         { add: ['TRASH'], remove: [] },
       ),
   });
-  // A list refresh (fresh query data, a fixture-page load) may have dropped
-  // rows that were previously selected — prune rather than leave stale ids
-  // selected forever.
   useEffect(() => {
     pruneSelected(rowIds);
   }, [rowIds, pruneSelected]);
@@ -274,7 +255,7 @@ export function ConversationList({
           Couldn’t load conversations.{' '}
           <button
             onClick={onRetry}
-            className="underline focus-visible:outline-2 focus-visible:outline-primary"
+            className="cursor-pointer underline focus-visible:outline-2 focus-visible:outline-primary"
           >
             Retry
           </button>
@@ -368,10 +349,6 @@ export function ConversationList({
   );
 }
 
-/** Composition-root wiring: fetches the active account/mailbox's threads via
- * `useThreadsQuery` and hands the mapped rows to the presentational
- * `ConversationList` above. Keeps `ConversationList` itself fixture-friendly
- * for unit tests. */
 export function ConversationListContainer() {
   const accountId = useSelectionStore((value) => value.activeAccountId);
   const activeThreadId = useSelectionStore((value) => value.activeThreadId);
@@ -391,9 +368,6 @@ export function ConversationListContainer() {
       })),
     [labelsQuery.data],
   );
-  // Only a *user* label counts as "the removed source" (FR "Move to") — a
-  // system mailbox's own display name (e.g. browsing Inbox) must never be
-  // mistaken for one.
   const currentLabelName = labelsQuery.data?.find(
     (label) => label.id === mailboxId && label.kind === 'user',
   )?.name;
@@ -404,9 +378,6 @@ export function ConversationListContainer() {
       ),
     [query.data, mailboxId],
   );
-  // `?listState=` still lets Playwright screenshot the loading/empty/error
-  // states deterministically instead of racing a real (instantly-resolving
-  // mock) IPC call.
   const forcedState = fixtureState();
   const state: ListState =
     forcedState !== 'ready'
@@ -435,8 +406,6 @@ export function ConversationListContainer() {
         triage.mutate({ threadIds, ...change });
       }}
       onCompose={(targetThreadId, action) => {
-        // Context menus only target the already loaded open conversation;
-        // opening a different row has no loaded message and is a no-op.
         if (!accountId || targetThreadId !== activeThreadId || !activeConversation.data) return;
         const conversation = mapConversation(activeConversation.data, new Map());
         const message = conversation.messages.at(-1);

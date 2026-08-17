@@ -20,16 +20,9 @@ import {
 import { toDraftRequest, useComposeAutosave } from '@/lib/compose/autosave';
 import { invoke } from '@/lib/ipc/commands';
 
-/** One field row: 52px label column, a hairline that thickens to 2px
- * `primary` on focus-within, and a focus padding 1px shorter so the
- * thickening never nudges the row's content. */
 const fieldRow =
   'flex items-center gap-2 border-b border-outline-variant pt-field-row-y pb-field-row-y focus-within:border-b-2 focus-within:border-primary focus-within:pb-field-row-y-focus dark:border-dark-outline-variant dark:focus-within:border-dark-primary';
 
-/** The composer panel: a Radix Dialog in non-modal mode, anchored
- * bottom-right over the mailbox (D8). The backdrop tints but never blocks
- * pointer access, focus is never trapped, and focus returns to whatever was
- * focused before the panel opened. */
 export function ComposeOverlay() {
   const session = useComposeStore((state) => state.session);
   const close = useComposeStore((state) => state.close);
@@ -49,17 +42,11 @@ export function ComposeOverlay() {
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
-  // Keyed on the session that raised it rather than a bare boolean, so the
-  // confirmation cannot survive the discard that closed that session and
-  // greet the next composer already open.
   const [confirmingFor, setConfirmingFor] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const titleId = useId();
   const { onAttach, onInsertImage, onRemoveAttachment } = useAttachmentPipeline(bodyRef);
 
-  // Captured once per session (keyed on its stable id, not the whole object,
-  // which is replaced on every keystroke) — the control to hand focus back
-  // to when the panel closes.
   const sessionId = session?.id ?? null;
   useEffect(() => {
     if (sessionId) previousFocusRef.current = document.activeElement as HTMLElement | null;
@@ -135,16 +122,6 @@ export function ComposeOverlay() {
             previousFocusRef.current?.focus();
           }}
           onInteractOutside={(event) => event.preventDefault()}
-          // Radix's `Dialog.Content` hardcodes `loop: true` on its internal
-          // `FocusScope` unconditionally — even in non-modal mode — so Tab
-          // from the last focusable control cycles back to the first
-          // control *inside the panel* rather than leaving it. That is a
-          // keyboard trap (WCAG 2.1.2), which D8 explicitly forbids for
-          // this persistent floating panel. Stopping propagation of Tab
-          // during the capture phase, before FocusScope's own bubble-phase
-          // handler on the same node runs, disables the loop while leaving
-          // the browser's native Tab default (which we never preventDefault)
-          // free to move focus normally, including out of the panel.
           onKeyDownCapture={(event) => {
             if (event.key === 'Tab') event.stopPropagation();
           }}
@@ -156,10 +133,6 @@ export function ComposeOverlay() {
               height: 'var(--compose-h)',
             } as CSSProperties
           }
-          // `select-text` covers the whole compose window (recipients,
-          // subject, body, quoted original) — it is all text the user is
-          // authoring or quoting, so the app-wide `select-none` from
-          // index.html must not reach in here.
           className="fixed bottom-container-padding right-container-padding z-50 flex select-text flex-col overflow-hidden rounded-lg border border-outline-variant bg-surface-container-lowest shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
         >
           <Dialog.Description className="sr-only">
@@ -192,7 +165,7 @@ export function ComposeOverlay() {
                   <button
                     type="button"
                     onClick={revealCcBcc}
-                    className="shrink-0 rounded-sm px-1.5 py-1 text-label-sm text-secondary hover:text-primary dark:text-dark-secondary dark:hover:text-dark-primary"
+                    className="shrink-0 cursor-pointer rounded-sm px-1.5 py-1 text-label-sm text-secondary hover:text-primary dark:text-dark-secondary dark:hover:text-dark-primary"
                   >
                     Cc/Bcc
                   </button>

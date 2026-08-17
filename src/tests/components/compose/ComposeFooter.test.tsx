@@ -116,8 +116,7 @@ describe('ComposeFooter', () => {
       />,
     );
     expect(screen.getByText('Couldn’t send.')).toBeInTheDocument();
-    // The reserved slot stays present but empty, so the action group keeps
-    // its position while the failure occupies its own line.
+
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('');
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalledTimes(1);

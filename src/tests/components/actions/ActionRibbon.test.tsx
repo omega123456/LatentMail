@@ -118,8 +118,7 @@ describe('ActionRibbon', () => {
         {...handlers}
       />,
     );
-    // The measured implementation fits at equality and overflows at one
-    // pixel less. jsdom needs explicit ResizeObserver measurements.
+
     act(() => {
       const observers = window.__resizeObserverInstances__ ?? [];
       observers[0]?.callback(

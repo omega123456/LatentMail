@@ -1,8 +1,3 @@
-//! End-to-end durable draft/send lifecycle: `sync::initialize` wires up the
-//! real production queue (including the compose durability executor), so
-//! these tests admit work through `compose::drafts::admit` exactly the way
-//! a future IPC handler will, then observe the queue actually driving it
-//! against a fake Gmail server and materializing the result.
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -31,11 +26,6 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-// These integration cases boot real Tauri test apps and therefore must
-// temporarily point the process-wide app-data environment at their own
-// temporary directories. Serializing only this boundary avoids one test
-// migrating another test's SQLite file; production queue work remains
-// concurrent.
 static APP_ENV: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 fn draft_response(id: &str, message_id: &str, thread_id: &str) -> serde_json::Value {
@@ -352,10 +342,6 @@ async fn compose_save_and_send_commands_persist_their_respective_durable_modes()
     }
 }
 
-/// The command implementations have their own behaviour tests. This small
-/// sweep specifically drives every remaining compose/mail command through
-/// Tauri's production dispatcher, covering the generated command wrappers
-/// that direct Rust calls deliberately bypass.
 #[tokio::test]
 async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
     let directory = tempfile::tempdir().unwrap();
@@ -591,8 +577,6 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
         })
         .await
         .unwrap();
-    // The composer closes on queue acceptance, so a failure this side of it
-    // reaches the user only through this event.
     let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
     let sink = std::sync::Arc::clone(&reported);
     app.handle().listen("compose://failed", move |event| {
@@ -627,9 +611,6 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
     }
 }
 
-/// Seeds the on-disk env (client id/token endpoint/base url/refresh token)
-/// and a real mock Tauri app, mirroring
-/// `sync_history_integration::initialize_with_sync_on_startup_actually_runs_a_scheduler_tick`.
 fn boot(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
     std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
     std::env::set_var(
@@ -688,12 +669,6 @@ fn mock_token(server: &MockServer) -> Mock {
         })))
 }
 
-/// Mirrors the generous, still well-under-5s budget
-/// `sync_history_integration`'s own real (unpaused) scheduler-tick test
-/// uses for the same reason: a real, un-mocked OAuth token exchange plus a
-/// real Gmail draft round trip against wiremock, which — like that test —
-/// is exposed to CPU contention from other test binaries running in
-/// parallel.
 async fn wait_for<F: Fn() -> bool>(condition: F) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     while !condition() {
@@ -773,21 +748,12 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
         )
         .unwrap();
 
-    // Persist the durable row + immutable snapshot exactly as `admit` would,
-    // but skip enqueueing — simulating a crash right after admission and
-    // before the queue ever ran the operation, so the source file below can
-    // be deleted before "restart" and recovery must work from the manifest
-    // alone (acceptance criterion 11).
     staging.snapshot("op-create", &[part]).unwrap();
     std::fs::remove_file(source.path()).ok();
     let coalescer = handle
         .state::<std::sync::Arc<SaveCoalescer>>()
         .inner()
         .clone();
-    // Real admission always schedules a coalescing generation before
-    // persisting (see `drafts::admit`); replicate that here so the
-    // recovered operation isn't mistaken for one superseded by a save that
-    // never happened.
     let generation = coalescer.schedule("draft:local-session").await;
     let mut payload = base_payload(DraftOperationMode::Create, None);
     payload.original_message_id = Some("original".into());
@@ -816,7 +782,6 @@ async fn create_recovers_from_a_simulated_interruption_using_only_the_persisted_
         .await
         .unwrap();
 
-    // Drive recovery the way `sync::initialize`'s startup path does.
     let queue = handle
         .state::<std::sync::Arc<QueueEngine>>()
         .inner()
@@ -1098,9 +1063,6 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
         .respond_with(ResponseTemplate::new(200).set_body_json(draft_response("d1", "m2", "t1")))
         .mount(&server)
         .await;
-    // The first hydration (right after create) must observe `m1`; every
-    // later one (after each update) observes `m2` — a real Gmail draft
-    // update assigns a fresh message id every time.
     let hydrate_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     Mock::given(method("GET"))
         .and(path("/gmail/v1/users/me/drafts/d1"))
@@ -1112,9 +1074,6 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
         .mount(&server)
         .await;
 
-    // This only needs the draft executor. `boot()` also starts a scheduler
-    // that outlives the test app and can contend for this test's process-wide
-    // OAuth endpoint while other compose cases replace it.
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     AccountRepository::upsert(
@@ -1199,10 +1158,6 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
     );
     assert!(part.path.exists(), "canonical draft-owned data survives");
 
-    // This models the second debounce firing while the first create was
-    // active: it was admitted as another Create with the session key before
-    // the UI had received d1. Once serialized behind the create it must use
-    // d1's update endpoint, never create a duplicate draft.
     drafts::admit(
         &queue,
         &storage,
@@ -1277,10 +1232,6 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
     let server = MockServer::start().await;
     mock_token(&server).mount(&server).await;
 
-    // Records the arrival order of the update-then-send round trip so the
-    // test can prove Send always re-uploads the freshly-assembled document
-    // to the existing draft before promoting it — never promotes whatever
-    // the last autosave happened to leave behind.
     let call_order = std::sync::Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
     let update_order = std::sync::Arc::clone(&call_order);
     Mock::given(method("PUT"))
@@ -1344,8 +1295,6 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         .inner()
         .clone();
 
-    // Seed as if a prior create/update already ran and left canonical parts
-    // owned by the stable draft id.
     let source = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(source.path(), b"final bytes").unwrap();
     let part = staging
@@ -1502,9 +1451,6 @@ async fn a_save_superseded_before_it_runs_is_coalesced_rather_than_uploaded() {
     let _environment = APP_ENV.lock().await;
     let server = MockServer::start().await;
     mock_token(&server).mount(&server).await;
-    // No draft-write mock is registered: if the superseded generation were
-    // wrongly dispatched to Gmail, wiremock would 404 and the operation
-    // would end up `failed` rather than `superseded`.
     let (app, _home) = boot(&server);
     let handle = app.handle();
     let directory = app.path().app_data_dir().unwrap();
@@ -1519,8 +1465,6 @@ async fn a_save_superseded_before_it_runs_is_coalesced_rather_than_uploaded() {
         .inner()
         .clone();
 
-    // Pause the queue so both admissions land before either executes, then
-    // resume — deterministic instead of racing real network latency.
     queue.pause();
     drafts::admit(
         &queue,
@@ -1691,9 +1635,6 @@ async fn hydrate_fetches_the_full_gmail_draft() {
 
 #[tokio::test]
 async fn a_retryable_gmail_failure_is_reported_as_failed_rather_than_silently_stuck() {
-    // Queue retry scheduling and Gmail's HTTP mapping are covered separately.
-    // This test only needs the durable terminal-state contract, so a captured
-    // executor avoids booting a scheduler with process-wide test configuration.
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     AccountRepository::upsert(
@@ -1749,8 +1690,6 @@ async fn a_retryable_gmail_failure_is_reported_as_failed_rather_than_silently_st
     .await
     .unwrap();
 
-    // A final queue attempt still returns the retryable Gmail error, but its
-    // durable operation is terminal rather than silently left active.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let operation = storage

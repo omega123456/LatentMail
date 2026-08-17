@@ -23,10 +23,7 @@ const MAX_ATTEMPTS: u8 = 10;
 pub enum Lane {
     Interactive,
     Background,
-    /// Whole-mailbox enumeration (backfill/reconciliation). Independent
-    /// concurrency from `Background`, so a saturating traversal can never
-    /// delay background work, and — like `Background` — yields to
-    /// `Interactive` before taking tokens.
+
     Traversal,
 }
 
@@ -36,10 +33,7 @@ pub enum OperationKind {
     LabelMutation,
     Send,
     Draft,
-    /// A sync engine run (initial, incremental poll or full re-sync). The
-    /// Gmail client already retries transient failures (429/5xx/network)
-    /// internally with its own backoff, so a sync run is retried by the
-    /// scheduler's next poll tick rather than by the queue.
+
     Sync,
     Star,
     Unstar,
@@ -49,8 +43,7 @@ pub enum OperationKind {
     Move,
     Spam,
     NotSpam,
-    /// A unit of whole-mailbox traversal work (backfill or reconciliation),
-    /// dispatched on `Lane::Traversal`.
+
     Traversal,
 }
 
@@ -60,17 +53,7 @@ impl OperationKind {
     }
 
     fn retries(self) -> bool {
-        // `Sync` and `Traversal` are both dispatched through `sync`'s
-        // one-shot `WorkRegistry` (a `FnOnce` consumed on first invocation —
-        // see `sync::create_queue_engine`/`SyncEngine::enqueue_backfill`).
-        // A queue-level retry would find nothing registered on the second
-        // attempt and the executor's `None => Ok(())` fallback would report
-        // a silent, spurious success without doing any of the retried work.
-        // Both kinds already get their own retry policy at a different
-        // layer: the Gmail client's internal 429/5xx backoff, and — for a
-        // fully failed run — the next scheduler tick / traversal
-        // (re)enqueue picking a fresh operation id back up from the
-        // persisted checkpoint.
+
         !matches!(self, Self::Send | Self::Sync | Self::Traversal)
     }
 }
@@ -164,7 +147,7 @@ impl TokenBucket {
     }
 }
 
-/// Per-(account, entity) mutex ensuring same-entity operations serialize.
+
 type EntityLocks = Mutex<HashMap<(String, String), Arc<Mutex<()>>>>;
 
 pub struct QueueEngine {
@@ -278,9 +261,7 @@ impl QueueEngine {
             let (traversal, traversal_rx) = mpsc::channel(LANE_CAPACITY);
             self.spawn_lane(interactive_rx, 4);
             self.spawn_lane(background_rx, 2);
-            // Traversal gets its own, independent concurrency permit pool —
-            // its cap on throughput is what keeps it from ever delaying
-            // background work (see D4 and Lane::Traversal).
+
             self.spawn_lane(traversal_rx, 1);
             accounts.insert(
                 account_id.to_owned(),
@@ -323,7 +304,7 @@ impl QueueEngine {
                     .or_insert_with(|| Arc::new(Mutex::new(()))),
             )
         };
-        let _entity = lock.lock().await; // lock first: same-entity bursts never consume all permits.
+        let _entity = lock.lock().await;
         let _permit = permits.acquire().await.expect("semaphore remains open");
         loop {
             self.wait_until_resumed().await;
@@ -366,14 +347,10 @@ impl QueueEngine {
         }
     }
 
-    /// Cooperative checkpoint for long-running operations. Queue admission
-    /// alone cannot stop an operation already executing, so traversal calls
-    /// this between persisted batches.
+
     pub async fn wait_until_resumed(&self) {
         loop {
-            // Register before observing the flag: otherwise `resume` can
-            // notify in the gap between the load and `notified`, leaving a
-            // paused traversal asleep forever.
+
             let notified = self.resumed.notified();
             if !self.paused.load(Ordering::Acquire) {
                 return;
@@ -385,8 +362,7 @@ impl QueueEngine {
     async fn wait_for_interactive(&self, operation: &QueueOperation) {
         if matches!(operation.lane, Lane::Background | Lane::Traversal) {
             loop {
-                // As with pause/resume, subscribe before checking to avoid
-                // missing the final interactive completion in between.
+
                 let notified = self.interactive_drained.notified();
                 if !self.has_interactive(&operation.account_id).await {
                     return;
@@ -431,11 +407,7 @@ pub fn retry_delay(attempt: u8) -> Duration {
     Duration::from_secs((1_u64 << attempt.saturating_sub(1).min(6)).min(60))
 }
 
-/// Startup recovery reads the durable subset once; the queue never polls
-/// SQLite for work. Returns the recoverable operations to re-enqueue plus
-/// the distinct account ids whose interrupted send became uncertain (never
-/// re-enqueued — the caller emits `send://uncertain` and schedules one
-/// ordinary account sync for each instead).
+
 pub fn recover_durable_operations(
     connection: &rusqlite::Connection,
 ) -> rusqlite::Result<(Vec<Operation>, Vec<String>)> {
@@ -447,11 +419,7 @@ pub fn recover_durable_operations(
     Ok((recovered, uncertain_accounts))
 }
 
-/// Persists a durable operation's row (queued, before admission) and then
-/// admits it to the queue. Callers for [`OperationKind::Draft`]/
-/// [`OperationKind::Send`] must always go through this rather than calling
-/// [`QueueEngine::enqueue`] directly, so recovery never has to assume a
-/// durable operation without a row (D15).
+
 pub async fn admit_durable(
     engine: &Arc<QueueEngine>,
     storage: &crate::storage::Storage,
@@ -491,8 +459,7 @@ pub async fn admit_durable(
     engine.enqueue(operation).await
 }
 
-/// Rebuilds recoverable queued work from its durable row. The compose service
-/// owns the payload executor, so this contains no captured process memory.
+
 pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation> {
     let kind = match operation.kind.as_str() {
         "draft" => OperationKind::Draft,

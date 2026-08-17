@@ -4,9 +4,6 @@ export type LabelRowConfirmProps = {
   onCancel: () => void;
 };
 
-/** Inline, hand-rolled delete confirmation (the plan's one deliberate
- * exception to "use radix for every menu/context-menu/popover" — a plain
- * two-button row needs none of that machinery). */
 export function LabelRowConfirm({ labelName, onConfirm, onCancel }: LabelRowConfirmProps) {
   return (
     <div
@@ -21,14 +18,14 @@ export function LabelRowConfirm({ labelName, onConfirm, onCancel }: LabelRowConf
         <button
           type="button"
           onClick={onConfirm}
-          className="rounded bg-error px-2 py-1 text-label-md text-on-error focus-visible:outline-2 focus-visible:outline-error dark:bg-dark-error dark:text-dark-on-error"
+          className="cursor-pointer rounded bg-error px-2 py-1 text-label-md text-on-error focus-visible:outline-2 focus-visible:outline-error dark:bg-dark-error dark:text-dark-on-error"
         >
           Yes
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
+          className="cursor-pointer rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
         >
           No
         </button>

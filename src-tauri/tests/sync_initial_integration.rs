@@ -1,5 +1,3 @@
-//! Initial sync: labels -> Inbox message ids -> content retrieval -> storage
-//! -> thread derivation, all routed through the queue's background lane.
 
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::queue::QueueEngine;
@@ -124,9 +122,7 @@ async fn initial_sync_populates_labels_messages_membership_and_threads() {
 
     let connection = storage.connection().unwrap();
     let labels = LabelRepository::list(&connection, "account").unwrap();
-    // Plus an auto-created "UNREAD" placeholder — m1 carries that label id,
-    // but the `labels.list` fixture above only returns "INBOX"; see
-    // `LabelRepository::ensure_placeholder`.
+
     let inbox = labels.iter().find(|label| label.id == "INBOX").unwrap();
     assert_eq!(inbox.message_count, 2);
     assert_eq!(inbox.unread_count, 1);
@@ -166,10 +162,7 @@ async fn initial_sync_populates_labels_messages_membership_and_threads() {
     assert!(status.last_synced_at.is_some());
 }
 
-/// Initial sync "adds" the entire recent mailbox. It still emits
-/// `mail://new` (the list has to refresh), but it must carry no arrivals —
-/// those are what the frontend turns into OS notifications, and a fresh
-/// account would otherwise announce every message it ever downloads.
+
 #[tokio::test]
 async fn initial_sync_announces_no_arrivals_to_notify_about() {
     let server = MockServer::start().await;
@@ -191,15 +184,10 @@ async fn initial_sync_announces_no_arrivals_to_notify_about() {
     assert_eq!(new_mail.get("arrivals"), Some(&serde_json::json!([])));
 }
 
-/// Gmail enumerates ids and then hands them out one by one, so a message
-/// can vanish in between — promoting a draft to a sent message deletes the
-/// draft's message exactly this way. One 404 must cost that message, not
-/// the whole run.
+
 #[tokio::test]
 async fn a_message_that_vanishes_between_listing_and_retrieval_is_skipped() {
     let server = MockServer::start().await;
-    // Mounted before the fixture: wiremock answers with the first mounted
-    // mock that matches, so this shadows the fixture's own `m2`.
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m2"))
         .respond_with(ResponseTemplate::new(404))
@@ -228,9 +216,6 @@ async fn a_message_that_vanishes_between_listing_and_retrieval_is_skipped() {
 #[tokio::test]
 async fn initial_sync_leaves_the_checkpoint_untouched_on_failure() {
     let server = MockServer::start().await;
-    // No mocks mounted: every request fails (connection refused after the
-    // server is dropped) — simulate by mounting only profile+labels but not
-    // the message list, which 404s against wiremock's default "no match".
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -249,9 +234,6 @@ async fn initial_sync_leaves_the_checkpoint_untouched_on_failure() {
     let result = engine.initial_sync("account", client).await;
     assert!(result.is_err());
 
-    // The run announced itself as syncing; without a closing announcement
-    // the status bar would spin on "Syncing…" indefinitely, since only
-    // `sync://complete` and this event ever clear it.
     let progress: Vec<_> = events
         .lock()
         .unwrap()

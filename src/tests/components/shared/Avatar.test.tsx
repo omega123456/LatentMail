@@ -17,15 +17,11 @@ describe('Avatar', () => {
     const { container } = render(
       <Avatar size={32} src="asset://localhost/logo.png" label="Northwind" />,
     );
-    // `alt=""` gives the `<img>` a presentation role, not `img` — queried
-    // directly rather than via `getByRole`.
+
     const img = container.querySelector('img') as HTMLImageElement;
     expect(img.src).toContain('logo.png');
     expect(screen.queryByText('N')).not.toBeInTheDocument();
-    // The plate/ring classes are unconditional in both themes (D7) — no
-    // `dark:` counterpart, so the plate stays light/white in dark theme too
-    // (a dark-ink brand mark must stay legible against the near-black
-    // dark-theme surfaces).
+
     expect(img.parentElement).toHaveClass('bg-surface-container-lowest');
     expect(img.parentElement).toHaveClass('ring-1', 'ring-outline-variant/40');
     expect(img.parentElement).not.toHaveClass('dark:bg-dark-surface-container-lowest');

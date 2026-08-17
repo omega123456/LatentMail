@@ -14,11 +14,6 @@ export type LabelColorPickerProps = {
   onCancel: () => void;
 };
 
-/** HSL hue (0-360) for a `#rrggbb` hex string — used only to group the
- * picker's swatches into contiguous hue families for display; the
- * canonical `LABEL_COLOR_PALETTE` order itself must stay untouched, since
- * it's position-aligned 1:1 with `--color-label-gmail-{N}` in `index.css`
- * and `gmail::labels::LABEL_PALETTE` in Rust. */
 function hexToHue(hex: string): number {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -35,10 +30,6 @@ function hexToHue(hex: string): number {
   return hue < 0 ? hue + 360 : hue;
 }
 
-/** Display order: hue families grouped into contiguous rows, greys/near-
- * greys (near-zero saturation) pinned first the way the wireframe and
- * Gmail's own picker both do — sorted by hue, then by lightness within a
- * hue so a family's rows read light-to-dark. */
 function byHueFamily(a: LabelColorSwatch, b: LabelColorSwatch): number {
   const hueA = hexToHue(a.gmailBackground);
   const hueB = hexToHue(b.gmailBackground);
@@ -46,13 +37,6 @@ function byHueFamily(a: LabelColorSwatch, b: LabelColorSwatch): number {
   return a.gmailBackground.localeCompare(b.gmailBackground);
 }
 
-/** Anchored palette grid (FR "Label colour picker"). `role="grid"` >
- * `role="row"` > `role="gridcell"`, the ARIA hierarchy assistive tech
- * requires — each row of `COLUMNS` swatches is its own `row`. Roving
- * tabindex: ArrowLeft/Right move linearly, ArrowUp/Down move by column
- * index rather than by list position — the two-dimensional traversal the
- * wireframe calls for. The footer and every swatch's accessible name use
- * the human-readable colour name, never a hex value. */
 export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPickerProps) {
   const [pendingId, setPendingId] = useState(selectedId);
   const cellRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -117,7 +101,7 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
                   tabIndex={selected ? 0 : -1}
                   onClick={() => setPendingId(swatch.id)}
                   onKeyDown={(event) => handleKeyDown(event, index)}
-                  className={`flex size-8 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${selected ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
+                  className={`flex size-8 cursor-pointer items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${selected ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
                 >
                   {selected && <Check aria-hidden="true" size={14} className={swatch.textClass} />}
                 </button>
@@ -137,7 +121,7 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
               setPendingId(selectedId);
               onCancel();
             }}
-            className="rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
+            className="cursor-pointer rounded px-2 py-1 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
           >
             Cancel
           </button>
@@ -145,7 +129,7 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
             type="button"
             disabled={pendingId === selectedId}
             onClick={() => onApply(pendingId)}
-            className="rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
+            className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
           >
             Apply
           </button>

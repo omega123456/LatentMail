@@ -202,9 +202,7 @@ describe('avatar queries', () => {
       wrapper: wrapper(client),
     });
     expect(result.current.fetchStatus).toBe('idle');
-    // "Never issued" means no fetch was ever started — TanStack still
-    // creates an observer entry for a disabled query, but its update count
-    // must stay at zero because `queryFn` never ran.
+
     expect(client.getQueryState(queryKeys.senderAvatar('example.com'))?.dataUpdateCount).toBe(0);
   });
 

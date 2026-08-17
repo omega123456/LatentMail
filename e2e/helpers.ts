@@ -11,9 +11,7 @@ export async function installPlaywrightIpc(
   pendingCommands: string[] = [],
   composeSession?: OpenComposeArgs,
 ) {
-  // `syncStatus` feeds the same `read_sync_status`/`trigger_sync` commands
-  // real usage calls through `useSyncStore.hydrateSync` — a single source
-  // of truth instead of a second channel that could race the real fetch.
+
   const syncOverride = syncStatus
     ? {
         read_sync_status: {
@@ -40,10 +38,7 @@ export async function installPlaywrightIpc(
           if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (pendingCommands.includes(command)) return new Promise(() => undefined);
           if (command in responses) return responses[command];
-          // Serializing the fixture map into the page drops every key whose
-          // value is `undefined`, so the void-result commands (mutations,
-          // write_setting, …) arrive here looking unmocked. Their names are
-          // passed separately for exactly that reason.
+
           if (voidCommands.includes(command)) return undefined;
           throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
         },

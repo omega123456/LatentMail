@@ -19,8 +19,6 @@ export function AccountSwitcher({
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const active = accounts.find((account) => account.id === activeAccountId) ?? accounts[0];
-  // Not gated by `showSenderAvatars` — the account photograph involves no
-  // third-party lookup (FR "Preference").
   const { data: activeAvatarSrc } = useAccountAvatarQuery(active?.id ?? null);
   const addAccount = async () => {
     setAdding(true);
@@ -39,15 +37,12 @@ export function AccountSwitcher({
         title={collapsed ? active.email : undefined}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={`flex w-full items-center gap-3 rounded px-2 py-2 text-left text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface ${collapsed ? 'justify-center' : ''}`}
+        className={`flex w-full cursor-pointer items-center gap-3 rounded px-2 py-2 text-left text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface ${collapsed ? 'justify-center' : ''}`}
       >
         <Avatar
           size={collapsed ? 36 : 40}
           src={activeAvatarSrc}
           label={active.displayName}
-          // The rail is the sole exception (D-series "collapsed rail keeps a
-          // real label") — expanded, the visible name beside it already
-          // carries identity, so the avatar stays decorative there.
           ariaLabel={collapsed ? active.email : undefined}
         />
         {!collapsed && (
@@ -65,7 +60,7 @@ export function AccountSwitcher({
       {open && (
         <div
           role="menu"
-          className={`absolute z-10 mt-stack-gap-sm min-w-56 rounded-md bg-surface-container-lowest p-stack-gap-sm shadow-lg dark:bg-dark-surface-container ${collapsed ? 'left-rail-width' : 'left-0'}`}
+          className={`absolute bottom-full z-10 mb-stack-gap-sm min-w-56 rounded-md bg-surface-container-lowest p-stack-gap-sm shadow-lg dark:bg-dark-surface-container ${collapsed ? 'left-rail-width' : 'left-0'}`}
         >
           {accounts.map((account) => (
             <button
@@ -76,11 +71,8 @@ export function AccountSwitcher({
                 onSelect(account.id);
                 setOpen(false);
               }}
-              className="flex w-full items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-left text-body-sm text-on-surface hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface dark:hover:bg-primary/15"
+              className="flex w-full cursor-pointer items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-left text-body-sm text-on-surface hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface dark:hover:bg-primary/15"
             >
-              {/* Menu rows stay initials-only by policy — a 24px photo is
-                  below the point a face is recognisable, and the address
-                  beside it already identifies the account. */}
               <Avatar size={24} label={account.displayName} />
               <span className="min-w-0 flex-1 truncate">{account.email}</span>
               {account.needsReauthentication && (
@@ -97,7 +89,7 @@ export function AccountSwitcher({
             role="menuitem"
             disabled={adding}
             onClick={() => void addAccount()}
-            className="mt-stack-gap-sm flex w-full items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-body-sm text-primary disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-primary"
+            className="mt-stack-gap-sm flex w-full cursor-pointer items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-body-sm text-primary disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-primary"
           >
             <Plus aria-hidden="true" size={16} />
             {adding ? 'Adding account…' : 'Add account'}

@@ -1,11 +1,3 @@
-//! Label lifecycle Gmail calls, draft deletion (the documented exception to
-//! the single coalescing mutation path — Gmail exposes no other way to
-//! delete a draft), and the fixed colour palette with pre-flight rejection
-//! of off-palette values (D10).
-//!
-//! Endpoint costs are declared in `gmail::mod` alongside every other
-//! constant; this module only references them (Phase 3 constraint: a
-//! single source of truth).
 
 use serde::{Deserialize, Serialize};
 
@@ -14,16 +6,7 @@ use super::{
     LABELS_DELETE_COST, LABELS_UPDATE_COST,
 };
 
-/// Gmail's real, documented 102-pair label colour palette (24 base colours
-/// plus 78 extended "more colours" swatches) — every id is a
-/// human-readable, hue-accurate slug for its own hex pair (Slice audit
-/// fix: several ids previously named the *wrong* hue entirely — e.g. an id
-/// of `"orange"` pointed at a grey — and `"pink"` silently duplicated
-/// `"red"`'s hex because the real grey `#434343` was dropped from the
-/// list). Values are ordered to match `src/index.css`'s
-/// `--color-label-gmail-{N}` custom properties one-for-one by position —
-/// `src/lib/labels/palette.ts` mirrors this exact id/hex list so a picked
-/// swatch id resolves to the same Gmail colour pair on both sides of IPC.
+
 pub const LABEL_PALETTE: &[(&str, &str, &str)] = &[
     ("black", "#000000", "#ffffff"),
     ("charcoal", "#434343", "#ffffff"),
@@ -129,9 +112,7 @@ pub const LABEL_PALETTE: &[(&str, &str, &str)] = &[
     ("deep-emerald-5", "#16a765", "#ffffff"),
 ];
 
-/// Resolves a design-token colour id to its Gmail wire colour pair, or
-/// `None` for an id off the palette — the pre-flight rejection point every
-/// label-colour-accepting command must call before touching the network.
+
 pub fn resolve_color(id: &str) -> Option<LabelColorPair> {
     LABEL_PALETTE
         .iter()

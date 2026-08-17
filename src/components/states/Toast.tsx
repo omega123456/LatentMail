@@ -4,17 +4,11 @@ import { Toast as ToastPrimitive } from 'radix-ui';
 import { milliseconds } from 'date-fns';
 import { useToastStore, type Toast as ToastEntry, type ToastSeverity } from '@/stores/toast';
 
-/** Errors get long enough to read and react to; confirmations get just long
- * enough to register. Neither is permanent, and both pause while hovered or
- * focused, which is what keeps the 30s limit adjustable (WCAG 2.2.1). */
 const DURATION_MS: Record<ToastSeverity, number> = {
   success: milliseconds({ seconds: 4 }),
   error: milliseconds({ seconds: 30 }),
 };
 
-/** Severity is carried by the icon, the left edge and the countdown rail —
- * never by colour alone. The `run`/`hold` pair drives the rail; see the
- * `--animate-toast-*` tokens in `index.css` for why pausing needs two classes. */
 const VARIANT: Record<
   ToastSeverity,
   { icon: typeof CircleCheck; edge: string; tint: string; rail: string; run: string; hold: string }
@@ -46,7 +40,6 @@ function ToastCard({ toast }: { toast: ToastEntry }) {
   return (
     <ToastPrimitive.Root
       duration={DURATION_MS[toast.severity]}
-      // Errors interrupt (assertive); confirmations wait their turn (polite).
       type={toast.severity === 'error' ? 'foreground' : 'background'}
       onOpenChange={(open) => {
         if (!open) dismiss(toast.id);
@@ -75,18 +68,6 @@ function ToastCard({ toast }: { toast: ToastEntry }) {
   );
 }
 
-/** The whole toast surface. Mounted unconditionally by `AppShell` — the live
- * region has to exist before a message lands in it or assistive tech misses
- * the mutation, so this never returns `null` on an empty queue.
- *
- * Anchored top-right, below the shell header (`top-16` matches its `h-16`) so
- * the card clears the header's rule rather than straddling it. The bottom edge
- * is unavailable: the compose overlay owns bottom-right and the status bar owns
- * the full width beneath it.
- *
- * `flex-col-reverse` renders the newest toast nearest the header — the store
- * keeps its natural oldest-first order, and older toasts sink away from the
- * eye instead of pushing the newest one down the screen. */
 export function Toast() {
   const toasts = useToastStore((state) => state.toasts);
   return (

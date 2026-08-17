@@ -65,8 +65,7 @@ describe('ReadingPane', () => {
     renderWithQueryClient(<ReadingPane threadId="thread-1" mailboxId="INBOX" />);
     expect(screen.getByRole('toolbar', { name: 'Conversation actions' })).toBeInTheDocument();
     expect(screen.getAllByRole('toolbar', { name: 'Message actions' })).toHaveLength(2);
-    // The stubbed handlers are deliberate no-ops until Phase 8 wires real
-    // dispatch — clicking exercises that they don't throw.
+
     await user.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
   });
 

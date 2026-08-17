@@ -93,8 +93,7 @@ describe('ConversationList', () => {
     await user.click(screen.getByText('Retry'));
     expect(retry).toHaveBeenCalledOnce();
 
-    // The reason Rust gave is shown inline — a bare "Couldn't load" is not
-    // something a user (or a developer) can act on.
+
     rerender(<ConversationList state="error" errorMessage="no such column: snippet" />);
     expect(screen.getByText('no such column: snippet')).toBeInTheDocument();
   });

@@ -11,9 +11,6 @@ type CommandContextValue = {
   setOverride: (command: CommandName, keys: string[]) => void;
 };
 
-// A sensible default so `useCommands`/`useCommandBindings` still work for
-// components rendered without a `CommandProvider` ancestor (existing unit
-// tests render `ConversationList` bare) — it just can't be remapped.
 const defaultValue: CommandContextValue = {
   bindings: resolveCommandBindings(),
   setOverride: () => undefined,
@@ -21,10 +18,6 @@ const defaultValue: CommandContextValue = {
 
 const CommandContext = createContext<CommandContextValue>(defaultValue);
 
-/** Mounts the keyboard-command registry, holding any per-command key
- * overrides in state so a future remap UI can call `useSetCommandOverride`.
- * Follows the existing provider convention: no visible DOM, just context +
- * a paired hook. */
 export function CommandProvider({ children }: PropsWithChildren) {
   const [overrides, setOverrides] = useState<CommandOverrides>({});
   const value = useMemo<CommandContextValue>(

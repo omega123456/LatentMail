@@ -1,7 +1,3 @@
-// Pure mappers from Rust-sourced IPC DTOs (src/lib/types/ipc.ts) onto the
-// presentational shapes the list/reader components already render
-// (src/lib/types/conversation.ts, src/components/reader/ReadingPane.tsx).
-// Kept separate from the fetching hooks so both stay easy to unit test.
 import { parseParticipant } from '@/lib/format/participants';
 import { domainFor } from '@/lib/avatars/identity';
 import { LABEL_COLOR_PALETTE, resolveLabelColorSwatch } from '@/lib/labels/palette';
@@ -12,18 +8,8 @@ import type { Mailbox } from '@/components/sidebar/FolderList';
 import type { Label } from '@/components/sidebar/LabelList';
 import type { LabelMenuEntry, LabelMembership } from '@/components/actions/LabelsMenu';
 
-// A label whose colour Gmail hasn't set yet (or set to a pair outside this
-// app's curated palette — see `lib/labels/palette.ts`) falls back to the
-// first swatch rather than rendering colourless.
 const FALLBACK_SWATCH = LABEL_COLOR_PALETTE[0];
 
-/** `mailboxId` picks which of the two Rust-resolved identities the row
- * names: the Sent mailbox names and depicts the recipient, everyone else the
- * newest sender (D12/D13). `thread.sender.display` is always a finished,
- * ready-to-render string with Rust's own fallback already applied. The Sent
- * side's identity is `null` only when the thread has no Sent-labelled
- * message at all — TS supplies its own "(No recipient)" fallback for that
- * case, since Rust never computed anything to fall back from. */
 export function mapThreadToRow(thread: MailThread, mailboxId?: string | null): Conversation {
   const isSent = mailboxId === 'SENT';
   const identity = isSent ? thread.sentRecipient : thread.sender;
@@ -66,12 +52,6 @@ export function mapLabelsToUserLabels(labels: MailLabel[]): Label[] {
     }));
 }
 
-/** Union-based thread-level membership (FR "Labels menu semantics"): a
- * label on every message is `checked`, on none is `unchecked`, and on some
- * but not all is `indeterminate` — the tri-state the staged `LabelsMenu`
- * exposes as `aria-checked="mixed"`. `messagesLabelIds` is empty only for a
- * thread with no messages yet loaded, in which case everything renders
- * `unchecked` rather than throwing on an empty reduce. */
 export function computeThreadLabelMembership(
   labels: MailLabel[],
   messagesLabelIds: string[][],

@@ -14,23 +14,18 @@ fn assembles_plain_and_html_with_threading_headers() {
     assert!(raw.contains("Heading"));
 }
 
-/// A draft is saved long before it has anywhere to go — the composer
-/// autosaves as soon as there is a subject or a body — so assembly must not
-/// require a destination the way a message about to be handed to an SMTP
-/// transport would.
+
 #[test]
 fn assembles_a_draft_that_has_no_recipients_yet() {
     let mut message = outgoing();
     message.to.clear();
     let raw = String::from_utf8(assemble(&message).unwrap()).unwrap();
     assert!(raw.contains("From: Sender <sender@example.com>"));
-    // Anchored to the header line: `In-Reply-To:` also ends in "To:".
+
     assert!(!raw.contains("\r\nTo:"));
 }
 
-/// Gmail derives recipients from the document's own headers — there is no
-/// envelope alongside it — so a stripped `Bcc` header is a bcc recipient
-/// who silently never receives the message.
+
 #[test]
 fn keeps_the_bcc_header_gmail_delivers_from() {
     let mut message = outgoing();
@@ -57,8 +52,7 @@ fn rejects_an_encoded_document_over_the_limit() {
 fn accepts_the_exact_encoded_ceiling_and_rejects_one_byte_over() {
     let mut message = outgoing();
     message.subject.clear();
-    // Fixed by the deterministic lettre encoder; this fixture was found once
-    // by search and avoids repeatedly assembling 25 MB documents in a test.
+
     let low = 18_268_380usize;
     message.attachments = vec![Part {
         filename: "a".into(),
@@ -66,8 +60,7 @@ fn accepts_the_exact_encoded_ceiling_and_rejects_one_byte_over() {
         bytes: vec![0; low],
         content_id: None,
     }];
-    // Base64 moves in small steps; subject bytes fill the final exact encoded
-    // boundary without hand-calculating MIME overhead.
+
     for suffix in 0..16 {
         message.subject = "x".repeat(suffix);
         let raw = assemble(&message).unwrap();
@@ -92,8 +85,7 @@ fn nests_related_and_mixed_parts_when_needed() {
     });
     let related = String::from_utf8(assemble(&message).unwrap()).unwrap();
     assert!(related.contains("multipart/related"));
-    // No Content-ID on the part: assembly falls back to the filename so the
-    // related part is still addressable.
+
     assert!(related.contains("Content-ID: <logo.png>"));
     assert!(related.contains("cid:logo"));
     message.attachments.push(Part {

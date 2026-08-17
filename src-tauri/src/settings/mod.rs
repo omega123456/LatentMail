@@ -8,7 +8,7 @@ use crate::storage::{SettingRepository, Storage, StorageError};
 
 const WINDOW_STATE_KEY: &str = "windowState";
 
-/// ponytail: 15-second floor is arbitrary; it exists to stop a bad setting melting quota.
+
 pub const MIN_SYNC_INTERVAL_SECS: u64 = 15;
 
 macro_rules! string_try {
@@ -38,10 +38,7 @@ pub struct Settings {
     pub sync_on_startup: bool,
     pub show_unread_counts: bool,
     pub sync_interval_seconds: u32,
-    /// Governs whether list/reader avatars render at all (D14). Enforced
-    /// twice: the frontend does not issue the sender-avatar query when this
-    /// is off, and `avatars::read_sender_avatar` independently refuses to
-    /// schedule a lookup regardless of what the frontend does.
+
     pub show_sender_avatars: bool,
 }
 
@@ -188,9 +185,7 @@ pub async fn write_setting<R: Runtime>(
     Ok(())
 }
 
-/// Pushes the settings that a running subsystem holds a copy of, so the
-/// preference takes effect without a restart. Currently only the sync
-/// interval qualifies; everything else is read on demand.
+
 fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
     if key != "syncIntervalSeconds" {
         return;

@@ -11,11 +11,6 @@ declare global {
   interface Window {
     __LATENTMAIL_PLAYWRIGHT_IPC__?: PlaywrightIpc;
     __LATENTMAIL_PLAYWRIGHT_READER_STATE__?: 'loading' | 'error';
-    /** Playwright opens the composer directly through this bridge so its
-     * own screenshot scenarios can exercise the mounted panel without
-     * driving the real Compose pill/keyboard/ribbon entry points.
-     * `MailLayout` reads it once on mount, exactly like
-     * `__LATENTMAIL_PLAYWRIGHT_READER_STATE__` above. */
     __LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__?: OpenComposeArgs;
   }
 }

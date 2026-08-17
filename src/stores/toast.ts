@@ -3,10 +3,6 @@ import { create } from 'zustand';
 export type ToastSeverity = 'success' | 'error';
 export type Toast = { id: number; severity: ToastSeverity; message: string };
 
-/** Newest last, oldest dropped past the cap. A flaky-network burst can fail a
- * dozen operations in a second; without a cap that grows an unbounded column
- * up the left edge of the window. Callers that already know they are acting on
- * many items should coalesce into one message rather than rely on this. */
 export const MAX_VISIBLE_TOASTS = 3;
 
 type ToastState = {

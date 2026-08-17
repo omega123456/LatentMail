@@ -22,10 +22,7 @@ fn app() -> tauri::App<tauri::test::MockRuntime> {
         .unwrap()
 }
 
-/// Dispatches `cmd` through the real Tauri IPC pipeline (not a direct Rust
-/// call) so that the `#[tauri::command]`-generated invoke wrapper — which
-/// `register()` wires up for every command — is actually exercised, the
-/// same path the frontend uses in production.
+
 fn invoke(
     webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
     cmd: &str,
@@ -85,9 +82,7 @@ fn pause_and_resume_queue_commands_emit_summaries_and_toggle_the_engine() {
     assert_eq!(summary.pending, 0);
 }
 
-/// Exercises every registered command through the real IPC dispatch path
-/// (`register()` wires all of these up), not just direct Rust calls, so the
-/// `#[tauri::command]`-generated wrapper for each one is covered too.
+
 #[test]
 fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     let app = app();
@@ -127,9 +122,7 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     assert!(invoke(
         &webview,
         "write_frontend_log",
-        // Exactly the payload `IpcCommandMap['write_frontend_log']` sends —
-        // wrapping it in a `record` key here is what hid the argument-name
-        // mismatch that silently dropped every frontend log.
+
         serde_json::json!({ "level": "info", "message": "from ipc" })
     )
     .is_ok());
@@ -158,9 +151,7 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         invoke(&webview, "list_accounts", serde_json::json!({})).unwrap(),
         serde_json::json!([])
     );
-    // No client id is configured in tests, so sign-in/reauth always fail
-    // fast — that is still real, meaningful coverage of the command's
-    // dispatch wiring and error path.
+
     assert!(invoke(&webview, "begin_sign_in", serde_json::json!({})).is_err());
     assert!(invoke(
         &webview,
@@ -286,12 +277,8 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
     }
 }
 
-/// Phase 3's complete IPC surface — triage mutations over identifier sets,
-/// draft deletion, label lifecycle, and traversal status — dispatched
-/// through the same real IPC pipeline as every other command, against a
-/// fake Gmail server standing in for the real API. No command body here
-/// may be a stub: each of these genuinely round-trips to the fake server
-/// and back into storage (Phase 3 AC8/AC11).
+
+
 #[tokio::test]
 async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     let directory = tempfile::tempdir().unwrap();
@@ -321,8 +308,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token(&account_id, "refresh-token").unwrap();
 
-    // Seed a thread with one message so `mutate_threads`/`delete_draft` have
-    // something real to act on.
+
     let connection = storage.connection().unwrap();
     AccountRepository::upsert(
         &connection,
@@ -403,10 +389,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
-    // `delete_draft` has no cached draft id for "message-1" yet, so it must
-    // resolve one via `GET /users/me/drafts` (the draft id, "draft-9", is
-    // deliberately distinct from the message id it maps to — see the item 2
-    // fix) before it can call the dedicated drafts-delete endpoint.
+
     Mock::given(method("GET"))
         .and(path("/users/me/drafts"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -453,7 +436,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         .build()
         .unwrap();
 
-    // Traversal status: real read against an empty cursor table.
+
     let status = invoke(
         &webview,
         "read_traversal_status",
@@ -462,7 +445,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     assert_eq!(status["state"], "notStarted");
 
-    // Label lifecycle.
+
     let created = invoke(
         &webview,
         "create_label",
@@ -495,7 +478,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_ok());
 
-    // A rejected off-palette colour never reaches the network.
+
     assert!(invoke(
         &webview,
         "create_label",
@@ -503,7 +486,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_err());
 
-    // Triage: the generalized mutation over an identifier set.
+
     let results = invoke(
         &webview,
         "mutate_threads",
@@ -518,7 +501,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     assert_eq!(results[0]["threadId"], "thread-1");
     assert_eq!(results[0]["outcome"], "applied");
 
-    // The documented drafts-deletion exception.
+
     assert!(invoke(
         &webview,
         "delete_draft",
@@ -526,9 +509,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_ok());
 
-    // Every label-name-validation rule and the off-palette recolour
-    // rejection, exercised through real IPC dispatch too — not just the
-    // storage-layer unit tests in `gmail_labels_integration.rs`.
+
     let second = invoke(
         &webview,
         "create_label",
@@ -544,13 +525,7 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .is_err());
 }
 
-/// The read commands (`list_labels`, `list_threads`, `load_conversation`)
-/// and the pre-existing single-thread star/read commands, dispatched
-/// through the real IPC pipeline — the established convention (see the
-/// module doc) that keeps every `#[tauri::command]`-generated invoke
-/// wrapper inside the function-coverage gate, not just its inner body
-/// (which direct Rust calls in `sync_threads_integration.rs` /
-/// `mutations_star_integration.rs` already exercise).
+
 #[tokio::test]
 async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_ipc_dispatch() {
     let directory = tempfile::tempdir().unwrap();
@@ -725,9 +700,7 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
     )
     .is_ok());
 
-    // Sync trigger/status through the same real dispatch path — a fresh
-    // account with no local rows, so a full initial sync's empty-mailbox
-    // path is what gets exercised here.
+
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -760,9 +733,7 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
     .unwrap();
     assert_eq!(read_back["state"], "idle");
 
-    // Traversal status once a cursor row exists — the `TraversalCursor ->
-    // TraversalStatusDto` conversion path `read_traversal_status` takes
-    // once backfill/reconciliation (Phase 4/5) have ever run.
+
     latentmail_lib::storage::TraversalCursorRepository::upsert(
         &storage_for_cursor.connection().unwrap(),
         &latentmail_lib::storage::TraversalCursor {
@@ -773,11 +744,7 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
             persisted_count: 4,
             completed: false,
             last_advanced_at: 1_700_000_000,
-            // Set directly (this test builds the row by hand rather than
-            // through a real backfill run) to exercise the DTO's read side
-            // of `TraversalCursor::resumed` — see
-            // `traversal_cursor_integration.rs` for coverage of how a real
-            // run comes to set this flag correctly in the first place.
+
             resumed: true,
         },
     )
@@ -791,15 +758,11 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
     assert_eq!(mid_status["state"], "reconciling");
     assert_eq!(mid_status["kind"], "reconciliation");
     assert_eq!(mid_status["discoveredCount"], 10);
-    // The DTO surfaces the cursor's persisted `resumed` flag as-is.
+
     assert_eq!(mid_status["isResumed"], true);
 }
 
-/// `mutate_messages` and `fetch_message_body` — registered handlers with no
-/// prior coverage in this file's command sweep (plan-adherence audit item
-/// 3). Dispatched through the same real IPC pipeline as every command
-/// above, against a fake Gmail server, so both `#[tauri::command]`-generated
-/// wrappers are genuinely exercised end to end.
+
 #[tokio::test]
 async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_through_real_ipc_dispatch(
 ) {
@@ -848,9 +811,7 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
     for label_id in ["INBOX", "STARRED"] {
         LabelRepository::ensure_placeholder(&connection, &account_id, label_id).unwrap();
     }
-    // `html_presence: NeverFetched` — a whole-mailbox-backfill-only
-    // message (Phase 4/6) — is what makes `fetch_message_body` actually
-    // contact Gmail rather than short-circuiting.
+
     MessageRepository::write_full_state(
         &connection,
         &Message {
@@ -932,8 +893,7 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
     assert_eq!(stored.html_body.as_deref(), Some("hello"));
     assert_eq!(stored.html_presence, HtmlPresence::Present);
 
-    // A body that has already been fetched is deliberately a no-op.  This
-    // keeps a repeated reader-open from contacting Gmail again.
+
     assert!(invoke(
         &webview,
         "fetch_message_body",
@@ -1171,10 +1131,8 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
     }
 }
 
-/// `mutate_threads`' drafts branch (D-exception) rejects any label delta
-/// other than a bare move-to-trash for a thread holding a draft message —
-/// dispatched through the real IPC pipeline so the generated invoke
-/// wrapper, not just the inner async body, is exercised for this branch.
+
+
 #[tokio::test]
 async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() {
     let directory = tempfile::tempdir().unwrap();
@@ -1285,9 +1243,7 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         .unwrap()
         .contains("Draft messages cannot be modified"));
 
-    // No `/users/me/messages/batchModify` mock is registered — a rejected
-    // draft-thread mutation must never even attempt that network call (the
-    // token exchange above is unrelated and always happens first).
+
     assert!(server
         .received_requests()
         .await
@@ -1296,9 +1252,7 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         .all(|request| request.url.path() != "/users/me/messages/batchModify"));
 }
 
-/// Phase 2's Rust-staging command surface, dispatched through the real IPC
-/// pipeline end to end: a path and inline bytes both stage into the same
-/// canonical descriptor shape, and removal is idempotent.
+
 #[test]
 fn staging_commands_stage_and_release_through_real_ipc() {
     let directory = tempfile::tempdir().unwrap();
@@ -1356,8 +1310,7 @@ fn staging_commands_stage_and_release_through_real_ipc() {
         }),
     )
     .is_ok());
-    // Releasing an id that was never staged (or already released) is a
-    // no-op, not an error — matches `Staging::remove_part`'s contract.
+
     assert!(invoke(
         &webview,
         "release_staged_attachment",
@@ -1370,9 +1323,7 @@ fn staging_commands_stage_and_release_through_real_ipc() {
     .is_ok());
 }
 
-/// Reply/forward context, contact lookup, HTML conversation sanitization,
-/// and traversal-status reconciliation of independent cursor rows — the
-/// success paths the command-wrapper sweeps only hit as missing-row errors.
+
 #[tokio::test]
 async fn reply_contacts_html_conversation_and_traversal_status_round_trip_through_ipc() {
     let directory = tempfile::tempdir().unwrap();

@@ -1,6 +1,3 @@
-//! Label lifecycle Gmail calls (`gmail::labels`), the fixed colour palette
-//! with pre-flight rejection, and the draft-deletion exception (Phase 3).
-
 use latentmail_lib::gmail::{labels::resolve_color, GmailClient, LabelColorPair};
 use latentmail_lib::storage::{LabelNameError, LabelRepository, Storage};
 use wiremock::{
@@ -169,8 +166,6 @@ fn user_label(connection: &rusqlite::Connection, id: &str, name: &str) {
     .unwrap();
 }
 
-/// Every rule a label name can fail reports a distinguishable error (AC6) —
-/// not one generic "invalid name" that leaves the caller unable to say why.
 #[test]
 fn each_label_name_rule_reports_a_distinguishable_error() {
     let connection = Storage::in_memory().unwrap();
@@ -201,9 +196,6 @@ fn each_label_name_rule_reports_a_distinguishable_error() {
         LabelRepository::validate_name(&connection, "account", "clients", None),
         Err(LabelNameError::Duplicate)
     );
-    // Renaming a label to its own current name (case-insensitively)
-    // succeeds because the label being renamed is excluded from the
-    // uniqueness check.
     assert_eq!(
         LabelRepository::validate_name(&connection, "account", "CLIENTS", Some("Label_1")),
         Ok("CLIENTS".to_owned())
@@ -239,9 +231,6 @@ fn rename_set_color_and_delete_round_trip_locally() {
         .is_none());
 }
 
-/// A colour pair coming back from Gmail unchanged, resolved through
-/// [`LabelColorPair`], confirming the type round-trips through the client
-/// unmodified.
 #[test]
 fn label_color_pair_is_plain_data() {
     let pair = LabelColorPair {

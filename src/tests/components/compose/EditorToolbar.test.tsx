@@ -71,7 +71,7 @@ describe('EditorToolbar', () => {
     render(<EditorToolbar editor={null} onLink={onLink} />);
     await user.click(screen.getByRole('button', { name: 'Link' }));
     expect(onLink).toHaveBeenCalledTimes(1);
-    // Formatting controls no-op without an editor rather than throwing.
+
     await user.click(screen.getByRole('button', { name: 'Bold' }));
     expect(screen.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'false');
   });

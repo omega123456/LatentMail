@@ -1,8 +1,3 @@
-//! Format detection from content (never a declared content type), PNG
-//! decode validation, SVG parse validation, and bounded rasterization (D1,
-//! D15). Every fixture is built or embedded as static bytes — no files on
-//! disk are needed.
-
 use latentmail_lib::avatars::image::{
     normalize_to_png, validate, ValidatedImage, MAX_DOWNLOAD_BYTES, OUTPUT_SIZE,
 };
@@ -59,8 +54,6 @@ fn a_valid_svg_rasterizes_to_the_stored_output_size() {
     let validated = validate(VALID_SVG.as_bytes()).expect("valid SVG must validate");
     assert!(matches!(validated, ValidatedImage::Svg(_)));
     let png_bytes = normalize_to_png(validated);
-    // Never returns anything resembling the original SVG markup — only a
-    // real, decodable PNG crosses out of this module (D1).
     assert!(!png_bytes.starts_with(b"<svg"));
     let decoded =
         image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png).unwrap();
@@ -85,10 +78,6 @@ fn an_oversized_svg_source_is_rejected() {
 
 #[test]
 fn an_oversized_png_source_is_rejected() {
-    // A wide-but-thin image keeps this well under the suite's one-second
-    // budget (few pixels to encode/decode) while still exercising the real
-    // decode-then-measure path validate() uses, since only the width needs
-    // to exceed MAX_SOURCE_DIMENSION.
     let image = image::RgbaImage::from_pixel(4100, 1, image::Rgba([10, 10, 10, 255]));
     let mut bytes = Vec::new();
     image::DynamicImage::ImageRgba8(image)

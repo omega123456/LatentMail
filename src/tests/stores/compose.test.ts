@@ -53,24 +53,24 @@ describe('compose store', () => {
     };
     const original = { width: window.innerWidth, height: window.innerHeight };
     try {
-      // A laptop keeps the height floor rather than shrinking below it.
+
       resize(1280, 800);
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 538, height: 500 });
 
-      // A large display scales up instead of leaving a small card.
+
       useComposeStore.getState().close();
       resize(1920, 1080);
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 806, height: 670 });
 
-      // Past the ceiling it stays a panel over the mailbox, not a window.
+
       useComposeStore.getState().close();
       resize(3440, 1440);
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 840, height: 820 });
 
-      // A viewport smaller than the floor wins over it, down to the minimum.
+
       useComposeStore.getState().close();
       resize(500, 400);
       openSession();
@@ -141,7 +141,7 @@ describe('compose store', () => {
       expect(useComposeStore.getState().session?.recipients.cc).toEqual(['b@example.com']);
       useComposeStore.getState().removeLastRecipient('cc');
       expect(useComposeStore.getState().session?.recipients.cc).toEqual([]);
-      // Popping an already-empty role is a safe no-op.
+
       useComposeStore.getState().removeLastRecipient('cc');
       expect(useComposeStore.getState().session?.recipients.cc).toEqual([]);
     });

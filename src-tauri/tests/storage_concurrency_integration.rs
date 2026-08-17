@@ -1,6 +1,3 @@
-//! WAL journaling and the busy timeout (D8, Phase 1 AC1). In-memory SQLite
-//! cannot use WAL, so this test — and only this test — uses a temporary
-//! file-backed database (`Storage::open`, never `Storage::in_memory`).
 
 use std::sync::mpsc;
 
@@ -30,10 +27,7 @@ fn a_file_backed_database_reports_wal_enabled() {
     assert_eq!(mode.to_ascii_lowercase(), "wal");
 }
 
-/// Under the default rollback journal a write transaction blocks readers for
-/// its whole duration; under WAL a reader proceeds from the last committed
-/// snapshot regardless. Synchronization is via channels (never a sleep) so
-/// the writer's transaction is provably still open when the read runs.
+
 #[test]
 fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
     let directory = tempfile::tempdir().unwrap();
@@ -50,8 +44,7 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
         let mut connection = storage.connection().unwrap();
         let transaction = connection.transaction().unwrap();
         AccountRepository::upsert(&transaction, &account("writer")).unwrap();
-        // Deliberately left uncommitted: the write lock stays held until the
-        // reader has proven it can proceed, then `release_writer_rx` fires.
+
         writer_ready_tx.send(()).unwrap();
         release_writer_rx.recv().unwrap();
         transaction.commit().unwrap();
@@ -59,8 +52,7 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
     });
 
     writer_ready_rx.recv().unwrap();
-    // Bounded, not a sleep: proves the read isn't blocked by the still-open
-    // writer, without depending on real timing beyond "reasonably prompt".
+
     let connection = storage.connection().unwrap();
     let read_result = connection.query_row("SELECT COUNT(*) FROM accounts", [], |row| {
         row.get::<_, i64>(0)
@@ -80,9 +72,7 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
         .is_some());
 }
 
-/// The busy timeout is set per connection (not database-wide), so a
-/// momentary lock conflict waits instead of failing immediately with
-/// `SQLITE_BUSY`.
+
 #[test]
 fn a_connection_reports_a_nonzero_busy_timeout() {
     let directory = tempfile::tempdir().unwrap();

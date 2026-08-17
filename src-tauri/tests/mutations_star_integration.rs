@@ -33,9 +33,6 @@ fn operation(id: String, lane: Lane, entity_key: String) -> QueueOperation {
     }
 }
 
-/// Account + INBOX/STARRED labels + one message per thread (`message-a` in
-/// `thread-a`, `message-b` in `thread-b`) — the shared fixture for the two
-/// engine-level mutation tests.
 fn seed_two_threads() -> (Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -181,10 +178,6 @@ fn mutation_history_write_back_rejects_an_older_full_state() {
     assert!(!MessageRepository::write_full_state(&connection, &message(15)).unwrap());
 }
 
-/// Drives two concurrent stars on *different* threads through the engine, so
-/// the 1 ms coalescing window is the thing under test — calling
-/// `GmailClient::batch_modify` with two ids directly would prove nothing
-/// about whether the engine ever groups them.
 #[tokio::test(start_paused = true)]
 async fn rapid_distinct_thread_stars_coalesce_into_one_batch_modify_request() {
     let server = MockServer::start().await;
@@ -354,10 +347,6 @@ async fn sync_engine_star_preempts_500_background_operations_and_coalesces_threa
     );
 }
 
-/// Real Gmail answers `batchModify` with 204 and an empty body — the mocked
-/// `{}` responses above hide that. Anything less than a full round trip here
-/// (star, message re-read, persisted history id) would still pass while the
-/// client choked on the empty body.
 #[tokio::test(start_paused = true)]
 async fn star_succeeds_when_batch_modify_returns_204_with_no_body() {
     let server = MockServer::start().await;
@@ -411,9 +400,6 @@ async fn star_succeeds_when_batch_modify_returns_204_with_no_body() {
     assert_eq!(message.history_id, 20);
 }
 
-/// A rejected `batchModify` has to reach the caller as the Gmail failure it
-/// is; the batch's shared reply channels used to be dropped instead, turning
-/// every mutation error into "sync queue is no longer accepting work".
 #[tokio::test(start_paused = true)]
 async fn rejected_batch_modify_reports_the_gmail_error_to_every_waiter() {
     let server = MockServer::start().await;
@@ -453,9 +439,6 @@ async fn rejected_batch_modify_reports_the_gmail_error_to_every_waiter() {
     }
 }
 
-/// D5: opposing mutations on the *same* thread inside the coalescing
-/// window resolve to the later value, and the superseded request hears so
-/// explicitly rather than seeing a dropped reply channel (AC5, AC7b).
 #[tokio::test(start_paused = true)]
 async fn star_then_unstar_on_the_same_thread_resolves_to_unstarred_and_supersedes_the_star() {
     let server = MockServer::start().await;
@@ -502,8 +485,6 @@ async fn star_then_unstar_on_the_same_thread_resolves_to_unstarred_and_supersede
             )
             .await
     });
-    // Give the star request time to become the window's leader before the
-    // unstar joins it, without depending on real scheduling order.
     tokio::task::yield_now().await;
     let unstar = engine
         .mutate(
@@ -541,9 +522,6 @@ async fn star_then_unstar_on_the_same_thread_resolves_to_unstarred_and_supersede
     );
 }
 
-/// D5: opposing mutations for *different* threads inside the same window
-/// each receive their own direction — the delta map never leaks one
-/// entity's mutation onto another's messages (AC6).
 #[tokio::test(start_paused = true)]
 async fn opposing_mutations_on_different_threads_each_receive_their_own_direction() {
     let server = MockServer::start().await;
@@ -552,10 +530,6 @@ async fn opposing_mutations_on_different_threads_each_receive_their_own_directio
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
-    // Each message answers with the label set Gmail would really hold after
-    // its own direction was applied — write-back trusts the re-read, not the
-    // delta, so a mock that answered identically for both would not
-    // distinguish a leak from a correct write.
     for (id, thread_id, labels) in [
         ("message-a", "thread-a", vec!["INBOX", "STARRED"]),
         ("message-b", "thread-b", vec!["INBOX"]),
@@ -627,11 +601,6 @@ async fn opposing_mutations_on_different_threads_each_receive_their_own_directio
     );
 }
 
-/// The write-back half of a flush can fail even after `batchModify`
-/// succeeds — Gmail's batch endpoint returns nothing useful, so each
-/// message is re-fetched afterwards to capture its confirmed `historyId`
-/// (AC-strict-stale-read). Every waiter on that entity must hear the
-/// re-fetch's real error, not a generic queue failure.
 #[tokio::test]
 async fn a_batch_modify_success_followed_by_a_failed_refetch_reports_the_refetch_error() {
     let server = MockServer::start().await;
@@ -669,9 +638,6 @@ async fn a_batch_modify_success_followed_by_a_failed_refetch_reports_the_refetch
     assert!(error.contains("400"), "unexpected error: {error}");
 }
 
-/// `mutate_message` resolves its target from storage before ever touching
-/// Gmail; a message id that vanished locally must be reported to the
-/// caller rather than silently dropped.
 #[tokio::test]
 async fn mutate_message_reports_a_locally_missing_message_target() {
     let (storage, _directory) = seed_two_threads();

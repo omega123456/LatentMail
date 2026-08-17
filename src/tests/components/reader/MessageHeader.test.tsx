@@ -35,9 +35,7 @@ describe('MessageHeader', () => {
         sentAt={parseISO('2026-08-13T12:00:00Z')}
       />,
     );
-    // Bug fix: previously only `sender.name` fed the initial, producing a
-    // blank circle for a sender with no display name — it must fall back to
-    // the address exactly like the visible text does.
+
     expect(screen.getByText('N')).toBeInTheDocument();
   });
 
@@ -49,8 +47,7 @@ describe('MessageHeader', () => {
         sentAt={parseISO('2026-08-13T12:00:00Z')}
       />,
     );
-    // `E` is text content directly inside the plate span (no nested
-    // element), so `getByText` resolves to the plate itself.
+
     const plate = screen.getByText('E');
     expect(plate).toHaveClass('ring-2');
     expect(plate).toHaveClass('ring-surface-container');

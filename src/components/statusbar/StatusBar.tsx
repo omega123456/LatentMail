@@ -39,7 +39,7 @@ function LeftZone({ accountId }: { accountId: string | null }) {
         aria-label={queue.paused ? 'Resume sync' : 'Pause sync'}
         title={queue.paused ? 'Resume sync' : 'Pause sync'}
         onClick={togglePaused}
-        className="rounded p-stack-gap-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface"
+        className="cursor-pointer rounded p-stack-gap-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface"
       >
         {queue.paused ? (
           <Play aria-hidden="true" size={16} />
@@ -55,7 +55,7 @@ function LeftZone({ accountId }: { accountId: string | null }) {
         disabled={!accountId || refreshing}
         aria-label="Refresh mail"
         onClick={refresh}
-        className="rounded p-stack-gap-sm disabled:opacity-50"
+        className="cursor-pointer rounded p-stack-gap-sm disabled:cursor-not-allowed disabled:opacity-50"
       >
         <RefreshCw
           aria-hidden="true"
@@ -107,7 +107,7 @@ function RightZone({ accountCount }: { accountCount: number }) {
         type="button"
         aria-label="Open queue settings"
         onClick={() => setRoute('settings')}
-        className="flex items-center gap-stack-gap-sm rounded p-stack-gap-sm focus-visible:outline-2 focus-visible:outline-primary"
+        className="flex cursor-pointer items-center gap-stack-gap-sm rounded p-stack-gap-sm focus-visible:outline-2 focus-visible:outline-primary"
       >
         <ListChecks aria-hidden="true" size={16} />
         {pending}

@@ -1,14 +1,9 @@
 import { ActionRibbon, type ActionRibbonProps } from './ActionRibbon';
 
 export type BulkSelectionPanelProps = Omit<ActionRibbonProps, 'currentLabelName'> & {
-  /** Selected conversation count — always ≥1 when this panel renders. */
   count: number;
 };
 
-/** Replaces the reading pane while a multi-selection is active (FR
- * "Multi-selection and bulk actions"): states the count, reminds the user
- * that Escape clears it, and reuses `ActionRibbon` verbatim for the inline
- * bulk actions rather than duplicating its hide/overflow rules. */
 export function BulkSelectionPanel({ count, ...ribbonProps }: BulkSelectionPanelProps) {
   return (
     <section

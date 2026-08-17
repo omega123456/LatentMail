@@ -103,10 +103,6 @@ async fn draft_uploads_use_upload_base_while_attachment_hydration_uses_standard_
     assert_eq!(client.attachment("m1", "a1").await.unwrap(), b"hello");
 }
 
-/// A bounce the sending host queued overnight: Gmail accepted it on Jul 23,
-/// but `internalDate` carries the sender's Jul 22 `Date:` instead. Gmail's own
-/// list shows the receipt time, so the topmost `Received:` hop wins. Values are
-/// the real ones observed against the live API.
 #[tokio::test]
 async fn message_dates_from_the_received_hop_when_internal_date_lags_behind() {
     let server = MockServer::start().await;
@@ -132,8 +128,6 @@ async fn message_dates_from_the_received_hop_when_internal_date_lags_behind() {
     assert_eq!(message.sent_at, 1_784_803_059);
 }
 
-/// Without a `Received:` hop to read, `internalDate` still beats a divergent
-/// `Date:` header.
 #[tokio::test]
 async fn message_prefers_internal_date_over_a_divergent_date_header() {
     let server = MockServer::start().await;

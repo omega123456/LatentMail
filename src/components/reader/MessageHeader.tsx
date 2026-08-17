@@ -19,20 +19,11 @@ export function MessageHeader({
   onComposeTo?: (participant: Participant) => void;
 }) {
   const timestamp = formatDistanceToNowStrict(sentAt, { addSuffix: true });
-  // FR "Preference": governs whether the reader's avatar renders (and is
-  // looked up) too, not just the list's.
   const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
   const { data: avatarSrc } = useSenderAvatarQuery(
     showSenderAvatars ? domainFor(sender.address) : null,
   );
-  // The label shown beside the sender doubles as the avatar's initial input
-  // — a sender with no display name previously produced a blank circle
-  // because only `sender.name` was read; it now falls back to the address
-  // exactly like the visible text does.
   const senderLabel = sender.name || sender.address;
-  // `select-text` opts the whole header back out of the app-wide
-  // `select-none` (index.html): sender, address, recipients and timestamp are
-  // all things a user legitimately copies out of a message.
   return (
     <header className="flex select-text items-start justify-between gap-4">
       <div className="flex min-w-0 items-center gap-4">
@@ -42,7 +33,7 @@ export function MessageHeader({
             <button
               type="button"
               onClick={() => onComposeTo?.(sender)}
-              className="truncate text-left text-sender text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface"
+              className="cursor-pointer truncate text-left text-sender text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface"
             >
               {sender.name || sender.address}
             </button>
@@ -54,7 +45,7 @@ export function MessageHeader({
             type="button"
             onClick={() => recipients[0] && onComposeTo?.(recipients[0])}
             title={participantsTitle(recipients)}
-            className="truncate text-left text-snippet text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary"
+            className="cursor-pointer truncate text-left text-snippet text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary"
           >
             to {formatParticipants(recipients)}
           </button>

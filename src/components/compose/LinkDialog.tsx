@@ -27,7 +27,9 @@ export function LinkDialog({ editor, onClose }: { editor: Editor; onClose: () =>
         Link URL
         <input value={url} onChange={(event) => setUrl(event.target.value)} />
       </label>
-      <button type="submit">Apply</button>
+      <button type="submit" className="cursor-pointer">
+        Apply
+      </button>
     </form>
   );
 }

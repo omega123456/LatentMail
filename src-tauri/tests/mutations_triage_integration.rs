@@ -243,10 +243,7 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
             ))
             .mount(&server)
             .await;
-        // "message-draft" has no cached draft id, so triage must resolve one
-        // via `GET /users/me/drafts` before calling the drafts-delete
-        // endpoint — and it must use that resolved id ("draft-99"), not the
-        // message id, on the DELETE call itself (item 2 fix).
+
         Mock::given(method("GET"))
             .and(path("/users/me/drafts"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -344,11 +341,7 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
     });
 }
 
-/// Item 2 fix, the persisted-id half: once a message's draft id has already
-/// been resolved and cached (`MessageRepository::set_draft_id`), deleting it
-/// again must use that cached id directly — never re-paging
-/// `GET /users/me/drafts` — and the DELETE call must carry the *cached*
-/// draft id, not the message id.
+
 #[test]
 fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -361,9 +354,7 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
             ))
             .mount(&server)
             .await;
-        // No `GET /users/me/drafts` mock is registered at all — if the
-        // production code paged the drafts list despite already having a
-        // cached id, this test would fail with an unmatched-request panic.
+
         Mock::given(method("DELETE"))
             .and(path("/users/me/drafts/cached-draft-id"))
             .respond_with(ResponseTemplate::new(204))

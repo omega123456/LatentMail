@@ -1,9 +1,3 @@
-//! Owns everything about acquiring, storing and serving identity imagery
-//! (D4): the two commands the frontend calls, the resolution event it
-//! listens for, and the shared cache both acquisition pipelines write
-//! through. Deliberately outside the three-lane Gmail operation queue —
-//! this module never calls Gmail and never touches [`crate::queue`].
-
 pub mod bimi;
 pub mod cache;
 pub mod image;
@@ -23,8 +17,6 @@ use crate::{
     storage::{AccountRepository, Storage},
 };
 
-/// Which pipeline produced a resolution — carried on the completion event
-/// so the frontend's event-bridge listener invalidates the right query.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AvatarPipeline {
@@ -32,14 +24,6 @@ pub enum AvatarPipeline {
     Account,
 }
 
-/// The resolution-complete event payload (`avatar://resolved`): which
-/// pipeline resolved, the raw domain (sender pipeline) or account id
-/// (account pipeline) that was resolved, and whether an image resulted.
-/// `key` must stay the raw, un-hashed value — the frontend's query keys
-/// ([`queryKeys.senderAvatar`]/[`queryKeys.accountAvatar`] in
-/// `src/lib/query/hooks.ts`) are keyed on the raw domain/account id, not on
-/// [`cache::hash_key`]'s internal cache key, so the event-bridge listener
-/// can invalidate the exact query that just resolved.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvatarResolvedEvent {
@@ -48,13 +32,7 @@ pub struct AvatarResolvedEvent {
     pub resolved: bool,
 }
 
-/// Abstracts emitting the resolution event so `AvatarService`'s actual
-/// resolution logic never needs to be generic over `Runtime` — only the
-/// thin `#[tauri::command]` wrappers below, which receive a concrete
-/// `AppHandle<R>`, are. Collapsing the generic surface this way keeps every
-/// test binary that links this module from separately monomorphizing the
-/// whole resolution pipeline (bounded concurrency, cache writes, the BIMI
-/// and profile pipelines) once per `Runtime` it happens to use.
+
 pub trait AvatarEmitter: Send + Sync + 'static {
     fn emit_resolved(&self, event: AvatarResolvedEvent);
 }
@@ -83,10 +61,7 @@ impl AvatarService {
         }
     }
 
-    /// Answers from cache immediately; schedules a background BIMI
-    /// resolution on a miss unless `showSenderAvatars` is off. D14: the
-    /// preference is enforced *here*, not only by the frontend declining to
-    /// call this command — with it off, no lookup is ever scheduled.
+
     pub async fn read_sender_avatar(
         &self,
         app: Arc<dyn AvatarEmitter>,
@@ -124,9 +99,7 @@ impl AvatarService {
         let scheduler = Arc::clone(&self.scheduler);
         tokio::spawn(async move {
             let _key_guard = scheduler.key_guard(&cache_key).await;
-            // A concurrent caller may have already resolved this domain
-            // while this task waited for the guard (D4's collapsing) —
-            // re-check before doing any network work.
+
             if matches!(
                 cache.answer(&cache_key, CacheDomain::Sender).await,
                 CacheAnswer::Fresh(_)
@@ -152,10 +125,7 @@ impl AvatarService {
         });
     }
 
-    /// Answers from cache immediately; schedules a background account
-    /// photograph acquisition on a miss. Not gated by `showSenderAvatars`
-    /// (that preference only governs third-party sender lookups, per the
-    /// plan) — the account photograph involves no third-party lookup.
+
     pub async fn read_account_avatar(
         &self,
         app: Arc<dyn AvatarEmitter>,
@@ -231,11 +201,7 @@ fn path_to_string(path: std::path::PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// Opens the avatar module's own storage handle and cache directory, and
-/// manages [`AvatarService`]. Must run after `settings::initialize`, which
-/// this reuses the already-managed [`SettingsService`] from, so
-/// `showSenderAvatars` reads reflect whatever the running app has, not a
-/// second, independent settings instance.
+
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app
         .path()
