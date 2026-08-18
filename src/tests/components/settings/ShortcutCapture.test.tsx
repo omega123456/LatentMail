@@ -45,6 +45,25 @@ describe('ShortcutCapture', () => {
     expect(onApply).not.toHaveBeenCalled();
   });
 
+  it('keeps focus in the field when Apply is pressed', async () => {
+    const user = userEvent.setup();
+    render(
+      <ShortcutCapture
+        command="toggleStar"
+        bindings={DEFAULT_COMMAND_BINDINGS}
+        onApply={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const field = screen.getByRole('textbox');
+    field.focus();
+    await user.keyboard('{Control>}k{/Control}');
+    await user.pointer({ keys: '[MouseLeft>]', target: screen.getByRole('button', { name: 'Apply' }) });
+
+    expect(document.activeElement).toBe(field);
+  });
+
   it('abandons on blur', async () => {
     const onCancel = vi.fn();
     render(

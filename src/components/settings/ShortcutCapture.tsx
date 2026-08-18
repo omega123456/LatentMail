@@ -35,6 +35,8 @@ export function ShortcutCapture({
     setCaptured(captureBinding(event));
   };
 
+  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+
   const apply = () => {
     if (!captured || conflict) return;
     onApply(command, captured);
@@ -60,13 +62,19 @@ export function ShortcutCapture({
         </div>
         <button
           type="button"
+          onMouseDown={keepFocus}
           onClick={apply}
           disabled={!captured || Boolean(conflict)}
           className={settingsLinkPrimary}
         >
           Apply
         </button>
-        <button type="button" onClick={onCancel} className={settingsLinkMuted}>
+        <button
+          type="button"
+          onMouseDown={keepFocus}
+          onClick={onCancel}
+          className={settingsLinkMuted}
+        >
           Cancel
         </button>
       </div>
