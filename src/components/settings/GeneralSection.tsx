@@ -3,6 +3,7 @@ import { minutesToSeconds, secondsToMinutes } from 'date-fns';
 import { useLayoutStore } from '@/stores/layout';
 import { useThemeStore } from '@/stores/theme';
 import type { Density, LayoutMode, ThemePreference } from '@/lib/types/ipc';
+import { Select } from '@/components/shared/Select';
 import { DensityGlyph, LayoutGlyph } from './LayoutGlyph';
 import { SegmentedControl } from './SegmentedControl';
 import { SettingRow } from './SettingRow';
@@ -23,6 +24,9 @@ const layoutOptions: { value: LayoutMode; label: string }[] = [
 const intervalOptionsMinutes = [1, 2, 5, 10, 15, 30];
 
 const zoomOptionsPercent = [80, 90, 100, 110, 125, 150];
+
+const settingsTriggerClass =
+  'w-select-menu cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink';
 
 const densityOptions: { value: Density; label: string }[] = [
   { value: 'compact', label: 'Compact' },
@@ -112,18 +116,16 @@ export function GeneralSection() {
           />
         </SettingRow>
         <SettingRow label="Zoom" description="Scale the whole interface.">
-          <select
-            aria-label="Zoom"
-            value={zoomPercent}
-            onChange={(event) => setZoomPercent(Number(event.target.value))}
-            className="cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink"
-          >
-            {zoomOptionsPercent.map((percent) => (
-              <option key={percent} value={percent}>
-                {percent}%
-              </option>
-            ))}
-          </select>
+          <Select
+            ariaLabel="Zoom"
+            value={String(zoomPercent)}
+            onChange={(next) => setZoomPercent(Number(next))}
+            options={zoomOptionsPercent.map((percent) => ({
+              value: String(percent),
+              label: `${percent}%`,
+            }))}
+            className={settingsTriggerClass}
+          />
         </SettingRow>
         <SettingRow label="Show sender avatars" description="Display a picture beside each sender.">
           <SettingSwitch
@@ -163,20 +165,16 @@ export function GeneralSection() {
           label="Full sync every"
           description="New mail arrives as soon as it is detected, regardless of this setting."
         >
-          <select
-            aria-label="Full sync every"
-            value={secondsToMinutes(syncIntervalSeconds)}
-            onChange={(event) =>
-              setSyncIntervalSeconds(minutesToSeconds(Number(event.target.value)))
-            }
-            className="cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink"
-          >
-            {intervalOptionsMinutes.map((minutes) => (
-              <option key={minutes} value={minutes}>
-                {minutes} {minutes === 1 ? 'minute' : 'minutes'}
-              </option>
-            ))}
-          </select>
+          <Select
+            ariaLabel="Full sync every"
+            value={String(secondsToMinutes(syncIntervalSeconds))}
+            onChange={(next) => setSyncIntervalSeconds(minutesToSeconds(Number(next)))}
+            options={intervalOptionsMinutes.map((minutes) => ({
+              value: String(minutes),
+              label: `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`,
+            }))}
+            className={settingsTriggerClass}
+          />
         </SettingRow>
       </div>
     </SettingsSection>

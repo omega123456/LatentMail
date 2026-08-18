@@ -233,6 +233,17 @@ for (const theme of themes) {
     );
   });
 
+  test(`select menu ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      parse_search_query: playwrightParsedSearchQuery,
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Show search options' }).click();
+    await page.getByLabel('Search in').click();
+    await screenshot(page, page.getByRole('listbox'), 'select-menu', theme);
+  });
+
   test(`search results sidebar row ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
       list_accounts: [playwrightMailAccount],

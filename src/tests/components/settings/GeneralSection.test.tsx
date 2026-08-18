@@ -96,7 +96,9 @@ describe('GeneralSection', () => {
       'aria-checked',
       'false',
     );
-    expect(screen.getByRole('combobox', { name: 'Full sync every' })).toHaveValue('2');
+    expect(screen.getByRole('combobox', { name: 'Full sync every' })).toHaveTextContent(
+      '2 minutes',
+    );
   });
 
   it('offers 1/2/5/10/15/30 minute options and persists the change in seconds', async () => {
@@ -107,12 +109,18 @@ describe('GeneralSection', () => {
     const user = await openGeneralWithDefaults();
 
     const select = screen.getByRole('combobox', { name: 'Full sync every' });
-    expect(
-      Array.from(select.querySelectorAll('option')).map((option) => option.textContent),
-    ).toEqual(['1 minute', '2 minutes', '5 minutes', '10 minutes', '15 minutes', '30 minutes']);
-    expect(select).toHaveValue('5');
+    expect(select).toHaveTextContent('5 minutes');
 
-    await user.selectOptions(select, '10');
+    await user.click(select);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      '1 minute',
+      '2 minutes',
+      '5 minutes',
+      '10 minutes',
+      '15 minutes',
+      '30 minutes',
+    ]);
+    await user.click(screen.getByRole('option', { name: '10 minutes' }));
 
     expect(writes).toContainEqual({ key: 'syncIntervalSeconds', value: 600 });
   });
@@ -125,12 +133,18 @@ describe('GeneralSection', () => {
     const user = await openGeneralWithDefaults();
 
     const select = screen.getByRole('combobox', { name: 'Zoom' });
-    expect(
-      Array.from(select.querySelectorAll('option')).map((option) => option.textContent),
-    ).toEqual(['80%', '90%', '100%', '110%', '125%', '150%']);
-    expect(select).toHaveValue('100');
+    expect(select).toHaveTextContent('100%');
 
-    await user.selectOptions(select, '125');
+    await user.click(select);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      '80%',
+      '90%',
+      '100%',
+      '110%',
+      '125%',
+      '150%',
+    ]);
+    await user.click(screen.getByRole('option', { name: '125%' }));
 
     expect(writes).toContainEqual({ key: 'zoomPercent', value: 125 });
     expect(document.body.style.zoom).toBe('1.25');

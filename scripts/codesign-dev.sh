@@ -1,23 +1,27 @@
 #!/bin/sh
-# macOS ties a keychain item's ACL to the signature of the binary that created
-# it, so an unsigned dev build re-prompts after every rebuild. Signing each run
-# with one stable self-signed identity keeps that ACL valid. Create it once:
-# Keychain Access -> Certificate Assistant -> Create a Certificate..., name
-# "LatentMail Dev", identity type "Self Signed Root", type "Code Signing".
-# Without the certificate this is a no-op and the build runs unsigned as before.
-# Only the app binary is signed; test binaries would pay the cost for nothing.
+# macOS pins a keychain item's ACL to the designated requirement of the binary
+# that created it, and re-checks that requirement on every read. An unsigned
+# build's requirement embeds its cdhash, which changes on every relink, so the
+# app re-prompts after each Rust rebuild.
 #
-# Signing only fixes ACLs written from here on. An item an *unsigned* build
-# created is pinned to that build's cdhash, which changes every rebuild, and no
-# amount of later signing repairs it — authorize the signed build once with
-# "Always Allow" at the next prompt, or delete the item and sign in again:
+# Ad-hoc signing with a fixed identifier and an explicit designated requirement
+# gives every build the same requirement. No certificate and no private key are
+# involved, so codesign itself never prompts for keychain access either — a
+# self-signed identity does, on every relink, and its untrusted chain also fails
+# the signature check the ACL match runs, which is why "Always Allow" never
+# stuck. Only the app binary is signed; test binaries would pay for nothing.
+#
+# The ACL of an item an earlier build created still names that build's
+# requirement, so authorize this one once with "Always Allow" at the next
+# prompt, or start over:
 #   security delete-generic-password -s com.latentmail.refresh-token
 # A failure here is never fatal — it only costs a keychain re-prompt — but it
-# must not be silent, or a missing/renamed certificate looks identical to
-# "signing works and the prompt is someone else's fault".
+# must not be silent, or it looks identical to "signing works and the prompt is
+# someone else's fault".
 case "$1" in
 */latentmail)
-  codesign --force --sign "LatentMail Dev" "$1" >/dev/null 2>&1 ||
+  codesign --force --sign - --identifier com.latentmail.dev \
+    --requirements '=designated => identifier "com.latentmail.dev"' "$1" >/dev/null 2>&1 ||
     echo "codesign-dev: signing failed; expect a keychain prompt after every rebuild" >&2
   ;;
 esac

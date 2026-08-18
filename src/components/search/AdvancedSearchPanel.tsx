@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { format, fromUnixTime } from 'date-fns';
 import type { MailLabel, ParsedSearchQuery, SearchPredicate, SearchScope } from '@/lib/types/ipc';
 import { useParseSearchQueryQuery } from '@/lib/query/hooks';
+import { Select, type SelectOption } from '@/components/shared/Select';
 import {
   BLANK_DATE_FILTER,
   DateFilter,
@@ -102,12 +103,22 @@ export function serializeFields(fields: PanelFields): string {
 
 const inputClass =
   'select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface';
-const selectClass = `${inputClass} appearance-none pr-8`;
+const selectClass = `${inputClass} cursor-pointer`;
 const labelClass = 'text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant';
-const selectWrapperClass = 'relative flex flex-col gap-1';
-const selectLabelClass = 'flex flex-col gap-1';
-const selectChevronClass =
-  'pointer-events-none absolute bottom-1.5 right-2 text-on-surface-variant dark:text-dark-on-surface-variant';
+const selectWrapperClass = 'flex flex-col gap-1';
+
+function scopeOptions(userLabels: MailLabel[]): SelectOption<string>[] {
+  return [
+    { value: JSON.stringify({ kind: 'default' }), label: 'All mail without Trash and Spam' },
+    { value: JSON.stringify({ kind: 'label', labelId: 'INBOX' }), label: 'Inbox' },
+    { value: JSON.stringify({ kind: 'label', labelId: 'SENT' }), label: 'Sent' },
+    ...userLabels.map((label) => ({
+      value: JSON.stringify({ kind: 'label', labelId: label.id }),
+      label: label.name,
+    })),
+    { value: JSON.stringify({ kind: 'all' }), label: 'All mail including Trash and Spam' },
+  ];
+}
 
 export function AdvancedSearchPanel({
   initialQuery,
@@ -215,32 +226,16 @@ export function AdvancedSearchPanel({
           onChange={(date) => setFields((current) => ({ ...current, date }))}
         />
         <div className={selectWrapperClass}>
-          <label htmlFor="search-panel-scope" className={selectLabelClass}>
-            <span className={labelClass}>Search in</span>
-            <select
-              id="search-panel-scope"
-              value={scopeValue}
-              onChange={(event) => onScopeChange(JSON.parse(event.target.value) as SearchScope)}
-              className={selectClass}
-            >
-              <option value={JSON.stringify({ kind: 'default' })}>
-                All mail without Trash and Spam
-              </option>
-              <option value={JSON.stringify({ kind: 'label', labelId: 'INBOX' })}>Inbox</option>
-              <option value={JSON.stringify({ kind: 'label', labelId: 'SENT' })}>Sent</option>
-              {userLabels.map((label) => (
-                <option key={label.id} value={JSON.stringify({ kind: 'label', labelId: label.id })}>
-                  {label.name}
-                </option>
-              ))}
-              <option value={JSON.stringify({ kind: 'all' })}>
-                All mail including Trash and Spam
-              </option>
-            </select>
+          <label htmlFor="search-panel-scope" className={labelClass}>
+            Search in
           </label>
-          <span aria-hidden="true" className={selectChevronClass}>
-            ▾
-          </span>
+          <Select
+            id="search-panel-scope"
+            value={scopeValue}
+            onChange={(next) => onScopeChange(JSON.parse(next) as SearchScope)}
+            options={scopeOptions(userLabels)}
+            className={selectClass}
+          />
         </div>
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2 text-body-sm text-on-surface dark:text-dark-on-surface">

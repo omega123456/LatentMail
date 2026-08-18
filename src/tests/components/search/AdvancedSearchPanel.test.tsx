@@ -311,13 +311,10 @@ describe('AdvancedSearchPanel', () => {
         onClose={vi.fn()}
       />,
     );
-    const select = screen.getByLabelText('Search in');
+    await user.click(screen.getByLabelText('Search in'));
     expect(screen.getByRole('option', { name: 'Receipts' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Inbox' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', { name: 'All mail including Trash and Spam' }),
-    ).toBeInTheDocument();
-    await user.selectOptions(select, JSON.stringify({ kind: 'all' }));
+    await user.click(screen.getByRole('option', { name: 'All mail including Trash and Spam' }));
     expect(onScopeChange).toHaveBeenCalledWith({ kind: 'all' });
   });
 });
