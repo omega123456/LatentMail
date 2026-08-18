@@ -223,7 +223,9 @@ export function AdvancedSearchPanel({
               onChange={(event) => onScopeChange(JSON.parse(event.target.value) as SearchScope)}
               className={selectClass}
             >
-              <option value={JSON.stringify({ kind: 'default' })}>All mail</option>
+              <option value={JSON.stringify({ kind: 'default' })}>
+                All mail without Trash and Spam
+              </option>
               <option value={JSON.stringify({ kind: 'label', labelId: 'INBOX' })}>Inbox</option>
               <option value={JSON.stringify({ kind: 'label', labelId: 'SENT' })}>Sent</option>
               {userLabels.map((label) => (
