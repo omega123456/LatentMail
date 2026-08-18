@@ -61,7 +61,6 @@ fn seed_two_threads() -> (Storage, tempfile::TempDir) {
                 kind: "system".into(),
                 color: None,
                 message_count: 0,
-                unread_count: 0,
             },
         )
         .unwrap();

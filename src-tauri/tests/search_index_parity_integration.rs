@@ -274,7 +274,6 @@ fn changing_label_membership_leaves_the_search_index_untouched() {
         kind: "system".into(),
         color: None,
         message_count: 0,
-        unread_count: 0,
     };
     LabelRepository::upsert(&connection, &label).unwrap();
     MessageRepository::write_full_state(&connection, &message("account", "one", 1)).unwrap();

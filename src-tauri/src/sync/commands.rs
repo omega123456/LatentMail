@@ -361,12 +361,21 @@ pub async fn list_labels(
     storage: tauri::State<'_, Storage>,
     account_id: String,
 ) -> Result<Vec<LabelDto>, String> {
-    let labels = string_try!(
+    let (labels, unread_counts) = string_try!(
         storage
-            .run(move |connection| LabelRepository::list(connection, &account_id))
+            .run(move |connection| Ok((
+                LabelRepository::list(connection, &account_id)?,
+                LabelRepository::unread_thread_counts(connection, &account_id)?
+            )))
             .await
     );
-    Ok(labels.into_iter().map(LabelDto::from).collect())
+    Ok(labels
+        .into_iter()
+        .map(|label| {
+            let unread_count = unread_counts.get(&label.id).copied().unwrap_or_default();
+            LabelDto::new(label, unread_count)
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -907,6 +916,25 @@ fn resolve_color_or_error(color_id: Option<&str>) -> Result<Option<LabelColor>, 
     }
 }
 
+async fn read_label_dto(
+    storage: &Storage,
+    account_id: String,
+    label_id: String,
+) -> Result<Option<LabelDto>, String> {
+    storage
+        .run(move |connection| {
+            let unread_counts = LabelRepository::unread_thread_counts(connection, &account_id)?;
+            Ok(
+                LabelRepository::get(connection, &account_id, &label_id)?.map(|label| {
+                    let unread_count = unread_counts.get(&label.id).copied().unwrap_or_default();
+                    LabelDto::new(label, unread_count)
+                }),
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn create_label<R: Runtime>(
     app: AppHandle<R>,
@@ -944,16 +972,9 @@ pub async fn create_label<R: Runtime>(
         .run(move |connection| LabelRepository::upsert(connection, &stored))
         .await
         .map_err(|error| error.to_string())?;
-    let label = storage
-        .run({
-            let account_id = account_id.clone();
-            let id = created.id.clone();
-            move |connection| LabelRepository::get(connection, &account_id, &id)
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "label vanished immediately after creation".to_owned())?;
-    Ok(LabelDto::from(label))
+    read_label_dto(&storage, account_id, created.id)
+        .await?
+        .ok_or_else(|| "label vanished immediately after creation".to_owned())
 }
 
 #[tauri::command]
@@ -991,12 +1012,9 @@ pub async fn rename_label<R: Runtime>(
         .run(move |connection| LabelRepository::rename(connection, &account, &id, &new_name))
         .await
         .map_err(|error| error.to_string())?;
-    let label = storage
-        .run(move |connection| LabelRepository::get(connection, &account_id, &label_id))
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "label not found".to_owned())?;
-    Ok(LabelDto::from(label))
+    read_label_dto(&storage, account_id, label_id)
+        .await?
+        .ok_or_else(|| "label not found".to_owned())
 }
 
 #[tauri::command]
@@ -1029,12 +1047,9 @@ pub async fn recolor_label<R: Runtime>(
         })
         .await
         .map_err(|error| error.to_string())?;
-    let label = storage
-        .run(move |connection| LabelRepository::get(connection, &account_id, &label_id))
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "label not found".to_owned())?;
-    Ok(LabelDto::from(label))
+    read_label_dto(&storage, account_id, label_id)
+        .await?
+        .ok_or_else(|| "label not found".to_owned())
 }
 
 #[tauri::command]

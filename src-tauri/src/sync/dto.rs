@@ -25,8 +25,8 @@ pub struct LabelDto {
     pub unread_count: i64,
 }
 
-impl From<Label> for LabelDto {
-    fn from(label: Label) -> Self {
+impl LabelDto {
+    pub fn new(label: Label, unread_count: i64) -> Self {
         Self {
             id: label.id,
             name: label.name,
@@ -36,7 +36,7 @@ impl From<Label> for LabelDto {
                 background: color.background,
             }),
             message_count: label.message_count,
-            unread_count: label.unread_count,
+            unread_count,
         }
     }
 }

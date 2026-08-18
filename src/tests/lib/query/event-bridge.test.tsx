@@ -440,5 +440,6 @@ describe('EventBridge', () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.searchForAccount('account-1'),
     });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
   });
 });

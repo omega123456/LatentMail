@@ -111,7 +111,6 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
         kind: "system".into(),
         color: None,
         message_count: 1,
-        unread_count: 1,
     };
     let starred = Label {
         id: "STARRED".into(),
@@ -577,6 +576,18 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(!labelled_cursor_plan
         .iter()
         .any(|step| step.contains("TEMP B-TREE")));
+    let unread_count_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT tl.label_id,COUNT(*) FROM threads t CROSS JOIN thread_labels tl ON tl.account_id=t.account_id AND tl.thread_id=t.id WHERE t.account_id='account' AND t.is_unread=1 GROUP BY tl.label_id",
+    );
+    assert!(unread_count_plan
+        .iter()
+        .any(|step| step.contains("SEARCH t USING INDEX threads_unread")));
+    assert!(unread_count_plan
+        .iter()
+        .any(|step| step.contains("COVERING INDEX thread_labels_by_thread")));
+    assert!(!unread_count_plan.iter().any(|step| step.contains("SCAN")));
+
     let thread_cascade_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN DELETE FROM thread_labels WHERE account_id='account' AND thread_id='thread'",
@@ -844,7 +855,6 @@ fn label_colour_pair_round_trips_and_is_absent_by_default() {
         kind: "user".into(),
         color: None,
         message_count: 0,
-        unread_count: 0,
     };
     LabelRepository::upsert(&connection, &label).unwrap();
     assert_eq!(

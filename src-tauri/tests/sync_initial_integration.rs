@@ -125,7 +125,8 @@ async fn initial_sync_populates_labels_messages_membership_and_threads() {
 
     let inbox = labels.iter().find(|label| label.id == "INBOX").unwrap();
     assert_eq!(inbox.message_count, 2);
-    assert_eq!(inbox.unread_count, 1);
+    let unread_counts = LabelRepository::unread_thread_counts(&connection, "account").unwrap();
+    assert_eq!(unread_counts.get("INBOX"), Some(&1));
 
     let m1 = MessageRepository::get(&connection, "account", "m1")
         .unwrap()

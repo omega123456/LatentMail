@@ -174,7 +174,6 @@ fn user_label(connection: &rusqlite::Connection, id: &str, name: &str) {
             kind: "user".into(),
             color: None,
             message_count: 0,
-            unread_count: 0,
         },
     )
     .unwrap();

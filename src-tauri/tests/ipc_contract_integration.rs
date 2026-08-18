@@ -1278,7 +1278,6 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
             kind: "user".into(),
             color: None,
             message_count: 0,
-            unread_count: 0,
         },
     )
     .unwrap();

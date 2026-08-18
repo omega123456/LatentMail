@@ -66,8 +66,44 @@ fn thread(id: &str, latest_at: i64, has_draft: bool) -> Thread {
     }
 }
 
+fn labelled_message(
+    connection: &rusqlite::Connection,
+    id: &str,
+    thread_id: &str,
+    label_ids: &[&str],
+) {
+    MessageRepository::write_full_state(
+        connection,
+        &Message {
+            account_id: "account".into(),
+            id: id.into(),
+            thread_id: thread_id.into(),
+            rfc_message_id: None,
+            sender: "alice@example.com".into(),
+            recipients: "me@example.com".into(),
+            subject: format!("Subject {thread_id}"),
+            sent_at: 1,
+            snippet: String::new(),
+            html_body: None,
+            plain_body: None,
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    for label_id in label_ids {
+        LabelRepository::ensure_placeholder(connection, "account", label_id).unwrap();
+        MessageRepository::set_label_membership(connection, "account", id, label_id, true).unwrap();
+    }
+    ThreadRepository::recompute(connection, "account", thread_id).unwrap();
+}
+
 #[tokio::test]
-async fn list_labels_returns_stored_counts() {
+async fn list_labels_counts_unread_threads_per_label() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
@@ -81,10 +117,13 @@ async fn list_labels_returns_stored_counts() {
             kind: "system".into(),
             color: None,
             message_count: 5,
-            unread_count: 2,
         },
     )
     .unwrap();
+    labelled_message(&connection, "m1", "t1", &["INBOX", "UNREAD"]);
+    labelled_message(&connection, "m2", "t2", &["INBOX", "UNREAD"]);
+    labelled_message(&connection, "m3", "t3", &["INBOX"]);
+    labelled_message(&connection, "m4", "t4", &["INBOX", "TRASH", "UNREAD"]);
     drop(connection);
     let application = app();
     application.manage(storage);
@@ -92,10 +131,31 @@ async fn list_labels_returns_stored_counts() {
     let labels = list_labels(application.state(), "account".into())
         .await
         .unwrap();
-    assert_eq!(labels.len(), 1);
-    assert_eq!(labels[0].id, "INBOX");
-    assert_eq!(labels[0].message_count, 5);
-    assert_eq!(labels[0].unread_count, 2);
+    let inbox = labels.iter().find(|label| label.id == "INBOX").unwrap();
+    assert_eq!(inbox.message_count, 5);
+    assert_eq!(inbox.unread_count, 2);
+    let trash = labels.iter().find(|label| label.id == "TRASH").unwrap();
+    assert_eq!(trash.unread_count, 1);
+}
+
+#[tokio::test]
+async fn list_labels_drops_unread_count_when_the_thread_is_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    labelled_message(&connection, "m1", "t1", &["INBOX", "UNREAD"]);
+    MessageRepository::set_label_membership(&connection, "account", "m1", "UNREAD", false).unwrap();
+    ThreadRepository::recompute(&connection, "account", "t1").unwrap();
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let labels = list_labels(application.state(), "account".into())
+        .await
+        .unwrap();
+    let inbox = labels.iter().find(|label| label.id == "INBOX").unwrap();
+    assert_eq!(inbox.unread_count, 0);
 }
 
 #[tokio::test]
@@ -116,7 +176,6 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
             kind: "user".into(),
             color: None,
             message_count: 2,
-            unread_count: 0,
         },
     )
     .unwrap();
@@ -213,7 +272,6 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
             kind: "system".into(),
             color: None,
             message_count: 0,
-            unread_count: 0,
         },
     )
     .unwrap();
@@ -420,7 +478,6 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
             kind: "system".into(),
             color: None,
             message_count: 1,
-            unread_count: 0,
         },
     )
     .unwrap();

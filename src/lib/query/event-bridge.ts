@@ -144,6 +144,7 @@ export function EventBridge() {
       if (accountId) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
         void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
       }
     });
 

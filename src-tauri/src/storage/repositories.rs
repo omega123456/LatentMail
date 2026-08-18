@@ -63,7 +63,6 @@ pub struct Label {
     pub kind: String,
     pub color: Option<LabelColor>,
     pub message_count: i64,
-    pub unread_count: i64,
 }
 
 const RESERVED_LABEL_PREFIX: &str = "CATEGORY_";
@@ -93,6 +92,13 @@ pub enum LabelNameError {
     Duplicate,
 }
 
+const UNREAD_THREADS_PER_LABEL: &str = "SELECT tl.label_id,COUNT(*)
+     FROM threads t
+     CROSS JOIN thread_labels tl
+       ON tl.account_id=t.account_id AND tl.thread_id=t.id
+     WHERE t.account_id=?1 AND t.is_unread=1
+     GROUP BY tl.label_id";
+
 pub struct LabelRepository;
 impl LabelRepository {
     pub fn upsert(connection: &Connection, label: &Label) -> Result<()> {
@@ -100,22 +106,31 @@ impl LabelRepository {
             Some(color) => (Some(color.text.as_str()), Some(color.background.as_str())),
             None => (None, None),
         };
-        connection.prepare_cached("INSERT INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,kind=excluded.kind,color_text=excluded.color_text,color_background=excluded.color_background,message_count=excluded.message_count,unread_count=excluded.unread_count")?.execute(params![label.account_id,label.id,label.name,label.kind,color_text,color_background,label.message_count,label.unread_count])?;
+        connection.prepare_cached("INSERT INTO labels (account_id,id,name,kind,color_text,color_background,message_count) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,kind=excluded.kind,color_text=excluded.color_text,color_background=excluded.color_background,message_count=excluded.message_count")?.execute(params![label.account_id,label.id,label.name,label.kind,color_text,color_background,label.message_count])?;
         Ok(())
     }
     pub fn list(connection: &Connection, account_id: &str) -> Result<Vec<Label>> {
-        let mut statement = connection.prepare("SELECT account_id,id,name,kind,color_text,color_background,message_count,unread_count FROM labels WHERE account_id=?1 ORDER BY name")?;
+        let mut statement = connection.prepare("SELECT account_id,id,name,kind,color_text,color_background,message_count FROM labels WHERE account_id=?1 ORDER BY name")?;
         let labels = statement.query_map([account_id], label)?.collect();
         labels
     }
     pub fn get(connection: &Connection, account_id: &str, id: &str) -> Result<Option<Label>> {
-        connection.query_row("SELECT account_id,id,name,kind,color_text,color_background,message_count,unread_count FROM labels WHERE account_id=?1 AND id=?2", params![account_id, id], label).optional()
+        connection.query_row("SELECT account_id,id,name,kind,color_text,color_background,message_count FROM labels WHERE account_id=?1 AND id=?2", params![account_id, id], label).optional()
+    }
+
+    pub fn unread_thread_counts(
+        connection: &Connection,
+        account_id: &str,
+    ) -> Result<HashMap<String, i64>> {
+        let mut statement = connection.prepare_cached(UNREAD_THREADS_PER_LABEL)?;
+        let counts = statement.query_map([account_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        counts.collect()
     }
 
     pub fn ensure_placeholder(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
         connection
             .prepare_cached(
-                "INSERT OR IGNORE INTO labels (account_id,id,name,kind,color_text,color_background,message_count,unread_count) VALUES (?1,?2,?2,'system',NULL,NULL,0,0)",
+                "INSERT OR IGNORE INTO labels (account_id,id,name,kind,color_text,color_background,message_count) VALUES (?1,?2,?2,'system',NULL,NULL,0)",
             )?
             .execute(params![account_id, id])?;
         Ok(())
@@ -1780,7 +1795,6 @@ fn label(row: &rusqlite::Row<'_>) -> Result<Label> {
         kind: row.get(3)?,
         color,
         message_count: row.get(6)?,
-        unread_count: row.get(7)?,
     })
 }
 fn message(row: &rusqlite::Row<'_>) -> Result<Message> {

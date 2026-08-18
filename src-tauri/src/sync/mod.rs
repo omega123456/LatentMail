@@ -1091,7 +1091,6 @@ pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
         kind: label.kind.clone(),
         color,
         message_count: label.message_count,
-        unread_count: label.unread_count,
     }
 }
 

@@ -65,7 +65,6 @@ fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEven
                 kind: "system".into(),
                 color: None,
                 message_count: 0,
-                unread_count: 0,
             },
         )
         .unwrap();
