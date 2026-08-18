@@ -714,17 +714,88 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
 
     queue.resume();
     engine.enqueue_backfill("account", client).await;
-    let mut saw_third_op = false;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        distinct_traversal_ops(),
+        2,
+        "a completed cursor must make enqueue_backfill a no-op rather than queue an operation that only re-reads it"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn enqueue_backfill_still_starts_a_chain_when_the_cursor_stopped_short_of_completion() {
+    let server = MockServer::start().await;
+    mount_profile(&server, 1).await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .and(query_param("pageToken", "page2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"messages":[{"id":"m2","threadId":"t2"}]})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m2"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(message_json("m2", "t2", "20", "Second")),
+        )
+        .mount(&server)
+        .await;
+
+    let (storage, _directory) = temp_storage();
+    storage
+        .run(|connection| {
+            TraversalCursorRepository::upsert(
+                connection,
+                &TraversalCursor {
+                    account_id: "account".to_owned(),
+                    kind: TraversalKind::Backfill,
+                    position: Some("page2".to_owned()),
+                    discovered_count: 2,
+                    persisted_count: 1,
+                    completed: false,
+                    last_advanced_at: 0,
+                    resumed: false,
+                },
+            )
+        })
+        .await
+        .unwrap();
+
+    let registry = WorkRegistry::new();
+    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
+    let engine = SyncEngine::new(
+        storage.clone(),
+        queue,
+        registry,
+        latentmail_lib::sync::noop_event_sink(),
+    );
+
+    engine
+        .enqueue_backfill("account", GmailClient::with_base_url("token", server.uri()))
+        .await;
+
+    let mut completed = false;
     for _ in 0..1_000 {
-        if distinct_traversal_ops() == 3 {
-            saw_third_op = true;
+        let cursor = storage
+            .run(|connection| {
+                TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        if cursor.completed {
+            completed = true;
             break;
         }
         tokio::task::yield_now().await;
     }
     assert!(
-        saw_third_op,
-        "enqueue_backfill must start normally again once the prior chain is terminal"
+        completed,
+        "an unfinished cursor must still be resumed by enqueue_backfill"
     );
 }
 

@@ -269,7 +269,10 @@ impl QueueRegistry {
             .map(|account_id| {
                 let empty_history = VecDeque::new();
                 let history = inner.history.get(&account_id).unwrap_or(&empty_history);
-                let blocked_by_interactive = interactive_outstanding.contains(&account_id);
+                let interactive_paused =
+                    global_paused || inner.is_scope_paused(&account_id, Lane::Interactive);
+                let blocked_by_interactive =
+                    !interactive_paused && interactive_outstanding.contains(&account_id);
 
                 let lanes: Vec<LaneSnapshot> = Lane::ALL
                     .into_iter()

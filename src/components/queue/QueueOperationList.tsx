@@ -1,3 +1,4 @@
+import { useNow } from '@/lib/format/use-now';
 import type { OperationRecord } from '@/lib/types/ipc';
 import { QueueOperationRow } from './QueueOperationRow';
 
@@ -10,6 +11,7 @@ export function QueueOperationList({
   onCancel: (operationId: string) => Promise<boolean>;
   onRetry: (operationId: string) => void;
 }) {
+  const now = useNow(1_000);
   if (operations.length === 0) {
     return (
       <p className="py-1.75 pl-queue-indent-op text-settings-meta text-settings-ink-mute dark:text-dark-settings-ink-mute">
@@ -23,6 +25,7 @@ export function QueueOperationList({
         <QueueOperationRow
           key={operation.id}
           operation={operation}
+          now={now}
           onCancel={onCancel}
           onRetry={onRetry}
         />

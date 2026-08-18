@@ -11,7 +11,7 @@ use latentmail_lib::{
             retry_queue_operation, set_queue_paused,
         },
         registry::PauseScope,
-        Executor, Lane, OperationKind, QueueEngine, QueueEventSink, QueueOperation,
+        Executor, Lane, LaneState, OperationKind, QueueEngine, QueueEventSink, QueueOperation,
     },
     storage::{Account, AccountRepository, Operation, OperationRepository, Storage},
 };
@@ -224,6 +224,47 @@ async fn scoped_lane_pause_holds_only_that_lane_and_resuming_wakes_parked_work()
     let (id, release) = started.recv().await.expect("scoped resume wakes parked work");
     assert_eq!(id, "parked");
     release.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn paused_interactive_lane_does_not_hold_back_the_other_lanes() {
+    let (executor, mut started) = controllable_executor();
+    let (events, _events_rx) = events_channel();
+    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+
+    queue
+        .set_paused(
+            &PauseScope::Lane {
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+            },
+            true,
+        )
+        .await;
+
+    queue
+        .enqueue(operation("parked", "account", Lane::Interactive, "e1"))
+        .await
+        .unwrap();
+    queue
+        .enqueue(operation("background", "account", Lane::Background, "e2"))
+        .await
+        .unwrap();
+
+    let (id, release) = started
+        .recv()
+        .await
+        .expect("background work runs while interactive is paused");
+    assert_eq!(id, "background");
+    release.send(()).unwrap();
+
+    let snapshot = queue.snapshot().await;
+    let lanes = &snapshot.first().expect("account snapshot").lanes;
+    let background = lanes
+        .iter()
+        .find(|lane| lane.lane == Lane::Background)
+        .expect("background lane");
+    assert_ne!(background.state, LaneState::Blocked);
 }
 
 #[tokio::test]

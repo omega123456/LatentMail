@@ -307,6 +307,7 @@ impl QueueEngine {
             }
         };
         if changed {
+            self.interactive_drained.notify_waiters();
             self.emit_summary();
         }
         changed
@@ -529,7 +530,11 @@ impl QueueEngine {
             loop {
 
                 let notified = self.interactive_drained.notified();
-                if !self.has_interactive(&operation.account_id).await {
+                if self
+                    .registry
+                    .is_scope_paused(&operation.account_id, Lane::Interactive)
+                    || !self.has_interactive(&operation.account_id).await
+                {
                     return;
                 }
                 notified.await;

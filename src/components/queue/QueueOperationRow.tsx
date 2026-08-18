@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { fromUnixTime, formatDistanceToNowStrict } from 'date-fns';
+import { formatDistanceStrict, fromUnixTime } from 'date-fns';
 import { RotateCcw, X } from 'lucide-react';
 import type { OperationRecord } from '@/lib/types/ipc';
 import { OPERATION_STATUS_META } from '@/lib/queue/describe';
@@ -7,22 +7,24 @@ import { QueueStateChip } from './QueueStateChip';
 
 const CANCELLABLE_STATUSES = new Set(['queued', 'retrying']);
 
-function describeTiming(operation: OperationRecord) {
+function describeTiming(operation: OperationRecord, now: Date) {
   if (operation.status === 'retrying' && operation.nextAttemptAt !== null) {
-    return `Attempt ${operation.attempts} · next in ${formatDistanceToNowStrict(fromUnixTime(operation.nextAttemptAt))}`;
+    return `Attempt ${operation.attempts} · next in ${formatDistanceStrict(fromUnixTime(operation.nextAttemptAt), now)}`;
   }
   if (operation.status === 'active') {
-    return `started ${formatDistanceToNowStrict(fromUnixTime(operation.updatedAt))} ago`;
+    return `started ${formatDistanceStrict(fromUnixTime(operation.updatedAt), now)} ago`;
   }
-  return `${formatDistanceToNowStrict(fromUnixTime(operation.updatedAt))} ago`;
+  return `${formatDistanceStrict(fromUnixTime(operation.updatedAt), now)} ago`;
 }
 
 export function QueueOperationRow({
   operation,
+  now = new Date(),
   onCancel,
   onRetry,
 }: {
   operation: OperationRecord;
+  now?: Date;
   onCancel: (operationId: string) => Promise<boolean>;
   onRetry: (operationId: string) => void;
 }) {
@@ -54,7 +56,7 @@ export function QueueOperationRow({
           {operation.description}
         </p>
         <span className="w-33 shrink-0 whitespace-nowrap text-right text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
-          {describeTiming(operation)}
+          {describeTiming(operation, now)}
         </span>
         <span className="flex w-10 shrink-0 justify-end opacity-0 focus-within:opacity-100 group-hover:opacity-100">
           {canCancel && (

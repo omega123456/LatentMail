@@ -519,7 +519,7 @@ impl SyncEngine {
                 return;
             }
         }
-        let resumed = self
+        let cursor = self
             .storage
             .run({
                 let account = account_id.to_owned();
@@ -533,8 +533,12 @@ impl SyncEngine {
             })
             .await
             .ok()
-            .flatten()
-            .is_some_and(|cursor| cursor.position.is_some());
+            .flatten();
+        if cursor.as_ref().is_some_and(|cursor| cursor.completed) {
+            self.active_backfills.lock().await.remove(account_id);
+            return;
+        }
+        let resumed = cursor.is_some_and(|cursor| cursor.position.is_some());
         enqueue_backfill_step(
             BackfillHandles {
                 queue: Arc::clone(&self.queue),

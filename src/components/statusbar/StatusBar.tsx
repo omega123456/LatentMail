@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { differenceInMinutes } from 'date-fns';
 import { ListChecks, Loader2, Pause, Play, RefreshCw } from 'lucide-react';
 import { exactTime } from '@/lib/format/relative-time';
+import { useNow } from '@/lib/format/use-now';
 import { invoke } from '@/lib/ipc/commands';
 import { useTraversalStatusQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
@@ -16,11 +17,7 @@ function elapsed(date: Date | null, now: Date) {
 
 function LeftZone({ accountId }: { accountId: string | null }) {
   const { queue, lastSynced, syncState, error, refreshing } = useSyncStore();
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
+  const now = useNow(30_000);
   const togglePaused = () => {
     const command = queue.paused ? 'resume_queue' : 'pause_queue';
     void invoke(command, {}).then((summary) => useSyncStore.getState().setQueue(summary));
