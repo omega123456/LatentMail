@@ -42,7 +42,7 @@ impl Lane {
     pub fn capacity(self) -> usize {
         match self {
             Self::Interactive => 4,
-            Self::Background => 2,
+            Self::Background => 1,
             Self::Traversal => 1,
         }
     }

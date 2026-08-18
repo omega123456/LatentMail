@@ -5,6 +5,14 @@ import { ipc } from '@/tests/ipc-mock';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+function silenceConsole() {
+  vi.spyOn(console, 'debug').mockImplementation(() => {});
+  vi.spyOn(console, 'info').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+}
+silenceConsole();
+
 vi.stubGlobal(
   'matchMedia',
   vi.fn(() => ({
@@ -95,5 +103,6 @@ beforeEach(() => {
   ipc.reset();
   window.__resizeObserverInstances__ = [];
   installNotificationStub();
+  silenceConsole();
 });
 afterEach(cleanup);
