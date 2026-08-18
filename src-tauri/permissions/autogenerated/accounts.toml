@@ -12,3 +12,8 @@ commands.allow = ["begin_sign_in"]
 identifier = "allow-begin-reauthentication"
 description = "Enables repairing one Google account."
 commands.allow = ["begin_reauthentication"]
+
+[[permission]]
+identifier = "allow-remove-account"
+description = "Enables removing an account, its local data and its stored credential."
+commands.allow = ["remove_account"]

@@ -13,6 +13,7 @@ export interface IpcCommandMap {
   list_accounts: { args: Record<string, never>; result: Account[] };
   begin_sign_in: { args: Record<string, never>; result: void };
   begin_reauthentication: { args: { accountId: string }; result: void };
+  remove_account: { args: { accountId: string }; result: void };
   list_labels: { args: { accountId: string }; result: MailLabel[] };
   lookup_contacts: { args: { accountId: string; query: string }; result: ContactSuggestion[] };
   reply_context: {
@@ -136,6 +137,12 @@ export interface IpcCommandMap {
     result: ThreadSearchPage;
   };
   parse_search_query: { args: { query: string }; result: ParsedSearchQuery };
+  read_queue_operations: { args: Record<string, never>; result: AccountQueueSnapshot[] };
+  cancel_queue_operation: { args: { operationId: string }; result: boolean };
+  retry_queue_operation: { args: { operationId: string }; result: boolean };
+  retry_failed_operations: { args: { accountId?: string | null }; result: number };
+  clear_queue_history: { args: { accountId?: string | null }; result: void };
+  set_queue_paused: { args: { scope: PauseScope; paused: boolean }; result: boolean };
 }
 
 export interface QueueSummary {
@@ -145,6 +152,65 @@ export interface QueueSummary {
   done: number;
   paused: boolean;
 }
+export type Lane = 'interactive' | 'background' | 'traversal';
+
+export type OperationKind =
+  | 'noop'
+  | 'labelMutation'
+  | 'send'
+  | 'draft'
+  | 'sync'
+  | 'star'
+  | 'unstar'
+  | 'markRead'
+  | 'markUnread'
+  | 'delete'
+  | 'move'
+  | 'spam'
+  | 'notSpam'
+  | 'traversal';
+
+export type OperationStatus = 'queued' | 'active' | 'retrying' | 'done' | 'failed' | 'cancelled';
+
+export type LaneState = 'paused' | 'blocked' | 'running' | 'idle';
+
+export interface OperationRecord {
+  id: string;
+  accountId: string;
+  lane: Lane;
+  kind: OperationKind;
+  description: string;
+  status: OperationStatus;
+  attempts: number;
+  error: string | null;
+  retryable: boolean;
+  nextAttemptAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LaneSnapshot {
+  lane: Lane;
+  capacity: number;
+  active: number;
+  backlog: number;
+  state: LaneState;
+  operations: OperationRecord[];
+}
+
+export interface AccountQueueSnapshot {
+  accountId: string;
+  active: number;
+  queued: number;
+  failed: number;
+  lanes: LaneSnapshot[];
+}
+
+export type PauseScope =
+  | { scope: 'global' }
+  | { scope: 'account'; accountId: string }
+  | { scope: 'lane'; accountId: string; lane: Lane };
+
 export interface Account {
   id: string;
   email: string;
@@ -169,6 +235,7 @@ export interface Settings {
   showUnreadCounts: boolean;
   syncIntervalSeconds: number;
   showSenderAvatars: boolean;
+  commandOverrides: Partial<Record<string, string[]>>;
 }
 
 export type SettingKey = keyof Settings;
@@ -315,9 +382,7 @@ export interface ThreadSearchPage {
 }
 
 export type SearchScope =
-  | { kind: 'default' }
-  | { kind: 'all' }
-  | { kind: 'label'; labelId: string };
+  { kind: 'default' } | { kind: 'all' } | { kind: 'label'; labelId: string };
 
 export type SearchPredicate =
   | { kind: 'label'; value: string; negated: boolean }
@@ -414,7 +479,7 @@ export interface AvatarResolvedEvent {
 export interface IpcEventMap {
   'system://health': { status: 'ok' };
   'avatar://resolved': AvatarResolvedEvent;
-  'queue://item': { id: string; status: string };
+  'queue://item': { id: string; status: string; accountId: string; lane: Lane };
   'queue://summary': QueueSummary;
   'account://state': Account;
   'sync://progress': SyncProgressEvent;

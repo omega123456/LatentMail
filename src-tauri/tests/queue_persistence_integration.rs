@@ -165,6 +165,7 @@ async fn admit_durable_persists_before_enqueue_and_terminal_state_is_recorded() 
             entity_key: "draft:draft-1".into(),
             cost: 0,
             attempts: 0,
+            description: "test operation".into(),
         },
         "{\"mode\":\"create\"}".into(),
     )

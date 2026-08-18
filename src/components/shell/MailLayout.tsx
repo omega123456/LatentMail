@@ -159,7 +159,9 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     [searchClear, setActiveAccountId, setActiveMailboxId, clearSelection],
   );
   useEffect(() => {
-    if (activeAccountId === null && accounts.length > 0) selectAccount(accounts[0].id);
+    if (accounts.length === 0) return;
+    const activeAccountStillExists = accounts.some((account) => account.id === activeAccountId);
+    if (activeAccountId === null || !activeAccountStillExists) selectAccount(accounts[0].id);
   }, [accounts, activeAccountId, selectAccount]);
   useEffect(() => {
     if (!window.__LATENTMAIL_PLAYWRIGHT_IPC__) return;

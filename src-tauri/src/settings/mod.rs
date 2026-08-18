@@ -40,6 +40,7 @@ pub struct Settings {
     pub sync_interval_seconds: u32,
 
     pub show_sender_avatars: bool,
+    pub command_overrides: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -87,8 +88,12 @@ impl Default for Settings {
             reader_height: 40,
             sync_on_startup: true,
             show_unread_counts: true,
-            sync_interval_seconds: 30,
+            sync_interval_seconds: u32::try_from(
+                chrono::Duration::minutes(5).num_seconds(),
+            )
+            .expect("five minutes fits in u32 seconds"),
             show_sender_avatars: true,
+            command_overrides: HashMap::new(),
         }
     }
 }
@@ -157,6 +162,7 @@ impl Settings {
             "showUnreadCounts" => set_value(&mut self.show_unread_counts, value),
             "syncIntervalSeconds" => set_value(&mut self.sync_interval_seconds, value),
             "showSenderAvatars" => set_value(&mut self.show_sender_avatars, value),
+            "commandOverrides" => set_value(&mut self.command_overrides, value),
             _ => false,
         }
     }
@@ -190,13 +196,13 @@ fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
     if key != "syncIntervalSeconds" {
         return;
     }
-    let (Some(seconds), Some(scheduler)) = (
+    let (Some(seconds), Some(schedulers)) = (
         value.as_u64().and_then(|value| u32::try_from(value).ok()),
-        app.try_state::<std::sync::Arc<crate::sync::SyncScheduler>>(),
+        app.try_state::<crate::sync::SyncSchedulers>(),
     ) else {
         return;
     };
-    scheduler.set_interval(std::time::Duration::from_secs(
+    schedulers.periodic.set_interval(std::time::Duration::from_secs(
         u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
     ));
 }

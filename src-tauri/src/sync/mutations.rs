@@ -18,11 +18,25 @@ use tokio::sync::oneshot;
 
 use crate::{
     gmail::GmailClient,
-    queue::{Lane, QueueError, QueueOperation},
+    queue::{Lane, OperationKind, QueueError, QueueOperation},
     storage::{Message, MessageRepository, Storage, ThreadRepository},
 };
 
 use super::{SyncEngine, SyncError};
+
+fn mutation_description(kind: OperationKind) -> String {
+    match kind {
+        OperationKind::Star => "Star messages".to_owned(),
+        OperationKind::Unstar => "Unstar messages".to_owned(),
+        OperationKind::MarkRead => "Mark messages read".to_owned(),
+        OperationKind::MarkUnread => "Mark messages unread".to_owned(),
+        OperationKind::Delete => "Move messages to Trash".to_owned(),
+        OperationKind::Move => "Move messages".to_owned(),
+        OperationKind::Spam => "Report spam".to_owned(),
+        OperationKind::NotSpam => "Mark not spam".to_owned(),
+        _ => "Update labels".to_owned(),
+    }
+}
 
 
 pub(super) async fn delete_draft(
@@ -302,6 +316,7 @@ impl SyncEngine {
                 entity_key: format!("mutation-batch:{account_id}"),
                 cost: 0,
                 attempts: 0,
+                description: mutation_description(kind),
             })
             .await
             .map_err(|_| SyncError::QueueStopped)?;

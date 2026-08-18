@@ -18,6 +18,7 @@ export {
 } from './compose';
 export {
   playwrightPausedQueueSummary,
+  playwrightQueueOperationsSnapshot,
   playwrightQueueSummary,
   playwrightResumedQueueSummary,
 } from './queue';

@@ -157,9 +157,7 @@ describe('MailLayout — search', () => {
     ipc.override('list_accounts', [account]);
     render(<App />);
     await screen.findByRole('button', { name: 'Collapse sidebar' });
-    act(() =>
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true })),
-    );
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true })));
     expect(screen.getByLabelText('Search mail')).toHaveFocus();
     (document.activeElement as HTMLElement)?.blur();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: '/' })));
@@ -250,5 +248,35 @@ describe('MailLayout — search', () => {
     await user.keyboard('{Enter}');
     expect(await screen.findByText(/limited to 2048 characters/)).toBeInTheDocument();
     expect(screen.queryByTestId('search-results-row')).not.toBeInTheDocument();
+  });
+});
+
+describe('MailLayout — account removal promotes a remaining account', () => {
+  const accountTwo = {
+    id: 'account-2',
+    email: 'sam@example.com',
+    displayName: 'Sam Rivera',
+    avatarUrl: null,
+    needsReauthentication: false,
+  };
+
+  it('promotes the first remaining account when the active account disappears from the list', async () => {
+    let accounts = [account, accountTwo];
+    ipc.override('list_accounts', () => accounts);
+    render(<App />);
+    await screen.findByTestId('mail-layout');
+    await waitFor(() => expect(useSelectionStore.getState().activeAccountId).toBe('account-1'));
+
+    accounts = [accountTwo];
+    act(() => ipc.emit('account://state', accountTwo));
+
+    await waitFor(() => expect(useSelectionStore.getState().activeAccountId).toBe('account-2'));
+  });
+
+  it('still promotes the first account when the active id is null, as it always has', async () => {
+    ipc.override('list_accounts', [account]);
+    render(<App />);
+    await screen.findByTestId('mail-layout');
+    await waitFor(() => expect(useSelectionStore.getState().activeAccountId).toBe('account-1'));
   });
 });

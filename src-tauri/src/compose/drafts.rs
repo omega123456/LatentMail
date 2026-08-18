@@ -114,6 +114,10 @@ pub async fn admit(
         DraftOperationMode::Send => OperationKind::Send,
         DraftOperationMode::Create | DraftOperationMode::Update => OperationKind::Draft,
     };
+    let description = match kind {
+        OperationKind::Send => format!("Send: {}", payload.subject),
+        _ => format!("Draft: {}", payload.subject),
+    };
     let payload_json = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     queue::admit_durable(
         engine,
@@ -126,6 +130,7 @@ pub async fn admit(
             entity_key,
             cost: 0,
             attempts: 0,
+            description,
         },
         payload_json,
     )

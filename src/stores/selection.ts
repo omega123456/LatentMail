@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import { useComposeStore } from './compose';
 import { useMultiSelectStore } from './multi-select';
+import { useSearchStore } from './search';
 
 type SelectionState = {
   activeAccountId: string | null;
@@ -11,9 +13,10 @@ type SelectionState = {
   setActiveThreadId: (activeThreadId: string | null) => void;
   setKeyboardCursor: (keyboardCursor: number | null) => void;
   clearSelection: () => void;
+  clearStateForRemovedAccount: (accountId: string) => void;
 };
 
-export const useSelectionStore = create<SelectionState>((set) => ({
+export const useSelectionStore = create<SelectionState>((set, get) => ({
   activeAccountId: null,
   activeMailboxId: null,
   activeThreadId: null,
@@ -32,4 +35,18 @@ export const useSelectionStore = create<SelectionState>((set) => ({
   },
   setKeyboardCursor: (keyboardCursor) => set({ keyboardCursor }),
   clearSelection: () => set({ activeThreadId: null, keyboardCursor: null }),
+  clearStateForRemovedAccount: (accountId) => {
+    useMultiSelectStore.getState().clear();
+    useSearchStore.getState().clear();
+    const composeSession = useComposeStore.getState().session;
+    if (composeSession?.accountId === accountId) useComposeStore.getState().close();
+    if (get().activeAccountId === accountId) {
+      set({
+        activeAccountId: null,
+        activeMailboxId: null,
+        activeThreadId: null,
+        keyboardCursor: null,
+      });
+    }
+  },
 }));

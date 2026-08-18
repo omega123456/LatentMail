@@ -14,6 +14,7 @@ describe('queryKeys', () => {
     ]);
     expect(queryKeys.syncStatus('account-1')).toEqual(['syncStatus', 'account-1']);
     expect(queryKeys.traversalStatus('account-1')).toEqual(['traversalStatus', 'account-1']);
+    expect(queryKeys.queueOperations).toEqual(['queueOperations']);
   });
 
   it('scopes traversalStatus per account, matching the array-prefix invalidation convention', () => {

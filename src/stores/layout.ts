@@ -14,6 +14,8 @@ type LayoutState = Pick<
   | 'readerHeight'
   | 'showUnreadCounts'
   | 'showSenderAvatars'
+  | 'syncOnStartup'
+  | 'syncIntervalSeconds'
 > & {
   route: Route;
   hydrated: boolean;
@@ -27,6 +29,10 @@ type LayoutState = Pick<
   setSidebarWidth: (sidebarWidth: number) => void;
   setListWidth: (listWidth: number) => void;
   setReaderHeight: (readerHeight: number) => void;
+  setShowUnreadCounts: (showUnreadCounts: boolean) => void;
+  setShowSenderAvatars: (showSenderAvatars: boolean) => void;
+  setSyncOnStartup: (syncOnStartup: boolean) => void;
+  setSyncIntervalSeconds: (syncIntervalSeconds: number) => void;
 };
 
 let hydration: Promise<void> | undefined;
@@ -48,6 +54,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   readerHeight: 40,
   showUnreadCounts: true,
   showSenderAvatars: true,
+  syncOnStartup: true,
+  syncIntervalSeconds: 300,
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -61,6 +69,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         readerHeight: settings.readerHeight,
         showUnreadCounts: settings.showUnreadCounts,
         showSenderAvatars: settings.showSenderAvatars,
+        syncOnStartup: settings.syncOnStartup,
+        syncIntervalSeconds: settings.syncIntervalSeconds,
         hydrated: true,
       });
     });
@@ -105,5 +115,21 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     readerHeight = clampSize(readerHeight, 20, 80);
     set({ readerHeight });
     persist('readerHeight', readerHeight);
+  },
+  setShowUnreadCounts: (showUnreadCounts) => {
+    set({ showUnreadCounts });
+    persist('showUnreadCounts', showUnreadCounts);
+  },
+  setShowSenderAvatars: (showSenderAvatars) => {
+    set({ showSenderAvatars });
+    persist('showSenderAvatars', showSenderAvatars);
+  },
+  setSyncOnStartup: (syncOnStartup) => {
+    set({ syncOnStartup });
+    persist('syncOnStartup', syncOnStartup);
+  },
+  setSyncIntervalSeconds: (syncIntervalSeconds) => {
+    set({ syncIntervalSeconds });
+    persist('syncIntervalSeconds', syncIntervalSeconds);
   },
 }));

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COMMAND_METADATA,
   DEFAULT_COMMAND_BINDINGS,
   commandForKey,
   commandForEvent,
@@ -90,5 +91,14 @@ describe('keyboard command registry', () => {
       ),
     ).toBe('focusSearch');
     expect(commandForKey('/', DEFAULT_COMMAND_BINDINGS)).toBe('focusSearch');
+  });
+
+  it('carries a display label and description for every registered command', () => {
+    for (const command of Object.keys(
+      DEFAULT_COMMAND_BINDINGS,
+    ) as (keyof typeof DEFAULT_COMMAND_BINDINGS)[]) {
+      expect(COMMAND_METADATA[command].label.length).toBeGreaterThan(0);
+      expect(COMMAND_METADATA[command].description.length).toBeGreaterThan(0);
+    }
   });
 });

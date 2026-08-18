@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
     sync::{
@@ -16,10 +16,19 @@ use tokio::{
 
 use crate::storage::{Operation, OperationRepository};
 
+pub mod commands;
+pub mod registry;
+
+pub use registry::{
+    AccountQueueSnapshot, LaneSnapshot, LaneState, OperationRecord, OperationStatus, PauseScope,
+    QueueRegistry,
+};
+
 const LANE_CAPACITY: usize = 512;
 const MAX_ATTEMPTS: u8 = 10;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Lane {
     Interactive,
     Background,
@@ -27,7 +36,20 @@ pub enum Lane {
     Traversal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl Lane {
+    pub const ALL: [Lane; 3] = [Lane::Interactive, Lane::Background, Lane::Traversal];
+
+    pub fn capacity(self) -> usize {
+        match self {
+            Self::Interactive => 4,
+            Self::Background => 2,
+            Self::Traversal => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum OperationKind {
     Noop,
     LabelMutation,
@@ -67,6 +89,7 @@ pub struct QueueOperation {
     pub entity_key: String,
     pub cost: u32,
     pub attempts: u8,
+    pub description: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +108,7 @@ impl QueueError {
 pub type OperationFuture = Pin<Box<dyn Future<Output = Result<(), QueueError>> + Send>>;
 pub type Executor = Arc<dyn Fn(QueueOperation) -> OperationFuture + Send + Sync>;
 pub type QueueEventSink = Arc<dyn Fn(&'static str, serde_json::Value) + Send + Sync>;
+pub type CancellationHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,6 +187,8 @@ pub struct QueueEngine {
     counters: Counters,
     executor: Executor,
     events: QueueEventSink,
+    registry: QueueRegistry,
+    cancellation_hook: CancellationHook,
 }
 
 impl QueueEngine {
@@ -175,6 +201,22 @@ impl QueueEngine {
         burst: u32,
         executor: Executor,
         events: QueueEventSink,
+    ) -> Arc<Self> {
+        Self::new_with_events_and_hook(
+            rate_per_second,
+            burst,
+            executor,
+            events,
+            Arc::new(|_| {}),
+        )
+    }
+
+    pub fn new_with_events_and_hook(
+        rate_per_second: u32,
+        burst: u32,
+        executor: Executor,
+        events: QueueEventSink,
+        cancellation_hook: CancellationHook,
     ) -> Arc<Self> {
         Arc::new(Self {
             accounts: Mutex::new(HashMap::new()),
@@ -189,6 +231,8 @@ impl QueueEngine {
             counters: Counters::default(),
             executor,
             events,
+            registry: QueueRegistry::new(),
+            cancellation_hook,
         })
     }
 
@@ -199,6 +243,8 @@ impl QueueEngine {
     pub async fn enqueue(self: &Arc<Self>, operation: QueueOperation) -> Result<(), &'static str> {
         let lane = operation.lane;
         let account_id = operation.account_id.clone();
+        let id = operation.id.clone();
+        self.registry.record_enqueued(&operation);
         let queue = self.account_queue(&operation.account_id).await;
         if lane == Lane::Interactive {
             *self
@@ -214,14 +260,15 @@ impl QueueEngine {
             Lane::Background => queue.background,
             Lane::Traversal => queue.traversal,
         };
-        let id = operation.id.clone();
         if sender.send(operation).await.is_err() {
             if lane == Lane::Interactive {
                 self.finish_interactive(&account_id).await;
             }
+            self.counters.pending.fetch_sub(1, Ordering::Relaxed);
+            self.registry.discard(&id);
             return Err("queue stopped");
         }
-        self.emit(&id, "queued");
+        self.emit(&id, &account_id, lane, "queued");
         Ok(())
     }
 
@@ -233,11 +280,96 @@ impl QueueEngine {
         self.resumed.notify_waiters();
     }
 
-    fn emit(&self, id: &str, status: &'static str) {
+    pub async fn set_paused(&self, scope: &PauseScope, paused: bool) -> bool {
+        let changed = match scope {
+            PauseScope::Global => {
+                let was_paused = self.paused.load(Ordering::Acquire);
+                if paused {
+                    self.pause();
+                } else {
+                    self.resume();
+                }
+                was_paused != paused
+            }
+            PauseScope::Account { account_id } => {
+                let changed = self.registry.set_account_paused(account_id, paused);
+                if changed && !paused {
+                    self.resumed.notify_waiters();
+                }
+                changed
+            }
+            PauseScope::Lane { account_id, lane } => {
+                let changed = self.registry.set_lane_paused(account_id, *lane, paused);
+                if changed && !paused {
+                    self.resumed.notify_waiters();
+                }
+                changed
+            }
+        };
+        if changed {
+            self.emit_summary();
+        }
+        changed
+    }
+
+    pub async fn cancel(self: &Arc<Self>, id: &str) -> Option<OperationRecord> {
+        let cancelled = self.registry.try_cancel(id)?;
+        self.counters.pending.fetch_sub(1, Ordering::Relaxed);
+        if cancelled.lane == Lane::Interactive {
+            self.finish_interactive(&cancelled.account_id).await;
+        }
+        (self.cancellation_hook)(id);
+        self.emit(id, &cancelled.account_id, cancelled.lane, "cancelled");
+        Some(cancelled)
+    }
+
+    pub async fn cancel_account_operations(self: &Arc<Self>, account_id: &str) {
+        let snapshot = self.snapshot().await;
+        let Some(account) = snapshot
+            .into_iter()
+            .find(|account| account.account_id == account_id)
+        else {
+            return;
+        };
+        for lane in account.lanes {
+            for operation in lane.operations {
+                if matches!(
+                    operation.status,
+                    OperationStatus::Queued | OperationStatus::Retrying
+                ) {
+                    self.cancel(&operation.id).await;
+                }
+            }
+        }
+    }
+
+    pub fn clear_history(&self, account_id: Option<&str>) {
+        self.registry.clear_history(account_id);
+        self.emit_summary();
+    }
+
+    pub async fn snapshot(&self) -> Vec<AccountQueueSnapshot> {
+        let interactive_outstanding: HashSet<String> = self
+            .interactive_pending
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(account_id, _)| account_id.clone())
+            .collect();
+        let global_paused = self.paused.load(Ordering::Acquire);
+        self.registry.snapshot(global_paused, &interactive_outstanding)
+    }
+
+    fn emit(&self, id: &str, account_id: &str, lane: Lane, status: &'static str) {
         (self.events)(
             "queue://item",
-            serde_json::json!({ "id": id, "status": status }),
+            serde_json::json!({ "id": id, "status": status, "accountId": account_id, "lane": lane }),
         );
+        self.emit_summary();
+    }
+
+    fn emit_summary(&self) {
         (self.events)(
             "queue://summary",
             serde_json::to_value(self.summary()).expect("QueueSummary serializes"),
@@ -259,10 +391,10 @@ impl QueueEngine {
             let (interactive, interactive_rx) = mpsc::channel(LANE_CAPACITY);
             let (background, background_rx) = mpsc::channel(LANE_CAPACITY);
             let (traversal, traversal_rx) = mpsc::channel(LANE_CAPACITY);
-            self.spawn_lane(interactive_rx, 4);
-            self.spawn_lane(background_rx, 2);
+            self.spawn_lane(interactive_rx, Lane::Interactive);
+            self.spawn_lane(background_rx, Lane::Background);
 
-            self.spawn_lane(traversal_rx, 1);
+            self.spawn_lane(traversal_rx, Lane::Traversal);
             accounts.insert(
                 account_id.to_owned(),
                 AccountQueue {
@@ -280,10 +412,10 @@ impl QueueEngine {
         }
     }
 
-    fn spawn_lane(self: &Arc<Self>, mut receiver: mpsc::Receiver<QueueOperation>, limit: usize) {
+    fn spawn_lane(self: &Arc<Self>, mut receiver: mpsc::Receiver<QueueOperation>, lane: Lane) {
         let engine = Arc::clone(self);
         tokio::spawn(async move {
-            let permits = Arc::new(Semaphore::new(limit));
+            let permits = Arc::new(Semaphore::new(lane.capacity()));
             while let Some(operation) = receiver.recv().await {
                 engine.wait_until_resumed().await;
                 let engine = Arc::clone(&engine);
@@ -307,15 +439,21 @@ impl QueueEngine {
         let _entity = lock.lock().await;
         let _permit = permits.acquire().await.expect("semaphore remains open");
         loop {
-            self.wait_until_resumed().await;
+            self.wait_until_resumed_for(&operation).await;
             self.wait_for_interactive(&operation).await;
             self.bucket_for(&operation.account_id)
                 .await
                 .acquire(operation.cost)
                 .await;
+            if !self
+                .registry
+                .try_mark_active(&operation.id, operation.attempts)
+            {
+                return;
+            }
             self.counters.pending.fetch_sub(1, Ordering::Relaxed);
             self.counters.active.fetch_add(1, Ordering::Relaxed);
-            self.emit(&operation.id, "active");
+            self.emit(&operation.id, &operation.account_id, operation.lane, "active");
             if operation.lane == Lane::Interactive {
                 self.finish_interactive(&operation.account_id).await;
                 self.interactive_drained.notify_waiters();
@@ -325,7 +463,9 @@ impl QueueEngine {
             match result {
                 Ok(()) => {
                     self.counters.done.fetch_add(1, Ordering::Relaxed);
-                    self.emit(&operation.id, "done");
+                    self.registry
+                        .transition_terminal(&operation, OperationStatus::Done, None);
+                    self.emit(&operation.id, &operation.account_id, operation.lane, "done");
                     return;
                 }
                 Err(error)
@@ -335,12 +475,23 @@ impl QueueEngine {
                 {
                     operation.attempts += 1;
                     self.counters.pending.fetch_add(1, Ordering::Relaxed);
-                    self.emit(&operation.id, "retrying");
+                    self.registry.transition_retrying(&operation);
+                    self.emit(
+                        &operation.id,
+                        &operation.account_id,
+                        operation.lane,
+                        "retrying",
+                    );
                     tokio::time::sleep(retry_delay(operation.attempts)).await;
                 }
-                Err(_) => {
+                Err(error) => {
                     self.counters.failed.fetch_add(1, Ordering::Relaxed);
-                    self.emit(&operation.id, "failed");
+                    self.registry.transition_terminal(
+                        &operation,
+                        OperationStatus::Failed,
+                        Some(format!("{error:?}")),
+                    );
+                    self.emit(&operation.id, &operation.account_id, operation.lane, "failed");
                     return;
                 }
             }
@@ -353,6 +504,20 @@ impl QueueEngine {
 
             let notified = self.resumed.notified();
             if !self.paused.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_until_resumed_for(&self, operation: &QueueOperation) {
+        loop {
+            let notified = self.resumed.notified();
+            let paused = self.paused.load(Ordering::Acquire)
+                || self
+                    .registry
+                    .is_scope_paused(&operation.account_id, operation.lane);
+            if !paused {
                 return;
             }
             notified.await;
@@ -471,6 +636,10 @@ pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation
     } else {
         Lane::Interactive
     };
+    let description = match kind {
+        OperationKind::Send => "Resumed send".to_owned(),
+        _ => "Resumed draft".to_owned(),
+    };
     Some(QueueOperation {
         id: operation.id.clone(),
         account_id: operation.account_id.clone(),
@@ -479,6 +648,7 @@ pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation
         entity_key: operation.entity_key.clone(),
         cost: 0,
         attempts: operation.attempts.try_into().unwrap_or_default(),
+        description,
     })
 }
 

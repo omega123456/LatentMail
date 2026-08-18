@@ -25,6 +25,7 @@ macro_rules! string_try {
     };
 }
 
+use crate::queue::QueueEngine;
 use crate::storage::{Account, AccountRepository, Storage};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -340,6 +341,26 @@ impl AuthService {
         }
         result.map(|(access, _)| access)
     }
+
+    pub async fn remove_account(
+        &self,
+        queue: &Arc<QueueEngine>,
+        account_id: &str,
+    ) -> Result<(), String> {
+        queue.cancel_account_operations(account_id).await;
+        let account_owned = account_id.to_owned();
+        let removed = self
+            .storage
+            .run(move |connection| AccountRepository::delete(connection, &account_owned))
+            .await
+            .map_err(|error| error.to_string())?;
+        if removed == 0 {
+            return Err("Unknown account".to_owned());
+        }
+        delete_refresh_token(account_id)?;
+        self.invalidate_access_token(account_id);
+        Ok(())
+    }
 }
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -558,6 +579,21 @@ pub fn load_refresh_token(account_id: &str) -> Result<String, String> {
         .cloned()
         .ok_or_else(|| "missing refresh token".to_owned())
 }
+#[cfg(feature = "test-utils")]
+pub fn delete_refresh_token(account_id: &str) -> Result<(), String> {
+    fake_keychain()
+        .lock()
+        .map_err(|_| "keychain lock poisoned".to_owned())?
+        .remove(account_id);
+    Ok(())
+}
+#[cfg(feature = "test-utils")]
+pub fn has_refresh_token(account_id: &str) -> bool {
+    fake_keychain()
+        .lock()
+        .expect("keychain lock poisoned")
+        .contains_key(account_id)
+}
 #[cfg(not(feature = "test-utils"))]
 pub fn save_refresh_token(account_id: &str, value: &str) -> Result<(), String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
@@ -571,6 +607,16 @@ pub fn load_refresh_token(account_id: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .get_password()
         .map_err(|e| e.to_string())
+}
+#[cfg(not(feature = "test-utils"))]
+pub fn delete_refresh_token(account_id: &str) -> Result<(), String> {
+    match keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
+        .map_err(|e| e.to_string())?
+        .delete_credential()
+    {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -593,6 +639,14 @@ pub async fn begin_reauthentication<R: Runtime>(
     account_id: String,
 ) -> Result<(), String> {
     service.start(app, Some(account_id)).await
+}
+#[tauri::command]
+pub async fn remove_account(
+    service: tauri::State<'_, AuthService>,
+    queue: tauri::State<'_, Arc<QueueEngine>>,
+    account_id: String,
+) -> Result<(), String> {
+    service.remove_account(queue.inner(), &account_id).await
 }
 
 

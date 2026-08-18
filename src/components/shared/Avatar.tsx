@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { initialFor } from '@/lib/avatars/identity';
 
-export type AvatarSize = 24 | 32 | 36 | 40 | 48;
+export type AvatarSize = 24 | 30 | 32 | 36 | 40 | 48;
 
 const DIMENSION_CLASS: Record<AvatarSize, string> = {
   24: 'size-6',
+  30: 'size-7.5',
   32: 'size-8',
   36: 'size-9',
   40: 'size-10',
@@ -13,6 +14,7 @@ const DIMENSION_CLASS: Record<AvatarSize, string> = {
 
 const TEXT_CLASS: Record<AvatarSize, string> = {
   24: 'text-label-sm',
+  30: 'text-avatar-md',
   32: 'text-label-md',
   36: 'text-body-sm',
   40: 'text-body-sm',
@@ -42,6 +44,7 @@ export type AvatarProps = {
   ariaLabel?: string;
   ring?: boolean;
   notchRingClassName?: string;
+  fallbackClassName?: string;
   className?: string;
 };
 
@@ -53,6 +56,7 @@ export function Avatar({
   ariaLabel,
   ring = false,
   notchRingClassName = 'ring-surface dark:ring-dark-surface',
+  fallbackClassName,
   className = '',
 }: AvatarProps) {
   const dimension = DIMENSION_CLASS[size];
@@ -72,10 +76,10 @@ export function Avatar({
       {...(ariaLabel ? { role: 'img', 'aria-label': ariaLabel } : { 'aria-hidden': true })}
     >
       <span
-        className={`flex size-full items-center justify-center overflow-hidden rounded-full font-semibold ${textSize} ${
+        className={`flex size-full items-center justify-center overflow-hidden rounded-full font-semibold ${
           showImage
-            ? 'bg-surface-container-lowest ring-1 ring-outline-variant/40'
-            : `bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary ${
+            ? `${textSize} bg-surface-container-lowest ring-1 ring-outline-variant/40`
+            : `${fallbackClassName ?? `${textSize} bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary`} ${
                 ring ? 'ring-2 ring-surface-container dark:ring-dark-surface-container' : ''
               }`
         }`}

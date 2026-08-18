@@ -10,6 +10,9 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   readerHeight: 40,
   syncOnStartup: true,
   showUnreadCounts: true,
-  syncIntervalSeconds: 30,
+  syncIntervalSeconds: 300,
   showSenderAvatars: true,
+  commandOverrides: {
+    replyAllToMessage: ['Shift+A'],
+  },
 };

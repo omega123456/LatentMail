@@ -646,6 +646,17 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("operations_by_account")));
 
+    let failed_durable_scoped_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE kind IN ('send','draft') AND status='failed' AND account_id='account' ORDER BY created_at",
+    );
+    assert!(failed_durable_scoped_plan
+        .iter()
+        .any(|step| step.contains("operations_failed_durable")));
+    assert!(!failed_durable_scoped_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
     let mut statement = connection.prepare("PRAGMA index_list(messages)").unwrap();
     let message_indexes = statement
         .query_map([], |row| row.get::<_, String>(1))

@@ -12,6 +12,7 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
         entity_key: entity.into(),
         cost: 1,
         attempts: 0,
+        description: "test operation".into(),
     }
 }
 

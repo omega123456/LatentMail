@@ -4,7 +4,7 @@ use latentmail_lib::ipc::{
     health_check, health_response, open_external_url, pause_queue, read_queue_summary, register,
     resume_queue, validate_external_url,
 };
-use latentmail_lib::queue::QueueEngine;
+use latentmail_lib::queue::{Lane, PauseScope, QueueEngine};
 use latentmail_lib::settings::SettingsService;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, InlinePart, LabelRepository, Message,
@@ -106,6 +106,7 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         avatar_storage,
         SettingsService::new(Storage::open(directory.path().join("mail.sqlite")).unwrap()),
     ));
+    app.manage(Storage::open(directory.path().join("mail.sqlite")).unwrap());
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
@@ -160,6 +161,12 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         serde_json::json!({ "accountId": "any" })
     )
     .is_err());
+    assert!(invoke(
+        &webview,
+        "remove_account",
+        serde_json::json!({ "accountId": "unknown" })
+    )
+    .is_err());
     let settings = invoke(&webview, "read_settings", serde_json::json!({})).unwrap();
     assert_eq!(settings["theme"], "system");
     assert!(invoke(
@@ -185,6 +192,82 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         )
         .unwrap(),
         serde_json::Value::Null
+    );
+
+    assert_eq!(
+        invoke(&webview, "read_queue_operations", serde_json::json!({})).unwrap(),
+        serde_json::json!([])
+    );
+    assert_eq!(
+        invoke(
+            &webview,
+            "cancel_queue_operation",
+            serde_json::json!({ "operationId": "missing" })
+        )
+        .unwrap(),
+        false
+    );
+    assert_eq!(
+        invoke(
+            &webview,
+            "retry_queue_operation",
+            serde_json::json!({ "operationId": "missing" })
+        )
+        .unwrap(),
+        false
+    );
+    assert_eq!(
+        invoke(
+            &webview,
+            "retry_failed_operations",
+            serde_json::json!({ "accountId": null })
+        )
+        .unwrap(),
+        0
+    );
+    assert!(invoke(
+        &webview,
+        "clear_queue_history",
+        serde_json::json!({ "accountId": null })
+    )
+    .is_ok());
+    assert_eq!(
+        invoke(
+            &webview,
+            "set_queue_paused",
+            serde_json::json!({ "scope": { "scope": "account", "accountId": "account" }, "paused": true }),
+        )
+        .unwrap(),
+        true
+    );
+}
+
+#[test]
+fn pause_scope_deserializes_from_the_exact_json_shape_the_frontend_sends() {
+    assert_eq!(
+        serde_json::from_value::<PauseScope>(serde_json::json!({ "scope": "global" })).unwrap(),
+        PauseScope::Global
+    );
+    assert_eq!(
+        serde_json::from_value::<PauseScope>(
+            serde_json::json!({ "scope": "account", "accountId": "account-1" })
+        )
+        .unwrap(),
+        PauseScope::Account {
+            account_id: "account-1".into()
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<PauseScope>(serde_json::json!({
+            "scope": "lane",
+            "accountId": "account-1",
+            "lane": "interactive"
+        }))
+        .unwrap(),
+        PauseScope::Lane {
+            account_id: "account-1".into(),
+            lane: Lane::Interactive
+        }
     );
 }
 

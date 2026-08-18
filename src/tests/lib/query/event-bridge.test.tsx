@@ -333,6 +333,37 @@ describe('EventBridge', () => {
     vi.useRealTimers();
   });
 
+  it('coalesces a burst of queue item and summary events into one queue-snapshot invalidation', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('queue://item', expect.any(Function)),
+    );
+    vi.useFakeTimers();
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() => {
+      for (let count = 0; count < 20; count += 1)
+        ipc.emit('queue://item', {
+          id: `queue:account-1:${count}`,
+          status: 'active',
+          accountId: 'account-1',
+          lane: 'interactive',
+        });
+      ipc.emit('queue://summary', { pending: 1, active: 1, failed: 0, done: 0, paused: false });
+      vi.advanceTimersByTime(250);
+    });
+    const queueSnapshotCalls = invalidate.mock.calls.filter(
+      ([arg]) => JSON.stringify(arg?.queryKey) === JSON.stringify(queryKeys.queueOperations),
+    );
+    expect(queueSnapshotCalls).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
   it('tears down every listener and any pending traversal timer on unmount', async () => {
     const { unmount } = render(
       <QueryProvider>
@@ -429,13 +460,41 @@ describe('EventBridge', () => {
 
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Couldn’t send your message.');
     const beforeUnrelatedItem = invalidate.mock.calls.length;
-    act(() => ipc.emit('queue://item', { id: 'queue:account-1:1', status: 'done' }));
+    act(() =>
+      ipc.emit('queue://item', {
+        id: 'queue:account-1:1',
+        status: 'done',
+        accountId: 'account-1',
+        lane: 'background',
+      }),
+    );
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
 
-    act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'queued' }));
-    act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'active' }));
+    act(() =>
+      ipc.emit('queue://item', {
+        id: 'mutation:account-1:1',
+        status: 'queued',
+        accountId: 'account-1',
+        lane: 'interactive',
+      }),
+    );
+    act(() =>
+      ipc.emit('queue://item', {
+        id: 'mutation:account-1:1',
+        status: 'active',
+        accountId: 'account-1',
+        lane: 'interactive',
+      }),
+    );
     expect(invalidate).toHaveBeenCalledTimes(beforeUnrelatedItem);
-    act(() => ipc.emit('queue://item', { id: 'mutation:account-1:1', status: 'done' }));
+    act(() =>
+      ipc.emit('queue://item', {
+        id: 'mutation:account-1:1',
+        status: 'done',
+        accountId: 'account-1',
+        lane: 'interactive',
+      }),
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.threadsForAccount('account-1') });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.searchForAccount('account-1'),

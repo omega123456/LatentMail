@@ -60,7 +60,7 @@ describe('useCommands', () => {
     expect(hasFocusContext()).toBe(true);
   });
 
-  it('resolves a CommandProvider override over the default binding', () => {
+  it('resolves a CommandProvider override over the default binding', async () => {
     const onDismiss = vi.fn();
     render(
       <CommandProvider>
@@ -68,6 +68,7 @@ describe('useCommands', () => {
         <Probe onDismiss={onDismiss} />
       </CommandProvider>,
     );
+    await act(async () => undefined);
 
     act(() => screen.getByText('Remap dismiss to x').click());
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));

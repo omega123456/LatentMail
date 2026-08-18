@@ -574,6 +574,7 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
             entity_key: "draft:missing-row".into(),
             cost: 0,
             attempts: 0,
+            description: "test operation".into(),
         })
         .await
         .unwrap();
@@ -1739,6 +1740,7 @@ async fn a_retryable_gmail_failure_is_reported_as_failed_rather_than_silently_st
             entity_key: "draft:local-session".into(),
             cost: 0,
             attempts: 9,
+            description: "test operation".into(),
         },
         serde_json::json!({}).to_string(),
     )
@@ -1805,6 +1807,7 @@ async fn a_gmail_server_error_during_create_is_classified_as_retryable_and_recor
             entity_key: "draft:failing-session".into(),
             cost: 0,
             attempts: 9,
+            description: "test operation".into(),
         },
         serde_json::to_string(&payload).unwrap(),
     )
@@ -1868,6 +1871,7 @@ async fn a_connection_refused_during_create_is_classified_as_a_network_error() {
             entity_key: "draft:network-failing-session".into(),
             cost: 0,
             attempts: 9,
+            description: "test operation".into(),
         },
         serde_json::to_string(&payload).unwrap(),
     )
@@ -1972,6 +1976,7 @@ async fn a_broken_metadata_table_fails_the_operation_after_a_successful_gmail_ex
             entity_key: "draft:meta-fail-session".into(),
             cost: 0,
             attempts: 0,
+            description: "test operation".into(),
         },
         serde_json::to_string(&payload).unwrap(),
     )

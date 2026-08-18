@@ -198,12 +198,20 @@ fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window(
 #[tokio::test]
 async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     let (app, _directory) = app_with_service();
-    let scheduler = latentmail_lib::sync::SyncScheduler::start(
+    let periodic = latentmail_lib::sync::SyncScheduler::start(
         std::time::Duration::from_secs(300),
         false,
         || async {},
     );
-    app.manage(std::sync::Arc::clone(&scheduler));
+    let fast = latentmail_lib::sync::SyncScheduler::start(
+        std::time::Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS),
+        true,
+        || async {},
+    );
+    app.manage(latentmail_lib::sync::SyncSchedulers {
+        fast: std::sync::Arc::clone(&fast),
+        periodic: std::sync::Arc::clone(&periodic),
+    });
 
     write_setting(
         app.handle().clone(),
@@ -221,7 +229,11 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
             .sync_interval_seconds,
         30
     );
-    assert_eq!(scheduler.interval(), std::time::Duration::from_secs(30));
+    assert_eq!(periodic.interval(), std::time::Duration::from_secs(30));
+    assert_eq!(
+        fast.interval(),
+        std::time::Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS)
+    );
 
     write_setting(
         app.handle().clone(),
@@ -231,7 +243,11 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     )
     .await
     .unwrap();
-    assert_eq!(scheduler.interval(), std::time::Duration::from_secs(15));
+    assert_eq!(periodic.interval(), std::time::Duration::from_secs(15));
+    assert_eq!(
+        fast.interval(),
+        std::time::Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS)
+    );
 }
 
 

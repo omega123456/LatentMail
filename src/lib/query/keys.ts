@@ -17,4 +17,5 @@ export const queryKeys = {
   traversalStatus: (accountId: string) => ['traversalStatus', accountId] as const,
   senderAvatar: (domain: string) => ['senderAvatar', domain] as const,
   accountAvatar: (accountId: string) => ['accountAvatar', accountId] as const,
+  queueOperations: ['queueOperations'] as const,
 };

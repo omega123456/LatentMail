@@ -30,8 +30,9 @@ describe('layout store', () => {
       readerHeight: 60,
       syncOnStartup: false,
       showUnreadCounts: false,
-      syncIntervalSeconds: 30,
+      syncIntervalSeconds: 120,
       showSenderAvatars: false,
+      commandOverrides: {},
     });
     const store = await loadStore();
     store.getState().setRoute('settings');
@@ -48,6 +49,9 @@ describe('layout store', () => {
       route: 'settings',
       hydrated: true,
       showSenderAvatars: false,
+      showUnreadCounts: false,
+      syncOnStartup: false,
+      syncIntervalSeconds: 120,
     });
   });
 
@@ -64,6 +68,10 @@ describe('layout store', () => {
     store.getState().setSidebarWidth(300);
     store.getState().setListWidth(420);
     store.getState().setReaderHeight(60);
+    store.getState().setShowUnreadCounts(false);
+    store.getState().setShowSenderAvatars(false);
+    store.getState().setSyncOnStartup(false);
+    store.getState().setSyncIntervalSeconds(600);
     await Promise.resolve();
 
     expect(writes).toEqual([
@@ -73,7 +81,17 @@ describe('layout store', () => {
       { key: 'sidebarWidth', value: 300 },
       { key: 'listWidth', value: 420 },
       { key: 'readerHeight', value: 60 },
+      { key: 'showUnreadCounts', value: false },
+      { key: 'showSenderAvatars', value: false },
+      { key: 'syncOnStartup', value: false },
+      { key: 'syncIntervalSeconds', value: 600 },
     ]);
+    expect(store.getState()).toMatchObject({
+      showUnreadCounts: false,
+      showSenderAvatars: false,
+      syncOnStartup: false,
+      syncIntervalSeconds: 600,
+    });
   });
 
   it('persists whole-pixel pane sizes from fractional drag offsets', async () => {
@@ -82,7 +100,6 @@ describe('layout store', () => {
     ipc.override('write_setting', (args) => {
       writes.push(args);
     });
-
 
     store.getState().setSidebarWidth(300.4);
     store.getState().setListWidth(420.6);

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from '@/components/statusbar/StatusBar';
 import { EventBridge } from '@/lib/query/event-bridge';
 import { ipc } from '@/tests/ipc-mock';
+import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
 
 function renderStatusBar(ui: React.ReactElement) {
@@ -122,6 +123,15 @@ describe('StatusBar', () => {
       expect(screen.getByText(/Synced/)).toHaveAttribute('title', 'Aug 11, 2026, 10:00 AM'),
     );
     log.mockRestore();
+  });
+
+  it('selects the Queue settings section when the queue indicator is activated', async () => {
+    const user = userEvent.setup();
+    useSettingsUiStore.setState({ activeSection: 'general' });
+    setStatus('idle');
+    renderStatusBar(<StatusBar accountCount={1} />);
+    await user.click(screen.getByRole('button', { name: 'Open queue settings' }));
+    expect(useSettingsUiStore.getState().activeSection).toBe('queue');
   });
 
   it('does not show Syncing… on a background tick; a manual refresh does', async () => {

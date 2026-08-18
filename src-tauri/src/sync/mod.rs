@@ -50,6 +50,7 @@ struct QueueRoute {
     lane: Lane,
     kind: OperationKind,
     entity_key: String,
+    description: String,
 }
 
 #[derive(Default)]
@@ -89,7 +90,18 @@ pub fn create_queue_engine_with_events(
     registry: Arc<WorkRegistry>,
     events: QueueEventSink,
 ) -> Arc<QueueEngine> {
-    QueueEngine::new_with_events(rate_per_second, burst, registry_executor(registry), events)
+    let hook_registry = Arc::clone(&registry);
+    let cancellation_hook: crate::queue::CancellationHook =
+        Arc::new(move |id: &str| {
+            hook_registry.take(id);
+        });
+    QueueEngine::new_with_events_and_hook(
+        rate_per_second,
+        burst,
+        registry_executor(registry),
+        events,
+        cancellation_hook,
+    )
 }
 
 fn registry_executor(registry: Arc<WorkRegistry>) -> Executor {
@@ -129,6 +141,7 @@ where
             lane: Lane::Background,
             kind: OperationKind::Sync,
             entity_key: format!("sync:{account_id}"),
+            description: "Sync mailbox".to_owned(),
         },
         future,
     )
@@ -156,6 +169,7 @@ where
             lane: Lane::Traversal,
             kind: OperationKind::Traversal,
             entity_key: traversal::traversal_entity_key(account_id),
+            description: "Traverse mailbox history".to_owned(),
         },
         future,
     )
@@ -199,6 +213,7 @@ where
 
         cost: 0,
         attempts: 0,
+        description: route.description,
     };
     queue
         .enqueue(operation)
@@ -639,21 +654,38 @@ impl SyncEngine {
         );
         self.set_idle(account_id, history_id, added_count, now, changed)
             .await;
-        if added_count > 0 {
-            emit_new_mail(
-                &self.events,
-                NewMailEvent {
-                    account_id: account_id.to_owned(),
-                    thread_ids,
-                    arrivals,
-                },
-            );
-        }
+        emit_new_mail_if_present(&self.events, account_id, thread_ids, arrivals, added_count);
         Ok(())
     }
 
     pub fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    pub async fn probe_only(&self, account_id: &str, client: GmailClient) -> Result<(), SyncError> {
+        let op_id = self.next_op_id(account_id);
+        let storage = self.storage.clone();
+        let account_owned = account_id.to_owned();
+        let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
+            probe_only_body(&storage, &client, &account_owned).await
+        })
+        .await;
+        match outcome {
+            Ok(batch) => {
+                emit_new_mail_if_present(
+                    &self.events,
+                    account_id,
+                    batch.thread_ids,
+                    batch.arrivals,
+                    batch.added_count,
+                );
+                Ok(())
+            }
+            Err(error) => {
+                tracing::warn!(target: "sync", "{account_id}: inbox probe cadence failed: {error}");
+                Err(error)
+            }
+        }
     }
 }
 
@@ -741,6 +773,7 @@ fn enqueue_backfill_step(
                 entity_key: traversal::traversal_entity_key(&account_id),
                 cost: 0,
                 attempts: 0,
+                description: "Backfill mailbox history".to_owned(),
             })
             .await;
         if enqueue_result.is_err() {
@@ -907,6 +940,80 @@ async fn fetch_unknown(
     Ok(messages)
 }
 
+pub(crate) struct MaterializedBatch {
+    thread_ids: Vec<String>,
+    arrivals: Vec<MailArrival>,
+    added_count: u32,
+}
+
+fn compute_arrivals(messages: &[GmailMessage]) -> Vec<MailArrival> {
+    messages
+        .iter()
+        .filter(|message| {
+            let has = |label: &str| message.label_ids.iter().any(|id| id == label);
+            has("INBOX") && has("UNREAD")
+        })
+        .map(|message| MailArrival {
+            sender: message.sender.clone(),
+            subject: message.subject.clone(),
+        })
+        .collect()
+}
+
+fn emit_new_mail_if_present(
+    events: &EventSink,
+    account_id: &str,
+    thread_ids: Vec<String>,
+    arrivals: Vec<MailArrival>,
+    added_count: u32,
+) {
+    if added_count > 0 {
+        emit_new_mail(
+            events,
+            NewMailEvent {
+                account_id: account_id.to_owned(),
+                thread_ids,
+                arrivals,
+            },
+        );
+    }
+}
+
+async fn probe_only_body(
+    storage: &Storage,
+    client: &GmailClient,
+    account_id: &str,
+) -> Result<MaterializedBatch, SyncError> {
+    let messages = probe_inbox(storage, client, account_id, &[]).await?;
+    let added_count = messages.len() as u32;
+    if messages.is_empty() {
+        return Ok(MaterializedBatch {
+            thread_ids: Vec::new(),
+            arrivals: Vec::new(),
+            added_count: 0,
+        });
+    }
+    let arrivals = compute_arrivals(&messages);
+    let thread_ids: HashSet<String> = messages.iter().map(|message| message.thread_id.clone()).collect();
+    let account_owned = account_id.to_owned();
+    let thread_ids_for_write = thread_ids.clone();
+    storage
+        .run(move |connection| {
+            let transaction = connection.unchecked_transaction()?;
+            for message in &messages {
+                write_message(&transaction, &account_owned, message)?;
+            }
+            ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
+            transaction.commit()
+        })
+        .await?;
+    Ok(MaterializedBatch {
+        thread_ids: thread_ids.into_iter().collect(),
+        arrivals,
+        added_count,
+    })
+}
+
 enum IncrementalOutcome {
     Updated {
         history_id: i64,
@@ -990,17 +1097,7 @@ async fn incremental_body(
     let added_count = added_messages.len() as u32;
     let changed = !records.is_empty() || !added_messages.is_empty();
 
-    let arrivals: Vec<MailArrival> = added_messages
-        .iter()
-        .filter(|message| {
-            let has = |label: &str| message.label_ids.iter().any(|id| id == label);
-            has("INBOX") && has("UNREAD")
-        })
-        .map(|message| MailArrival {
-            sender: message.sender.clone(),
-            subject: message.subject.clone(),
-        })
-        .collect();
+    let arrivals = compute_arrivals(&added_messages);
     let added_thread_ids: HashSet<String> = added_messages
         .iter()
         .map(|message| message.thread_id.clone())
@@ -1144,6 +1241,14 @@ impl SyncScheduler {
     }
 }
 
+pub const FAST_PROBE_INTERVAL_SECS: u64 = 30;
+
+#[derive(Clone)]
+pub struct SyncSchedulers {
+    pub fast: Arc<SyncScheduler>,
+    pub periodic: Arc<SyncScheduler>,
+}
+
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app
@@ -1188,7 +1293,18 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             registry_exec(operation)
         }
     });
-    let queue = QueueEngine::new_with_events(250, 250, executor, Arc::clone(&events));
+    let hook_registry = Arc::clone(&registry);
+    let cancellation_hook: crate::queue::CancellationHook =
+        Arc::new(move |id: &str| {
+            hook_registry.take(id);
+        });
+    let queue = QueueEngine::new_with_events_and_hook(
+        250,
+        250,
+        executor,
+        Arc::clone(&events),
+        cancellation_hook,
+    );
 
     app.manage(storage.clone());
     let engine = SyncEngine::new(
@@ -1249,39 +1365,71 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
     tauri::async_runtime::spawn(async move {
         let preferences = settings.read().await.unwrap_or_default();
 
-        let interval = Duration::from_secs(
+        let periodic_interval = Duration::from_secs(
             u64::from(preferences.sync_interval_seconds)
                 .max(crate::settings::MIN_SYNC_INTERVAL_SECS),
         );
         let app_for_manage = app.clone();
-        let scheduler = SyncScheduler::start(interval, preferences.sync_on_startup, move || {
-            let app = app.clone();
-            let auth = auth.clone();
-            let engine = Arc::clone(&engine);
-            async move {
-                let Ok(accounts) = auth.accounts().await else {
-                    return;
-                };
 
-                for account in accounts {
-                    if account.needs_reauthentication {
-                        continue;
-                    }
-                    let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
-                        continue;
+        let fast_app = app.clone();
+        let fast_auth = auth.clone();
+        let fast_engine = Arc::clone(&engine);
+        let fast = SyncScheduler::start(
+            Duration::from_secs(FAST_PROBE_INTERVAL_SECS),
+            true,
+            move || {
+                let app = fast_app.clone();
+                let auth = fast_auth.clone();
+                let engine = Arc::clone(&fast_engine);
+                async move {
+                    let Ok(accounts) = auth.accounts().await else {
+                        return;
                     };
-                    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-                        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
-                    let client = engine.gmail_client(&account.id, token, base_url).await;
-                    if engine.run_sync(&account.id, client.clone()).await.is_ok() {
-
-                        engine.enqueue_backfill(&account.id, client).await;
-                    } else {
-                        auth.invalidate_access_token(&account.id);
+                    for account in accounts {
+                        if account.needs_reauthentication {
+                            continue;
+                        }
+                        let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
+                            continue;
+                        };
+                        let client = engine.gmail_client(&account.id, token, gmail_base_url()).await;
+                        let _ = engine.probe_only(&account.id, client).await;
                     }
                 }
-            }
-        });
-        app_for_manage.manage(scheduler);
+            },
+        );
+
+        let periodic_auth = auth.clone();
+        let periodic_engine = Arc::clone(&engine);
+        let periodic = SyncScheduler::start(
+            periodic_interval,
+            preferences.sync_on_startup,
+            move || {
+                let app = app.clone();
+                let auth = periodic_auth.clone();
+                let engine = Arc::clone(&periodic_engine);
+                async move {
+                    let Ok(accounts) = auth.accounts().await else {
+                        return;
+                    };
+
+                    for account in accounts {
+                        if account.needs_reauthentication {
+                            continue;
+                        }
+                        let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
+                            continue;
+                        };
+                        let client = engine.gmail_client(&account.id, token, gmail_base_url()).await;
+                        if engine.run_sync(&account.id, client.clone()).await.is_ok() {
+                            engine.enqueue_backfill(&account.id, client).await;
+                        } else {
+                            auth.invalidate_access_token(&account.id);
+                        }
+                    }
+                }
+            },
+        );
+        app_for_manage.manage(SyncSchedulers { fast, periodic });
     });
 }

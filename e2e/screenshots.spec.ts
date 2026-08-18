@@ -6,6 +6,7 @@ import {
   playwrightContactSuggestionMatches,
   playwrightMailAccount,
   playwrightParsedSearchQuery,
+  playwrightQueueOperationsSnapshot,
   playwrightReauthAccount,
   playwrightSearchThreadPage,
   playwrightSettings,
@@ -201,7 +202,12 @@ for (const theme of themes) {
     await page.goto('/');
     await page.getByLabel('Search mail').click();
     await page.getByLabel('Search mail').fill('is:');
-    await screenshot(page, page.getByRole('listbox', { name: 'Search suggestions' }), 'search-keyword-suggestions', theme);
+    await screenshot(
+      page,
+      page.getByRole('listbox', { name: 'Search suggestions' }),
+      'search-keyword-suggestions',
+      theme,
+    );
   });
 
   test(`advanced search panel ${theme}`, async ({ page }) => {
@@ -219,7 +225,12 @@ for (const theme of themes) {
     await page.getByRole('button', { name: '4 August 2026', exact: true }).click();
     await page.getByRole('button', { name: '13 August 2026', exact: true }).click();
     await expect(page.getByTestId('date-filter-summary')).toHaveText('4 Aug 2026 – 13 Aug 2026');
-    await screenshot(page, page.getByTestId('advanced-search-panel'), 'advanced-search-panel', theme);
+    await screenshot(
+      page,
+      page.getByTestId('advanced-search-panel'),
+      'advanced-search-panel',
+      theme,
+    );
   });
 
   test(`search results sidebar row ${theme}`, async ({ page }) => {
@@ -409,7 +420,6 @@ for (const theme of themes) {
         accountId: 'mail-account',
         from: 'you@example.com',
         recipients: {
-
           to: [
             'Priya Raman <priya.raman@example.com>',
             'Tomás Field <tomas.field@example.com>',
@@ -460,6 +470,85 @@ for (const theme of themes) {
     await expect(page.getByRole('option', { name: /Marta Oliveira/ })).toBeVisible();
     await page.getByRole('combobox', { name: 'To' }).press('ArrowDown');
     await screenshot(page, page.getByTestId('compose-overlay'), 'contact-suggestions', theme);
+  });
+
+  test(`settings navigation ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await screenshot(page, page.getByTestId('settings-nav'), 'settings-nav', theme);
+  });
+
+  test(`settings general section ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await screenshot(
+      page,
+      page.getByTestId('settings-general-section'),
+      'settings-general-section',
+      theme,
+    );
+  });
+
+  test(`settings accounts section ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Accounts' }).click();
+    await screenshot(
+      page,
+      page.getByTestId('settings-accounts-section'),
+      'settings-accounts-section',
+      theme,
+    );
+  });
+
+  test(`settings keyboard section ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      read_settings: playwrightSettings,
+    });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Keyboard' }).click();
+    await page.getByRole('button', { name: 'Change shortcut for Forward' }).click();
+    await page.getByRole('textbox', { name: 'Recording new shortcut for Forward' }).press('r');
+    await screenshot(
+      page,
+      page.getByTestId('settings-keyboard-section'),
+      'settings-keyboard-section',
+      theme,
+    );
+  });
+
+  test(`settings queue section ${theme}`, async ({ page }) => {
+    await page.clock.setFixedTime(parseISO('2026-08-18T12:00:00Z'));
+    await installPlaywrightIpc(page, {
+      list_accounts: [
+        { ...playwrightMailAccount, displayName: 'Running Account' },
+        { ...playwrightReauthAccount, id: 'reauth-account', displayName: 'Paused Account' },
+        { ...playwrightSidebarAccounts[0], displayName: 'Idle Account' },
+      ],
+      read_queue_operations: playwrightQueueOperationsSnapshot,
+    });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Queue' }).click();
+    await page
+      .getByTestId('queue-account-card-mail-account')
+      .getByRole('button', { name: 'Expand the Interactive lane' })
+      .click();
+    await page
+      .getByTestId('queue-account-card-reauth-account')
+      .getByRole('button', { name: 'Expand the Interactive lane' })
+      .click();
+    await screenshot(
+      page,
+      page.getByTestId('settings-queue-section'),
+      'settings-queue-section',
+      theme,
+    );
   });
 
   test(`quote disclosure ${theme}`, async ({ page }) => {

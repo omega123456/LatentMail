@@ -5,6 +5,7 @@ import { SignInScreen } from '@/components/auth/SignInScreen';
 import { CommandProvider } from '@/providers/CommandProvider';
 import { MailLayout } from './MailLayout';
 import { Toast } from '@/components/states/Toast';
+import { SettingsShell } from '@/components/settings/SettingsShell';
 
 export function AppShell() {
   const route = useLayoutStore((state) => state.route);
@@ -26,9 +27,7 @@ export function AppShell() {
     route === 'auth' ? (
       <SignInScreen />
     ) : route === 'settings' ? (
-      <main className="min-h-screen bg-surface p-container-padding text-headline-sm dark:bg-dark-surface">
-        Settings are not yet implemented.
-      </main>
+      <SettingsShell />
     ) : (
       <MailLayout accounts={accounts ?? []} />
     );

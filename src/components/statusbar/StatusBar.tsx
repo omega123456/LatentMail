@@ -5,6 +5,7 @@ import { exactTime } from '@/lib/format/relative-time';
 import { invoke } from '@/lib/ipc/commands';
 import { useTraversalStatusQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
+import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
 
 function elapsed(date: Date | null, now: Date) {
@@ -98,6 +99,7 @@ function ProgressZone({ accountId }: { accountId: string | null }) {
 function RightZone({ accountCount }: { accountCount: number }) {
   const pending = useSyncStore((state) => state.queue.pending);
   const setRoute = useLayoutStore((state) => state.setRoute);
+  const setActiveSection = useSettingsUiStore((state) => state.setActiveSection);
   return (
     <div className="flex items-center gap-stack-gap-md">
       <span>
@@ -106,7 +108,10 @@ function RightZone({ accountCount }: { accountCount: number }) {
       <button
         type="button"
         aria-label="Open queue settings"
-        onClick={() => setRoute('settings')}
+        onClick={() => {
+          setActiveSection('queue');
+          setRoute('settings');
+        }}
         className="flex cursor-pointer items-center gap-stack-gap-sm rounded p-stack-gap-sm focus-visible:outline-2 focus-visible:outline-primary"
       >
         <ListChecks aria-hidden="true" size={16} />

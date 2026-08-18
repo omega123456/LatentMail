@@ -5,8 +5,10 @@ import App from '@/App';
 import type { IpcCommandMap } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
+import { useSearchStore } from '@/stores/search';
 import { useSelectionStore } from '@/stores/selection';
 import { useSyncStore } from '@/stores/sync';
+import { useSettingsUiStore } from '@/stores/settings-ui';
 
 beforeEach(() => {
   act(() => {
@@ -25,6 +27,14 @@ beforeEach(() => {
       listWidth: 350,
       readerHeight: 40,
     });
+    useSearchStore.setState({
+      draft: '',
+      submittedQuery: '',
+      scope: { kind: 'default' },
+      active: false,
+      panelOpen: false,
+    });
+    useSettingsUiStore.setState({ activeSection: 'general' });
   });
 });
 
@@ -221,7 +231,76 @@ describe('AppShell wired to real data', () => {
     expect(useLayoutStore.getState().listWidth).toBe(370);
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(await screen.findByText('Settings are not yet implemented.')).toBeInTheDocument();
+    expect(await screen.findByTestId('settings-shell')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to Mail' })).toBeInTheDocument();
+  });
+
+  it('returns from Settings to Mail with the active account, mailbox, selection and search intact', async () => {
+    const user = userEvent.setup();
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    render(<App />);
+    await screen.findByText('Q3 review');
+
+    act(() => {
+      useSelectionStore.setState({ activeThreadId: 'thread-1', keyboardCursor: 0 });
+      useSearchStore.setState({
+        draft: 'from:anna',
+        submittedQuery: 'from:anna',
+        scope: { kind: 'default' },
+        active: true,
+        panelOpen: false,
+      });
+    });
+
+    const before = {
+      selection: useSelectionStore.getState(),
+      search: useSearchStore.getState(),
+    };
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await screen.findByTestId('settings-shell');
+    await user.click(screen.getByRole('button', { name: 'Back to Mail' }));
+    await screen.findByTestId('mail-layout');
+
+    expect(useSelectionStore.getState()).toEqual(before.selection);
+    expect(useSearchStore.getState()).toEqual(before.search);
+  });
+
+  it('remembers the last viewed settings section for the app session', async () => {
+    const user = userEvent.setup();
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    render(<App />);
+    await screen.findByText('Q3 review');
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await screen.findByTestId('settings-shell');
+    await user.click(screen.getByRole('button', { name: 'Queue' }));
+    expect(await screen.findByRole('heading', { name: 'Queue' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Back to Mail' }));
+    await screen.findByTestId('mail-layout');
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await screen.findByTestId('settings-shell');
+    expect(screen.getByRole('heading', { name: 'Queue' })).toBeInTheDocument();
+  });
+
+  it('renders no Save, Apply or Cancel control in General', async () => {
+    const user = userEvent.setup();
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    render(<App />);
+    await screen.findByText('Q3 review');
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await screen.findByRole('heading', { name: 'General' });
+
+    expect(screen.queryByRole('button', { name: /save/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /apply/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
   });
 
   it('resizes the bottom preview reader', async () => {

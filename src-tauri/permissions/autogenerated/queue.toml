@@ -12,3 +12,33 @@ commands.allow = ["resume_queue"]
 identifier = "allow-read-queue-summary"
 description = "Enables reading the operation queue summary."
 commands.allow = ["read_queue_summary"]
+
+[[permission]]
+identifier = "allow-read-queue-operations"
+description = "Enables reading the operation queue snapshot."
+commands.allow = ["read_queue_operations"]
+
+[[permission]]
+identifier = "allow-cancel-queue-operation"
+description = "Enables cancelling an operation that has not yet executed."
+commands.allow = ["cancel_queue_operation"]
+
+[[permission]]
+identifier = "allow-retry-queue-operation"
+description = "Enables retrying a single failed Send or Draft operation."
+commands.allow = ["retry_queue_operation"]
+
+[[permission]]
+identifier = "allow-retry-failed-operations"
+description = "Enables retrying every failed Send and Draft operation, optionally scoped to an account."
+commands.allow = ["retry_failed_operations"]
+
+[[permission]]
+identifier = "allow-clear-queue-history"
+description = "Enables clearing terminal operation history, optionally scoped to an account."
+commands.allow = ["clear_queue_history"]
+
+[[permission]]
+identifier = "allow-set-queue-paused"
+description = "Enables setting the paused flag for the global, account, or account-and-lane scope."
+commands.allow = ["set_queue_paused"]

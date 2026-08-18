@@ -35,6 +35,7 @@ async fn retries_only_retryable_errors_with_exponential_backoff() {
             entity_key: "retry".into(),
             cost: 1,
             attempts: 0,
+            description: "test operation".into(),
         })
         .await
         .unwrap();
@@ -71,6 +72,7 @@ async fn rate_limited_operations_wait_for_the_token_bucket_to_refill() {
             entity_key: "one".into(),
             cost: 1,
             attempts: 0,
+            description: "test operation".into(),
         })
         .await
         .unwrap();
@@ -83,6 +85,7 @@ async fn rate_limited_operations_wait_for_the_token_bucket_to_refill() {
             entity_key: "two".into(),
             cost: 1,
             attempts: 0,
+            description: "test operation".into(),
         })
         .await
         .unwrap();
@@ -116,6 +119,7 @@ async fn non_retryable_operations_increment_the_failed_counter_without_retrying(
             entity_key: "send".into(),
             cost: 1,
             attempts: 0,
+            description: "test operation".into(),
         })
         .await
         .unwrap();

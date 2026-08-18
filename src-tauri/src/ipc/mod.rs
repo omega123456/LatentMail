@@ -108,6 +108,7 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::auth::list_accounts,
         crate::auth::begin_sign_in,
         crate::auth::begin_reauthentication,
+        crate::auth::remove_account,
         crate::settings::read_settings,
         crate::settings::write_setting,
         crate::sync::commands::list_labels,
@@ -144,6 +145,12 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::sync::commands::delete_label,
         crate::sync::commands::read_traversal_status,
         crate::avatars::read_sender_avatar,
-        crate::avatars::read_account_avatar
+        crate::avatars::read_account_avatar,
+        crate::queue::commands::read_queue_operations,
+        crate::queue::commands::cancel_queue_operation,
+        crate::queue::commands::retry_queue_operation,
+        crate::queue::commands::retry_failed_operations,
+        crate::queue::commands::clear_queue_history,
+        crate::queue::commands::set_queue_paused
     ])
 }

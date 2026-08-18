@@ -9,6 +9,7 @@ import { playwrightSettings } from './settings';
 import { playwrightContactSuggestions, playwrightStagedAttachment } from './compose';
 import {
   playwrightPausedQueueSummary,
+  playwrightQueueOperationsSnapshot,
   playwrightQueueSummary,
   playwrightResumedQueueSummary,
 } from './queue';
@@ -25,6 +26,7 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   list_accounts: [],
   begin_sign_in: undefined,
   begin_reauthentication: undefined,
+  remove_account: undefined,
   list_labels: playwrightLabels,
   lookup_contacts: playwrightContactSuggestions,
   reply_context: {
@@ -98,6 +100,12 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
     excludes: [],
     predicates: [],
   },
+  read_queue_operations: playwrightQueueOperationsSnapshot,
+  cancel_queue_operation: true,
+  retry_queue_operation: true,
+  retry_failed_operations: 0,
+  clear_queue_history: undefined,
+  set_queue_paused: true,
 };
 
 export { playwrightSidebarAccounts };

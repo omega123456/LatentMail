@@ -32,6 +32,14 @@ export function EventBridge() {
     const unlistens: Array<() => void | Promise<void>> = [];
     const traversalAccounts = new Set<string>();
     let traversalTimer: number | undefined;
+    let queueSnapshotTimer: number | undefined;
+    const scheduleQueueSnapshotInvalidation = () => {
+      if (queueSnapshotTimer !== undefined) return;
+      queueSnapshotTimer = window.setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
+        queueSnapshotTimer = undefined;
+      }, 250);
+    };
     const subscribe = <E extends keyof IpcEventMap>(
       event: E,
       handler: (payload: IpcEventMap[E]) => void,
@@ -48,6 +56,7 @@ export function EventBridge() {
 
     subscribe('queue://summary', (summary) => {
       useSyncStore.getState().setQueue(summary);
+      scheduleQueueSnapshotInvalidation();
     });
 
     subscribe('sync://progress', (progress) => {
@@ -138,6 +147,7 @@ export function EventBridge() {
     });
 
     subscribe('queue://item', (item) => {
+      scheduleQueueSnapshotInvalidation();
       if (item.status !== 'done' && item.status !== 'failed') return;
       if (!item.id.startsWith('mutation:')) return;
       const accountId = item.id.split(':')[1];
@@ -164,6 +174,7 @@ export function EventBridge() {
     return () => {
       disposed = true;
       if (traversalTimer !== undefined) window.clearTimeout(traversalTimer);
+      if (queueSnapshotTimer !== undefined) window.clearTimeout(queueSnapshotTimer);
       unlistens.forEach((remove) => void remove());
     };
   }, [queryClient]);
