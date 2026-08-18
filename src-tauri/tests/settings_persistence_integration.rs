@@ -90,3 +90,42 @@ async fn invalid_preference_values_are_rejected_without_overwriting_the_default(
     assert!(service.write("unknown".into(), json!(true)).await.is_err());
     assert_eq!(service.read().await.unwrap().layout, Layout::ThreeColumn);
 }
+
+#[tokio::test]
+async fn remote_image_preferences_round_trip_and_reject_a_malformed_sender_list() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mail.sqlite");
+    let service = SettingsService::new(Storage::open(&path).unwrap());
+
+    assert!(!service.read().await.unwrap().always_load_remote_images);
+    assert!(service
+        .read()
+        .await
+        .unwrap()
+        .allowed_image_senders
+        .is_empty());
+
+    service
+        .write("alwaysLoadRemoteImages".into(), json!(true))
+        .await
+        .unwrap();
+    service
+        .write(
+            "allowedImageSenders".into(),
+            json!(["receipts@stripe.com", "team@linear.app"]),
+        )
+        .await
+        .unwrap();
+    assert!(service
+        .write("allowedImageSenders".into(), json!("receipts@stripe.com"))
+        .await
+        .is_err());
+
+    let reopened = SettingsService::new(Storage::open(path).unwrap());
+    let settings = reopened.read().await.unwrap();
+    assert!(settings.always_load_remote_images);
+    assert_eq!(
+        settings.allowed_image_senders,
+        vec!["receipts@stripe.com".to_owned(), "team@linear.app".to_owned()]
+    );
+}

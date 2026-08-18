@@ -38,6 +38,8 @@ describe('KeyboardSection', () => {
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: {},
     });
 

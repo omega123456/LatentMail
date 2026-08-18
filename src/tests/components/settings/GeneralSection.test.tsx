@@ -54,6 +54,8 @@ describe('GeneralSection', () => {
         hydrated: false,
         syncIntervalSeconds: 300,
         zoomPercent: 100,
+        alwaysLoadRemoteImages: false,
+        allowedImageSenders: [],
       });
       useSettingsUiStore.setState({ activeSection: 'general' });
     });
@@ -73,6 +75,8 @@ describe('GeneralSection', () => {
       syncIntervalSeconds: 120,
       showSenderAvatars: false,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: {},
     });
 

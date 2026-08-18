@@ -7,10 +7,16 @@ describe('queryKeys', () => {
     expect(queryKeys.labels('account-1')).toEqual(['labels', 'account-1']);
     expect(queryKeys.threads('account-1', 'INBOX')).toEqual(['threads', 'account-1', 'INBOX']);
     expect(queryKeys.threadsForAccount('account-1')).toEqual(['threads', 'account-1']);
-    expect(queryKeys.conversation('account-1', 'thread-1')).toEqual([
+    expect(queryKeys.conversationThread('account-1', 'thread-1')).toEqual([
       'conversation',
       'account-1',
       'thread-1',
+    ]);
+    expect(queryKeys.conversation('account-1', 'thread-1', 'policy')).toEqual([
+      'conversation',
+      'account-1',
+      'thread-1',
+      'policy',
     ]);
     expect(queryKeys.syncStatus('account-1')).toEqual(['syncStatus', 'account-1']);
     expect(queryKeys.traversalStatus('account-1')).toEqual(['traversalStatus', 'account-1']);

@@ -43,6 +43,8 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     syncIntervalSeconds: 300,
     showSenderAvatars: true,
     zoomPercent: 100,
+    alwaysLoadRemoteImages: false,
+    allowedImageSenders: [],
     commandOverrides: {},
   },
   write_setting: undefined,

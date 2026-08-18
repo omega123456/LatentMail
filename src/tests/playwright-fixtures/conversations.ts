@@ -19,6 +19,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       isStarred: false,
       labelIds: [],
       remoteImagesBlocked: false,
+      remoteImagesAllowed: false,
     },
     {
       id: 'message-2',
@@ -41,6 +42,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       isStarred: true,
       labelIds: ['INBOX', 'Label_1', 'Label_2'],
       remoteImagesBlocked: true,
+      remoteImagesAllowed: false,
     },
   ],
 };

@@ -90,6 +90,76 @@ describe('MessageCard', () => {
     expect(screen.getByLabelText('Message body')).toBeInTheDocument();
   });
 
+  it('offers both bypasses on the blocked banner and reports the sender address lowercased', async () => {
+    const user = userEvent.setup();
+    const onLoadImages = vi.fn();
+    const onTrustSender = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{
+          ...message,
+          html: '<p>Body</p>',
+          htmlPresence: 'present',
+          labelIds: ['INBOX'],
+          remoteImagesBlocked: true,
+        }}
+        expanded
+        newest
+        onLoadImages={onLoadImages}
+        onTrustSender={onTrustSender}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Load images' }));
+    expect(onLoadImages).toHaveBeenCalledWith('message-1');
+    await user.click(screen.getByRole('button', { name: 'Always allow from Alex' }));
+    expect(onTrustSender).toHaveBeenCalledWith('alex@example.com');
+  });
+
+  it('offers no bypass at all on a spammed message', () => {
+    renderWithQueryClient(
+      <MessageCard
+        message={{
+          ...message,
+          html: '<p>Body</p>',
+          htmlPresence: 'present',
+          labelIds: ['SPAM'],
+          remoteImagesBlocked: true,
+        }}
+        expanded
+        newest
+      />,
+    );
+    expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load images' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Always allow from/ })).not.toBeInTheDocument();
+  });
+
+  it('widens the body frame image policy only when the message is allowed', () => {
+    const { rerender } = renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present' }}
+        expanded
+        newest
+      />,
+    );
+    const blockedFrame = screen.getByLabelText('Message body') as HTMLIFrameElement;
+    expect(blockedFrame.srcdoc).toContain('img-src data:;');
+    rerender(
+      <MessageCard
+        message={{
+          ...message,
+          html: '<p>Body</p>',
+          htmlPresence: 'present',
+          remoteImagesAllowed: true,
+        }}
+        expanded
+        newest
+      />,
+    );
+    const allowedFrame = screen.getByLabelText('Message body') as HTMLIFrameElement;
+    expect(allowedFrame.srcdoc).toContain('img-src data: https: http:;');
+  });
+
   it('toggles the message from a click on its row without hijacking the sender button', async () => {
     const user = userEvent.setup();
     const onComposeTo = vi.fn();

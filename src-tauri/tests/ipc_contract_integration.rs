@@ -318,7 +318,7 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
         ),
         (
             "load_conversation",
-            serde_json::json!({ "accountId": "account", "threadId": "thread" }),
+            serde_json::json!({ "accountId": "account", "threadId": "thread", "imagePolicy": null }),
         ),
         (
             "fetch_message_body",
@@ -1872,11 +1872,16 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
     let conversation = invoke(
         &webview,
         "load_conversation",
-        serde_json::json!({ "accountId": account_id, "threadId": "thread-1" }),
+        serde_json::json!({
+            "accountId": account_id,
+            "threadId": "thread-1",
+            "imagePolicy": { "alwaysLoad": false, "allowedSenders": [], "loadFor": [] },
+        }),
     )
     .unwrap();
     assert_eq!(conversation["messages"][0]["htmlPresence"], "present");
     assert_eq!(conversation["messages"][0]["remoteImagesBlocked"], true);
+    assert_eq!(conversation["messages"][0]["remoteImagesAllowed"], false);
 
     let status = invoke(
         &webview,

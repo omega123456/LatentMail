@@ -97,6 +97,7 @@ export function mapConversation(conversation: IpcConversation): ReaderConversati
       unread: message.isUnread,
       starred: message.isStarred,
       remoteImagesBlocked: message.remoteImagesBlocked,
+      remoteImagesAllowed: message.remoteImagesAllowed,
       isDraft: message.labelIds.includes('DRAFT'),
       draftId: message.draftId,
     })),

@@ -15,3 +15,6 @@ export const settingsLinkButton =
 export const settingsLinkPrimary = `${settingsLinkButton} text-settings-primary dark:text-dark-settings-primary`;
 
 export const settingsLinkMuted = `${settingsLinkButton} text-settings-ink-mute dark:text-dark-settings-ink-mute`;
+
+export const settingsTriggerClass =
+  'w-select-menu cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink';

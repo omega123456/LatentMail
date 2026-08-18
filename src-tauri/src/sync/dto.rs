@@ -267,7 +267,32 @@ pub struct MessageDto {
     pub is_starred: bool,
     pub label_ids: Vec<String>,
     pub remote_images_blocked: bool,
+    pub remote_images_allowed: bool,
     pub draft_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePolicy {
+    pub always_load: bool,
+    pub allowed_senders: Vec<String>,
+    pub load_for: Vec<String>,
+}
+
+impl ImagePolicy {
+    pub fn allows(&self, label_ids: &[String], message_id: &str, sender: &str) -> bool {
+        if label_ids.iter().any(|label| label == "SPAM") {
+            return false;
+        }
+        self.always_load
+            || self.load_for.iter().any(|id| id == message_id)
+            || crate::storage::addresses::first_identity(sender).is_some_and(|identity| {
+                let address = identity.address.to_ascii_lowercase();
+                self.allowed_senders
+                    .iter()
+                    .any(|allowed| allowed.to_ascii_lowercase() == address)
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -294,6 +319,7 @@ pub fn message_dto(
     label_ids: Vec<String>,
     html_body: Option<String>,
     remote_images_blocked: bool,
+    remote_images_allowed: bool,
     draft_id: Option<String>,
 ) -> MessageDto {
     MessageDto {
@@ -314,6 +340,7 @@ pub fn message_dto(
         is_starred: message.is_starred,
         label_ids,
         remote_images_blocked,
+        remote_images_allowed,
         draft_id,
     }
 }

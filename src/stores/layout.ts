@@ -17,6 +17,8 @@ type LayoutState = Pick<
   | 'zoomPercent'
   | 'syncOnStartup'
   | 'syncIntervalSeconds'
+  | 'alwaysLoadRemoteImages'
+  | 'allowedImageSenders'
 > & {
   route: Route;
   hydrated: boolean;
@@ -35,6 +37,9 @@ type LayoutState = Pick<
   setZoomPercent: (zoomPercent: number) => void;
   setSyncOnStartup: (syncOnStartup: boolean) => void;
   setSyncIntervalSeconds: (syncIntervalSeconds: number) => void;
+  setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages: boolean) => void;
+  trustImageSender: (address: string) => void;
+  untrustImageSender: (address: string) => void;
 };
 
 let hydration: Promise<void> | undefined;
@@ -66,6 +71,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   zoomPercent: 100,
   syncOnStartup: true,
   syncIntervalSeconds: 300,
+  alwaysLoadRemoteImages: false,
+  allowedImageSenders: [],
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -83,6 +90,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         zoomPercent: settings.zoomPercent,
         syncOnStartup: settings.syncOnStartup,
         syncIntervalSeconds: settings.syncIntervalSeconds,
+        alwaysLoadRemoteImages: settings.alwaysLoadRemoteImages,
+        allowedImageSenders: settings.allowedImageSenders,
         hydrated: true,
       });
     });
@@ -148,6 +157,26 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setSyncIntervalSeconds: (syncIntervalSeconds) => {
     set({ syncIntervalSeconds });
     persist('syncIntervalSeconds', syncIntervalSeconds);
+  },
+  setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages) => {
+    set({ alwaysLoadRemoteImages });
+    persist('alwaysLoadRemoteImages', alwaysLoadRemoteImages);
+  },
+  trustImageSender: (address) => {
+    const normalized = address.trim().toLowerCase();
+    const current = useLayoutStore.getState().allowedImageSenders;
+    if (!normalized || current.includes(normalized)) return;
+    const allowedImageSenders = [...current, normalized];
+    set({ allowedImageSenders });
+    persist('allowedImageSenders', allowedImageSenders);
+  },
+  untrustImageSender: (address) => {
+    const normalized = address.trim().toLowerCase();
+    const allowedImageSenders = useLayoutStore
+      .getState()
+      .allowedImageSenders.filter((entry) => entry !== normalized);
+    set({ allowedImageSenders });
+    persist('allowedImageSenders', allowedImageSenders);
   },
 }));
 

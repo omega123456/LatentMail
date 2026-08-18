@@ -82,6 +82,8 @@ describe('theme store', () => {
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: {},
     });
     const { useThemeStore } = await loadThemeStore();

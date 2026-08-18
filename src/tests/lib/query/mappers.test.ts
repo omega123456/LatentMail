@@ -132,6 +132,7 @@ describe('mapConversation', () => {
           isStarred: false,
           labelIds: ['Label_1', 'INBOX'],
           remoteImagesBlocked: true,
+          remoteImagesAllowed: false,
         },
       ],
     };
@@ -143,6 +144,7 @@ describe('mapConversation', () => {
       text: null,
       labelIds: ['Label_1', 'INBOX'],
       remoteImagesBlocked: true,
+      remoteImagesAllowed: false,
     });
   });
 });

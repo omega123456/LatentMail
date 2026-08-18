@@ -13,7 +13,27 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   syncIntervalSeconds: 300,
   showSenderAvatars: true,
   zoomPercent: 100,
+  alwaysLoadRemoteImages: false,
+  allowedImageSenders: [],
   commandOverrides: {
     replyAllToMessage: ['Shift+A'],
   },
+};
+
+export const playwrightTrustedSenderSettings: IpcCommandMap['read_settings']['result'] = {
+  ...playwrightSettings,
+  allowedImageSenders: [
+    'alerts@monzo.com',
+    'billing@acme-cloud.com',
+    'connect@figma.com',
+    'digest@substack.com',
+    'hello@readwise.io',
+    'invoices@hetzner.com',
+    'mail@notion.so',
+    'news@economist.com',
+    'no-reply@github.com',
+    'orders@bandcamp.com',
+    'receipts@stripe.com',
+    'team@linear.app',
+  ],
 };

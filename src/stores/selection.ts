@@ -8,6 +8,8 @@ type SelectionState = {
   activeMailboxId: string | null;
   activeThreadId: string | null;
   keyboardCursor: number | null;
+  imagesAllowedFor: string[];
+  allowImagesFor: (messageId: string) => void;
   setActiveAccountId: (activeAccountId: string | null) => void;
   setActiveMailboxId: (activeMailboxId: string | null) => void;
   setActiveThreadId: (activeThreadId: string | null) => void;
@@ -21,20 +23,27 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   activeMailboxId: null,
   activeThreadId: null,
   keyboardCursor: null,
+  imagesAllowedFor: [],
+  allowImagesFor: (messageId) =>
+    set((state) =>
+      state.imagesAllowedFor.includes(messageId)
+        ? state
+        : { imagesAllowedFor: [...state.imagesAllowedFor, messageId] },
+    ),
   setActiveAccountId: (activeAccountId) => {
     useMultiSelectStore.getState().clear();
     set({ activeAccountId });
   },
   setActiveMailboxId: (activeMailboxId) => {
     useMultiSelectStore.getState().clear();
-    set({ activeMailboxId, activeThreadId: null, keyboardCursor: null });
+    set({ activeMailboxId, activeThreadId: null, keyboardCursor: null, imagesAllowedFor: [] });
   },
   setActiveThreadId: (activeThreadId) => {
     if (activeThreadId !== null) useMultiSelectStore.getState().clear();
-    set({ activeThreadId });
+    set({ activeThreadId, imagesAllowedFor: [] });
   },
   setKeyboardCursor: (keyboardCursor) => set({ keyboardCursor }),
-  clearSelection: () => set({ activeThreadId: null, keyboardCursor: null }),
+  clearSelection: () => set({ activeThreadId: null, keyboardCursor: null, imagesAllowedFor: [] }),
   clearStateForRemovedAccount: (accountId) => {
     useMultiSelectStore.getState().clear();
     useSearchStore.getState().clear();
@@ -46,6 +55,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
         activeMailboxId: null,
         activeThreadId: null,
         keyboardCursor: null,
+        imagesAllowedFor: [],
       });
     }
   },

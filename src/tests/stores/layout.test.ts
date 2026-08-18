@@ -10,6 +10,8 @@ async function loadStore() {
     sidebarWidth: 260,
     listWidth: 350,
     readerHeight: 40,
+    alwaysLoadRemoteImages: false,
+    allowedImageSenders: [],
     route: 'mail',
     hydrated: false,
   });
@@ -33,6 +35,8 @@ describe('layout store', () => {
       syncIntervalSeconds: 120,
       showSenderAvatars: false,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: {},
     });
     const store = await loadStore();
@@ -51,6 +55,8 @@ describe('layout store', () => {
       hydrated: true,
       showSenderAvatars: false,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       showUnreadCounts: false,
       syncOnStartup: false,
       syncIntervalSeconds: 120,
@@ -92,6 +98,8 @@ describe('layout store', () => {
       showUnreadCounts: false,
       showSenderAvatars: false,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       syncOnStartup: false,
       syncIntervalSeconds: 600,
     });
@@ -115,6 +123,32 @@ describe('layout store', () => {
       { key: 'readerHeight', value: 61 },
     ]);
     expect(store.getState()).toMatchObject({ sidebarWidth: 300, listWidth: 421, readerHeight: 61 });
+  });
+
+  it('normalises trusted senders, ignores a duplicate, and persists each whole list', async () => {
+    const store = await loadStore();
+    const writes: Array<{ key: string; value: unknown }> = [];
+    ipc.override('write_setting', (args) => {
+      writes.push(args);
+    });
+
+    store.getState().setAlwaysLoadRemoteImages(true);
+    store.getState().trustImageSender('  Receipts@Stripe.com ');
+    store.getState().trustImageSender('receipts@stripe.com');
+    store.getState().trustImageSender('team@linear.app');
+    store.getState().untrustImageSender('Receipts@Stripe.com');
+    await Promise.resolve();
+
+    expect(writes).toEqual([
+      { key: 'alwaysLoadRemoteImages', value: true },
+      { key: 'allowedImageSenders', value: ['receipts@stripe.com'] },
+      { key: 'allowedImageSenders', value: ['receipts@stripe.com', 'team@linear.app'] },
+      { key: 'allowedImageSenders', value: ['team@linear.app'] },
+    ]);
+    expect(store.getState()).toMatchObject({
+      alwaysLoadRemoteImages: true,
+      allowedImageSenders: ['team@linear.app'],
+    });
   });
 
   it('resizes the zoomed surface to the window on resize', async () => {

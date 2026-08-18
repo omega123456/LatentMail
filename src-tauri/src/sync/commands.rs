@@ -18,7 +18,8 @@ use crate::{
 };
 
 use super::{
-    dto::message_dto, ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
+    dto::{message_dto, ImagePolicy},
+    ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
     ThreadCursor, ThreadDto, ThreadPage, TraversalStatusDto,
 };
 
@@ -541,7 +542,9 @@ pub async fn load_conversation(
     storage: tauri::State<'_, Storage>,
     account_id: String,
     thread_id: String,
+    image_policy: Option<ImagePolicy>,
 ) -> Result<ConversationDto, String> {
+    let image_policy = image_policy.unwrap_or_default();
     let (account_for_read, thread_for_read) = (account_id.clone(), thread_id.clone());
     let (messages, thread_subject) = string_try!(
         storage
@@ -562,6 +565,11 @@ pub async fn load_conversation(
 
     let mut message_dtos = Vec::with_capacity(messages.len());
     for stored in messages {
+        let allow_remote = image_policy.allows(
+            &stored.label_ids,
+            &stored.message.id,
+            &stored.message.sender,
+        );
         let (sanitized_html, remote_images_blocked) = match &stored.message.html_body {
             Some(html) => {
                 let cid_map: HashMap<String, CidPart> = stored
@@ -577,7 +585,7 @@ pub async fn load_conversation(
                         )
                     })
                     .collect();
-                let sanitized = sanitize::sanitize(html, &cid_map);
+                let sanitized = sanitize::sanitize(html, &cid_map, allow_remote);
                 (Some(sanitized.html), sanitized.remote_images_blocked)
             }
             None => (None, false),
@@ -588,6 +596,7 @@ pub async fn load_conversation(
             stored.label_ids,
             sanitized_html,
             remote_images_blocked,
+            allow_remote,
             stored.draft_id,
         ));
     }

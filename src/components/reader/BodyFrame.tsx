@@ -4,7 +4,15 @@ import { invoke } from '@/lib/ipc/commands';
 
 const maxFrameHeight = 1600;
 
-export function BodyFrame({ html, text }: { html: string | null; text: string | null }) {
+export function BodyFrame({
+  html,
+  text,
+  allowRemoteImages = false,
+}: {
+  html: string | null;
+  text: string | null;
+  allowRemoteImages?: boolean;
+}) {
   const [height, setHeight] = useState(1);
   if (!html && !text)
     return (
@@ -19,7 +27,8 @@ export function BodyFrame({ html, text }: { html: string | null; text: string | 
       </pre>
     );
   const dark = document.documentElement.classList.contains('dark');
-  const srcDoc = `<style>body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
+  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src data:">`;
+  const srcDoc = `${frameCsp}<style>body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
   return (
     <div className="rounded-md border border-outline-variant/30 p-6 dark:border-dark-outline-variant/50">
       <iframe

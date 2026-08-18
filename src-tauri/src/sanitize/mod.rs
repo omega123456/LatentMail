@@ -20,7 +20,11 @@ pub struct SanitizedHtml {
     pub remote_images_blocked: bool,
 }
 
-pub fn sanitize(html: &str, cid_parts: &HashMap<String, CidPart>) -> SanitizedHtml {
+pub fn sanitize(
+    html: &str,
+    cid_parts: &HashMap<String, CidPart>,
+    allow_remote: bool,
+) -> SanitizedHtml {
     let cid_parts = cid_parts.clone();
     let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let blocked_in_filter = std::sync::Arc::clone(&blocked);
@@ -41,7 +45,7 @@ pub fn sanitize(html: &str, cid_parts: &HashMap<String, CidPart>) -> SanitizedHt
                     None
                 }
                 ("img", "src") => {
-                    image_source(value, &cid_parts, &blocked_in_filter).map(Cow::Owned)
+                    image_source(value, &cid_parts, &blocked_in_filter, allow_remote).map(Cow::Owned)
                 }
                 _ => Some(Cow::Borrowed(value)),
             },
@@ -55,6 +59,7 @@ fn image_source(
     value: &str,
     cid_parts: &HashMap<String, CidPart>,
     blocked: &std::sync::atomic::AtomicBool,
+    allow_remote: bool,
 ) -> Option<String> {
     let source = value.trim();
     let lower = source.to_ascii_lowercase();
@@ -76,6 +81,9 @@ fn image_source(
     }
     if lower.starts_with("data:") {
         return None;
+    }
+    if allow_remote {
+        return Some(source.to_owned());
     }
     blocked.store(true, std::sync::atomic::Ordering::Relaxed);
     Some(REMOTE_IMAGE_PLACEHOLDER.to_owned())

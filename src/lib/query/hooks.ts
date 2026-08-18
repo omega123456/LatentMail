@@ -1,7 +1,14 @@
+import { useMemo } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc, dispatchInvoke } from '@/lib/ipc/dispatch';
-import type { MoveDestination, PauseScope, SearchScope, ThreadCursor } from '@/lib/types/ipc';
+import type {
+  ImagePolicy,
+  MoveDestination,
+  PauseScope,
+  SearchScope,
+  ThreadCursor,
+} from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useMultiSelectStore } from '@/stores/multi-select';
@@ -146,10 +153,25 @@ export function useParseSearchQueryQuery(query: string) {
 }
 
 export function useConversationQuery(accountId: string | null, threadId: string | null) {
+  const alwaysLoad = useLayoutStore((state) => state.alwaysLoadRemoteImages);
+  const allowedSenders = useLayoutStore((state) => state.allowedImageSenders);
+  const loadFor = useSelectionStore((state) => state.imagesAllowedFor);
+  const imagePolicy: ImagePolicy = useMemo(
+    () => ({
+      alwaysLoad,
+      allowedSenders: [...allowedSenders].sort(),
+      loadFor: [...loadFor].sort(),
+    }),
+    [alwaysLoad, allowedSenders, loadFor],
+  );
   return useQuery({
-    queryKey: queryKeys.conversation(accountId ?? '', threadId ?? ''),
+    queryKey: queryKeys.conversation(accountId ?? '', threadId ?? '', JSON.stringify(imagePolicy)),
     queryFn: () =>
-      invoke('load_conversation', { accountId: accountId as string, threadId: threadId as string }),
+      invoke('load_conversation', {
+        accountId: accountId as string,
+        threadId: threadId as string,
+        imagePolicy,
+      }),
     enabled: accountId !== null && threadId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
@@ -209,7 +231,7 @@ export function useFetchMessageBodyMutation(accountId: string | null, threadId: 
       invoke('fetch_message_body', { accountId: accountId as string, messageId }),
     onSuccess: () =>
       queryClient.invalidateQueries({
-        queryKey: queryKeys.conversation(accountId ?? '', threadId ?? ''),
+        queryKey: queryKeys.conversationThread(accountId ?? '', threadId ?? ''),
       }),
     onError: () => showError('Couldn’t load this message.'),
   });
@@ -574,7 +596,7 @@ function optimisticallyUpdateConversationMessages(
   update: (message: ReaderMessageCacheEntry) => ReaderMessageCacheEntry,
 ) {
   queryClient.setQueriesData(
-    { queryKey: queryKeys.conversation(accountId ?? '', threadId) },
+    { queryKey: queryKeys.conversationThread(accountId ?? '', threadId) },
     (data: { messages: ReaderMessageCacheEntry[] } | undefined) =>
       data && {
         ...data,
@@ -628,7 +650,7 @@ export function useMessageTriageMutation(accountId: string | null) {
         queryKey: queryKeys.threadsForAccount(accountId ?? ''),
       });
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.conversation(accountId ?? '', threadId),
+        queryKey: queryKeys.conversationThread(accountId ?? '', threadId),
       });
     },
   });
@@ -662,7 +684,7 @@ export function useDeleteMessagesMutation(accountId: string | null) {
         queryKey: queryKeys.threadsForAccount(accountId ?? ''),
       });
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.conversation(accountId ?? '', threadId),
+        queryKey: queryKeys.conversationThread(accountId ?? '', threadId),
       });
     },
   });
@@ -704,7 +726,7 @@ export function useMoveMessagesMutation(accountId: string | null) {
         queryKey: queryKeys.threadsForAccount(accountId ?? ''),
       });
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.conversation(accountId ?? '', threadId),
+        queryKey: queryKeys.conversationThread(accountId ?? '', threadId),
       });
     },
   });

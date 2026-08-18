@@ -10,8 +10,28 @@ beforeEach(() => {
     activeMailboxId: null,
     activeThreadId: null,
     keyboardCursor: null,
+    imagesAllowedFor: [],
   });
   useMultiSelectStore.setState({ selectedIds: new Set(['a', 'b']), anchorId: 'b' });
+});
+
+describe('one-time remote-image bypass', () => {
+  it('accumulates message ids without duplicating them', () => {
+    useSelectionStore.getState().allowImagesFor('message-1');
+    useSelectionStore.getState().allowImagesFor('message-1');
+    useSelectionStore.getState().allowImagesFor('message-2');
+    expect(useSelectionStore.getState().imagesAllowedFor).toEqual(['message-1', 'message-2']);
+  });
+
+  it.each([
+    ['opening another thread', () => useSelectionStore.getState().setActiveThreadId('thread-2')],
+    ['changing mailbox', () => useSelectionStore.getState().setActiveMailboxId('SENT')],
+    ['clearing the selection', () => useSelectionStore.getState().clearSelection()],
+  ])('resets when the displayed body changes by %s', (_name, change) => {
+    useSelectionStore.getState().allowImagesFor('message-1');
+    change();
+    expect(useSelectionStore.getState().imagesAllowedFor).toEqual([]);
+  });
 });
 
 describe('selection store coordination with multi-select', () => {

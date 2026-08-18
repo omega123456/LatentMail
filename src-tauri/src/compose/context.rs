@@ -25,7 +25,7 @@ pub fn display_quote(message: &Message) -> Option<DisplayQuote> {
     let html = message
         .html_body
         .as_deref()
-        .map(|html| sanitize::sanitize(html, &HashMap::new()).html)
+        .map(|html| sanitize::sanitize(html, &HashMap::new(), false).html)
         .or_else(|| {
             message
                 .plain_body

@@ -11,6 +11,7 @@ import {
   playwrightSearchThreadPage,
   playwrightSettings,
   playwrightSidebarAccounts,
+  playwrightTrustedSenderSettings,
 } from '@/tests/playwright-fixtures';
 
 const themes = ['light', 'dark'] as const;
@@ -498,6 +499,22 @@ for (const theme of themes) {
       page,
       page.getByTestId('settings-general-section'),
       'settings-general-section',
+      theme,
+    );
+  });
+
+  test(`settings trusted senders ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      read_settings: playwrightTrustedSenderSettings,
+    });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await expect(page.getByText('1–10 of 12')).toBeVisible();
+    await screenshot(
+      page,
+      page.getByTestId('settings-trusted-senders'),
+      'settings-trusted-senders',
       theme,
     );
   });

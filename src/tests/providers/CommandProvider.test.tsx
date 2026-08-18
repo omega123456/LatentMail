@@ -87,6 +87,8 @@ describe('CommandProvider', () => {
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'] },
     });
 
@@ -132,6 +134,8 @@ describe('CommandProvider', () => {
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'] },
     });
     render(
@@ -157,6 +161,8 @@ describe('CommandProvider', () => {
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'] },
     });
     const writes: Array<{ key: string; value: unknown }> = [];
@@ -197,6 +203,8 @@ describe('CommandProvider', () => {
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
       zoomPercent: 100,
+      alwaysLoadRemoteImages: false,
+      allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'], markRead: ['Mod+I'] },
     });
     const writes: Array<{ key: string; value: unknown }> = [];

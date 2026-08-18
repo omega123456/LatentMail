@@ -7,7 +7,9 @@ import { Select } from '@/components/shared/Select';
 import { DensityGlyph, LayoutGlyph } from './LayoutGlyph';
 import { SegmentedControl } from './SegmentedControl';
 import { SettingRow } from './SettingRow';
+import { settingsTriggerClass } from './styles';
 import { SettingsSection } from './SettingsSection';
+import { TrustedSendersList } from './TrustedSendersList';
 
 const themeOptions: { value: ThemePreference; label: string }[] = [
   { value: 'light', label: 'Light' },
@@ -24,9 +26,6 @@ const layoutOptions: { value: LayoutMode; label: string }[] = [
 const intervalOptionsMinutes = [1, 2, 5, 10, 15, 30];
 
 const zoomOptionsPercent = [80, 90, 100, 110, 125, 150];
-
-const settingsTriggerClass =
-  'w-select-menu cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink';
 
 const densityOptions: { value: Density; label: string }[] = [
   { value: 'compact', label: 'Compact' },
@@ -80,6 +79,8 @@ export function GeneralSection() {
   const setSyncOnStartup = useLayoutStore((state) => state.setSyncOnStartup);
   const syncIntervalSeconds = useLayoutStore((state) => state.syncIntervalSeconds);
   const setSyncIntervalSeconds = useLayoutStore((state) => state.setSyncIntervalSeconds);
+  const alwaysLoadRemoteImages = useLayoutStore((state) => state.alwaysLoadRemoteImages);
+  const setAlwaysLoadRemoteImages = useLayoutStore((state) => state.setAlwaysLoadRemoteImages);
 
   return (
     <SettingsSection title="General" description="Changes apply immediately.">
@@ -144,6 +145,28 @@ export function GeneralSection() {
             label="Show unread counts"
           />
         </SettingRow>
+      </div>
+      <div
+        aria-hidden="true"
+        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
+      />
+      <div className="flex flex-col">
+        <SubsectionHeading>Remote images</SubsectionHeading>
+        <SettingRow
+          label="Always load remote images"
+          description="Load images from every sender, without asking."
+        >
+          <SettingSwitch
+            checked={alwaysLoadRemoteImages}
+            onChange={setAlwaysLoadRemoteImages}
+            label="Always load remote images"
+          />
+        </SettingRow>
+        <div
+          aria-hidden="true"
+          className="mb-4.5 mt-1.5 h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
+        />
+        <TrustedSendersList />
       </div>
       <div
         aria-hidden="true"

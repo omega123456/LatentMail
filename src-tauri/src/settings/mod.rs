@@ -41,6 +41,8 @@ pub struct Settings {
 
     pub show_sender_avatars: bool,
     pub zoom_percent: u32,
+    pub always_load_remote_images: bool,
+    pub allowed_image_senders: Vec<String>,
     pub command_overrides: HashMap<String, Vec<String>>,
 }
 
@@ -95,6 +97,8 @@ impl Default for Settings {
             .expect("five minutes fits in u32 seconds"),
             show_sender_avatars: true,
             zoom_percent: 100,
+            always_load_remote_images: false,
+            allowed_image_senders: Vec::new(),
             command_overrides: HashMap::new(),
         }
     }
@@ -165,6 +169,8 @@ impl Settings {
             "syncIntervalSeconds" => set_value(&mut self.sync_interval_seconds, value),
             "showSenderAvatars" => set_value(&mut self.show_sender_avatars, value),
             "zoomPercent" => set_value(&mut self.zoom_percent, value),
+            "alwaysLoadRemoteImages" => set_value(&mut self.always_load_remote_images, value),
+            "allowedImageSenders" => set_value(&mut self.allowed_image_senders, value),
             "commandOverrides" => set_value(&mut self.command_overrides, value),
             _ => false,
         }

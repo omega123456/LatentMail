@@ -75,7 +75,7 @@ export interface IpcCommandMap {
     result: ThreadPage;
   };
   load_conversation: {
-    args: { accountId: string; threadId: string };
+    args: { accountId: string; threadId: string; imagePolicy: ImagePolicy };
     result: Conversation;
   };
   fetch_message_body: { args: { accountId: string; messageId: string }; result: void };
@@ -236,6 +236,8 @@ export interface Settings {
   syncIntervalSeconds: number;
   showSenderAvatars: boolean;
   zoomPercent: number;
+  alwaysLoadRemoteImages: boolean;
+  allowedImageSenders: string[];
   commandOverrides: Partial<Record<string, string[]>>;
 }
 
@@ -422,7 +424,14 @@ export interface ConversationMessage {
   isStarred: boolean;
   labelIds: string[];
   remoteImagesBlocked: boolean;
+  remoteImagesAllowed: boolean;
   draftId?: string | null;
+}
+
+export interface ImagePolicy {
+  alwaysLoad: boolean;
+  allowedSenders: string[];
+  loadFor: string[];
 }
 
 export interface Conversation {

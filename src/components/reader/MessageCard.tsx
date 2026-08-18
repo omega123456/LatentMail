@@ -25,9 +25,17 @@ export type ReaderMessage = {
   unread?: boolean;
   starred?: boolean;
   remoteImagesBlocked?: boolean;
+  remoteImagesAllowed?: boolean;
   isDraft?: boolean;
   draftId?: string | null;
 };
+
+const remoteImageChipClass =
+  'cursor-pointer whitespace-nowrap rounded-chip px-2.5 py-1.25 text-label-md font-semibold tracking-normal shadow-segment focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary';
+
+const remoteImageChipQuiet = `${remoteImageChipClass} bg-surface-container-lowest text-on-surface dark:bg-dark-surface-container-lowest dark:text-dark-on-surface`;
+
+const remoteImageChipPrimary = `${remoteImageChipClass} bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary`;
 
 export type MessageRibbonProps = Omit<MessageActionRibbonProps, 'unread' | 'starred'>;
 
@@ -41,6 +49,8 @@ export function MessageCard({
   loadingBody = false,
   bodyError = false,
   onComposeTo,
+  onLoadImages,
+  onTrustSender,
 }: {
   message: ReaderMessage;
   expanded: boolean;
@@ -51,11 +61,14 @@ export function MessageCard({
   loadingBody?: boolean;
   bodyError?: boolean;
   onComposeTo?: (participant: Participant) => void;
+  onLoadImages?: (messageId: string) => void;
+  onTrustSender?: (address: string) => void;
 }) {
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
   const requested = useRef<string | null>(null);
   const needsBody = message.htmlPresence === 'neverFetched' || (!message.html && !message.text);
+  const isSpam = (message.labelIds ?? []).includes('SPAM');
   useEffect(() => {
     if (!open || !needsBody || requested.current === message.id) return;
     requested.current = message.id;
@@ -104,10 +117,28 @@ export function MessageCard({
       {open && (
         <div className="mx-auto mt-8 w-full max-w-4xl text-body-md">
           {message.remoteImagesBlocked && (
-            <p className="mb-stack-gap-md flex items-center gap-stack-gap-sm rounded-sm bg-surface-container p-stack-gap-sm text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
-              <ImageOff size={16} />
-              Remote images are blocked.
-            </p>
+            <div className="mb-stack-gap-md flex flex-wrap items-center gap-2.5 rounded-control bg-surface-container px-3 py-2.5 text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
+              <ImageOff className="shrink-0" size={16} />
+              <span>Remote images are blocked.</span>
+              {!isSpam && (
+                <span className="ml-auto flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => onLoadImages?.(message.id)}
+                    className={remoteImageChipQuiet}
+                  >
+                    Load images
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onTrustSender?.(message.sender.address)}
+                    className={remoteImageChipPrimary}
+                  >
+                    Always allow from {message.sender.name || message.sender.address}
+                  </button>
+                </span>
+              )}
+            </div>
           )}
           {message.htmlPresence === 'neverFetched' ? (
             loadingBody ? (
@@ -130,7 +161,11 @@ export function MessageCard({
               </p>
             )
           ) : (
-            <BodyFrame html={message.html} text={message.text} />
+            <BodyFrame
+              html={message.html}
+              text={message.text}
+              allowRemoteImages={message.remoteImagesAllowed ?? false}
+            />
           )}
         </div>
       )}

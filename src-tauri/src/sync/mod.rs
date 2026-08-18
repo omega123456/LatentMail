@@ -36,7 +36,8 @@ pub mod traversal;
 pub mod triage;
 
 pub use dto::{
-    ContactSuggestionDto, ConversationDto, LabelColorDto, LabelDto, MessageDto, MutationOutcomeDto,
+    ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto, LabelDto, MessageDto,
+    MutationOutcomeDto,
     MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto, StagedAttachmentDto, SyncStatusDto,
     ThreadCursor, ThreadDto, ThreadPage, ThreadSearchPage, TraversalKind, TraversalState,
     TraversalStatusDto,

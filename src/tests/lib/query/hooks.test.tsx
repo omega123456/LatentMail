@@ -116,7 +116,7 @@ describe('query hooks', () => {
 
   it('fetches a lazy body and invalidates its conversation', async () => {
     const client = new QueryClient();
-    client.setQueryData(queryKeys.conversation('account', 'thread-1'), { messages: [] });
+    client.setQueryData(queryKeys.conversationThread('account', 'thread-1'), { messages: [] });
     const { result } = renderHook(() => useFetchMessageBodyMutation('account', 'thread-1'), {
       wrapper: wrapper(client),
     });
@@ -125,7 +125,7 @@ describe('query hooks', () => {
     });
     await waitFor(() =>
       expect(
-        client.getQueryState(queryKeys.conversation('account', 'thread-1'))?.isInvalidated,
+        client.getQueryState(queryKeys.conversationThread('account', 'thread-1'))?.isInvalidated,
       ).toBe(true),
     );
   });
@@ -163,7 +163,7 @@ describe('query hooks', () => {
       pages: [{ items: [thread], nextCursor: null }],
       pageParams: [null],
     });
-    client.setQueryData(queryKeys.conversation('account', 'thread-1'), {
+    client.setQueryData(queryKeys.conversationThread('account', 'thread-1'), {
       messages: [{ id: 'message-1', labelIds: ['INBOX'], isUnread: true, isStarred: false }],
     });
     const hooks = renderHook(
@@ -190,7 +190,7 @@ describe('query hooks', () => {
     });
     expect(useMultiSelectStore.getState().selectedIds.size).toBe(0);
     const message = (
-      client.getQueryData(queryKeys.conversation('account', 'thread-1')) as {
+      client.getQueryData(queryKeys.conversationThread('account', 'thread-1')) as {
         messages: Array<{ isStarred: boolean; isUnread: boolean }>;
       }
     ).messages[0];

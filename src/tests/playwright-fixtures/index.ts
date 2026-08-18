@@ -9,7 +9,7 @@ export { playwrightThreadPage, playwrightThreads } from './threads';
 export { playwrightConversation, playwrightDeferredBodyConversation } from './conversations';
 export { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
 export { playwrightTraversalStatus } from './traversal';
-export { playwrightSettings } from './settings';
+export { playwrightSettings, playwrightTrustedSenderSettings } from './settings';
 export { playwrightAvatarFixtureMark } from './avatars';
 export {
   playwrightContactSuggestionMatches,

@@ -77,7 +77,7 @@ describe('thread mutations', () => {
     const client = new QueryClient();
 
     await client.fetchQuery({
-      queryKey: queryKeys.conversation('account', 'thread-9'),
+      queryKey: queryKeys.conversationThread('account', 'thread-9'),
       queryFn: () =>
         ipc.tauriInvoke('load_conversation', { accountId: 'account', threadId: 'thread-9' }),
     });
@@ -89,7 +89,7 @@ describe('thread mutations', () => {
     await user.click(await screen.findByLabelText('Star Mutation'));
     await waitFor(() =>
       expect(
-        client.getQueryState(queryKeys.conversation('account', 'thread-9'))?.isInvalidated,
+        client.getQueryState(queryKeys.conversationThread('account', 'thread-9'))?.isInvalidated,
       ).toBe(true),
     );
   });

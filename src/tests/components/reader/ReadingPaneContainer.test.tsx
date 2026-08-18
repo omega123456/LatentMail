@@ -164,6 +164,7 @@ describe('ReadingPaneContainer', () => {
           isStarred: false,
           labelIds: ['Label_1'],
           remoteImagesBlocked: false,
+          remoteImagesAllowed: false,
         },
       ],
     });
@@ -264,6 +265,7 @@ describe('ReadingPaneContainer', () => {
           isStarred: false,
           labelIds: ['INBOX'],
           remoteImagesBlocked: false,
+          remoteImagesAllowed: false,
         },
       ],
     });

@@ -326,7 +326,7 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(application.state(), "account".into(), "t1".into())
+    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
         .await
         .unwrap();
 
@@ -519,7 +519,7 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
     )
     .await
     .unwrap();
-    let conversation = load_conversation(application.state(), "account".into(), "t1".into())
+    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
         .await
         .unwrap();
 

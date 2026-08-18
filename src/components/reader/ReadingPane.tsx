@@ -20,6 +20,7 @@ import {
 import { messageBadges } from '@/lib/labels/badges';
 import { computeThreadLabelMembership, mapConversation } from '@/lib/query/mappers';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
+import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import type { MoveDestinationId } from '@/components/actions/MoveToMenu';
@@ -104,6 +105,8 @@ export function ReadingPane({
   onMessageTriage,
   onCompose,
   onComposeTo,
+  onLoadImages,
+  onTrustSender,
 }: {
   threadId: string | null;
   conversation?: ReaderConversation;
@@ -122,6 +125,8 @@ export function ReadingPane({
   loadingMessageId?: string;
   failedMessageId?: string;
   onMessageTriage?: (messageId: string, intent: MessageTriageIntent) => void;
+  onLoadImages?: (messageId: string) => void;
+  onTrustSender?: (address: string) => void;
 }) {
   const fixtureState = window.__LATENTMAIL_PLAYWRIGHT_IPC__
     ? window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__
@@ -213,6 +218,8 @@ export function ReadingPane({
             }}
             onFetchBody={onFetchBody}
             onComposeTo={onComposeTo}
+            onLoadImages={onLoadImages}
+            onTrustSender={onTrustSender}
             loadingBody={loadingMessageId === message.id}
             bodyError={failedMessageId === message.id}
           />
@@ -258,6 +265,8 @@ function triageHandlersFor(
 export function ReadingPaneContainer({ threadId }: { threadId: string | null }) {
   const accountId = useSelectionStore((value) => value.activeAccountId);
   const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
+  const allowImagesFor = useSelectionStore((value) => value.allowImagesFor);
+  const trustImageSender = useLayoutStore((value) => value.trustImageSender);
   const searchActive = useSearchStore((value) => value.active);
   const searchQuery = useSearchStore((value) => value.submittedQuery);
   const searchScope = useSearchStore((value) => value.scope);
@@ -352,6 +361,8 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       onComposeTo={(participant) => {
         if (accountId) openNewMessage(accountId, accountEmail, participant);
       }}
+      onLoadImages={allowImagesFor}
+      onTrustSender={trustImageSender}
       systemLabelIds={systemLabelIds}
       moveToCurrentLabelIds={moveToCurrentLabelIds}
       labelMenuEntries={labelMenuEntries}

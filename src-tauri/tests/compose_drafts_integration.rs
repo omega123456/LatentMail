@@ -997,6 +997,7 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         app.state(),
         "account".into(),
         "missing".into(),
+        None,
     )
     .await
     .unwrap()

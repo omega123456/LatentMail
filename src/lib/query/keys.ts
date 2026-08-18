@@ -10,7 +10,9 @@ export const queryKeys = {
     ['search', accountId, query, JSON.stringify(scope)] as const,
   searchForAccount: (accountId: string) => ['search', accountId] as const,
   parsedSearchQuery: (query: string) => ['parsedSearchQuery', query] as const,
-  conversation: (accountId: string, threadId: string) =>
+  conversation: (accountId: string, threadId: string, policyKey: string) =>
+    ['conversation', accountId, threadId, policyKey] as const,
+  conversationThread: (accountId: string, threadId: string) =>
     ['conversation', accountId, threadId] as const,
   conversationsForAccount: (accountId: string) => ['conversation', accountId] as const,
   syncStatus: (accountId: string) => ['syncStatus', accountId] as const,
