@@ -76,7 +76,7 @@ export function MessageCard({
   }, [message.id, needsBody, onFetchBody, open]);
   return (
     <article
-      className={`relative pb-6 ${newest ? '' : 'mb-6 border-b border-outline-variant/30 dark:border-dark-outline-variant/50'}`}
+      className={`relative rounded-md border border-outline-variant/30 dark:border-dark-outline-variant/50 ${newest ? '' : 'mb-4'}`}
       data-testid={`message-${message.id}`}
     >
       <div
@@ -85,7 +85,7 @@ export function MessageCard({
           if (newest || (event.target as HTMLElement).closest('button')) return;
           setExpanded((value) => !value);
         }}
-        className={`-mx-3 flex items-start gap-2 rounded px-3 pt-3 ${open ? 'mb-2 border-b border-outline-variant/30 pb-6 dark:border-dark-outline-variant/50' : 'pb-3'} ${newest ? '' : 'cursor-pointer transition-colors hover:bg-surface-container-low dark:hover:bg-dark-surface-container-low'}`}
+        className={`flex items-start gap-2 rounded px-4 pt-4 ${open ? 'mb-2 border-b border-outline-variant/30 pb-6 dark:border-dark-outline-variant/50' : 'pb-4'} ${newest ? '' : 'cursor-pointer transition-colors hover:bg-surface-container-low dark:hover:bg-dark-surface-container-low'}`}
       >
         {newest ? (
           <span className="w-6 shrink-0" />
@@ -115,7 +115,7 @@ export function MessageCard({
         </div>
       </div>
       {open && (
-        <div className="mx-auto mt-8 w-full max-w-4xl text-body-md">
+        <div className="mx-auto w-full max-w-4xl px-4 pb-4 text-body-md">
           {message.remoteImagesBlocked && (
             <div className="mb-stack-gap-md flex flex-wrap items-center gap-2.5 rounded-control bg-surface-container px-3 py-2.5 text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
               <ImageOff className="shrink-0" size={16} />
@@ -170,7 +170,7 @@ export function MessageCard({
         </div>
       )}
       {ribbon && (
-        <div className="mt-stack-gap-md flex justify-end">
+        <div className="mt-stack-gap-md flex justify-end px-4 pb-4">
           <MessageActionRibbon
             {...ribbon}
             unread={message.unread ?? false}

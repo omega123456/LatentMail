@@ -35,7 +35,9 @@ export function QuoteDisclosure({
           className="mt-2.5 rounded-r border-l-3 border-outline-variant bg-surface-container-low px-3 py-2.5 text-body-sm text-on-surface-variant dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:text-dark-on-surface-variant"
         >
           <p className="mb-2 text-snippet text-outline dark:text-dark-outline">{attribution}</p>
-          <BodyFrame html={html} text={null} />
+          <div className="rounded-md border border-outline-variant/30 p-6 dark:border-dark-outline-variant/50">
+            <BodyFrame html={html} text={null} />
+          </div>
         </div>
       </Collapsible.Content>
     </Collapsible.Root>

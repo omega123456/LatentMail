@@ -30,27 +30,25 @@ export function BodyFrame({
   const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src data:">`;
   const srcDoc = `${frameCsp}<style>body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
   return (
-    <div className="rounded-md border border-outline-variant/30 p-6 dark:border-dark-outline-variant/50">
-      <iframe
-        aria-label="Message body"
-        title="Message body"
-        className="max-h-body-frame-max w-full overflow-auto border-0"
-        height={height}
-        sandbox="allow-same-origin"
-        srcDoc={srcDoc}
-        onLoad={(event) => {
-          const document = event.currentTarget.contentDocument;
-          if (!document) return;
-          setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
-          document.addEventListener('contextmenu', (menu) => menu.preventDefault());
-          document.addEventListener('click', (click) => {
-            const link = (click.target as Element | null)?.closest('a[href]');
-            if (!link) return;
-            click.preventDefault();
-            void invoke('open_external_url', { url: link.getAttribute('href') ?? '' });
-          });
-        }}
-      />
-    </div>
+    <iframe
+      aria-label="Message body"
+      title="Message body"
+      className="max-h-body-frame-max w-full overflow-auto border-0"
+      height={height}
+      sandbox="allow-same-origin"
+      srcDoc={srcDoc}
+      onLoad={(event) => {
+        const document = event.currentTarget.contentDocument;
+        if (!document) return;
+        setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
+        document.addEventListener('contextmenu', (menu) => menu.preventDefault());
+        document.addEventListener('click', (click) => {
+          const link = (click.target as Element | null)?.closest('a[href]');
+          if (!link) return;
+          click.preventDefault();
+          void invoke('open_external_url', { url: link.getAttribute('href') ?? '' });
+        });
+      }}
+    />
   );
 }
