@@ -1,11 +1,14 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/ipc/commands';
 import { appLog } from '@/lib/app-log';
+import { useToastStore } from '@/stores/toast';
 import type { QueueSummary, SyncStatus } from '@/lib/types/ipc';
 
 export type SyncState = 'idle' | 'syncing' | 'error';
 
 const emptySummary: QueueSummary = { pending: 0, active: 0, failed: 0, done: 0, paused: false };
+
+const SYNC_FAILURE_MESSAGE = "Couldn't sync your mail. Check your connection and try again.";
 
 type Store = {
   queue: QueueSummary;
@@ -18,6 +21,7 @@ type Store = {
   hydrateSync: (accountId: string) => Promise<void>;
   triggerSync: (accountId: string) => Promise<void>;
   setQueue: (queue: QueueSummary) => void;
+  setSyncState: (state: SyncState) => void;
   applyStatus: (status: SyncStatus) => void;
 };
 
@@ -49,11 +53,18 @@ export const useSyncStore = create<Store>((set, get) => ({
     }
   },
   setQueue: (queue) => set({ queue }),
-  applyStatus: (status) =>
+  setSyncState: (state) => {
+    if (state === 'error' && get().syncState !== 'error')
+      useToastStore.getState().showError(SYNC_FAILURE_MESSAGE);
+    set({ syncState: state });
+  },
+  applyStatus: (status) => {
+    if (status.lastError) appLog.error(`sync failed: ${status.lastError}`);
+    get().setSyncState(status.state);
     set({
       accountId: status.accountId,
-      syncState: status.state,
       lastSynced: status.lastSyncedAt !== null ? new Date(status.lastSyncedAt) : null,
       error: status.lastError ?? undefined,
-    }),
+    });
+  },
 }));

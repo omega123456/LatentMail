@@ -52,6 +52,8 @@
   --color-surface-variant: #dae2fd;
   --color-star: #a45d00;
   --color-success: #146c2e;
+  --color-warning-container: #f7cb5c;
+  --color-on-warning-container: #3a2500;
   --color-badge-inbox: #e3f2fd;
   --color-badge-on-inbox: #1565c0;
   --color-badge-sent: #f3e5f5;
@@ -141,6 +143,8 @@
   --color-dark-surface-variant: #353534;
   --color-dark-star: #ffb95e;
   --color-dark-success: #8ddb98;
+  --color-dark-warning-container: #553f0a;
+  --color-dark-on-warning-container: #ffdf9e;
   --color-dark-badge-inbox: #1a237e;
   --color-dark-badge-on-inbox: #64b5f6;
   --color-dark-badge-sent: #4a148c;
@@ -290,6 +294,8 @@
   --spacing-toast-max: 340px;
   --spacing-settings-nav: 224px;
 
+  --spacing-status-bar-h: 24px;
+  --spacing-progress-track: 64px;
   --spacing-queue-bar-h: 46px;
   --spacing-queue-lane-h: 38px;
   --spacing-queue-op-h: 30px;

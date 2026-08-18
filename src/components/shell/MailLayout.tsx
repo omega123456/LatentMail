@@ -343,7 +343,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           {body}
         </div>
       </div>
-      <StatusBar accountCount={accounts.length} accountId={activeAccountId} />
+      <StatusBar accountId={activeAccountId} />
       <ComposeOverlay />
     </div>
   );

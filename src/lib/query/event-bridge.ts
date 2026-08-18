@@ -60,7 +60,7 @@ export function EventBridge() {
     });
 
     subscribe('sync://progress', (progress) => {
-      useSyncStore.setState({ syncState: progress.state });
+      useSyncStore.getState().setSyncState(progress.state);
     });
 
     subscribe('sync://traversal', (progress) => {
