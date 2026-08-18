@@ -22,26 +22,28 @@ export function SettingsShell() {
         onBackToMail={() => setRoute('mail')}
       />
       <div className="flex flex-1 flex-col gap-5.5 overflow-y-auto px-8.5 pb-8.5 pt-7.5">
-        {activeSection === 'general' && (
-          <div data-testid="settings-general-section" className="flex flex-col gap-5.5">
-            <GeneralSection />
-          </div>
-        )}
-        {activeSection === 'accounts' && (
-          <div data-testid="settings-accounts-section" className="flex flex-col gap-5.5">
-            <AccountsSection />
-          </div>
-        )}
-        {activeSection === 'keyboard' && (
-          <div data-testid="settings-keyboard-section" className="flex flex-col gap-5.5">
-            <KeyboardSection />
-          </div>
-        )}
-        {activeSection === 'queue' && (
-          <div data-testid="settings-queue-section" className="flex flex-col gap-5.5">
-            <QueueSection />
-          </div>
-        )}
+        <div className="mx-auto flex w-full max-w-settings-content-max flex-col gap-5.5">
+          {activeSection === 'general' && (
+            <div data-testid="settings-general-section" className="flex flex-col gap-5.5">
+              <GeneralSection />
+            </div>
+          )}
+          {activeSection === 'accounts' && (
+            <div data-testid="settings-accounts-section" className="flex flex-col gap-5.5">
+              <AccountsSection />
+            </div>
+          )}
+          {activeSection === 'keyboard' && (
+            <div data-testid="settings-keyboard-section" className="flex flex-col gap-5.5">
+              <KeyboardSection />
+            </div>
+          )}
+          {activeSection === 'queue' && (
+            <div data-testid="settings-queue-section" className="flex flex-col gap-5.5">
+              <QueueSection />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
