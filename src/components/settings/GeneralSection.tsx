@@ -22,6 +22,8 @@ const layoutOptions: { value: LayoutMode; label: string }[] = [
 
 const intervalOptionsMinutes = [1, 2, 5, 10, 15, 30];
 
+const zoomOptionsPercent = [80, 90, 100, 110, 125, 150];
+
 const densityOptions: { value: Density; label: string }[] = [
   { value: 'compact', label: 'Compact' },
   { value: 'comfortable', label: 'Comfortable' },
@@ -66,6 +68,8 @@ export function GeneralSection() {
   const setDensity = useLayoutStore((state) => state.setDensity);
   const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
   const setShowSenderAvatars = useLayoutStore((state) => state.setShowSenderAvatars);
+  const zoomPercent = useLayoutStore((state) => state.zoomPercent);
+  const setZoomPercent = useLayoutStore((state) => state.setZoomPercent);
   const showUnreadCounts = useLayoutStore((state) => state.showUnreadCounts);
   const setShowUnreadCounts = useLayoutStore((state) => state.setShowUnreadCounts);
   const syncOnStartup = useLayoutStore((state) => state.syncOnStartup);
@@ -106,6 +110,20 @@ export function GeneralSection() {
               glyph: <DensityGlyph density={option.value} />,
             }))}
           />
+        </SettingRow>
+        <SettingRow label="Zoom" description="Scale the whole interface.">
+          <select
+            aria-label="Zoom"
+            value={zoomPercent}
+            onChange={(event) => setZoomPercent(Number(event.target.value))}
+            className="cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink"
+          >
+            {zoomOptionsPercent.map((percent) => (
+              <option key={percent} value={percent}>
+                {percent}%
+              </option>
+            ))}
+          </select>
         </SettingRow>
         <SettingRow label="Show sender avatars" description="Display a picture beside each sender.">
           <SettingSwitch

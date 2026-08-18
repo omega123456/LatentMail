@@ -12,6 +12,7 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   showUnreadCounts: true,
   syncIntervalSeconds: 300,
   showSenderAvatars: true,
+  zoomPercent: 100,
   commandOverrides: {
     replyAllToMessage: ['Shift+A'],
   },

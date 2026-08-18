@@ -320,7 +320,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           '--reader-h': `${readerHeight}%`,
         } as CSSProperties
       }
-      className="grid h-screen grid-rows-app-shell overflow-hidden bg-surface dark:bg-dark-surface"
+      className="grid h-full grid-rows-app-shell overflow-hidden bg-surface dark:bg-dark-surface"
     >
       <div
         className="grid min-h-0"

@@ -235,6 +235,7 @@ export interface Settings {
   showUnreadCounts: boolean;
   syncIntervalSeconds: number;
   showSenderAvatars: boolean;
+  zoomPercent: number;
   commandOverrides: Partial<Record<string, string[]>>;
 }
 

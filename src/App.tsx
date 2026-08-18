@@ -10,7 +10,7 @@ export default function App() {
       <EventBridge />
       <ThemeProvider>
         <LayoutProvider>
-          <div className="min-h-screen bg-background font-inter text-on-surface dark:bg-dark-background dark:text-dark-on-surface">
+          <div className="h-full bg-background font-inter text-on-surface dark:bg-dark-background dark:text-dark-on-surface">
             <AppShell />
           </div>
         </LayoutProvider>

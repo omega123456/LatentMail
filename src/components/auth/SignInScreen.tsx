@@ -22,7 +22,7 @@ export function SignInScreen() {
   };
   return (
     <main
-      className="flex min-h-screen items-center justify-center bg-surface p-container-padding dark:bg-dark-surface"
+      className="flex min-h-full items-center justify-center bg-surface p-container-padding dark:bg-dark-surface"
       data-testid="sign-in-screen"
     >
       <section className="w-full max-w-md rounded-md bg-surface-container-lowest p-8 shadow-lg dark:bg-dark-surface-container-lowest">

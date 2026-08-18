@@ -14,7 +14,7 @@ export function SettingsShell() {
   return (
     <div
       data-testid="settings-shell"
-      className="flex min-h-screen bg-settings-page dark:bg-dark-settings-page"
+      className="flex min-h-full bg-settings-page dark:bg-dark-settings-page"
     >
       <SettingsNav
         activeSection={activeSection}

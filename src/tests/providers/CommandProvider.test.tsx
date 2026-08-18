@@ -86,6 +86,7 @@ describe('CommandProvider', () => {
       showUnreadCounts: true,
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
+      zoomPercent: 100,
       commandOverrides: { toggleStar: ['Mod+K'] },
     });
 
@@ -130,6 +131,7 @@ describe('CommandProvider', () => {
       showUnreadCounts: true,
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
+      zoomPercent: 100,
       commandOverrides: { toggleStar: ['Mod+K'] },
     });
     render(
@@ -154,6 +156,7 @@ describe('CommandProvider', () => {
       showUnreadCounts: true,
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
+      zoomPercent: 100,
       commandOverrides: { toggleStar: ['Mod+K'] },
     });
     const writes: Array<{ key: string; value: unknown }> = [];
@@ -193,6 +196,7 @@ describe('CommandProvider', () => {
       showUnreadCounts: true,
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
+      zoomPercent: 100,
       commandOverrides: { toggleStar: ['Mod+K'], markRead: ['Mod+I'] },
     });
     const writes: Array<{ key: string; value: unknown }> = [];

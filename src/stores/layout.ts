@@ -14,6 +14,7 @@ type LayoutState = Pick<
   | 'readerHeight'
   | 'showUnreadCounts'
   | 'showSenderAvatars'
+  | 'zoomPercent'
   | 'syncOnStartup'
   | 'syncIntervalSeconds'
 > & {
@@ -31,6 +32,7 @@ type LayoutState = Pick<
   setReaderHeight: (readerHeight: number) => void;
   setShowUnreadCounts: (showUnreadCounts: boolean) => void;
   setShowSenderAvatars: (showSenderAvatars: boolean) => void;
+  setZoomPercent: (zoomPercent: number) => void;
   setSyncOnStartup: (syncOnStartup: boolean) => void;
   setSyncIntervalSeconds: (syncIntervalSeconds: number) => void;
 };
@@ -39,6 +41,13 @@ let hydration: Promise<void> | undefined;
 
 function clampSize(value: number, min: number, max: number) {
   return Math.round(Math.min(max, Math.max(min, value)));
+}
+
+export function applyZoom(zoomPercent: number) {
+  const scale = zoomPercent / 100;
+  document.body.style.zoom = String(scale);
+  document.body.style.width = `${window.innerWidth / scale}px`;
+  document.body.style.height = `${window.innerHeight / scale}px`;
 }
 
 function persist<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -54,12 +63,14 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   readerHeight: 40,
   showUnreadCounts: true,
   showSenderAvatars: true,
+  zoomPercent: 100,
   syncOnStartup: true,
   syncIntervalSeconds: 300,
   route: 'mail',
   hydrated: false,
   hydrate: () => {
     hydration ??= invoke('read_settings', {}).then((settings) => {
+      applyZoom(settings.zoomPercent);
       set({
         layout: settings.layout,
         density: settings.density,
@@ -69,6 +80,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         readerHeight: settings.readerHeight,
         showUnreadCounts: settings.showUnreadCounts,
         showSenderAvatars: settings.showSenderAvatars,
+        zoomPercent: settings.zoomPercent,
         syncOnStartup: settings.syncOnStartup,
         syncIntervalSeconds: settings.syncIntervalSeconds,
         hydrated: true,
@@ -124,6 +136,11 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     set({ showSenderAvatars });
     persist('showSenderAvatars', showSenderAvatars);
   },
+  setZoomPercent: (zoomPercent) => {
+    applyZoom(zoomPercent);
+    set({ zoomPercent });
+    persist('zoomPercent', zoomPercent);
+  },
   setSyncOnStartup: (syncOnStartup) => {
     set({ syncOnStartup });
     persist('syncOnStartup', syncOnStartup);
@@ -133,3 +150,9 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     persist('syncIntervalSeconds', syncIntervalSeconds);
   },
 }));
+
+window.addEventListener('resize', () => {
+  applyZoom(useLayoutStore.getState().zoomPercent);
+});
+
+applyZoom(100);

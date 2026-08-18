@@ -49,7 +49,12 @@ async function openGeneralWithDefaults() {
 describe('GeneralSection', () => {
   beforeEach(() => {
     act(() => {
-      useLayoutStore.setState({ route: 'mail', hydrated: false, syncIntervalSeconds: 300 });
+      useLayoutStore.setState({
+        route: 'mail',
+        hydrated: false,
+        syncIntervalSeconds: 300,
+        zoomPercent: 100,
+      });
       useSettingsUiStore.setState({ activeSection: 'general' });
     });
   });
@@ -67,6 +72,7 @@ describe('GeneralSection', () => {
       showUnreadCounts: false,
       syncIntervalSeconds: 120,
       showSenderAvatars: false,
+      zoomPercent: 100,
       commandOverrides: {},
     });
 
@@ -109,6 +115,25 @@ describe('GeneralSection', () => {
     await user.selectOptions(select, '10');
 
     expect(writes).toContainEqual({ key: 'syncIntervalSeconds', value: 600 });
+  });
+
+  it('offers zoom levels, applies them to the document and persists the choice', async () => {
+    const writes: Array<{ key: string; value: unknown }> = [];
+    ipc.override('write_setting', (args) => {
+      writes.push(args as { key: string; value: unknown });
+    });
+    const user = await openGeneralWithDefaults();
+
+    const select = screen.getByRole('combobox', { name: 'Zoom' });
+    expect(
+      Array.from(select.querySelectorAll('option')).map((option) => option.textContent),
+    ).toEqual(['80%', '90%', '100%', '110%', '125%', '150%']);
+    expect(select).toHaveValue('100');
+
+    await user.selectOptions(select, '125');
+
+    expect(writes).toContainEqual({ key: 'zoomPercent', value: 125 });
+    expect(document.body.style.zoom).toBe('1.25');
   });
 
   it('writes through write_setting for every control on change', async () => {

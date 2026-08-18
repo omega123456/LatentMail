@@ -32,6 +32,7 @@ describe('layout store', () => {
       showUnreadCounts: false,
       syncIntervalSeconds: 120,
       showSenderAvatars: false,
+      zoomPercent: 100,
       commandOverrides: {},
     });
     const store = await loadStore();
@@ -49,6 +50,7 @@ describe('layout store', () => {
       route: 'settings',
       hydrated: true,
       showSenderAvatars: false,
+      zoomPercent: 100,
       showUnreadCounts: false,
       syncOnStartup: false,
       syncIntervalSeconds: 120,
@@ -89,6 +91,7 @@ describe('layout store', () => {
     expect(store.getState()).toMatchObject({
       showUnreadCounts: false,
       showSenderAvatars: false,
+      zoomPercent: 100,
       syncOnStartup: false,
       syncIntervalSeconds: 600,
     });
@@ -112,5 +115,16 @@ describe('layout store', () => {
       { key: 'readerHeight', value: 61 },
     ]);
     expect(store.getState()).toMatchObject({ sidebarWidth: 300, listWidth: 421, readerHeight: 61 });
+  });
+
+  it('resizes the zoomed surface to the window on resize', async () => {
+    const useLayoutStore = await loadStore();
+    useLayoutStore.getState().setZoomPercent(125);
+
+    window.dispatchEvent(new Event('resize'));
+
+    expect(document.body.style.zoom).toBe('1.25');
+    expect(document.body.style.width).toBe(`${window.innerWidth / 1.25}px`);
+    expect(document.body.style.height).toBe(`${window.innerHeight / 1.25}px`);
   });
 });

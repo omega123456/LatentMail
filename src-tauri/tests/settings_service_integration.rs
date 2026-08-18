@@ -66,6 +66,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ("showUnreadCounts", serde_json::json!(false)),
         ("syncIntervalSeconds", serde_json::json!(45)),
         ("showSenderAvatars", serde_json::json!(false)),
+        ("zoomPercent", serde_json::json!(125)),
     ] {
         write_setting(app.handle().clone(), app.state(), key.into(), value)
             .await
@@ -93,6 +94,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
     assert!(!settings.show_unread_counts);
     assert_eq!(settings.sync_interval_seconds, 45);
     assert!(!settings.show_sender_avatars);
+    assert_eq!(settings.zoom_percent, 125);
 }
 
 #[tokio::test]

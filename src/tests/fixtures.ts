@@ -42,6 +42,7 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     showUnreadCounts: true,
     syncIntervalSeconds: 300,
     showSenderAvatars: true,
+    zoomPercent: 100,
     commandOverrides: {},
   },
   write_setting: undefined,

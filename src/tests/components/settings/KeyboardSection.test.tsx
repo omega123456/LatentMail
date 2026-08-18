@@ -37,6 +37,7 @@ describe('KeyboardSection', () => {
       showUnreadCounts: true,
       syncIntervalSeconds: 300,
       showSenderAvatars: true,
+      zoomPercent: 100,
       commandOverrides: {},
     });
 
