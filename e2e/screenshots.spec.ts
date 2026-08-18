@@ -196,6 +196,14 @@ for (const theme of themes) {
     await screenshot(page, page.getByRole('search'), 'search-field-focused', theme);
   });
 
+  test(`search keyword suggestions ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await page.getByLabel('Search mail').click();
+    await page.getByLabel('Search mail').fill('is:');
+    await screenshot(page, page.getByRole('listbox', { name: 'Search suggestions' }), 'search-keyword-suggestions', theme);
+  });
+
   test(`advanced search panel ${theme}`, async ({ page }) => {
     await page.clock.setFixedTime(parseISO('2026-08-17T12:00:00'));
     await installPlaywrightIpc(page, {

@@ -1,8 +1,11 @@
-import { forwardRef } from 'react';
+import { forwardRef, useEffect, useId, useMemo, useState } from 'react';
+import { Popover } from 'radix-ui';
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { MAX_SEARCH_QUERY_LENGTH, useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { AdvancedSearchPanel } from './AdvancedSearchPanel';
+import { KeywordSuggestions } from './KeywordSuggestions';
+import { applySuggestion, suggestionsFor, type SearchSuggestion } from './searchKeywords';
 import type { MailLabel } from '@/lib/types/ipc';
 
 export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>(
@@ -18,6 +21,25 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
     const clear = useSearchStore((state) => state.clear);
     const showError = useToastStore((state) => state.showError);
 
+    const [activeIndex, setActiveIndex] = useState(-1);
+    const [dismissed, setDismissed] = useState(false);
+    const listboxId = useId();
+
+    const suggestions = useMemo(() => suggestionsFor(draft, labels), [draft, labels]);
+    const open = !dismissed && !panelOpen && suggestions.length > 0;
+
+    useEffect(() => {
+      if (!open) return;
+      const handler = (event: globalThis.KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          setDismissed(true);
+        }
+      };
+      window.addEventListener('keydown', handler, { capture: true });
+      return () => window.removeEventListener('keydown', handler, { capture: true });
+    }, [open]);
+
     const handleSubmit = (text: string) => {
       const trimmed = text.trim();
       if (trimmed.length === 0) return;
@@ -28,6 +50,14 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
       submit(trimmed);
     };
 
+    const applyAndKeepFocus = (item: SearchSuggestion) => {
+      setDraft(applySuggestion(draft, item.insert));
+      setActiveIndex(-1);
+    };
+
+    const activeOptionId =
+      open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
+
     return (
       <div role="search" aria-label="Mail search" className="relative w-full max-w-2xl">
         <div className="flex items-center gap-2 rounded-full bg-surface-container-low px-3 py-2 transition-colors hover:bg-surface-container focus-within:outline-2 focus-within:outline-primary dark:bg-dark-surface-container-low dark:hover:bg-dark-surface-container">
@@ -36,28 +66,75 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
             size={18}
             className="shrink-0 text-on-surface-variant dark:text-dark-on-surface-variant"
           />
-          <input
-            ref={ref}
-            type="text"
-            value={draft}
-            placeholder="Search mail…"
-            aria-label="Search mail"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                handleSubmit(draft);
-              } else if (event.key === 'Escape') {
-                if (draft.trim().length > 0) {
-                  event.preventDefault();
-                  clear();
-                } else {
-                  (event.target as HTMLInputElement).blur();
-                }
-              }
-            }}
-            className="min-w-0 flex-1 select-text bg-transparent text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
-          />
+          <Popover.Root open={open}>
+            <Popover.Anchor asChild>
+              <input
+                ref={ref}
+                type="text"
+                value={draft}
+                placeholder="Search mail…"
+                aria-label="Search mail"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={open}
+                aria-controls={listboxId}
+                aria-activedescendant={activeOptionId}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  setActiveIndex(-1);
+                  setDismissed(false);
+                }}
+                onKeyDown={(event) => {
+                  if (open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                    event.preventDefault();
+                    const count = suggestions.length;
+                    const delta = event.key === 'ArrowDown' ? 1 : -1;
+                    setActiveIndex((index) => (count === 0 ? -1 : (index + delta + count) % count));
+                    return;
+                  }
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (open && activeIndex >= 0 && suggestions[activeIndex]) {
+                      applyAndKeepFocus(suggestions[activeIndex]);
+                    } else {
+                      handleSubmit(draft);
+                    }
+                    return;
+                  }
+                  if (event.key === 'Tab' && open) {
+                    event.preventDefault();
+                    applyAndKeepFocus(suggestions[activeIndex >= 0 ? activeIndex : 0]);
+                    return;
+                  }
+                  if (event.key === 'Escape' && !open) {
+                    if (draft.trim().length > 0) {
+                      event.preventDefault();
+                      clear();
+                    } else {
+                      (event.target as HTMLInputElement).blur();
+                    }
+                  }
+                }}
+                className="min-w-0 flex-1 select-text bg-transparent text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
+              />
+            </Popover.Anchor>
+            <Popover.Portal>
+              <Popover.Content
+                align="start"
+                sideOffset={6}
+                onOpenAutoFocus={(event) => event.preventDefault()}
+                style={{ width: 'var(--radix-popover-trigger-width)' }}
+                className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
+              >
+                <KeywordSuggestions
+                  id={listboxId}
+                  items={suggestions}
+                  activeIndex={activeIndex}
+                  onSelect={applyAndKeepFocus}
+                />
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
           {draft.length > 0 ? (
             <button
               type="button"

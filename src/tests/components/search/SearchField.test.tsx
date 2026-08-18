@@ -111,4 +111,84 @@ describe('SearchField', () => {
     await user.click(screen.getByRole('button', { name: 'Hide search options' }));
     expect(screen.queryByTestId('advanced-search-panel')).not.toBeInTheDocument();
   });
+
+  it('shows keyword suggestions while typing an operator name', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    await user.type(screen.getByLabelText('Search mail'), 'fro');
+    expect(screen.getByRole('listbox', { name: 'Search suggestions' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /from:/ })).toBeInTheDocument();
+  });
+
+  it('ArrowDown then Enter applies the active suggestion instead of submitting', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'fro');
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(field).toHaveValue('from:');
+    expect(useSearchStore.getState().active).toBe(false);
+  });
+
+  it('shows the value suggestions for is: and applying one keeps the trailing space', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'is:');
+    expect(screen.getAllByRole('option')).toHaveLength(4);
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(field).toHaveValue('is:unread ');
+  });
+
+  it('Enter with no active suggestion still submits', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'fro');
+    await user.keyboard('{Enter}');
+    expect(useSearchStore.getState().submittedQuery).toBe('fro');
+    expect(useSearchStore.getState().active).toBe(true);
+  });
+
+  it('Tab applies the first suggestion when none is active', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'fro');
+    await user.keyboard('{Tab}');
+    expect(field).toHaveValue('from:');
+  });
+
+  it('Escape closes the suggestion popup without clearing the draft', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'fro');
+    expect(screen.getByRole('listbox', { name: 'Search suggestions' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument();
+    expect(field).toHaveValue('fro');
+  });
+
+  it('a label suggestion inserts the label id', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(
+      <SearchField
+        labels={[
+          {
+            id: 'Label_1',
+            name: 'Work',
+            kind: 'user',
+            color: null,
+            messageCount: 0,
+            unreadCount: 0,
+          },
+        ]}
+      />,
+    );
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'label:wo');
+    await user.click(screen.getByRole('option', { name: /Work/ }));
+    expect(field).toHaveValue('label:Label_1 ');
+  });
 });

@@ -41,7 +41,7 @@ export const BLANK_DATE_FILTER: DateFilterValue = {
 const WEEK_OPTIONS = { weekStartsOn: 1 } as const;
 const ISO_DAY = 'yyyy-MM-dd';
 
-const PRESETS: { value: string; label: string; summary: string }[] = [
+export const PRESETS: { value: string; label: string; summary: string }[] = [
   { value: '', label: 'Any time', summary: 'Any time' },
   { value: '1d', label: '1 day', summary: 'Last 24 hours' },
   { value: '7d', label: '1 week', summary: 'Last 7 days' },
