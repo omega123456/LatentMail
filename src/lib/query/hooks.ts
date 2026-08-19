@@ -187,6 +187,63 @@ export function useConversationQuery(accountId: string | null, threadId: string 
   });
 }
 
+export function useCachedAttachmentQuery(
+  accountId: string | null,
+  messageId: string | null,
+  attachmentId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.cachedAttachment(accountId ?? '', messageId ?? '', attachmentId ?? ''),
+    queryFn: () =>
+      invoke('ensure_attachment_cached', {
+        accountId: accountId as string,
+        messageId: messageId as string,
+        attachmentId: attachmentId as string,
+      }),
+    enabled: enabled && accountId !== null && messageId !== null && attachmentId !== null,
+    staleTime: Infinity,
+  });
+}
+
+export function useAttachmentBytesQuery(
+  accountId: string | null,
+  messageId: string | null,
+  attachmentId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.attachmentBytes(accountId ?? '', messageId ?? '', attachmentId ?? ''),
+    queryFn: () =>
+      invoke('read_attachment_bytes', {
+        accountId: accountId as string,
+        messageId: messageId as string,
+        attachmentId: attachmentId as string,
+      }),
+    enabled: enabled && accountId !== null && messageId !== null && attachmentId !== null,
+    staleTime: Infinity,
+  });
+}
+
+export function useAttachmentTextQuery(
+  accountId: string | null,
+  messageId: string | null,
+  attachmentId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.attachmentText(accountId ?? '', messageId ?? '', attachmentId ?? ''),
+    queryFn: () =>
+      invoke('read_attachment_text', {
+        accountId: accountId as string,
+        messageId: messageId as string,
+        attachmentId: attachmentId as string,
+      }),
+    enabled: enabled && accountId !== null && messageId !== null && attachmentId !== null,
+    staleTime: Infinity,
+  });
+}
+
 export function useTraversalStatusQuery(accountId: string | null) {
   return useQuery({
     queryKey: queryKeys.traversalStatus(accountId ?? ''),

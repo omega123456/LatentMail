@@ -42,6 +42,7 @@ describe('KeyboardSection', () => {
       allowedImageSenders: [],
       commandOverrides: {},
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
 
     render(

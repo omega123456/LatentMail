@@ -8,10 +8,12 @@ export function BodyFrame({
   html,
   text,
   allowRemoteImages = false,
+  heightConstrained = false,
 }: {
   html: string | null;
   text: string | null;
   allowRemoteImages?: boolean;
+  heightConstrained?: boolean;
 }) {
   const [height, setHeight] = useState(1);
   if (!html && !text)
@@ -33,14 +35,19 @@ export function BodyFrame({
     <iframe
       aria-label="Message body"
       title="Message body"
-      className="max-h-body-frame-max w-full overflow-auto border-0"
-      height={height}
+      className={
+        heightConstrained
+          ? 'h-full w-full overflow-auto border-0'
+          : 'max-h-body-frame-max w-full overflow-auto border-0'
+      }
+      height={heightConstrained ? undefined : height}
       sandbox="allow-same-origin"
       srcDoc={srcDoc}
       onLoad={(event) => {
         const document = event.currentTarget.contentDocument;
         if (!document) return;
-        setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
+        if (!heightConstrained)
+          setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
         document.addEventListener('contextmenu', (menu) => menu.preventDefault());
         document.addEventListener('click', (click) => {
           const link = (click.target as Element | null)?.closest('a[href]');

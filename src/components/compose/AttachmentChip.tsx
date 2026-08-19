@@ -1,58 +1,8 @@
-import {
-  AlertCircle,
-  File,
-  FileArchive,
-  FileAudio,
-  FileSpreadsheet,
-  FileText,
-  FileVideo,
-  Image as ImageIcon,
-  Loader2,
-  X,
-} from 'lucide-react';
-import { createElement, type ComponentType } from 'react';
+import { AlertCircle, Loader2, X } from 'lucide-react';
+import { createElement } from 'react';
 import type { ComposeAttachment } from '@/stores/compose';
-
-const categoryIcons: {
-  test: (mimeType: string) => boolean;
-  Icon: ComponentType<{ size?: number; 'aria-hidden'?: boolean | 'true' | 'false' }>;
-}[] = [
-  { test: (mime) => mime.startsWith('image/'), Icon: ImageIcon },
-  { test: (mime) => mime.startsWith('video/'), Icon: FileVideo },
-  { test: (mime) => mime.startsWith('audio/'), Icon: FileAudio },
-  {
-    test: (mime) => mime.includes('zip') || mime.includes('compressed') || mime.includes('archive'),
-    Icon: FileArchive,
-  },
-  {
-    test: (mime) => mime.includes('spreadsheet') || mime.includes('excel') || mime === 'text/csv',
-    Icon: FileSpreadsheet,
-  },
-  {
-    test: (mime) =>
-      mime.startsWith('text/') ||
-      mime.includes('pdf') ||
-      mime.includes('document') ||
-      mime.includes('word'),
-    Icon: FileText,
-  },
-];
-
-function iconFor(mimeType: string) {
-  return categoryIcons.find((entry) => entry.test(mimeType))?.Icon ?? File;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB'];
-  let value = bytes / 1024;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10} ${units[unitIndex]}`;
-}
+import { formatFileSize } from '@/lib/format/file-size';
+import { resolveMimeIcon } from '@/lib/format/mime-icon';
 
 export function AttachmentChip({
   attachment,
@@ -61,7 +11,10 @@ export function AttachmentChip({
   attachment: ComposeAttachment;
   onRemove: () => void;
 }) {
-  const icon = iconFor(attachment.mimeType);
+  const { Icon, coloured, inkClassName, wellClassName } = resolveMimeIcon(
+    attachment.mimeType,
+    attachment.filename,
+  );
   const reading = attachment.state === 'reading';
   const failed = attachment.state === 'failed';
   return (
@@ -75,7 +28,9 @@ export function AttachmentChip({
         className={`grid size-7 shrink-0 place-items-center rounded ${
           failed
             ? 'bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container'
-            : 'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant'
+            : coloured
+              ? `${wellClassName} ${inkClassName}`
+              : 'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant'
         }`}
       >
         {reading ? (
@@ -83,7 +38,7 @@ export function AttachmentChip({
         ) : failed ? (
           <AlertCircle size={16} />
         ) : (
-          createElement(icon, { size: 16 })
+          createElement(Icon, { size: 16 })
         )}
       </div>
       <div className="min-w-0 flex-1">
@@ -102,7 +57,7 @@ export function AttachmentChip({
             ? 'Reading…'
             : failed
               ? (attachment.error ?? "Couldn't read")
-              : formatSize(attachment.size)}
+              : formatFileSize(attachment.size)}
         </p>
       </div>
       <button

@@ -36,8 +36,8 @@ pub mod traversal;
 pub mod triage;
 
 pub use dto::{
-    ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto, LabelDto, MessageDto,
-    MutationOutcomeDto,
+    AttachmentDto, ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto, LabelDto,
+    MessageDto, MutationOutcomeDto,
     MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto, StagedAttachmentDto, SyncStatusDto,
     ThreadCursor, ThreadDto, ThreadPage, ThreadSearchPage, TraversalKind, TraversalState,
     TraversalStatusDto,
@@ -366,6 +366,7 @@ pub struct SyncEngine {
     pending: AsyncMutex<mutations::PendingMutations>,
     gmail_limiters: GmailRateLimiters,
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
+    attachment_cache: std::sync::OnceLock<crate::attachments::AttachmentCache>,
 }
 
 impl SyncEngine {
@@ -385,7 +386,16 @@ impl SyncEngine {
             pending: AsyncMutex::new(std::collections::HashMap::new()),
             gmail_limiters: GmailRateLimiters::default(),
             active_backfills: Arc::new(AsyncMutex::new(std::collections::HashSet::new())),
+            attachment_cache: std::sync::OnceLock::new(),
         })
+    }
+
+    pub fn set_attachment_cache(&self, cache: crate::attachments::AttachmentCache) {
+        let _ = self.attachment_cache.set(cache);
+    }
+
+    pub fn attachment_cache(&self) -> Option<&crate::attachments::AttachmentCache> {
+        self.attachment_cache.get()
     }
 
     pub async fn gmail_client(
@@ -502,8 +512,9 @@ impl SyncEngine {
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
         let backfill_client = client.clone();
+        let cache = self.attachment_cache().cloned();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            full_sync_body(&storage, &client, &account_owned).await
+            full_sync_body(&storage, &client, &account_owned, cache).await
         })
         .await;
         let result = self.finish(account_id, outcome).await;
@@ -548,6 +559,7 @@ impl SyncEngine {
                 events: Arc::clone(&self.events),
                 op_counter: Arc::clone(&self.op_counter),
                 active_backfills: Arc::clone(&self.active_backfills),
+                attachment_cache: self.attachment_cache().cloned(),
             },
             account_id.to_owned(),
             client,
@@ -569,8 +581,10 @@ impl SyncEngine {
         let traversal_registry = Arc::clone(&self.registry);
         let reconciliation_events = Arc::clone(&self.events);
         let account_owned = account_id.to_owned();
+        let cache = self.attachment_cache().cloned();
+        let reconciliation_cache = cache.clone();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            match incremental_body(&storage, &client, &account_owned, checkpoint).await? {
+            match incremental_body(&storage, &client, &account_owned, checkpoint, cache).await? {
                 IncrementalOutcome::Updated {
                     history_id,
                     added_count,
@@ -603,6 +617,7 @@ impl SyncEngine {
                                     &reconciliation_account,
                                     &reconciliation_events,
                                     Some(&reconciliation_queue),
+                                    reconciliation_cache,
                                 )
                                 .await
                             }
@@ -671,8 +686,9 @@ impl SyncEngine {
         let op_id = self.next_op_id(account_id);
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
+        let cache = self.attachment_cache().cloned();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            probe_only_body(&storage, &client, &account_owned).await
+            probe_only_body(&storage, &client, &account_owned, cache).await
         })
         .await;
         match outcome {
@@ -709,6 +725,7 @@ fn enqueue_backfill_step(
             events,
             op_counter,
             active_backfills,
+            attachment_cache,
         } = handles;
         let op_id = format!(
             "traversal:{account_id}:{}",
@@ -718,6 +735,7 @@ fn enqueue_backfill_step(
         let step_events = Arc::clone(&events);
         let step_account = account_id.clone();
         let step_client = client.clone();
+        let step_attachment_cache = attachment_cache.clone();
         let (step_queue, step_registry, step_op_counter, step_active_backfills) = (
             Arc::clone(&queue),
             Arc::clone(&registry),
@@ -735,6 +753,7 @@ fn enqueue_backfill_step(
                         &step_account,
                         &step_events,
                         resumed,
+                        step_attachment_cache.clone(),
                     )
                     .await;
                     let completed = match step_result {
@@ -758,6 +777,7 @@ fn enqueue_backfill_step(
                                 events: step_events,
                                 op_counter: step_op_counter,
                                 active_backfills: step_active_backfills,
+                                attachment_cache,
                             },
                             step_account,
                             step_client,
@@ -797,6 +817,7 @@ struct BackfillHandles {
     op_counter: Arc<AtomicU64>,
 
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
+    attachment_cache: Option<crate::attachments::AttachmentCache>,
 }
 
 
@@ -813,6 +834,7 @@ async fn full_sync_body(
     storage: &Storage,
     client: &GmailClient,
     account_id: &str,
+    cache: Option<crate::attachments::AttachmentCache>,
 ) -> Result<FullSyncOutcome, SyncError> {
     let profile = client.profile().await?;
     let gmail_labels = client.labels().await?;
@@ -851,7 +873,7 @@ async fn full_sync_body(
                 LabelRepository::upsert(&transaction, &to_label(&account_owned, label))?;
             }
             for message in &messages {
-                write_message(&transaction, &account_owned, message)?;
+                write_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
             ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
             transaction.commit()
@@ -988,6 +1010,7 @@ async fn probe_only_body(
     storage: &Storage,
     client: &GmailClient,
     account_id: &str,
+    cache: Option<crate::attachments::AttachmentCache>,
 ) -> Result<MaterializedBatch, SyncError> {
     let messages = probe_inbox(storage, client, account_id, &[]).await?;
     let added_count = messages.len() as u32;
@@ -1006,7 +1029,7 @@ async fn probe_only_body(
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
             for message in &messages {
-                write_message(&transaction, &account_owned, message)?;
+                write_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
             ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
             transaction.commit()
@@ -1035,6 +1058,7 @@ async fn incremental_body(
     client: &GmailClient,
     account_id: &str,
     start_history_id: i64,
+    cache: Option<crate::attachments::AttachmentCache>,
 ) -> Result<IncrementalOutcome, SyncError> {
     let gmail_labels = client.labels().await?;
     let mut token = None;
@@ -1118,7 +1142,7 @@ async fn incremental_body(
             let mut touched = HashSet::new();
             for message in &added_messages {
                 touched.insert(message.thread_id.clone());
-                write_message(&transaction, &account_owned, message)?;
+                write_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
             for record in &records {
                 for change in &record.labels_added {
@@ -1200,8 +1224,13 @@ fn write_message(
     connection: &rusqlite::Connection,
     account_id: &str,
     message: &GmailMessage,
+    cache: Option<&crate::attachments::AttachmentCache>,
 ) -> rusqlite::Result<()> {
-    materialize::persist(connection, account_id, message)
+    materialize::persist(connection, account_id, message)?;
+    if let Some(cache) = cache {
+        crate::attachments::seed_cache(cache, account_id, &message.id, &message.attachment_parts);
+    }
+    Ok(())
 }
 
 
@@ -1280,6 +1309,18 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     ));
     app.manage(Arc::clone(&staging));
 
+    let attachment_cache =
+        crate::attachments::AttachmentCache::new(directory.join("attachment-cache"))
+            .map_err(|error| error.to_string())?;
+    app.manage(attachment_cache.clone());
+    let sweep_cache = attachment_cache.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            sweep_cache.sweep(crate::attachments::CACHE_CEILING_BYTES)
+        })
+        .await;
+    });
+
     let coalescer = Arc::new(crate::compose::drafts::SaveCoalescer::new());
     app.manage(Arc::clone(&coalescer));
 
@@ -1318,6 +1359,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         registry,
         Arc::clone(&events),
     );
+    engine.set_attachment_cache(attachment_cache);
     app.manage(Arc::clone(&queue));
     app.manage(Arc::clone(&engine));
     start_scheduler(app.clone(), Arc::clone(&engine));

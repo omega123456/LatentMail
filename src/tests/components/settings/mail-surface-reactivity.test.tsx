@@ -56,6 +56,7 @@ const conversationOne = {
       labelIds: [],
       remoteImagesBlocked: false,
       remoteImagesAllowed: false,
+      attachments: [],
     },
   ],
 } satisfies IpcCommandMap['load_conversation']['result'];

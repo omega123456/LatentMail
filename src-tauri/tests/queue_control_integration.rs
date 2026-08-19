@@ -374,6 +374,32 @@ async fn cancel_queue_operation_command_marks_a_cancelled_durable_send_terminal(
 }
 
 #[tokio::test]
+async fn cancel_queue_operation_command_reports_true_without_touching_storage_for_a_non_persisting_kind(
+) {
+    let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let (events, _events_rx) = events_channel();
+    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+    queue.pause();
+    queue
+        .enqueue(operation("sync-cancel", "account", Lane::Background, "e1"))
+        .await
+        .unwrap();
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+
+    let app = app();
+    app.manage(Arc::clone(&queue));
+    app.manage(storage);
+
+    let applied = cancel_queue_operation(app.state(), app.state(), "sync-cancel".into())
+        .await
+        .unwrap();
+    assert!(applied);
+    queue.resume();
+}
+
+#[tokio::test]
 async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -539,6 +565,28 @@ async fn retry_failed_operations_retries_every_failed_durable_row_optionally_sco
         .await
         .unwrap();
     assert_eq!(all, 2);
+}
+
+#[tokio::test]
+async fn retry_failed_operations_command_is_a_no_op_when_no_rows_match_the_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(&connection, &account("account-empty")).unwrap();
+    drop(connection);
+
+    let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let (events, _events_rx) = events_channel();
+    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+
+    let app = app();
+    app.manage(Arc::clone(&queue));
+    app.manage(storage);
+
+    let retried = retry_failed_operations(app.state(), app.state(), Some("account-empty".into()))
+        .await
+        .unwrap();
+    assert_eq!(retried, 0);
 }
 
 #[tokio::test]

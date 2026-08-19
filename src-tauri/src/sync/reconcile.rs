@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    attachments::AttachmentCache,
     contacts,
     gmail::{GmailClient, ListOptions, MAX_PAGE_SIZE},
     queue::QueueEngine,
@@ -18,6 +19,7 @@ pub async fn run(
     account_id: &str,
     events: &EventSink,
     queue: Option<&QueueEngine>,
+    cache: Option<AttachmentCache>,
 ) -> Result<FullSyncOutcome, SyncError> {
     let history_checkpoint = client.profile().await?.history_id;
     let gmail_labels = client.labels().await?;
@@ -156,8 +158,9 @@ pub async fn run(
         if let Some(queue) = queue {
             queue.wait_until_resumed().await;
         }
-        fetched_threads
-            .extend(traversal::fetch_and_persist(storage, client, account_id, ids).await?);
+        fetched_threads.extend(
+            traversal::fetch_and_persist(storage, client, account_id, ids, cache.clone()).await?,
+        );
         persisted_count += ids.len() as i64;
         checkpoint(
             storage,

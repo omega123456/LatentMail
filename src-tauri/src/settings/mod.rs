@@ -46,6 +46,7 @@ pub struct Settings {
     pub allowed_image_senders: Vec<String>,
     pub command_overrides: HashMap<String, Vec<String>>,
     pub log_level: LogLevel,
+    pub prefetch_image_attachments: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -123,6 +124,7 @@ impl Default for Settings {
             allowed_image_senders: Vec::new(),
             command_overrides: HashMap::new(),
             log_level: LogLevel::Info,
+            prefetch_image_attachments: false,
         }
     }
 }
@@ -205,6 +207,7 @@ impl Settings {
             "allowedImageSenders" => set_value(&mut self.allowed_image_senders, value),
             "commandOverrides" => set_value(&mut self.command_overrides, value),
             "logLevel" => set_value(&mut self.log_level, value),
+            "prefetchImageAttachments" => set_value(&mut self.prefetch_image_attachments, value),
             _ => false,
         }
     }

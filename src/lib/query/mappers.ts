@@ -120,6 +120,7 @@ export function mapConversation(conversation: IpcConversation): ReaderConversati
       remoteImagesAllowed: message.remoteImagesAllowed,
       isDraft: message.labelIds.includes('DRAFT'),
       draftId: message.draftId,
+      attachments: [...message.attachments].sort((a, b) => a.position - b.position),
     })),
   };
 }

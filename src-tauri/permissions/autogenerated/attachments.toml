@@ -1,0 +1,24 @@
+[[permission]]
+identifier = "allow-ensure-attachment-cached"
+description = "Enables fetching and caching an attachment's bytes on demand, reusing a prior cache hit."
+commands.allow = ["ensure_attachment_cached"]
+
+[[permission]]
+identifier = "allow-read-attachment-bytes"
+description = "Enables reading a cached attachment's raw bytes across IPC for preview panes that need them directly."
+commands.allow = ["read_attachment_bytes"]
+
+[[permission]]
+identifier = "allow-read-attachment-text"
+description = "Enables reading a cached attachment as decoded text, with encoding selected in Rust."
+commands.allow = ["read_attachment_text"]
+
+[[permission]]
+identifier = "allow-save-attachment-to-path"
+description = "Enables copying a cached attachment to a user-chosen destination path."
+commands.allow = ["save_attachment_to_path"]
+
+[[permission]]
+identifier = "allow-stage-attachment-into-draft"
+description = "Enables staging a cached received attachment into a draft's staging owner for the forward path."
+commands.allow = ["stage_attachment_into_draft"]

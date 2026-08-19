@@ -81,6 +81,8 @@ export function GeneralSection() {
   const setSyncIntervalSeconds = useLayoutStore((state) => state.setSyncIntervalSeconds);
   const alwaysLoadRemoteImages = useLayoutStore((state) => state.alwaysLoadRemoteImages);
   const setAlwaysLoadRemoteImages = useLayoutStore((state) => state.setAlwaysLoadRemoteImages);
+  const prefetchImageAttachments = useLayoutStore((state) => state.prefetchImageAttachments);
+  const setPrefetchImageAttachments = useLayoutStore((state) => state.setPrefetchImageAttachments);
 
   return (
     <SettingsSection title="General" description="Changes apply immediately.">
@@ -167,6 +169,23 @@ export function GeneralSection() {
           className="mb-4.5 mt-1.5 h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
         />
         <TrustedSendersList />
+      </div>
+      <div
+        aria-hidden="true"
+        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
+      />
+      <div className="flex flex-col">
+        <SubsectionHeading>Attachments</SubsectionHeading>
+        <SettingRow
+          label="Prefetch image attachment thumbnails"
+          description="Download image attachments as soon as a message opens, so chips show thumbnails."
+        >
+          <SettingSwitch
+            checked={prefetchImageAttachments}
+            onChange={setPrefetchImageAttachments}
+            label="Prefetch image attachment thumbnails"
+          />
+        </SettingRow>
       </div>
       <div
         aria-hidden="true"

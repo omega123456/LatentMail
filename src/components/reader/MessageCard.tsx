@@ -5,10 +5,12 @@ import {
   type MessageActionRibbonProps,
 } from '@/components/actions/MessageActionRibbon';
 import { invoke } from '@/lib/ipc/commands';
+import { AttachmentSection } from './AttachmentSection';
 import { BodyFrame } from './BodyFrame';
 import { MessageHeader, type MessageSender } from './MessageHeader';
 import type { MessageBadge } from '@/lib/labels/badges';
 import type { Participant } from '@/lib/format/participants';
+import type { MessageAttachment } from '@/lib/types/ipc';
 
 export type ReaderMessage = {
   id: string;
@@ -30,6 +32,7 @@ export type ReaderMessage = {
   remoteImagesAllowed?: boolean;
   isDraft?: boolean;
   draftId?: string | null;
+  attachments?: MessageAttachment[];
 };
 
 const remoteImageChipClass =
@@ -54,6 +57,7 @@ export function MessageCard({
   onLoadImages,
   onTrustSender,
   gmailThreadUrl = null,
+  accountId = null,
 }: {
   message: ReaderMessage;
   expanded: boolean;
@@ -67,6 +71,7 @@ export function MessageCard({
   onLoadImages?: (messageId: string) => void;
   onTrustSender?: (address: string) => void;
   gmailThreadUrl?: string | null;
+  accountId?: string | null;
 }) {
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
@@ -198,6 +203,15 @@ export function MessageCard({
                 </div>
               )}
             </>
+          )}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mt-stack-gap-md">
+              <AttachmentSection
+                accountId={accountId}
+                messageId={message.id}
+                attachments={message.attachments}
+              />
+            </div>
           )}
         </div>
       )}

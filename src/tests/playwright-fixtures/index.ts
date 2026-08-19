@@ -7,6 +7,11 @@ export {
 export { playwrightLabels, playwrightCreatedLabel, playwrightMutationResults } from './labels';
 export { playwrightThreadPage, playwrightThreads } from './threads';
 export { playwrightConversation, playwrightDeferredBodyConversation } from './conversations';
+export {
+  playwrightMessageAttachments,
+  playwrightCachedAttachment,
+  playwrightAttachmentImageSrc,
+} from './attachments';
 export { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
 export { playwrightTraversalStatus } from './traversal';
 export { playwrightSettings, playwrightTrustedSenderSettings } from './settings';

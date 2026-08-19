@@ -13,6 +13,15 @@ pub struct ReplyContext {
     pub references: Vec<String>,
     pub original_gmail_message_id: String,
     pub display_quote: Option<DisplayQuote>,
+    pub attachments: Vec<ReplyAttachment>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyAttachment {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size: i64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +110,7 @@ pub fn reply(
     account_email: &str,
     all: bool,
     references: Option<&str>,
+    attachments: Vec<ReplyAttachment>,
 ) -> ReplyContext {
     let from_self = address_key(&message.sender) == account_email.to_ascii_lowercase();
     let mut recipients = if from_self {
@@ -126,10 +136,11 @@ pub fn reply(
         references: chain,
         original_gmail_message_id: message.id.clone(),
         display_quote: display_quote(message),
+        attachments,
     }
 }
 
-pub fn forward(message: &Message) -> ReplyContext {
+pub fn forward(message: &Message, attachments: Vec<ReplyAttachment>) -> ReplyContext {
     ReplyContext {
         to: Vec::new(),
         cc: Vec::new(),
@@ -140,5 +151,6 @@ pub fn forward(message: &Message) -> ReplyContext {
         references: Vec::new(),
         original_gmail_message_id: message.id.clone(),
         display_quote: display_quote(message),
+        attachments,
     }
 }

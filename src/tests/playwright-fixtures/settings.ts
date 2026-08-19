@@ -19,6 +19,7 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
     replyAllToMessage: ['Shift+A'],
   },
   logLevel: 'info',
+  prefetchImageAttachments: false,
 };
 
 export const playwrightTrustedSenderSettings: IpcCommandMap['read_settings']['result'] = {

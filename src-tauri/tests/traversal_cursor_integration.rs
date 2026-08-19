@@ -283,9 +283,12 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
     let pause_queue = queue.clone();
+    let pauses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sink_pauses = Arc::clone(&pauses);
     let sink: EventSink = Arc::new(move |name, _payload| {
         if name == "sync://traversal" {
             pause_queue.pause();
+            sink_pauses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     });
     let engine = SyncEngine::new(storage.clone(), queue.clone(), registry, sink);
@@ -301,10 +304,13 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
             })
             .await
             .unwrap();
-        if matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page3")) {
+        let paused = pauses.load(std::sync::atomic::Ordering::SeqCst) >= 1;
+        let at_page3 =
+            matches!(cursor, Some(ref cursor) if cursor.position.as_deref() == Some("page3"));
+        if at_page3 && paused {
             break;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
     let cursor = cursor.expect("this run's first page must have committed");
     assert_eq!(cursor.position.as_deref(), Some("page3"));
@@ -329,7 +335,7 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
             final_cursor = Some(candidate);
             break;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
     let final_cursor = final_cursor.expect("backfill must complete");
     assert!(
@@ -372,6 +378,7 @@ async fn backfill_enumeration_has_no_label_filter_no_date_bound_and_includes_spa
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -407,6 +414,7 @@ async fn persisted_messages_carry_metadata_membership_and_truncated_body_only() 
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -487,6 +495,7 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await;
     assert!(page_one.is_ok(), "page 1 must commit cleanly");
@@ -499,6 +508,7 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await;
     assert!(
@@ -524,6 +534,7 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await;
     assert!(second_attempt.unwrap(), "the resumed page is the last one");
@@ -697,7 +708,7 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
             .await
             .unwrap()
             .unwrap();
-        if cursor.completed {
+        if cursor.completed && distinct_traversal_ops() == 2 {
             completed = true;
             break;
         }
@@ -847,6 +858,7 @@ async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -1009,6 +1021,7 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         true,
+        None,
     )
     .await
     .unwrap();
@@ -1063,6 +1076,7 @@ async fn fetch_and_persist_writes_messages_and_returns_touched_thread_ids() {
         &client,
         "account",
         &["m1".to_owned(), "m2".to_owned()],
+        None,
     )
     .await
     .unwrap();
@@ -1120,6 +1134,7 @@ async fn a_completed_cursor_is_not_restarted() {
         "account",
         &latentmail_lib::sync::noop_event_sink(),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -1149,7 +1164,7 @@ async fn progress_events_carry_counts_only_never_a_percentage_or_estimate() {
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
     let (sink, events) = collecting_sink();
-    run_backfill_step(&storage, &client, "account", &sink, false)
+    run_backfill_step(&storage, &client, "account", &sink, false, None)
         .await
         .unwrap();
 
@@ -1338,6 +1353,18 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
 
     engine.initial_sync("account", client).await.unwrap();
 
+    let completed_traversal_ops = || {
+        queue_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event["status"] == "done")
+            .filter_map(|event| event["id"].as_str())
+            .filter(|id| id.starts_with("traversal:account:"))
+            .map(str::to_owned)
+            .collect::<std::collections::HashSet<_>>()
+    };
+
     let mut cursor = None;
     for _ in 0..10_000 {
         cursor = storage
@@ -1346,22 +1373,15 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
             })
             .await
             .unwrap();
-        if matches!(&cursor, Some(cursor) if cursor.completed) {
+        let settled = completed_traversal_ops().len() == 2;
+        if matches!(&cursor, Some(cursor) if cursor.completed) && settled {
             break;
         }
         tokio::task::yield_now().await;
     }
     assert!(matches!(&cursor, Some(cursor) if cursor.completed));
 
-    let distinct_traversal_ops: std::collections::HashSet<String> = queue_events
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|event| event["status"] == "done")
-        .filter_map(|event| event["id"].as_str())
-        .filter(|id| id.starts_with("traversal:account:"))
-        .map(str::to_owned)
-        .collect();
+    let distinct_traversal_ops = completed_traversal_ops();
     assert_eq!(
         distinct_traversal_ops.len(),
         2,

@@ -166,6 +166,7 @@ describe('ReadingPaneContainer', () => {
           labelIds: ['Label_1'],
           remoteImagesBlocked: false,
           remoteImagesAllowed: false,
+          attachments: [],
         },
       ],
     });
@@ -177,7 +178,6 @@ describe('ReadingPaneContainer', () => {
     });
 
     renderWithClient();
-
 
     const ribbon = within(await screen.findByTestId('action-ribbon'));
     await user.click(ribbon.getByRole('button', { name: 'Move to' }));
@@ -268,6 +268,7 @@ describe('ReadingPaneContainer', () => {
           labelIds: ['INBOX'],
           remoteImagesBlocked: false,
           remoteImagesAllowed: false,
+          attachments: [],
         },
       ],
     });

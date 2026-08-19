@@ -109,6 +109,23 @@ async fn invalid_preference_values_are_rejected_without_overwriting_the_default(
 }
 
 #[tokio::test]
+async fn image_attachment_prefetch_preference_defaults_off_and_round_trips() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mail.sqlite");
+    let service = SettingsService::new(Storage::open(&path).unwrap());
+
+    assert!(!service.read().await.unwrap().prefetch_image_attachments);
+
+    service
+        .write("prefetchImageAttachments".into(), json!(true))
+        .await
+        .unwrap();
+
+    let reopened = SettingsService::new(Storage::open(path).unwrap());
+    assert!(reopened.read().await.unwrap().prefetch_image_attachments);
+}
+
+#[tokio::test]
 async fn remote_image_preferences_round_trip_and_reject_a_malformed_sender_list() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("mail.sqlite");

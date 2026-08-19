@@ -1,9 +1,9 @@
 use latentmail_lib::storage::{
-    truncate_body, Account, AccountRepository, ComposeDraftMetadata,
-    ComposeDraftMetadataRepository, HtmlPresence, Label, LabelColor, LabelNameError,
-    LabelRepository, Message, MessageRepository, Operation, OperationRepository, SettingRepository,
-    Storage, Thread, ThreadIdentity, ThreadRepository, TraversalCursor, TraversalCursorRepository,
-    TraversalKind,
+    truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
+    ComposeDraftMetadata, ComposeDraftMetadataRepository, HtmlPresence, Label, LabelColor,
+    LabelNameError, LabelRepository, Message, MessageRepository, Operation, OperationRepository,
+    SettingRepository, Storage, Thread, ThreadIdentity, ThreadRepository, TraversalCursor,
+    TraversalCursorRepository, TraversalKind,
 };
 
 fn account() -> Account {
@@ -929,4 +929,81 @@ async fn storage_offloads_database_work() {
             .unwrap(),
         "light"
     );
+}
+
+#[test]
+fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    MessageRepository::write_full_state(&connection, &message()).unwrap();
+
+    let attachments = vec![
+        Attachment {
+            attachment_id: "att-2".into(),
+            filename: "second.pdf".into(),
+            mime_type: "application/pdf".into(),
+            size: 200,
+            position: 1,
+        },
+        Attachment {
+            attachment_id: "att-1".into(),
+            filename: "first.pdf".into(),
+            mime_type: "application/pdf".into(),
+            size: 100,
+            position: 0,
+        },
+    ];
+    AttachmentRepository::replace_for_message(&connection, "account", "message", &attachments)
+        .unwrap();
+
+    let stored = AttachmentRepository::for_message(&connection, "account", "message").unwrap();
+    assert_eq!(
+        stored.iter().map(|value| value.attachment_id.as_str()).collect::<Vec<_>>(),
+        vec!["att-1", "att-2"],
+        "attachments must read back ordered by sender position, not insertion order"
+    );
+    assert_eq!(
+        AttachmentRepository::get(&connection, "account", "message", "att-1")
+            .unwrap()
+            .unwrap()
+            .filename,
+        "first.pdf"
+    );
+
+    let mut statement = connection.prepare("PRAGMA foreign_key_check").unwrap();
+    let violations = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(violations.is_empty(), "unexpected FK violations: {violations:?}");
+
+    let cascade_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN DELETE FROM message_attachments WHERE account_id='account' AND message_id='message'",
+    );
+    assert!(cascade_plan
+        .iter()
+        .any(|step| step.contains("message_attachments") || step.contains("SEARCH")));
+    assert!(!cascade_plan.iter().any(|step| step.contains("SCAN message_attachments")));
+
+    MessageRepository::delete(&connection, "account", "message").unwrap();
+    assert!(AttachmentRepository::for_message(&connection, "account", "message")
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn conversation_attachment_join_uses_the_composite_index_with_no_temp_b_tree() {
+    let connection = Storage::in_memory().unwrap();
+    let plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT a.message_id,a.attachment_id
+         FROM messages m CROSS JOIN message_attachments a
+         WHERE m.account_id='account' AND m.thread_id='thread'
+           AND a.account_id=m.account_id AND a.message_id=m.id",
+    );
+    assert!(plan.iter().any(|step| step.contains("SEARCH a")));
+    assert!(!plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(!plan.iter().any(|step| step.contains("SCAN a")));
 }

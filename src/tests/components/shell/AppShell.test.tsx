@@ -104,6 +104,7 @@ const conversationOne = {
       labelIds: ['Label_1'],
       remoteImagesBlocked: false,
       remoteImagesAllowed: false,
+      attachments: [],
     },
   ],
 } satisfies IpcCommandMap['load_conversation']['result'];

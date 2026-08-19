@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, InlinePart, Label, LabelRepository, Message,
-    MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
+    Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart,
+    Label, LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity,
+    ThreadRepository,
 };
 use latentmail_lib::sync::commands::{
     fetch_message_body, list_labels, list_threads, load_conversation, read_sync_status,
@@ -350,6 +351,67 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     );
     assert!(!html.contains("cid:img1"));
     assert!(!message.truncated);
+}
+
+#[tokio::test]
+async fn load_conversation_carries_attachment_metadata_on_the_dto() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    ThreadRepository::upsert(&connection, &thread("t1", 1, false)).unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: "account".into(),
+            id: "m1".into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: "alice@example.com".into(),
+            recipients: "me@example.com".into(),
+            subject: "Subject t1".into(),
+            sent_at: 1,
+            snippet: "hi".into(),
+            html_body: None,
+            plain_body: Some("hi".into()),
+            has_attachments: true,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    AttachmentRepository::replace_for_message(
+        &connection,
+        "account",
+        "m1",
+        &[Attachment {
+            attachment_id: "att-1".into(),
+            filename: "report.pdf".into(),
+            mime_type: "application/pdf".into(),
+            size: 2048,
+            position: 0,
+        }],
+    )
+    .unwrap();
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(conversation.messages.len(), 1);
+    let attachments = &conversation.messages[0].attachments;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].id, "att-1");
+    assert_eq!(attachments[0].filename, "report.pdf");
+    assert_eq!(attachments[0].mime_type, "application/pdf");
+    assert_eq!(attachments[0].size, 2048);
+    assert_eq!(attachments[0].position, 0);
 }
 
 #[tokio::test]

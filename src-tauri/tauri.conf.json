@@ -24,7 +24,11 @@
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: asset: http://asset.localhost https: http:",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/compose-staging/**", "$APPDATA/avatar-cache/**"]
+        "scope": [
+          "$APPDATA/compose-staging/**",
+          "$APPDATA/avatar-cache/**",
+          "$APPDATA/attachment-cache/**"
+        ]
       }
     }
   },

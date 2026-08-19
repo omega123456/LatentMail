@@ -7,8 +7,8 @@ use latentmail_lib::ipc::{
 use latentmail_lib::queue::{Lane, PauseScope, QueueEngine};
 use latentmail_lib::settings::SettingsService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, InlinePart, LabelRepository, Message,
-    MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
+    Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart,
+    LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
 use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
@@ -107,6 +107,21 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         SettingsService::new(Storage::open(directory.path().join("mail.sqlite")).unwrap()),
     ));
     app.manage(Storage::open(directory.path().join("mail.sqlite")).unwrap());
+    app.manage(std::sync::Arc::new(
+        latentmail_lib::compose::staging::Staging::new(directory.path().join("compose-staging")),
+    ));
+    app.manage(
+        latentmail_lib::attachments::cache::AttachmentCache::new(
+            directory.path().join("attachment-cache"),
+        )
+        .unwrap(),
+    );
+    app.manage(SyncEngine::new(
+        Storage::open(directory.path().join("mail.sqlite")).unwrap(),
+        QueueEngine::no_op(),
+        WorkRegistry::new(),
+        noop_event_sink(),
+    ));
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
@@ -244,6 +259,583 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         .unwrap(),
         true
     );
+
+    let missing_attachment_args = serde_json::json!({
+        "accountId": "account",
+        "messageId": "missing-message",
+        "attachmentId": "missing-attachment"
+    });
+    assert!(
+        invoke(&webview, "ensure_attachment_cached", missing_attachment_args.clone()).is_err(),
+        "reachable through IPC and fails cleanly on missing metadata, not a permission error"
+    );
+    assert!(invoke(&webview, "read_attachment_bytes", missing_attachment_args.clone()).is_err());
+    assert!(invoke(&webview, "read_attachment_text", missing_attachment_args.clone()).is_err());
+    let mut save_args = missing_attachment_args.clone();
+    save_args["destination"] = serde_json::json!(directory.path().join("saved.bin").to_string_lossy());
+    assert!(invoke(&webview, "save_attachment_to_path", save_args).is_err());
+    let mut stage_args = missing_attachment_args;
+    stage_args["owner"] = serde_json::json!("owner");
+    assert!(invoke(&webview, "stage_attachment_into_draft", stage_args).is_err());
+}
+
+#[tokio::test]
+async fn attachment_commands_succeed_end_to_end_through_real_ipc_dispatch() {
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let auth_service = AuthService::new(storage.clone());
+    let account_id = {
+        auth_service
+            .save_account("me@example.com".into(), "refresh-token".into(), None)
+            .await
+            .unwrap();
+        auth_service.accounts().await.unwrap()[0].id.clone()
+    };
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-token", "token_type": "Bearer"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/a1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": "aGVsbG8" })),
+        )
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    latentmail_lib::auth::save_refresh_token(&account_id, "refresh-token").unwrap();
+
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: account_id.clone(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: account_id.clone(),
+            id: "m1".into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: "sender@example.com".into(),
+            recipients: String::new(),
+            subject: "Subject".into(),
+            sent_at: 1,
+            snippet: String::new(),
+            html_body: None,
+            plain_body: None,
+            has_attachments: true,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    AttachmentRepository::replace_for_message(
+        &connection,
+        &account_id,
+        "m1",
+        &[Attachment {
+            attachment_id: "a1".into(),
+            filename: "hello.txt".into(),
+            mime_type: "text/plain".into(),
+            size: 5,
+            position: 0,
+        }],
+    )
+    .unwrap();
+    drop(connection);
+
+    app.manage(auth_service);
+    app.manage(SyncEngine::new(
+        storage.clone(),
+        QueueEngine::no_op(),
+        WorkRegistry::new(),
+        noop_event_sink(),
+    ));
+    app.manage(storage);
+    app.manage(std::sync::Arc::new(
+        latentmail_lib::compose::staging::Staging::new(directory.path().join("compose-staging")),
+    ));
+    app.manage(
+        latentmail_lib::attachments::cache::AttachmentCache::new(
+            directory.path().join("attachment-cache"),
+        )
+        .unwrap(),
+    );
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let args = serde_json::json!({
+        "accountId": account_id,
+        "messageId": "m1",
+        "attachmentId": "a1"
+    });
+    let cached = invoke(&webview, "ensure_attachment_cached", args.clone()).unwrap();
+    assert_eq!(cached["filename"], "hello.txt");
+    assert_eq!(cached["mimeType"], "text/plain");
+
+    let text = invoke(&webview, "read_attachment_text", args.clone()).unwrap();
+    assert_eq!(text, "hello");
+
+    assert!(invoke(&webview, "read_attachment_bytes", args.clone()).is_ok());
+
+    let destination = directory.path().join("saved.txt");
+    let mut save_args = args.clone();
+    save_args["destination"] = serde_json::json!(destination.to_string_lossy());
+    assert!(invoke(&webview, "save_attachment_to_path", save_args).is_ok());
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), "hello");
+
+    let mut stage_args = args;
+    stage_args["owner"] = serde_json::json!("draft-owner");
+    let staged = invoke(&webview, "stage_attachment_into_draft", stage_args).unwrap();
+    assert_eq!(staged["filename"], "hello.txt");
+}
+
+fn manage_attachment_command_dependencies(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    storage: &Storage,
+    directory: &std::path::Path,
+) {
+    app.manage(AuthService::new(storage.clone()));
+    app.manage(SyncEngine::new(
+        storage.clone(),
+        QueueEngine::no_op(),
+        WorkRegistry::new(),
+        noop_event_sink(),
+    ));
+    app.manage(storage.clone());
+    app.manage(std::sync::Arc::new(
+        latentmail_lib::compose::staging::Staging::new(directory.join("compose-staging")),
+    ));
+    app.manage(
+        latentmail_lib::attachments::cache::AttachmentCache::new(directory.join("attachment-cache"))
+            .unwrap(),
+    );
+}
+
+fn seed_cached_attachment(
+    directory: &std::path::Path,
+    account_id: &str,
+    message_id: &str,
+    attachment_id: &str,
+    bytes: &[u8],
+) -> std::path::PathBuf {
+    latentmail_lib::attachments::cache::AttachmentCache::new(directory.join("attachment-cache"))
+        .unwrap()
+        .write_bytes(
+            account_id,
+            message_id,
+            attachment_id,
+            "attachment.txt",
+            "text/plain",
+            bytes,
+        )
+        .unwrap()
+        .cache_path
+}
+
+fn insert_account_message_and_attachment(
+    storage: &Storage,
+    account_id: &str,
+    message_id: &str,
+    attachment_ids: &[&str],
+) {
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: account_id.into(),
+            email: format!("{account_id}@example.com"),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: account_id.into(),
+            id: message_id.into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: "sender@example.com".into(),
+            recipients: String::new(),
+            subject: "Subject".into(),
+            sent_at: 1,
+            snippet: String::new(),
+            html_body: None,
+            plain_body: None,
+            has_attachments: true,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Absent,
+        },
+    )
+    .unwrap();
+    let attachments: Vec<Attachment> = attachment_ids
+        .iter()
+        .map(|attachment_id| Attachment {
+            attachment_id: (*attachment_id).into(),
+            filename: format!("{attachment_id}.txt"),
+            mime_type: "text/plain".into(),
+            size: 5,
+            position: 0,
+        })
+        .collect();
+    AttachmentRepository::replace_for_message(&connection, account_id, message_id, &attachments)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ensure_attachment_cached_fails_when_the_attachment_row_is_missing() {
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    insert_account_message_and_attachment(&storage, "account-missing-row", "m1", &[]);
+    manage_attachment_command_dependencies(&app, &storage, directory.path());
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let error = invoke(
+        &webview,
+        "ensure_attachment_cached",
+        serde_json::json!({
+            "accountId": "account-missing-row",
+            "messageId": "m1",
+            "attachmentId": "does-not-exist"
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(error, serde_json::json!("Attachment metadata is unavailable"));
+}
+
+#[tokio::test]
+async fn ensure_attachment_cached_fails_when_the_account_has_no_refresh_token() {
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var("LATENTMAIL_GOOGLE_TOKEN_URL", "http://127.0.0.1:9/token");
+
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    insert_account_message_and_attachment(&storage, "account-no-token", "m1", &["a1"]);
+    manage_attachment_command_dependencies(&app, &storage, directory.path());
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let error = invoke(
+        &webview,
+        "ensure_attachment_cached",
+        serde_json::json!({
+            "accountId": "account-no-token",
+            "messageId": "m1",
+            "attachmentId": "a1"
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(error, serde_json::json!("missing refresh token"));
+}
+
+#[tokio::test]
+async fn ensure_attachment_cached_fails_when_gmail_rejects_the_fetch() {
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let auth_service = AuthService::new(storage.clone());
+    let account_id = auth_service
+        .save_account("gmail-rejects@example.com".into(), "refresh-token".into(), None)
+        .await
+        .unwrap()
+        .id;
+    insert_account_message_and_attachment(&storage, &account_id, "m1", &["a1"]);
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-token", "token_type": "Bearer"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/a1"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+
+    app.manage(auth_service);
+    app.manage(SyncEngine::new(
+        storage.clone(),
+        QueueEngine::no_op(),
+        WorkRegistry::new(),
+        noop_event_sink(),
+    ));
+    app.manage(storage);
+    app.manage(std::sync::Arc::new(
+        latentmail_lib::compose::staging::Staging::new(directory.path().join("compose-staging")),
+    ));
+    app.manage(
+        latentmail_lib::attachments::cache::AttachmentCache::new(
+            directory.path().join("attachment-cache"),
+        )
+        .unwrap(),
+    );
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let error = invoke(
+        &webview,
+        "ensure_attachment_cached",
+        serde_json::json!({
+            "accountId": account_id,
+            "messageId": "m1",
+            "attachmentId": "a1"
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        serde_json::json!("Gmail request failed with status 404")
+    );
+}
+
+async fn mount_authenticated_gmail_server(
+    account_id: &str,
+    forbidden_attachment_path: &str,
+) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-token", "token_type": "Bearer"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path_regex(forbidden_attachment_path))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    latentmail_lib::auth::save_refresh_token(account_id, "refresh-token").unwrap();
+    server
+}
+
+#[tokio::test]
+async fn read_and_stage_commands_fail_when_the_cached_entry_is_unreadable() {
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    insert_account_message_and_attachment(
+        &storage,
+        "account-unreadable-cache",
+        "m1",
+        &["for-bytes", "for-text", "for-stage"],
+    );
+    manage_attachment_command_dependencies(&app, &storage, directory.path());
+    let server = mount_authenticated_gmail_server(
+        "account-unreadable-cache",
+        r"^/users/me/messages/m1/attachments/.+$",
+    )
+    .await;
+
+    for attachment_id in ["for-bytes", "for-text", "for-stage"] {
+        let entry = seed_cached_attachment(
+            directory.path(),
+            "account-unreadable-cache",
+            "m1",
+            attachment_id,
+            b"hello",
+        );
+        std::fs::remove_file(&entry).unwrap();
+        std::fs::create_dir(&entry).unwrap();
+    }
+
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let bytes_error = invoke(
+        &webview,
+        "read_attachment_bytes",
+        serde_json::json!({
+            "accountId": "account-unreadable-cache",
+            "messageId": "m1",
+            "attachmentId": "for-bytes"
+        }),
+    )
+    .unwrap_err();
+    assert!(bytes_error.is_string());
+    assert_ne!(bytes_error, serde_json::json!("missing refresh token"));
+    assert_ne!(
+        bytes_error,
+        serde_json::json!("Attachment metadata is unavailable")
+    );
+
+    let text_error = invoke(
+        &webview,
+        "read_attachment_text",
+        serde_json::json!({
+            "accountId": "account-unreadable-cache",
+            "messageId": "m1",
+            "attachmentId": "for-text"
+        }),
+    )
+    .unwrap_err();
+    assert!(text_error.is_string());
+    assert_ne!(text_error, serde_json::json!("missing refresh token"));
+
+    let stage_error = invoke(
+        &webview,
+        "stage_attachment_into_draft",
+        serde_json::json!({
+            "accountId": "account-unreadable-cache",
+            "messageId": "m1",
+            "attachmentId": "for-stage",
+            "owner": "draft-owner"
+        }),
+    )
+    .unwrap_err();
+    assert!(stage_error.is_string());
+    assert_ne!(stage_error, serde_json::json!("missing refresh token"));
+
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn save_attachment_to_path_fails_when_the_destination_directory_does_not_exist() {
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    insert_account_message_and_attachment(&storage, "account-bad-destination", "m1", &["a1"]);
+    manage_attachment_command_dependencies(&app, &storage, directory.path());
+    let server = mount_authenticated_gmail_server(
+        "account-bad-destination",
+        r"^/users/me/messages/m1/attachments/a1$",
+    )
+    .await;
+
+    seed_cached_attachment(
+        directory.path(),
+        "account-bad-destination",
+        "m1",
+        "a1",
+        b"hello",
+    );
+
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let destination = directory.path().join("missing-directory").join("out.txt");
+    let error = invoke(
+        &webview,
+        "save_attachment_to_path",
+        serde_json::json!({
+            "accountId": "account-bad-destination",
+            "messageId": "m1",
+            "attachmentId": "a1",
+            "destination": destination.to_string_lossy()
+        }),
+    )
+    .unwrap_err();
+    assert!(error.is_string());
+    assert_ne!(error, serde_json::json!("missing refresh token"));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn stage_attachment_into_draft_fails_when_the_staging_directory_cannot_be_created() {
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    insert_account_message_and_attachment(&storage, "account-blocked-staging", "m1", &["a1"]);
+    manage_attachment_command_dependencies(&app, &storage, directory.path());
+    let server = mount_authenticated_gmail_server(
+        "account-blocked-staging",
+        r"^/users/me/messages/m1/attachments/a1$",
+    )
+    .await;
+
+    seed_cached_attachment(
+        directory.path(),
+        "account-blocked-staging",
+        "m1",
+        "a1",
+        b"hello",
+    );
+
+    let blocked_account_segment = directory
+        .path()
+        .join("compose-staging")
+        .join("drafts")
+        .join("account-blocked-staging");
+    std::fs::create_dir_all(blocked_account_segment.parent().unwrap()).unwrap();
+    std::fs::write(&blocked_account_segment, b"not a directory").unwrap();
+
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let error = invoke(
+        &webview,
+        "stage_attachment_into_draft",
+        serde_json::json!({
+            "accountId": "account-blocked-staging",
+            "messageId": "m1",
+            "attachmentId": "a1",
+            "owner": "draft-owner"
+        }),
+    )
+    .unwrap_err();
+    assert!(error.is_string());
+    assert_ne!(error, serde_json::json!("missing refresh token"));
+    server.verify().await;
 }
 
 #[test]
@@ -310,7 +902,7 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
         ),
         (
             "reply_context",
-            serde_json::json!({ "accountId": "account", "messageId": "message", "accountEmail": "me@example.com", "replyAll": false, "forward": false }),
+            serde_json::json!({ "accountId": "account", "messageId": "message", "accountEmail": "me@example.com", "replyAll": false, "forward": false, "owner": "owner" }),
         ),
         (
             "stage_attachment_from_path",
@@ -1781,6 +2373,19 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
     .unwrap();
     MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
         .unwrap();
+    AttachmentRepository::replace_for_message(
+        &connection,
+        &account_id,
+        "message-1",
+        &[Attachment {
+            attachment_id: "gmail-att-1".into(),
+            filename: "report.pdf".into(),
+            mime_type: "application/pdf".into(),
+            size: 2048,
+            position: 0,
+        }],
+    )
+    .unwrap();
     latentmail_lib::contacts::observe(
         &connection,
         &account_id,
@@ -1838,6 +2443,7 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
             "accountEmail": "me@example.com",
             "replyAll": true,
             "forward": false,
+            "owner": "reply-owner",
         }),
     )
     .unwrap();
@@ -1848,6 +2454,7 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
         .unwrap()
         .iter()
         .any(|value| value == "cc@example.com"));
+    assert!(reply["attachments"].as_array().unwrap().is_empty());
 
     let forwarded = invoke(
         &webview,
@@ -1858,11 +2465,16 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
             "accountEmail": "me@example.com",
             "replyAll": false,
             "forward": true,
+            "owner": "forward-owner",
         }),
     )
     .unwrap();
     assert_eq!(forwarded["subject"], "Fwd: Hello");
     assert!(forwarded["targetThreadId"].is_null());
+    assert_eq!(forwarded["attachments"][0]["id"], "gmail-att-1");
+    assert_eq!(forwarded["attachments"][0]["filename"], "report.pdf");
+    assert_eq!(forwarded["attachments"][0]["mimeType"], "application/pdf");
+    assert_eq!(forwarded["attachments"][0]["size"], 2048);
 
     let contacts = invoke(
         &webview,
@@ -1896,4 +2508,114 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
     assert_eq!(status["state"], "complete");
     assert_eq!(status["kind"], "backfill");
     assert_eq!(status["discoveredCount"], 20);
+}
+
+#[tokio::test]
+async fn forwarding_a_message_whose_only_attachment_shaped_parts_are_inline_images_stages_none() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    let account_id = "account-inline-only".to_owned();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: account_id.clone(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    ThreadRepository::upsert(
+        &connection,
+        &Thread {
+            account_id: account_id.clone(),
+            id: "thread-inline".into(),
+            subject: "Logo".into(),
+            participants: "Alice <alice@example.com>".into(),
+            latest_at: 1,
+            message_count: 1,
+            is_unread: false,
+            is_starred: false,
+            has_attachments: false,
+            has_draft: false,
+            sender_identity: ThreadIdentity {
+                display: "Alice".into(),
+                address: Some("alice@example.com".into()),
+            },
+            recipient_identity: None,
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: account_id.clone(),
+            id: "message-inline".into(),
+            thread_id: "thread-inline".into(),
+            rfc_message_id: Some("<inline@example.com>".into()),
+            sender: "Alice <alice@example.com>".into(),
+            recipients: "me@example.com".into(),
+            subject: "Logo".into(),
+            sent_at: 1,
+            snippet: "logo".into(),
+            html_body: Some("<img src=\"cid:logo\">".into()),
+            plain_body: None,
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Present,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_recipient_roles(
+        &connection,
+        &account_id,
+        "message-inline",
+        "me@example.com",
+        "",
+        "",
+        None,
+    )
+    .unwrap();
+    MessageRepository::replace_inline_parts(
+        &connection,
+        &account_id,
+        "message-inline",
+        &[InlinePart {
+            content_id: "logo".into(),
+            mime_type: "image/png".into(),
+            bytes: b"img".to_vec(),
+        }],
+    )
+    .unwrap();
+    AttachmentRepository::replace_for_message(&connection, &account_id, "message-inline", &[]).unwrap();
+    drop(connection);
+
+    let app = app();
+    app.manage(storage);
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let forwarded = invoke(
+        &webview,
+        "reply_context",
+        serde_json::json!({
+            "accountId": account_id,
+            "messageId": "message-inline",
+            "accountEmail": "me@example.com",
+            "replyAll": false,
+            "forward": true,
+            "owner": "forward-owner",
+        }),
+    )
+    .unwrap();
+    assert!(forwarded["attachments"].as_array().unwrap().is_empty());
 }

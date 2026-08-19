@@ -295,6 +295,34 @@
   --spacing-settings-nav: 224px;
   --spacing-settings-content-max: 800px;
   --spacing-select-menu: 160px;
+  --spacing-preview-modal-w: 1440px;
+  --spacing-preview-modal-h: 1100px;
+  --spacing-pdf-page-max: 1100px;
+
+  --color-filetype-pdf-ink: #b3261e;
+  --color-filetype-pdf-well: #fbe9e7;
+  --color-dark-filetype-pdf-ink: #ff9d92;
+  --color-dark-filetype-pdf-well: #3a1111;
+  --color-filetype-document-ink: #0058bc;
+  --color-filetype-document-well: #e3f2fd;
+  --color-dark-filetype-document-ink: #64b5f6;
+  --color-dark-filetype-document-well: #1a237e;
+  --color-filetype-spreadsheet-ink: #146c2e;
+  --color-filetype-spreadsheet-well: #e8f5e9;
+  --color-dark-filetype-spreadsheet-ink: #8ddb98;
+  --color-dark-filetype-spreadsheet-well: #1b3a24;
+  --color-filetype-presentation-ink: #a45d00;
+  --color-filetype-presentation-well: #fff3e0;
+  --color-dark-filetype-presentation-ink: #ffb95e;
+  --color-dark-filetype-presentation-well: #3a2413;
+  --color-filetype-image-ink: #7b1fa2;
+  --color-filetype-image-well: #f3e5f5;
+  --color-dark-filetype-image-ink: #ce93d8;
+  --color-dark-filetype-image-well: #4a148c;
+  --color-filetype-archive-ink: #5a6072;
+  --color-filetype-archive-well: #eaecf2;
+  --color-dark-filetype-archive-ink: #a6a9b8;
+  --color-dark-filetype-archive-well: #26262d;
 
   --spacing-status-bar-h: 24px;
   --spacing-progress-track: 64px;

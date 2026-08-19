@@ -4,12 +4,15 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::{
+    attachments::AttachmentCache,
     gmail::{GmailClient, GmailMessage, ListOptions, MAX_PAGE_SIZE},
     storage::{
-        HtmlPresence, LabelRepository, Message, MessageRepository, Storage, ThreadRepository,
-        TraversalCursor, TraversalCursorRepository, TraversalKind,
+        AttachmentRepository, HtmlPresence, LabelRepository, Message, MessageRepository, Storage,
+        ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
     },
 };
+
+use super::materialize::attachment_records;
 
 use super::{EventSink, SyncError};
 
@@ -44,6 +47,7 @@ pub async fn run_backfill_step(
     account_id: &str,
     events: &EventSink,
     resumed: bool,
+    cache: Option<AttachmentCache>,
 ) -> Result<bool, SyncError> {
 
     let existing = storage
@@ -108,7 +112,7 @@ pub async fn run_backfill_step(
             let mut touched = HashSet::new();
             for message in &messages {
                 touched.insert(message.thread_id.clone());
-                write_traversal_message(&transaction, &account_owned, message)?;
+                write_traversal_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
             ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
 
@@ -149,6 +153,7 @@ pub async fn fetch_and_persist(
     client: &GmailClient,
     account_id: &str,
     ids: &[String],
+    cache: Option<AttachmentCache>,
 ) -> Result<Vec<String>, SyncError> {
     let mut messages = Vec::with_capacity(ids.len());
     for id in ids {
@@ -161,7 +166,7 @@ pub async fn fetch_and_persist(
             let mut touched = HashSet::new();
             for message in &messages {
                 touched.insert(message.thread_id.clone());
-                write_traversal_message(&transaction, &account_owned, message)?;
+                write_traversal_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
             ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
             transaction.commit()?;
@@ -176,6 +181,7 @@ fn write_traversal_message(
     connection: &rusqlite::Connection,
     account_id: &str,
     message: &GmailMessage,
+    cache: Option<&AttachmentCache>,
 ) -> rusqlite::Result<()> {
     let truncated_body =
         crate::storage::truncate_body(message.plain_body.as_deref(), message.html_body.as_deref());
@@ -224,6 +230,16 @@ fn write_traversal_message(
                 true,
             )?;
         }
+    }
+
+    AttachmentRepository::replace_for_message(
+        connection,
+        account_id,
+        &message.id,
+        &attachment_records(message),
+    )?;
+    if let Some(cache) = cache {
+        crate::attachments::seed_cache(cache, account_id, &message.id, &message.attachment_parts);
     }
     Ok(())
 }

@@ -8,6 +8,7 @@ import { playwrightTraversalStatus } from './traversal';
 import { playwrightSettings } from './settings';
 import { playwrightLogEntries } from './logs';
 import { playwrightContactSuggestions, playwrightStagedAttachment } from './compose';
+import { playwrightCachedAttachment } from './attachments';
 import {
   playwrightPausedQueueSummary,
   playwrightQueueOperationsSnapshot,
@@ -41,9 +42,11 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
     references: [],
     originalGmailMessageId: '',
     displayQuote: null,
+    attachments: [],
   },
   stage_attachment_from_path: playwrightStagedAttachment,
   stage_attachment_from_bytes: playwrightStagedAttachment,
+  stage_attachment_into_draft: playwrightStagedAttachment,
   release_staged_attachment: undefined,
   save_compose_draft: { operationId: 'draft-operation', draftId: 'draft-1' },
   send_compose_draft: { operationId: 'send-operation', draftId: 'draft-1' },
@@ -69,6 +72,11 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
     attachments: [],
   },
   'plugin:dialog|open': null,
+  'plugin:dialog|save': null,
+  ensure_attachment_cached: playwrightCachedAttachment,
+  read_attachment_bytes: new ArrayBuffer(0),
+  read_attachment_text: '',
+  save_attachment_to_path: undefined,
   list_threads: playwrightThreadPage,
   load_conversation: playwrightConversation,
   fetch_message_body: undefined,

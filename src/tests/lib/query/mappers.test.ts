@@ -134,6 +134,7 @@ describe('mapConversation', () => {
           labelIds: ['Label_1', 'INBOX'],
           remoteImagesBlocked: true,
           remoteImagesAllowed: false,
+          attachments: [],
         },
       ],
     };

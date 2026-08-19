@@ -39,6 +39,7 @@ describe('layout store', () => {
       allowedImageSenders: [],
       commandOverrides: {},
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
     const store = await loadStore();
     store.getState().setRoute('settings');

@@ -2,12 +2,13 @@ pub mod addresses;
 mod repositories;
 
 pub use repositories::{
-    truncate_body, Account, AccountRepository, AvatarCacheOutcome, AvatarCacheRecord,
-    AvatarCacheRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository,
-    ComposeMessageContext, ConversationMessage, HtmlPresence, InlinePart, Label, LabelColor,
-    LabelNameError, LabelRepository, Message, MessageRepository, Operation, OperationRepository,
-    ReconciliationMessage, SearchRepository, SettingRepository, Thread, ThreadIdentity,
-    ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+    truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
+    AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, ComposeDraftMetadata,
+    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationMessage, HtmlPresence,
+    InlinePart, Label, LabelColor, LabelNameError, LabelRepository, Message, MessageRepository,
+    Operation, OperationRepository, ReconciliationMessage, SearchRepository, SettingRepository,
+    Thread, ThreadIdentity, ThreadListRow, ThreadRepository, TraversalCursor,
+    TraversalCursorRepository, TraversalKind,
 };
 
 use std::{
@@ -23,7 +24,7 @@ use thiserror::Error;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 
-const STATEMENT_CACHE_CAPACITY: usize = 48;
+const STATEMENT_CACHE_CAPACITY: usize = 52;
 
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;

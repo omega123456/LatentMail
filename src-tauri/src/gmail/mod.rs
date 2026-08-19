@@ -37,6 +37,9 @@ const MESSAGE_FIELDS: &str = "id,threadId,historyId,labelIds,snippet,internalDat
 const MESSAGE_METADATA_FIELDS: &str =
     "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers)";
 const MAX_GMAIL_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_RESPONSE_BYTES: usize = 40 * 1024 * 1024;
+
+pub const RESERVED_ATTACHMENT_ID_PREFIX: &str = "latentmail-inline-";
 
 pub mod labels;
 
@@ -98,6 +101,8 @@ pub struct AttachmentPart {
     pub attachment_id: String,
     pub filename: String,
     pub mime_type: String,
+    pub size: u64,
+    pub inline_bytes: Option<Vec<u8>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GmailMessage {
@@ -500,12 +505,15 @@ impl GmailClient {
         message_id: &str,
         attachment_id: &str,
     ) -> Result<Vec<u8>, GmailError> {
+        self.acquire(ATTACHMENTS_GET_COST).await;
         let raw: RawAttachment = self
-            .get(
+            .request_capped(
+                reqwest::Method::GET,
                 &format!("/users/me/messages/{message_id}/attachments/{attachment_id}"),
-                &[],
-                ATTACHMENTS_GET_COST,
+                std::iter::empty(),
+                Option::<&()>::None,
                 false,
+                MAX_ATTACHMENT_RESPONSE_BYTES,
             )
             .await?;
         decode(&raw.data).ok_or(GmailError::AttachmentData)
@@ -642,6 +650,23 @@ impl GmailClient {
         body: Option<&B>,
         history: bool,
     ) -> Result<T, GmailError> {
+        self.request_capped(method, path, query, body, history, MAX_GMAIL_RESPONSE_BYTES)
+            .await
+    }
+    async fn request_capped<
+        'a,
+        T: DeserializeOwned,
+        B: Serialize + ?Sized,
+        I: IntoIterator<Item = (&'a str, &'a str)>,
+    >(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: I,
+        body: Option<&B>,
+        history: bool,
+        max_bytes: usize,
+    ) -> Result<T, GmailError> {
         let query = query.into_iter().collect::<Vec<_>>();
         for attempt in 0..10 {
             let mut request = self
@@ -654,9 +679,10 @@ impl GmailClient {
             }
             match request.send().await {
                 Ok(response) if response.status().is_success() => {
-                    if response.content_length().is_some_and(|len| {
-                        len > MAX_GMAIL_RESPONSE_BYTES as u64
-                    }) {
+                    if response
+                        .content_length()
+                        .is_some_and(|len| len > max_bytes as u64)
+                    {
                         return Err(GmailError::ResponseTooLarge);
                     }
                     let raw = response.bytes().await?;
@@ -823,6 +849,7 @@ struct RawBody {
     data: Option<String>,
     #[serde(rename = "attachmentId")]
     attachment_id: Option<String>,
+    size: Option<u64>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -942,6 +969,8 @@ fn map_message(raw: RawMessage) -> GmailMessage {
     let headers = headers(raw_headers);
     let mut content = Content::default();
     collect_part(&raw.payload, &mut content);
+    let attachment_parts = classify_attachments(content.candidates, content.html.as_deref());
+    let has_attachments = !attachment_parts.is_empty();
     GmailMessage {
         id: raw.id,
         thread_id: raw.thread_id,
@@ -979,9 +1008,9 @@ fn map_message(raw: RawMessage) -> GmailMessage {
         subject: headers.get("subject").cloned().unwrap_or_default(),
         html_body: content.html,
         plain_body: content.plain,
-        has_attachments: content.attachments,
+        has_attachments,
         inline_parts: content.inline,
-        attachment_parts: content.attachment_parts,
+        attachment_parts,
         oversize: false,
     }
 }
@@ -989,10 +1018,20 @@ fn map_message(raw: RawMessage) -> GmailMessage {
 struct Content {
     html: Option<String>,
     plain: Option<String>,
-    attachments: bool,
-    attachment_parts: Vec<AttachmentPart>,
+    candidates: Vec<AttachmentCandidate>,
     inline: Vec<InlinePart>,
 }
+
+#[derive(Clone)]
+struct AttachmentCandidate {
+    attachment_id: Option<String>,
+    content_id: Option<String>,
+    filename: Option<String>,
+    mime_type: String,
+    size: u64,
+    bytes: Option<Vec<u8>>,
+}
+
 fn collect_part(part: &RawPart, content: &mut Content) {
 
     let mime = part
@@ -1011,20 +1050,31 @@ fn collect_part(part: &RawPart, content: &mut Content) {
             .find(|header| header.name.eq_ignore_ascii_case("content-id"))
             .map(|header| header.value.trim_matches(['<', '>']).to_owned())
     });
-    let is_attachment = !part.filename.as_deref().unwrap_or_default().is_empty();
-    if is_attachment {
-        content.attachments = true;
-        if let Some(attachment_id) = part
+    let filename = part
+        .filename
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let is_attachment = filename.is_some();
+    if filename.is_some() || cid.is_some() {
+        let attachment_id = part
             .body
             .as_ref()
             .and_then(|body| body.attachment_id.as_deref())
-        {
-            content.attachment_parts.push(AttachmentPart {
-                attachment_id: attachment_id.to_owned(),
-                filename: part.filename.clone().unwrap_or_default(),
-                mime_type: mime.essence_str().to_owned(),
-            });
-        }
+            .map(str::to_owned);
+        let size = part
+            .body
+            .as_ref()
+            .and_then(|body| body.size)
+            .unwrap_or_else(|| data.as_ref().map_or(0, |bytes| bytes.len() as u64));
+        content.candidates.push(AttachmentCandidate {
+            attachment_id,
+            content_id: cid.clone(),
+            filename,
+            mime_type: mime.essence_str().to_owned(),
+            size,
+            bytes: data.clone(),
+        });
     }
     if let (Some(content_id), Some(bytes)) = (cid, data.clone()) {
         content.inline.push(InlinePart {
@@ -1085,6 +1135,65 @@ fn embedded_message(part: &RawPart) -> Option<String> {
     block.push_str(body.unwrap_or_default().trim_end());
     Some(block)
 }
+fn classify_attachments(
+    candidates: Vec<AttachmentCandidate>,
+    html: Option<&str>,
+) -> Vec<AttachmentPart> {
+    let mut result = Vec::with_capacity(candidates.len());
+    for (position, candidate) in candidates.into_iter().enumerate() {
+        let locally_held = candidate.bytes.is_some();
+        let cid_referenced = candidate.content_id.as_deref().is_some_and(|content_id| {
+            html.is_some_and(|html| html.contains(&format!("cid:{content_id}")))
+        });
+        if cid_referenced && locally_held {
+            continue;
+        }
+        let attachment_id = candidate.attachment_id.clone().unwrap_or_else(|| {
+            synthesize_attachment_id(candidate.content_id.as_deref(), position)
+        });
+        let filename = candidate
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("attachment-{position}"));
+        result.push(AttachmentPart {
+            attachment_id,
+            filename,
+            mime_type: candidate.mime_type,
+            size: candidate.size,
+            inline_bytes: candidate.bytes,
+        });
+    }
+    result
+}
+
+fn synthesize_attachment_id(content_id: Option<&str>, position: usize) -> String {
+    match content_id {
+        Some(content_id) => format!(
+            "{RESERVED_ATTACHMENT_ID_PREFIX}cid-{}",
+            sanitize_path_segment(content_id)
+        ),
+        None => format!("{RESERVED_ATTACHMENT_ID_PREFIX}pos-{position}"),
+    }
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "empty".to_owned()
+    } else {
+        sanitized
+    }
+}
+
 fn decode(value: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD
         .decode(value.trim_end_matches('=').as_bytes())

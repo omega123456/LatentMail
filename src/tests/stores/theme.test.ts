@@ -86,6 +86,7 @@ describe('theme store', () => {
       allowedImageSenders: [],
       commandOverrides: {},
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
     const { useThemeStore } = await loadThemeStore();
     const writes: Array<{ key: string; value: unknown }> = [];

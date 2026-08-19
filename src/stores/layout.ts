@@ -20,6 +20,7 @@ type LayoutState = Pick<
   | 'alwaysLoadRemoteImages'
   | 'allowedImageSenders'
   | 'logLevel'
+  | 'prefetchImageAttachments'
 > & {
   route: Route;
   hydrated: boolean;
@@ -40,6 +41,7 @@ type LayoutState = Pick<
   setSyncIntervalSeconds: (syncIntervalSeconds: number) => void;
   setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages: boolean) => void;
   setLogLevel: (logLevel: LogLevel) => void;
+  setPrefetchImageAttachments: (prefetchImageAttachments: boolean) => void;
   trustImageSender: (address: string) => void;
   untrustImageSender: (address: string) => void;
 };
@@ -76,6 +78,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   alwaysLoadRemoteImages: false,
   allowedImageSenders: [],
   logLevel: 'info',
+  prefetchImageAttachments: false,
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -96,6 +99,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         alwaysLoadRemoteImages: settings.alwaysLoadRemoteImages,
         allowedImageSenders: settings.allowedImageSenders,
         logLevel: settings.logLevel,
+        prefetchImageAttachments: settings.prefetchImageAttachments,
         hydrated: true,
       });
     });
@@ -169,6 +173,10 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setLogLevel: (logLevel) => {
     set({ logLevel });
     persist('logLevel', logLevel);
+  },
+  setPrefetchImageAttachments: (prefetchImageAttachments) => {
+    set({ prefetchImageAttachments });
+    persist('prefetchImageAttachments', prefetchImageAttachments);
   },
   trustImageSender: (address) => {
     const normalized = address.trim().toLowerCase();

@@ -1,4 +1,4 @@
-import { act } from '@testing-library/react';
+import { act, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
 import { useComposeStore } from '@/stores/compose';
@@ -33,6 +33,7 @@ describe('compose entry actions', () => {
       references: ['<prior@example.com>', '<original@example.com>'],
       originalGmailMessageId: 'original',
       displayQuote: { html: '<p>Quote</p>', attribution: 'On Aug 10, 2026, Sender wrote:' },
+      attachments: [],
     });
 
     await act(async () => openReply('reply-all', 'account', 'me@example.com', message));
@@ -44,6 +45,7 @@ describe('compose entry actions', () => {
       subject: 'Re: Subject',
       quote: { html: '<p>Quote</p>' },
     });
+    expect(useComposeStore.getState().session?.attachments).toEqual([]);
   });
 
   it('does nothing for reply/forward/edit draft actions without a target', async () => {
@@ -64,6 +66,7 @@ describe('compose entry actions', () => {
       references: [],
       originalGmailMessageId: 'original',
       displayQuote: { html: '<p>Quote</p>', attribution: 'On Aug 10, 2026, Sender wrote:' },
+      attachments: [],
     });
     await act(async () =>
       openForward('account', 'me@example.com', { ...message, html: null, text: '<safe>\nline' }),
@@ -74,6 +77,75 @@ describe('compose entry actions', () => {
       subject: 'Fwd: Subject',
       quote: { html: '<p>Quote</p>' },
     });
+  });
+
+  it('forwarding a message whose only attachment-shaped parts are inline images stages none', async () => {
+    ipc.override('reply_context', {
+      to: [],
+      cc: [],
+      subject: 'Fwd: Subject',
+      originalMessageId: '',
+      targetThreadId: null,
+      inReplyTo: null,
+      references: [],
+      originalGmailMessageId: 'original',
+      displayQuote: null,
+      attachments: [],
+    });
+    await act(async () => openForward('account', 'me@example.com', message));
+    expect(useComposeStore.getState().session?.attachments).toEqual([]);
+    expect(ipc.tauriInvoke).not.toHaveBeenCalledWith('stage_attachment_into_draft', expect.anything());
+  });
+
+  it('stages each forwarded attachment through the compose store, independently reporting failures', async () => {
+    ipc.override('reply_context', {
+      to: [],
+      cc: [],
+      subject: 'Fwd: Subject',
+      originalMessageId: '',
+      targetThreadId: null,
+      inReplyTo: null,
+      references: [],
+      originalGmailMessageId: 'original',
+      displayQuote: null,
+      attachments: [
+        { id: 'att-ok', filename: 'report.pdf', mimeType: 'application/pdf', size: 1024 },
+        { id: 'att-bad', filename: 'broken.zip', mimeType: 'application/zip', size: 512 },
+      ],
+    });
+    const stageCalls: unknown[] = [];
+    ipc.override('stage_attachment_into_draft', (args) => {
+      stageCalls.push(args);
+      if (args.attachmentId === 'att-bad') return Promise.reject(new Error('Gmail unavailable'));
+      return Promise.resolve({
+        id: 'staged-ok',
+        filename: 'report.pdf',
+        mimeType: 'application/pdf',
+        path: '/staged/report.pdf',
+        contentId: null,
+        size: 1024,
+      });
+    });
+
+    await act(async () => openForward('account', 'me@example.com', message));
+    const owner = useComposeStore.getState().session?.id;
+    expect(owner).toBeTruthy();
+    expect(useComposeStore.getState().session?.attachments).toHaveLength(2);
+    expect(stageCalls).toEqual([
+      expect.objectContaining({ attachmentId: 'att-ok', owner }),
+      expect.objectContaining({ attachmentId: 'att-bad', owner }),
+    ]);
+
+    await waitFor(() => {
+      const attachments = useComposeStore.getState().session?.attachments ?? [];
+      expect(attachments.every((entry) => entry.state !== 'reading')).toBe(true);
+    });
+
+    const attachments = useComposeStore.getState().session?.attachments ?? [];
+    const ok = attachments.find((entry) => entry.filename === 'report.pdf');
+    const bad = attachments.find((entry) => entry.filename === 'broken.zip');
+    expect(ok).toMatchObject({ state: 'settled', size: 1024 });
+    expect(bad).toMatchObject({ state: 'failed', error: 'Gmail unavailable' });
   });
 
   it('saves qualifying dirty work before reliably retargeting the composer', async () => {

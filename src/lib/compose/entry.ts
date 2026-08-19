@@ -1,7 +1,9 @@
 import { invoke } from '@/lib/ipc/commands';
 import { toDraftRequest } from '@/lib/compose/autosave';
+import { dispatchConvertFileSrc } from '@/lib/ipc/dispatch';
 import type { Participant } from '@/lib/format/participants';
 import type { ReaderMessage } from '@/components/reader/MessageCard';
+import type { ReplyContextAttachment } from '@/lib/types/ipc';
 import { useComposeStore, type ComposeMode, type OpenComposeArgs } from '@/stores/compose';
 
 function formatRaw(participant: Participant): string {
@@ -31,15 +33,17 @@ export async function openReply(
   message: ReaderMessage | undefined,
 ): Promise<void> {
   if (!message) return;
+  const session = baseSession(mode, accountId, accountEmail);
   const context = await invoke('reply_context', {
     accountId,
     messageId: message.id,
     accountEmail,
     replyAll: mode === 'reply-all',
     forward: false,
+    owner: session.id,
   });
   openOrRetarget({
-    ...baseSession(mode, accountId, accountEmail),
+    ...session,
     recipients: { to: context.to, cc: context.cc, bcc: [] },
     subject: context.subject,
     html: '',
@@ -52,27 +56,65 @@ export async function openReply(
   });
 }
 
+async function stageForwardAttachment(
+  accountId: string,
+  owner: string,
+  messageId: string,
+  attachment: ReplyContextAttachment,
+): Promise<void> {
+  const localId = crypto.randomUUID();
+  useComposeStore.getState().addReadingAttachment({
+    localId,
+    filename: attachment.filename,
+    mimeType: attachment.mimeType,
+    contentId: null,
+  });
+  try {
+    const staged = await invoke('stage_attachment_into_draft', {
+      accountId,
+      messageId,
+      attachmentId: attachment.id,
+      owner,
+    });
+    useComposeStore.getState().settleAttachment(localId, {
+      id: staged.id,
+      path: staged.path,
+      assetUrl: dispatchConvertFileSrc(staged.path),
+      size: staged.size,
+    });
+  } catch (error) {
+    useComposeStore
+      .getState()
+      .failAttachment(localId, error instanceof Error ? error.message : "Couldn't read");
+  }
+}
+
 export async function openForward(
   accountId: string,
   accountEmail: string,
   message: ReaderMessage | undefined,
 ): Promise<void> {
   if (!message) return;
+  const session = baseSession('forward', accountId, accountEmail);
   const context = await invoke('reply_context', {
     accountId,
     messageId: message.id,
     accountEmail,
     replyAll: false,
     forward: true,
+    owner: session.id,
   });
   openOrRetarget({
-    ...baseSession('forward', accountId, accountEmail),
+    ...session,
     recipients: { to: [], cc: [], bcc: [] },
     subject: context.subject,
     html: '',
     quote: context.displayQuote,
     originalMessageId: context.originalMessageId,
     originalGmailMessageId: context.originalGmailMessageId,
+  });
+  context.attachments.forEach((attachment) => {
+    void stageForwardAttachment(accountId, session.id, message.id, attachment);
   });
 }
 

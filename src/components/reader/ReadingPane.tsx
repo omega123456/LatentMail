@@ -109,6 +109,7 @@ export function ReadingPane({
   onLoadImages,
   onTrustSender,
   gmailThreadUrl = null,
+  accountId = null,
 }: {
   threadId: string | null;
   conversation?: ReaderConversation;
@@ -130,6 +131,7 @@ export function ReadingPane({
   onLoadImages?: (messageId: string) => void;
   onTrustSender?: (address: string) => void;
   gmailThreadUrl?: string | null;
+  accountId?: string | null;
 }) {
   const fixtureState = window.__LATENTMAIL_PLAYWRIGHT_IPC__
     ? window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__
@@ -204,8 +206,10 @@ export function ReadingPane({
             ribbon={{
               ...messageRibbonBase,
               systemLabelIds: message.labelIds ?? [],
-              onApplyLabels: (changes) => onMessageTriage?.(message.id, { kind: 'label', ...changes }),
-              onMoveTo: (destination) => onMessageTriage?.(message.id, { kind: 'move', destination }),
+              onApplyLabels: (changes) =>
+                onMessageTriage?.(message.id, { kind: 'label', ...changes }),
+              onMoveTo: (destination) =>
+                onMessageTriage?.(message.id, { kind: 'move', destination }),
               onToggleSpam: () =>
                 onMessageTriage?.(message.id, {
                   kind: 'move',
@@ -226,6 +230,7 @@ export function ReadingPane({
             loadingBody={loadingMessageId === message.id}
             bodyError={failedMessageId === message.id}
             gmailThreadUrl={gmailThreadUrl}
+            accountId={accountId}
           />
         ))}
       </div>
@@ -251,7 +256,11 @@ function triageHandlersFor(
 ) {
   return {
     onToggleRead: () =>
-      mutate(threadIds, { kind: 'label', add: unread ? [] : ['UNREAD'], remove: unread ? ['UNREAD'] : [] }),
+      mutate(threadIds, {
+        kind: 'label',
+        add: unread ? [] : ['UNREAD'],
+        remove: unread ? ['UNREAD'] : [],
+      }),
     onToggleStar: () =>
       mutate(threadIds, {
         kind: 'label',
@@ -260,7 +269,8 @@ function triageHandlersFor(
       }),
     onApplyLabels: ({ add, remove }: { add: string[]; remove: string[] }) =>
       mutate(threadIds, { kind: 'label', add, remove }),
-    onMoveTo: (destination: 'INBOX' | 'SPAM' | 'TRASH') => mutate(threadIds, { kind: 'move', destination }),
+    onMoveTo: (destination: 'INBOX' | 'SPAM' | 'TRASH') =>
+      mutate(threadIds, { kind: 'move', destination }),
     onToggleSpam: () => mutate(threadIds, { kind: 'move', destination: isSpam ? 'INBOX' : 'SPAM' }),
     onDelete: () => mutate(threadIds, { kind: 'delete' }),
   };
@@ -369,6 +379,7 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       onLoadImages={allowImagesFor}
       onTrustSender={trustImageSender}
       gmailThreadUrl={gmailThreadUrl}
+      accountId={accountId}
       systemLabelIds={systemLabelIds}
       moveToCurrentLabelIds={moveToCurrentLabelIds}
       labelMenuEntries={labelMenuEntries}

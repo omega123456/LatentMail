@@ -253,23 +253,37 @@ pub async fn hydrate_compose_draft<R: Runtime>(
         .map_err(|error| error.to_string())?;
     let mut attachments = Vec::new();
     for part in &draft.message.attachment_parts {
-        let staged = staging
-            .stage_attachment(
-                &client,
-                &account_id,
-                &draft_id,
-                crate::compose::staging::GmailAttachmentSource {
-                    message_id: &draft.message.id,
-                    attachment_id: &part.attachment_id,
-                },
-                crate::compose::staging::NewStagedPart {
-                    id: crate::compose::drafts::generate_id("staged"),
-                    filename: part.filename.clone(),
-                    mime_type: part.mime_type.clone(),
-                    content_id: None,
-                },
-            )
-            .await?;
+        let staged = if let Some(bytes) = &part.inline_bytes {
+            let descriptor = crate::compose::staging::StagedPart {
+                id: crate::compose::drafts::generate_id("staged"),
+                filename: part.filename.clone(),
+                mime_type: part.mime_type.clone(),
+                path: std::path::PathBuf::new(),
+                content_id: None,
+                size: 0,
+            };
+            staging
+                .stage_bytes(&account_id, &draft_id, &descriptor, bytes)
+                .map_err(|error| error.to_string())?
+        } else {
+            staging
+                .stage_attachment(
+                    &client,
+                    &account_id,
+                    &draft_id,
+                    crate::compose::staging::GmailAttachmentSource {
+                        message_id: &draft.message.id,
+                        attachment_id: &part.attachment_id,
+                    },
+                    crate::compose::staging::NewStagedPart {
+                        id: crate::compose::drafts::generate_id("staged"),
+                        filename: part.filename.clone(),
+                        mime_type: part.mime_type.clone(),
+                        content_id: None,
+                    },
+                )
+                .await?
+        };
         attachments.push(staged.into());
     }
     let quote_html = metadata.as_ref().and_then(|value| value.quote_html.clone());
@@ -410,7 +424,9 @@ pub async fn reply_context(
     account_email: String,
     reply_all: bool,
     forward: bool,
+    owner: String,
 ) -> Result<crate::compose::context::ReplyContext, String> {
+    let _ = &owner;
     let context = string_try!(
         storage
             .run(move |connection| {
@@ -420,7 +436,17 @@ pub async fn reply_context(
             .await
     );
     if forward {
-        Ok(crate::compose::context::forward(&context.message))
+        let attachments = context
+            .attachments
+            .iter()
+            .map(|attachment| crate::compose::context::ReplyAttachment {
+                id: attachment.attachment_id.clone(),
+                filename: attachment.filename.clone(),
+                mime_type: attachment.mime_type.clone(),
+                size: attachment.size,
+            })
+            .collect::<Vec<_>>();
+        Ok(crate::compose::context::forward(&context.message, attachments))
     } else {
         Ok(crate::compose::context::reply(
             &context.message,
@@ -429,6 +455,7 @@ pub async fn reply_context(
             &account_email,
             reply_all,
             context.references.as_deref(),
+            Vec::new(),
         ))
     }
 }
@@ -596,6 +623,7 @@ pub async fn load_conversation(
             sanitized,
             allow_remote,
             stored.draft_id,
+            stored.attachments,
         ));
     }
 
@@ -651,6 +679,12 @@ pub async fn fetch_message_body<R: Runtime>(
             bytes: part.bytes,
         })
         .collect::<Vec<_>>();
+    let attachments = crate::sync::materialize::attachment_records_from_parts(
+        &message.attachment_parts,
+    );
+    if let Some(cache) = engine.attachment_cache() {
+        crate::attachments::seed_cache(cache, &account_id, &message_id, &message.attachment_parts);
+    }
     string_try!(
         storage
             .run(move |connection| {
@@ -668,6 +702,12 @@ pub async fn fetch_message_body<R: Runtime>(
                     &account_id,
                     &message_id,
                     &parts,
+                )?;
+                crate::storage::AttachmentRepository::replace_for_message(
+                    &transaction,
+                    &account_id,
+                    &message_id,
+                    &attachments,
                 )?;
                 transaction.commit()
             })
@@ -901,7 +941,7 @@ pub async fn delete_draft<R: Runtime>(
 }
 
 
-async fn gmail_client_for<R: Runtime>(
+pub(crate) async fn gmail_client_for<R: Runtime>(
     app: &AppHandle<R>,
     auth: &tauri::State<'_, AuthService>,
     engine: &tauri::State<'_, Arc<SyncEngine>>,

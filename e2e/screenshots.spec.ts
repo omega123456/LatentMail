@@ -132,6 +132,32 @@ for (const theme of themes) {
     await screenshot(page, page.getByTestId('reading-pane'), 'reader-loaded', theme);
   });
 
+  test(`attachment section ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
+    await toggleTheme(page, theme);
+    await page.keyboard.press('j');
+    await expect(page.getByRole('heading', { name: 'Q3 Marketing Strategy Review' })).toBeVisible();
+    await screenshot(page, page.getByTestId('attachment-section'), 'attachment-section', theme);
+  });
+
+  test(`attachment preview modal ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
+    await toggleTheme(page, theme);
+    await page.keyboard.press('j');
+    await page.getByRole('button', { name: 'Preview scan-0142.jpg' }).click();
+    await expect(page.getByTestId('attachment-preview-modal')).toBeVisible();
+    await screenshot(
+      page,
+      page.getByTestId('attachment-preview-modal'),
+      'attachment-preview-modal',
+      theme,
+    );
+  });
+
   test(`status bar ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(
       page,
@@ -589,7 +615,12 @@ for (const theme of themes) {
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('button', { name: 'Logs' }).click();
-    await screenshot(page, page.getByTestId('settings-logs-section'), 'settings-logs-section', theme);
+    await screenshot(
+      page,
+      page.getByTestId('settings-logs-section'),
+      'settings-logs-section',
+      theme,
+    );
   });
 
   test(`quote disclosure ${theme}`, async ({ page }) => {

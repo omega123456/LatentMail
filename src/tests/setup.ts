@@ -89,6 +89,12 @@ Range.prototype.getClientRects = () => emptyClientRects;
 Range.prototype.getBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
 document.elementFromPoint = () => null;
 Object.assign(navigator, { clipboard: { readText: vi.fn(), writeText: vi.fn() } });
+if (!URL.createObjectURL) {
+  Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:mock-object-url') });
+}
+if (!URL.revokeObjectURL) {
+  Object.assign(URL, { revokeObjectURL: vi.fn() });
+}
 if (!Element.prototype.hasPointerCapture) {
   Element.prototype.hasPointerCapture = () => false;
 }

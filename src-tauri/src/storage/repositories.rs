@@ -297,6 +297,7 @@ pub struct ComposeMessageContext {
     pub message: Message,
     pub recipient_roles: (String, String, String),
     pub references: Option<String>,
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,6 +307,86 @@ pub struct ConversationMessage {
     pub label_ids: Vec<String>,
     pub inline_parts: Vec<InlinePart>,
     pub draft_id: Option<String>,
+    pub attachments: Vec<Attachment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub attachment_id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size: i64,
+    pub position: i64,
+}
+
+pub struct AttachmentRepository;
+impl AttachmentRepository {
+    pub fn replace_for_message(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+        attachments: &[Attachment],
+    ) -> Result<()> {
+        connection
+            .prepare_cached(
+                "DELETE FROM message_attachments WHERE account_id=?1 AND message_id=?2",
+            )?
+            .execute(params![account_id, message_id])?;
+        let mut statement = connection.prepare_cached(
+            "INSERT INTO message_attachments (account_id,message_id,attachment_id,filename,mime_type,size,position) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        )?;
+        for attachment in attachments {
+            statement.execute(params![
+                account_id,
+                message_id,
+                attachment.attachment_id,
+                attachment.filename,
+                attachment.mime_type,
+                attachment.size,
+                attachment.position
+            ])?;
+        }
+        Ok(())
+    }
+
+    pub fn for_message(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+    ) -> Result<Vec<Attachment>> {
+        let mut statement = connection.prepare(
+            "SELECT attachment_id,filename,mime_type,size,position FROM message_attachments WHERE account_id=?1 AND message_id=?2 ORDER BY position",
+        )?;
+        let attachments = statement
+            .query_map(params![account_id, message_id], attachment)?
+            .collect();
+        attachments
+    }
+
+    pub fn get(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<Option<Attachment>> {
+        connection
+            .query_row(
+                "SELECT attachment_id,filename,mime_type,size,position FROM message_attachments WHERE account_id=?1 AND message_id=?2 AND attachment_id=?3",
+                params![account_id, message_id, attachment_id],
+                attachment,
+            )
+            .optional()
+    }
+}
+
+fn attachment(row: &rusqlite::Row<'_>) -> Result<Attachment> {
+    Ok(Attachment {
+        attachment_id: row.get(0)?,
+        filename: row.get(1)?,
+        mime_type: row.get(2)?,
+        size: row.get(3)?,
+        position: row.get(4)?,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +406,7 @@ impl MessageRepository {
         account_id: &str,
         id: &str,
     ) -> Result<Option<ComposeMessageContext>> {
-        connection
+        let context = connection
             .query_row(
                 "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,rfc_references
                  FROM messages WHERE account_id=?1 AND id=?2",
@@ -335,10 +416,19 @@ impl MessageRepository {
                         message: message(row)?,
                         recipient_roles: (row.get(17)?, row.get(18)?, row.get(19)?),
                         references: row.get(20)?,
+                        attachments: Vec::new(),
                     })
                 },
             )
-            .optional()
+            .optional()?;
+        match context {
+            Some(mut context) => {
+                context.attachments =
+                    AttachmentRepository::for_message(connection, account_id, id)?;
+                Ok(Some(context))
+            }
+            None => Ok(None),
+        }
     }
     pub fn recipient_roles(
         connection: &Connection,
@@ -533,6 +623,7 @@ impl MessageRepository {
                     label_ids: Vec::new(),
                     inline_parts: Vec::new(),
                     draft_id: row.get(20)?,
+                    attachments: Vec::new(),
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
@@ -584,6 +675,35 @@ impl MessageRepository {
             if let Some(index) = positions.get(&message_id) {
                 messages[*index].inline_parts.push(part);
             }
+        }
+
+        let mut statement = connection.prepare(
+            "SELECT a.message_id,a.attachment_id,a.filename,a.mime_type,a.size,a.position
+             FROM messages m CROSS JOIN message_attachments a
+             WHERE m.account_id=?1 AND m.thread_id=?2
+               AND a.account_id=m.account_id AND a.message_id=m.id",
+        )?;
+        let attachment_rows = statement
+            .query_map(params![account_id, thread_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    Attachment {
+                        attachment_id: row.get(1)?,
+                        filename: row.get(2)?,
+                        mime_type: row.get(3)?,
+                        size: row.get(4)?,
+                        position: row.get(5)?,
+                    },
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        for (message_id, attachment) in attachment_rows {
+            if let Some(index) = positions.get(&message_id) {
+                messages[*index].attachments.push(attachment);
+            }
+        }
+        for message in &mut messages {
+            message.attachments.sort_by_key(|value| value.position);
         }
         Ok(messages)
     }

@@ -24,6 +24,7 @@ export interface IpcCommandMap {
       accountEmail: string;
       replyAll: boolean;
       forward: boolean;
+      owner: string;
     };
     result: ReplyContext;
   };
@@ -65,6 +66,30 @@ export interface IpcCommandMap {
   'plugin:dialog|open': {
     args: { options: DialogOpenOptions };
     result: string | string[] | null;
+  };
+  'plugin:dialog|save': {
+    args: { options: DialogSaveOptions };
+    result: string | null;
+  };
+  ensure_attachment_cached: {
+    args: { accountId: string; messageId: string; attachmentId: string };
+    result: CachedAttachmentDto;
+  };
+  read_attachment_bytes: {
+    args: { accountId: string; messageId: string; attachmentId: string };
+    result: ArrayBuffer;
+  };
+  read_attachment_text: {
+    args: { accountId: string; messageId: string; attachmentId: string };
+    result: string;
+  };
+  save_attachment_to_path: {
+    args: { accountId: string; messageId: string; attachmentId: string; destination: string };
+    result: void;
+  };
+  stage_attachment_into_draft: {
+    args: { accountId: string; messageId: string; attachmentId: string; owner: string };
+    result: StagedAttachment;
   };
   list_threads: {
     args: {
@@ -242,6 +267,7 @@ export interface Settings {
   allowedImageSenders: string[];
   commandOverrides: Partial<Record<string, string[]>>;
   logLevel: LogLevel;
+  prefetchImageAttachments: boolean;
 }
 
 export interface LogEntryDto {
@@ -280,6 +306,13 @@ export interface ReplyContext {
   references: string[];
   originalGmailMessageId: string;
   displayQuote: { html: string; attribution: string } | null;
+  attachments: ReplyContextAttachment[];
+}
+export interface ReplyContextAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
 }
 export interface StagedAttachment {
   id: string;
@@ -325,6 +358,19 @@ export interface DialogOpenOptions {
   multiple?: boolean;
   directory?: boolean;
   filters?: { name: string; extensions: string[] }[];
+}
+
+export interface DialogSaveOptions {
+  defaultPath?: string;
+  filters?: { name: string; extensions: string[] }[];
+}
+
+export interface CachedAttachmentDto {
+  cachePath: string;
+  displayPath: string;
+  mimeType: string;
+  filename: string;
+  size: number;
 }
 
 export type DragDropEvent =
@@ -415,6 +461,14 @@ export interface ParsedSearchQuery {
   predicates: SearchPredicate[];
 }
 
+export interface MessageAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  position: number;
+}
+
 export interface ConversationMessage {
   id: string;
   sender: string;
@@ -436,6 +490,7 @@ export interface ConversationMessage {
   remoteImagesAllowed: boolean;
   draftId?: string | null;
   truncated: boolean;
+  attachments: MessageAttachment[];
 }
 
 export interface ImagePolicy {

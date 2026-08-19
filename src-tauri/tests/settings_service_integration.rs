@@ -67,6 +67,7 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ("syncIntervalSeconds", serde_json::json!(45)),
         ("showSenderAvatars", serde_json::json!(false)),
         ("zoomPercent", serde_json::json!(125)),
+        ("prefetchImageAttachments", serde_json::json!(true)),
     ] {
         write_setting(app.handle().clone(), app.state(), key.into(), value)
             .await
@@ -95,6 +96,50 @@ async fn every_persisted_setting_accepts_its_wire_value() {
     assert_eq!(settings.sync_interval_seconds, 45);
     assert!(!settings.show_sender_avatars);
     assert_eq!(settings.zoom_percent, 125);
+    assert!(settings.prefetch_image_attachments);
+}
+
+#[tokio::test]
+async fn writing_every_log_level_persists_and_applies_it_live_without_panicking() {
+    let (app, _directory) = app_with_service();
+
+    for level in ["debug", "info", "warn", "error"] {
+        write_setting(
+            app.handle().clone(),
+            app.state(),
+            "logLevel".into(),
+            serde_json::json!(level),
+        )
+        .await
+        .unwrap();
+
+        let settings = read_settings(app.state()).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&settings.log_level).unwrap(),
+            serde_json::json!(level)
+        );
+    }
+}
+
+#[tokio::test]
+async fn writing_an_invalid_log_level_value_leaves_the_persisted_setting_unchanged() {
+    let (app, _directory) = app_with_service();
+
+    let error = write_setting(
+        app.handle().clone(),
+        app.state(),
+        "logLevel".into(),
+        serde_json::json!("not-a-real-level"),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("Unknown or invalid setting"));
+
+    let settings = read_settings(app.state()).await.unwrap();
+    assert_eq!(
+        settings.log_level,
+        latentmail_lib::settings::LogLevel::Info
+    );
 }
 
 #[tokio::test]

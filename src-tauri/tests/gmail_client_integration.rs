@@ -249,7 +249,7 @@ async fn an_oversize_response_on_a_non_rescued_endpoint_is_refused() {
     let server = MockServer::start().await;
     let big_data = "a".repeat(11 * 1024 * 1024);
     Mock::given(method("GET"))
-        .and(path("/users/me/messages/m1/attachments/a1"))
+        .and(path("/users/me/drafts/d1"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": big_data })),
         )
@@ -257,11 +257,31 @@ async fn an_oversize_response_on_a_non_rescued_endpoint_is_refused() {
         .await;
 
     let error = GmailClient::with_base_url("token", server.uri())
-        .attachment("m1", "a1")
+        .draft("d1")
         .await
         .expect_err("oversize response must be refused before it is buffered");
 
     assert!(matches!(error, GmailError::ResponseTooLarge));
+}
+
+#[tokio::test]
+async fn the_attachment_endpoint_accepts_responses_past_the_shared_ten_megabyte_cap() {
+    let server = MockServer::start().await;
+    let big_data = "a".repeat(11 * 1024 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/a1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": big_data })),
+        )
+        .mount(&server)
+        .await;
+
+    let bytes = GmailClient::with_base_url("token", server.uri())
+        .attachment("m1", "a1")
+        .await
+        .expect("the attachment endpoint's own 40MB ceiling must admit an 11MB response");
+
+    assert!(!bytes.is_empty());
 }
 
 #[tokio::test]

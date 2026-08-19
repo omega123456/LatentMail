@@ -1,10 +1,29 @@
 use crate::{
     gmail::GmailMessage,
     storage::{
-        HtmlPresence, InlinePart, LabelRepository, Message, MessageRepository, ThreadRepository,
+        Attachment, AttachmentRepository, HtmlPresence, InlinePart, LabelRepository, Message,
+        MessageRepository, ThreadRepository,
     },
 };
 use rusqlite::Connection;
+
+pub fn attachment_records(value: &GmailMessage) -> Vec<Attachment> {
+    attachment_records_from_parts(&value.attachment_parts)
+}
+
+pub fn attachment_records_from_parts(parts: &[crate::gmail::AttachmentPart]) -> Vec<Attachment> {
+    parts
+        .iter()
+        .enumerate()
+        .map(|(position, part)| Attachment {
+            attachment_id: part.attachment_id.clone(),
+            filename: part.filename.clone(),
+            mime_type: part.mime_type.clone(),
+            size: part.size as i64,
+            position: position as i64,
+        })
+        .collect()
+}
 
 pub fn message(account_id: &str, value: &GmailMessage) -> Message {
     Message {
@@ -59,6 +78,13 @@ pub fn persist(
             .collect::<Vec<_>>();
         MessageRepository::replace_inline_parts(connection, account_id, &value.id, &parts)?;
     }
+
+    AttachmentRepository::replace_for_message(
+        connection,
+        account_id,
+        &value.id,
+        &attachment_records(value),
+    )?;
     Ok(())
 }
 

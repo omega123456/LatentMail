@@ -7,3 +7,4 @@ max-threads = 1
 [[profile.default.overrides]]
 filter = 'binary(=compose_drafts_integration)'
 test-group = 'compose-app'
+threads-required = "num-cpus"

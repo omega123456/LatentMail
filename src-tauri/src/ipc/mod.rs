@@ -152,6 +152,11 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::queue::commands::retry_queue_operation,
         crate::queue::commands::retry_failed_operations,
         crate::queue::commands::clear_queue_history,
-        crate::queue::commands::set_queue_paused
+        crate::queue::commands::set_queue_paused,
+        crate::attachments::commands::ensure_attachment_cached,
+        crate::attachments::commands::read_attachment_bytes,
+        crate::attachments::commands::read_attachment_text,
+        crate::attachments::commands::save_attachment_to_path,
+        crate::attachments::commands::stage_attachment_into_draft
     ])
 }

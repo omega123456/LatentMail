@@ -137,3 +137,45 @@ async fn message_snippet_html_entities_are_decoded() {
 
     assert_eq!(message.snippet, "I'm sorry & you <3 \"this\" > that");
 }
+
+#[tokio::test]
+async fn a_malicious_content_id_is_sanitized_before_becoming_a_synthesized_attachment_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/malicious-cid"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "malicious-cid",
+            "threadId": "thread",
+            "historyId": "7",
+            "payload": {
+                "headers": [],
+                "parts": [{
+                    "mimeType": "application/octet-stream",
+                    "filename": "evil.bin",
+                    "headers": [{ "name": "Content-ID", "value": "<../../../etc/passwd>" }],
+                    "body": { "data": "cGF5bG9hZA" }
+                }]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let message = GmailClient::with_base_url("token", server.uri())
+        .message("malicious-cid")
+        .await
+        .unwrap();
+
+    assert_eq!(message.attachment_parts.len(), 1);
+    let attachment_id = &message.attachment_parts[0].attachment_id;
+    assert!(attachment_id.starts_with("latentmail-inline-cid-"));
+    for forbidden in ['/', '\\', ':'] {
+        assert!(
+            !attachment_id.contains(forbidden),
+            "synthesized attachment id {attachment_id} must not contain {forbidden}"
+        );
+    }
+    assert!(!attachment_id.contains(".."));
+    assert!(std::path::Path::new(attachment_id)
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_))));
+}

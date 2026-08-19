@@ -375,7 +375,7 @@ async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
         ),
         (
             "reply_context",
-            serde_json::json!({ "accountId": "account", "messageId": "missing", "accountEmail": "me@example.com", "replyAll": false, "forward": false }),
+            serde_json::json!({ "accountId": "account", "messageId": "missing", "accountEmail": "me@example.com", "replyAll": false, "forward": false, "owner": "owner" }),
         ),
         (
             "stage_attachment_from_path",
@@ -1103,6 +1103,83 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         serde_json::json!({ "accountId": "account", "draftId": "d1", "sessionId": "session" }),
     )
     .unwrap();
+}
+
+#[tokio::test]
+async fn hydrate_stages_a_draft_attachment_that_carries_its_bytes_inline() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    mock_token(&server).mount(&server).await;
+    let mut hydrated_draft = draft_response("d1", "m1", "t1");
+    hydrated_draft["message"]["payload"] = serde_json::json!({
+        "mimeType": "multipart/mixed",
+        "headers": [{"name": "Subject", "value": "Hello"}],
+        "parts": [
+            { "mimeType": "text/plain", "body": { "data": "aGVsbG8" } },
+            {
+                "mimeType": "image/jpeg",
+                "filename": "inline.jpg",
+                "body": { "data": "cGhvdG8" }
+            }
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts/d1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(hydrated_draft))
+        .mount(&server)
+        .await;
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    AccountRepository::upsert(
+        &storage.connection().unwrap(),
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    latentmail_lib::auth::save_refresh_token("account", "refresh-token").unwrap();
+    let registry = WorkRegistry::new();
+    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
+    let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(AuthService::new(storage.clone()));
+    app.manage(SyncEngine::new(
+        storage.clone(),
+        queue,
+        registry,
+        noop_event_sink(),
+    ));
+    app.manage(storage);
+    app.manage(std::sync::Arc::new(Staging::new(
+        directory.path().join("staged"),
+    )));
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let hydrated = invoke(
+        &webview,
+        "hydrate_compose_draft",
+        serde_json::json!({ "accountId": "account", "draftId": "d1" }),
+    )
+    .unwrap();
+    assert_eq!(hydrated["attachments"][0]["filename"], "inline.jpg");
+    assert_eq!(hydrated["attachments"][0]["size"], "photo".len() as u64);
 }
 
 #[tokio::test]

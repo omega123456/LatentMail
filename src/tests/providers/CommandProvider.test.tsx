@@ -91,6 +91,7 @@ describe('CommandProvider', () => {
       allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'] },
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
 
     render(
@@ -139,6 +140,7 @@ describe('CommandProvider', () => {
       allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'] },
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
     render(
       <CommandProvider>
@@ -167,6 +169,7 @@ describe('CommandProvider', () => {
       allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'] },
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
     const writes: Array<{ key: string; value: unknown }> = [];
     ipc.override('write_setting', (args) => {
@@ -210,6 +213,7 @@ describe('CommandProvider', () => {
       allowedImageSenders: [],
       commandOverrides: { toggleStar: ['Mod+K'], markRead: ['Mod+I'] },
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
     const writes: Array<{ key: string; value: unknown }> = [];
     ipc.override('write_setting', (args) => {

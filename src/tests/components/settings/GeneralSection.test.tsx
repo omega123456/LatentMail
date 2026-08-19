@@ -79,6 +79,7 @@ describe('GeneralSection', () => {
       allowedImageSenders: [],
       commandOverrides: {},
       logLevel: 'info',
+      prefetchImageAttachments: false,
     });
 
     await openGeneral();

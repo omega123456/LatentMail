@@ -2,9 +2,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::sanitize::SanitizedHtml;
 use crate::storage::{
-    HtmlPresence, Label, Message, Thread, ThreadIdentity, TraversalCursor,
+    Attachment, HtmlPresence, Label, Message, Thread, ThreadIdentity, TraversalCursor,
     TraversalKind as StorageTraversalKind,
 };
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentDto {
+    pub id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size: i64,
+    pub position: i64,
+}
+
+impl From<Attachment> for AttachmentDto {
+    fn from(value: Attachment) -> Self {
+        Self {
+            id: value.attachment_id,
+            filename: value.filename,
+            mime_type: value.mime_type,
+            size: value.size,
+            position: value.position,
+        }
+    }
+}
 
 use super::SyncState;
 
@@ -271,6 +293,7 @@ pub struct MessageDto {
     pub remote_images_allowed: bool,
     pub draft_id: Option<String>,
     pub truncated: bool,
+    pub attachments: Vec<AttachmentDto>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -324,6 +347,7 @@ pub fn message_dto(
     sanitized: Option<SanitizedHtml>,
     remote_images_allowed: bool,
     draft_id: Option<String>,
+    attachments: Vec<Attachment>,
 ) -> MessageDto {
     let (html_body, remote_images_blocked, truncated) = match sanitized {
         Some(value) => (Some(value.html), value.remote_images_blocked, value.truncated),
@@ -350,6 +374,7 @@ pub fn message_dto(
         remote_images_allowed,
         draft_id,
         truncated,
+        attachments: attachments.into_iter().map(AttachmentDto::from).collect(),
     }
 }
 
