@@ -214,6 +214,7 @@ pub enum HtmlPresence {
     NeverFetched,
     Present,
     Absent,
+    TooLarge,
 }
 impl HtmlPresence {
     fn as_db_str(self) -> &'static str {
@@ -221,12 +222,14 @@ impl HtmlPresence {
             Self::NeverFetched => "never_fetched",
             Self::Present => "present",
             Self::Absent => "absent",
+            Self::TooLarge => "too_large",
         }
     }
     fn from_db_str(value: &str) -> Self {
         match value {
             "present" => Self::Present,
             "absent" => Self::Absent,
+            "too_large" => Self::TooLarge,
             _ => Self::NeverFetched,
         }
     }

@@ -96,6 +96,7 @@ const conversationOne = {
       snippet: 'Attached slides',
       htmlBody: '<p>Attached slides</p>',
       htmlPresence: 'present',
+      truncated: false,
       plainBody: null,
       hasAttachments: false,
       isUnread: true,

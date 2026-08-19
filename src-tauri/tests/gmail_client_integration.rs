@@ -1,4 +1,4 @@
-use latentmail_lib::gmail::GmailClient;
+use latentmail_lib::gmail::{GmailClient, GmailError};
 use wiremock::{
     matchers::{body_json, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
@@ -242,4 +242,75 @@ async fn a_forwarded_message_with_no_plain_text_of_its_own_falls_back_to_its_htm
     let plain = fetched.plain_body.expect("falls back to the embedded html body as plain text");
     assert!(plain.contains("Forwarded message"));
     assert!(plain.contains("hi"));
+}
+
+#[tokio::test]
+async fn an_oversize_response_on_a_non_rescued_endpoint_is_refused() {
+    let server = MockServer::start().await;
+    let big_data = "a".repeat(11 * 1024 * 1024);
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/a1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": big_data })),
+        )
+        .mount(&server)
+        .await;
+
+    let error = GmailClient::with_base_url("token", server.uri())
+        .attachment("m1", "a1")
+        .await
+        .expect_err("oversize response must be refused before it is buffered");
+
+    assert!(matches!(error, GmailError::ResponseTooLarge));
+}
+
+#[tokio::test]
+async fn message_rescues_an_oversize_body_with_a_metadata_only_refetch() {
+    let server = MockServer::start().await;
+    let big_data = "a".repeat(11 * 1024 * 1024);
+    let full_fields = "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers,body,parts,filename,mimeType,partId)";
+    let metadata_fields = "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers)";
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/big"))
+        .and(query_param("fields", full_fields))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "big", "threadId": "t", "historyId": "10", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "1000",
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Sender <s@example.com>"},
+                    {"name": "Subject", "value": "Huge"}
+                ],
+                "body": {"data": big_data}
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/big"))
+        .and(query_param("format", "metadata"))
+        .and(query_param("fields", metadata_fields))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "big", "threadId": "t", "historyId": "10", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "1000",
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Sender <s@example.com>"},
+                    {"name": "Subject", "value": "Huge"}
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let message = GmailClient::with_base_url("token", server.uri())
+        .message("big")
+        .await
+        .expect("the metadata-only rescue must still resolve the message");
+
+    assert!(message.oversize);
+    assert_eq!(message.subject, "Huge");
+    assert_eq!(message.sender, "Sender <s@example.com>");
+    assert!(message.html_body.is_none());
+    assert!(message.plain_body.is_none());
 }

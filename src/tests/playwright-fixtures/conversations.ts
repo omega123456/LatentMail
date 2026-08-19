@@ -20,6 +20,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       labelIds: [],
       remoteImagesBlocked: false,
       remoteImagesAllowed: false,
+      truncated: false,
     },
     {
       id: 'message-2',
@@ -43,6 +44,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       labelIds: ['INBOX', 'Label_1', 'Label_2'],
       remoteImagesBlocked: true,
       remoteImagesAllowed: false,
+      truncated: false,
     },
   ],
 };

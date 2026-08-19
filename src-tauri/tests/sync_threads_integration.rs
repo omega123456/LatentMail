@@ -349,6 +349,62 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
         "cid: source must resolve to inline data"
     );
     assert!(!html.contains("cid:img1"));
+    assert!(!message.truncated);
+}
+
+#[tokio::test]
+async fn load_conversation_flags_html_sanitized_past_the_size_cap_as_truncated() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    LabelRepository::upsert(
+        &connection,
+        &Label {
+            account_id: "account".into(),
+            id: "INBOX".into(),
+            name: "Inbox".into(),
+            kind: "system".into(),
+            color: None,
+            message_count: 0,
+        },
+    )
+    .unwrap();
+    ThreadRepository::upsert(&connection, &thread("t1", 1, false)).unwrap();
+    let huge_html = format!("<p>{}</p>", "a".repeat(600_000));
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            account_id: "account".into(),
+            id: "m1".into(),
+            thread_id: "t1".into(),
+            rfc_message_id: None,
+            sender: "alice@example.com".into(),
+            recipients: "me@example.com".into(),
+            subject: "Subject t1".into(),
+            sent_at: 1,
+            snippet: "hi".into(),
+            html_body: Some(huge_html),
+            plain_body: Some("hi".into()),
+            has_attachments: false,
+            is_unread: false,
+            is_starred: false,
+            history_id: 1,
+            truncated_body: None,
+            html_presence: HtmlPresence::Present,
+        },
+    )
+    .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
+        .await
+        .unwrap();
+
+    assert!(conversation.messages[0].truncated);
 }
 
 #[tokio::test]

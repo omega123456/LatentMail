@@ -126,6 +126,7 @@ describe('mapConversation', () => {
           snippet: 'Attached slides',
           htmlBody: '<p>Attached slides</p>',
           htmlPresence: 'present',
+          truncated: false,
           plainBody: null,
           hasAttachments: false,
           isUnread: false,

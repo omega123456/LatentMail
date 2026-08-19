@@ -29,6 +29,7 @@ fn message(id: &str, thread_id: &str, sender: &str, to: &str, sent_at: i64, sent
         has_attachments: false,
         inline_parts: Vec::new(),
         attachment_parts: Vec::new(),
+        oversize: false,
     }
 }
 

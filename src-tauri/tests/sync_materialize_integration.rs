@@ -25,6 +25,7 @@ fn message(id: &str, thread_id: &str) -> GmailMessage {
         has_attachments: false,
         inline_parts: Vec::new(),
         attachment_parts: Vec::new(),
+        oversize: false,
     }
 }
 

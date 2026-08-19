@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::sanitize::SanitizedHtml;
 use crate::storage::{
     HtmlPresence, Label, Message, Thread, ThreadIdentity, TraversalCursor,
     TraversalKind as StorageTraversalKind,
@@ -269,6 +270,7 @@ pub struct MessageDto {
     pub remote_images_blocked: bool,
     pub remote_images_allowed: bool,
     pub draft_id: Option<String>,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -301,6 +303,7 @@ pub enum HtmlPresenceDto {
     NeverFetched,
     Present,
     Absent,
+    TooLarge,
 }
 
 impl From<HtmlPresence> for HtmlPresenceDto {
@@ -309,6 +312,7 @@ impl From<HtmlPresence> for HtmlPresenceDto {
             HtmlPresence::NeverFetched => Self::NeverFetched,
             HtmlPresence::Present => Self::Present,
             HtmlPresence::Absent => Self::Absent,
+            HtmlPresence::TooLarge => Self::TooLarge,
         }
     }
 }
@@ -317,11 +321,14 @@ pub fn message_dto(
     message: Message,
     recipient_roles: (String, String, String),
     label_ids: Vec<String>,
-    html_body: Option<String>,
-    remote_images_blocked: bool,
+    sanitized: Option<SanitizedHtml>,
     remote_images_allowed: bool,
     draft_id: Option<String>,
 ) -> MessageDto {
+    let (html_body, remote_images_blocked, truncated) = match sanitized {
+        Some(value) => (Some(value.html), value.remote_images_blocked, value.truncated),
+        None => (None, false, false),
+    };
     MessageDto {
         id: message.id,
         sender: message.sender,
@@ -342,6 +349,7 @@ pub fn message_dto(
         remote_images_blocked,
         remote_images_allowed,
         draft_id,
+        truncated,
     }
 }
 

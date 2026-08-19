@@ -34,6 +34,9 @@ pub const MAX_PAGE_SIZE: u32 = 500;
 
 const LIST_FIELDS: &str = "messages(id,threadId),nextPageToken";
 const MESSAGE_FIELDS: &str = "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers,body,parts,filename,mimeType,partId)";
+const MESSAGE_METADATA_FIELDS: &str =
+    "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers)";
+const MAX_GMAIL_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 pub mod labels;
 
@@ -117,6 +120,7 @@ pub struct GmailMessage {
     pub has_attachments: bool,
     pub inline_parts: Vec<InlinePart>,
     pub attachment_parts: Vec<AttachmentPart>,
+    pub oversize: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GmailDraft {
@@ -157,6 +161,8 @@ pub enum GmailError {
     Response(#[from] serde_json::Error),
     #[error("invalid Gmail attachment payload")]
     AttachmentData,
+    #[error("Gmail response exceeded the {MAX_GMAIL_RESPONSE_BYTES}-byte cap")]
+    ResponseTooLarge,
 }
 
 
@@ -399,15 +405,34 @@ impl GmailClient {
         }
     }
     pub async fn message(&self, id: &str) -> Result<GmailMessage, GmailError> {
-        let raw: RawMessage = self
+        let result: Result<RawMessage, GmailError> = self
             .get(
                 &format!("/users/me/messages/{id}"),
                 &[("fields".to_owned(), MESSAGE_FIELDS.into())],
                 MESSAGES_GET_COST,
                 false,
             )
-            .await?;
-        Ok(map_message(raw))
+            .await;
+        match result {
+            Ok(raw) => Ok(map_message(raw)),
+            Err(GmailError::ResponseTooLarge) => {
+                let raw: RawMessage = self
+                    .get(
+                        &format!("/users/me/messages/{id}"),
+                        &[
+                            ("format".to_owned(), "metadata".to_owned()),
+                            ("fields".to_owned(), MESSAGE_METADATA_FIELDS.to_owned()),
+                        ],
+                        MESSAGES_GET_COST,
+                        false,
+                    )
+                    .await?;
+                let mut message = map_message(raw);
+                message.oversize = true;
+                Ok(message)
+            }
+            Err(other) => Err(other),
+        }
     }
     pub async fn message_if_present(&self, id: &str) -> Result<Option<GmailMessage>, GmailError> {
         match self.message(id).await {
@@ -629,7 +654,11 @@ impl GmailClient {
             }
             match request.send().await {
                 Ok(response) if response.status().is_success() => {
-
+                    if response.content_length().is_some_and(|len| {
+                        len > MAX_GMAIL_RESPONSE_BYTES as u64
+                    }) {
+                        return Err(GmailError::ResponseTooLarge);
+                    }
                     let raw = response.bytes().await?;
                     let body: &[u8] = if raw.is_empty() { b"null" } else { &raw };
                     return Ok(serde_json::from_slice(body)?);
@@ -953,6 +982,7 @@ fn map_message(raw: RawMessage) -> GmailMessage {
         has_attachments: content.attachments,
         inline_parts: content.inline,
         attachment_parts: content.attachment_parts,
+        oversize: false,
     }
 }
 #[derive(Default)]

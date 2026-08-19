@@ -92,6 +92,7 @@ export function mapConversation(conversation: IpcConversation): ReaderConversati
       snippet: message.snippet,
       html: message.htmlBody,
       htmlPresence: message.htmlPresence,
+      truncated: message.truncated,
       text: message.plainBody,
       labelIds: message.labelIds,
       unread: message.isUnread,

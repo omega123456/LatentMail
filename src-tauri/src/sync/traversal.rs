@@ -197,7 +197,11 @@ fn write_traversal_message(
         is_starred: message.label_ids.iter().any(|id| id == "STARRED"),
         history_id: message.history_id,
         truncated_body,
-        html_presence: HtmlPresence::NeverFetched,
+        html_presence: if message.oversize {
+            HtmlPresence::TooLarge
+        } else {
+            HtmlPresence::NeverFetched
+        },
     };
     let changed = MessageRepository::write_traversal_state(connection, &record)?;
     if changed {

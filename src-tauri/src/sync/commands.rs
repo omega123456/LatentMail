@@ -570,7 +570,7 @@ pub async fn load_conversation(
             &stored.message.id,
             &stored.message.sender,
         );
-        let (sanitized_html, remote_images_blocked) = match &stored.message.html_body {
+        let sanitized = match &stored.message.html_body {
             Some(html) => {
                 let cid_map: HashMap<String, CidPart> = stored
                     .inline_parts
@@ -585,17 +585,15 @@ pub async fn load_conversation(
                         )
                     })
                     .collect();
-                let sanitized = sanitize::sanitize(html, &cid_map, allow_remote);
-                (Some(sanitized.html), sanitized.remote_images_blocked)
+                Some(sanitize::sanitize(html, &cid_map, allow_remote))
             }
-            None => (None, false),
+            None => None,
         };
         message_dtos.push(message_dto(
             stored.message,
             stored.recipient_roles,
             stored.label_ids,
-            sanitized_html,
-            remote_images_blocked,
+            sanitized,
             allow_remote,
             stored.draft_id,
         ));
@@ -630,13 +628,18 @@ pub async fn fetch_message_body<R: Runtime>(
     )
     .ok_or_else(|| "Message is unavailable".to_owned())?;
 
-    if !matches!(stored.0, crate::storage::HtmlPresence::NeverFetched) && !stored.1 {
+    if matches!(stored.0, crate::storage::HtmlPresence::TooLarge)
+        || (!matches!(stored.0, crate::storage::HtmlPresence::NeverFetched) && !stored.1)
+    {
         return Ok(());
     }
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
     let message = string_try!(client.message(&message_id).await);
-    let html_presence =
-        crate::storage::HtmlPresence::from_fetched_body(message.html_body.as_deref());
+    let html_presence = if message.oversize {
+        crate::storage::HtmlPresence::TooLarge
+    } else {
+        crate::storage::HtmlPresence::from_fetched_body(message.html_body.as_deref())
+    };
     let html_body = message.html_body;
     let plain_body = message.plain_body;
     let parts = message

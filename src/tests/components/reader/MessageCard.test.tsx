@@ -2,6 +2,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageCard } from '@/components/reader/MessageCard';
+import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
 const message = {
@@ -178,5 +179,71 @@ describe('MessageCard', () => {
     expect(screen.getByLabelText('Message body')).toBeInTheDocument();
     await user.click(screen.getByRole('time'));
     expect(screen.queryByLabelText('Message body')).not.toBeInTheDocument();
+  });
+
+  it('renders a too-large notice with a Gmail link and no iframe, and skips the lazy-body fetch', () => {
+    const onFetchBody = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, htmlPresence: 'tooLarge' }}
+        expanded
+        newest
+        onFetchBody={onFetchBody}
+        gmailThreadUrl="https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1"
+      />,
+    );
+    expect(onFetchBody).not.toHaveBeenCalled();
+    expect(screen.getByText('This message is too large to display here.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Message body')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'View entire message in Gmail' }),
+    ).toBeInTheDocument();
+  });
+
+  it('opens the Gmail thread URL through centralized IPC from the too-large notice', async () => {
+    const openExternal = vi.fn();
+    ipc.override('open_external_url', openExternal);
+    const user = userEvent.setup();
+    renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, htmlPresence: 'tooLarge' }}
+        expanded
+        newest
+        gmailThreadUrl="https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1"
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'View entire message in Gmail' }));
+    expect(openExternal).toHaveBeenCalledWith({
+      url: 'https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1',
+    });
+  });
+
+  it('renders the truncated footer link only when truncated, and opens it through centralized IPC', async () => {
+    const openExternal = vi.fn();
+    ipc.override('open_external_url', openExternal);
+    const user = userEvent.setup();
+    const { rerender } = renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present' }}
+        expanded
+        newest
+        gmailThreadUrl="https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1"
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'View entire message in Gmail' }),
+    ).not.toBeInTheDocument();
+    rerender(
+      <MessageCard
+        message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present', truncated: true }}
+        expanded
+        newest
+        gmailThreadUrl="https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1"
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'View entire message in Gmail' }));
+    expect(openExternal).toHaveBeenCalledWith({
+      url: 'https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1',
+    });
   });
 });

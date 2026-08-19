@@ -417,7 +417,7 @@ export interface ConversationMessage {
   sentAt: number;
   snippet: string;
   htmlBody: string | null;
-  htmlPresence: 'neverFetched' | 'present' | 'absent';
+  htmlPresence: 'neverFetched' | 'present' | 'absent' | 'tooLarge';
   plainBody: string | null;
   hasAttachments: boolean;
   isUnread: boolean;
@@ -426,6 +426,7 @@ export interface ConversationMessage {
   remoteImagesBlocked: boolean;
   remoteImagesAllowed: boolean;
   draftId?: string | null;
+  truncated: boolean;
 }
 
 export interface ImagePolicy {

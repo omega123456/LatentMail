@@ -4,6 +4,7 @@ import {
   MessageActionRibbon,
   type MessageActionRibbonProps,
 } from '@/components/actions/MessageActionRibbon';
+import { invoke } from '@/lib/ipc/commands';
 import { BodyFrame } from './BodyFrame';
 import { MessageHeader, type MessageSender } from './MessageHeader';
 import type { MessageBadge } from '@/lib/labels/badges';
@@ -19,7 +20,8 @@ export type ReaderMessage = {
   sentAt: Date;
   snippet: string;
   html: string | null;
-  htmlPresence?: 'neverFetched' | 'present' | 'absent';
+  htmlPresence?: 'neverFetched' | 'present' | 'absent' | 'tooLarge';
+  truncated?: boolean;
   text: string | null;
   labelIds?: string[];
   unread?: boolean;
@@ -51,6 +53,7 @@ export function MessageCard({
   onComposeTo,
   onLoadImages,
   onTrustSender,
+  gmailThreadUrl = null,
 }: {
   message: ReaderMessage;
   expanded: boolean;
@@ -63,11 +66,14 @@ export function MessageCard({
   onComposeTo?: (participant: Participant) => void;
   onLoadImages?: (messageId: string) => void;
   onTrustSender?: (address: string) => void;
+  gmailThreadUrl?: string | null;
 }) {
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
   const requested = useRef<string | null>(null);
-  const needsBody = message.htmlPresence === 'neverFetched' || (!message.html && !message.text);
+  const needsBody =
+    message.htmlPresence !== 'tooLarge' &&
+    (message.htmlPresence === 'neverFetched' || (!message.html && !message.text));
   const isSpam = (message.labelIds ?? []).includes('SPAM');
   useEffect(() => {
     if (!open || !needsBody || requested.current === message.id) return;
@@ -140,7 +146,20 @@ export function MessageCard({
               )}
             </div>
           )}
-          {message.htmlPresence === 'neverFetched' ? (
+          {message.htmlPresence === 'tooLarge' ? (
+            <div className="min-h-reader-body flex flex-wrap items-center gap-2.5 text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
+              <span>This message is too large to display here.</span>
+              {gmailThreadUrl && (
+                <button
+                  type="button"
+                  onClick={() => void invoke('open_external_url', { url: gmailThreadUrl })}
+                  className={remoteImageChipPrimary}
+                >
+                  View entire message in Gmail
+                </button>
+              )}
+            </div>
+          ) : message.htmlPresence === 'neverFetched' ? (
             loadingBody ? (
               <p className="min-h-reader-body text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
                 Loading message…
@@ -161,11 +180,24 @@ export function MessageCard({
               </p>
             )
           ) : (
-            <BodyFrame
-              html={message.html}
-              text={message.text}
-              allowRemoteImages={message.remoteImagesAllowed ?? false}
-            />
+            <>
+              <BodyFrame
+                html={message.html}
+                text={message.text}
+                allowRemoteImages={message.remoteImagesAllowed ?? false}
+              />
+              {message.truncated && gmailThreadUrl && (
+                <div className="mt-stack-gap-md">
+                  <button
+                    type="button"
+                    onClick={() => void invoke('open_external_url', { url: gmailThreadUrl })}
+                    className={remoteImageChipQuiet}
+                  >
+                    View entire message in Gmail
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

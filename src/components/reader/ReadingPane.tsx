@@ -17,6 +17,7 @@ import {
   type MessageTriageIntent,
   type ThreadTriageIntent,
 } from '@/lib/query/hooks';
+import { buildGmailThreadWebUrl } from '@/lib/gmail/thread-url';
 import { messageBadges } from '@/lib/labels/badges';
 import { computeThreadLabelMembership, mapConversation } from '@/lib/query/mappers';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
@@ -107,6 +108,7 @@ export function ReadingPane({
   onComposeTo,
   onLoadImages,
   onTrustSender,
+  gmailThreadUrl = null,
 }: {
   threadId: string | null;
   conversation?: ReaderConversation;
@@ -127,6 +129,7 @@ export function ReadingPane({
   onMessageTriage?: (messageId: string, intent: MessageTriageIntent) => void;
   onLoadImages?: (messageId: string) => void;
   onTrustSender?: (address: string) => void;
+  gmailThreadUrl?: string | null;
 }) {
   const fixtureState = window.__LATENTMAIL_PLAYWRIGHT_IPC__
     ? window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__
@@ -222,6 +225,7 @@ export function ReadingPane({
             onTrustSender={onTrustSender}
             loadingBody={loadingMessageId === message.id}
             bodyError={failedMessageId === message.id}
+            gmailThreadUrl={gmailThreadUrl}
           />
         ))}
       </div>
@@ -330,6 +334,7 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
     ? intersectThreadSystemLabelIds(selectedThreads)
     : threadSystemLabelIds;
   const isSpam = systemLabelIds.includes('SPAM');
+  const gmailThreadUrl = buildGmailThreadWebUrl(threadId, accountEmail);
   const moveToCurrentLabelIds = multiSelectActive
     ? MOVE_DESTINATION_IDS.filter(
         (id) =>
@@ -363,6 +368,7 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       }}
       onLoadImages={allowImagesFor}
       onTrustSender={trustImageSender}
+      gmailThreadUrl={gmailThreadUrl}
       systemLabelIds={systemLabelIds}
       moveToCurrentLabelIds={moveToCurrentLabelIds}
       labelMenuEntries={labelMenuEntries}
