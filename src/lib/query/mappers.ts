@@ -1,7 +1,12 @@
 import { parseParticipant } from '@/lib/format/participants';
 import { domainFor } from '@/lib/avatars/identity';
 import { LABEL_COLOR_PALETTE, resolveLabelColorSwatch } from '@/lib/labels/palette';
-import type { Conversation as IpcConversation, MailLabel, MailThread } from '@/lib/types/ipc';
+import type {
+  Conversation as IpcConversation,
+  LogEntryDto,
+  MailLabel,
+  MailThread,
+} from '@/lib/types/ipc';
 import type { Conversation } from '@/lib/types/conversation';
 import type { ReaderConversation } from '@/components/reader/ReadingPane';
 import type { Mailbox } from '@/components/sidebar/FolderList';
@@ -75,6 +80,20 @@ export function computeThreadLabelMembership(
         membership,
       };
     });
+}
+
+export interface LogEntry {
+  timestamp: Date;
+  level: string;
+  message: string;
+}
+
+export function toLogEntry(entry: LogEntryDto): LogEntry {
+  return {
+    timestamp: new Date(entry.timestampMillis),
+    level: entry.level,
+    message: entry.message,
+  };
 }
 
 export function mapConversation(conversation: IpcConversation): ReaderConversation {

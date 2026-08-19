@@ -10,6 +10,7 @@ import type {
   ThreadCursor,
 } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
+import { toLogEntry } from './mappers';
 import { useToastStore } from '@/stores/toast';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
@@ -87,6 +88,15 @@ export function useSetQueuePausedMutation() {
   return useMutation({
     mutationFn: (args: { scope: PauseScope; paused: boolean }) => invoke('set_queue_paused', args),
     onError: () => showError('Couldn’t update the pause state.'),
+  });
+}
+
+export function useLogEntriesQuery() {
+  return useQuery({
+    queryKey: queryKeys.logEntries,
+    queryFn: () => invoke('read_log_entries', {}),
+    select: (entries) => entries.map(toLogEntry),
+    staleTime: 0,
   });
 }
 

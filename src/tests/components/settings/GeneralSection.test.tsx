@@ -78,6 +78,7 @@ describe('GeneralSection', () => {
       alwaysLoadRemoteImages: false,
       allowedImageSenders: [],
       commandOverrides: {},
+      logLevel: 'info',
     });
 
     await openGeneral();

@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Keyboard,
   ListChecks,
+  ScrollText,
   SlidersHorizontal,
   UserCircle,
   type LucideIcon,
@@ -13,6 +14,7 @@ const sections: { id: SettingsSectionId; label: string; Icon: LucideIcon }[] = [
   { id: 'accounts', label: 'Accounts', Icon: UserCircle },
   { id: 'keyboard', label: 'Keyboard', Icon: Keyboard },
   { id: 'queue', label: 'Queue', Icon: ListChecks },
+  { id: 'logs', label: 'Logs', Icon: ScrollText },
 ];
 
 const navRow = (active: boolean) =>

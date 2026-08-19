@@ -27,7 +27,9 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
             let directory = handle.path().app_log_dir()?;
-            handle.manage(logging::init(directory)?);
+            let (guard, level_handle) = logging::init(directory)?;
+            handle.manage(guard);
+            handle.manage(level_handle);
             settings::initialize(handle).map_err(std::io::Error::other)?;
             auth::initialize(handle).map_err(std::io::Error::other)?;
             avatars::initialize(handle).map_err(std::io::Error::other)?;

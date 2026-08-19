@@ -25,8 +25,9 @@ describe('SettingsShell', () => {
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
   });
 
-  it('renders real content for Accounts, Keyboard and Queue', async () => {
+  it('renders real content for Accounts, Keyboard, Queue and Logs', async () => {
     const user = userEvent.setup();
+    ipc.override('read_log_entries', []);
     renderWithQueryClient(<SettingsShell />);
 
     await user.click(screen.getByRole('button', { name: 'Accounts' }));
@@ -38,6 +39,10 @@ describe('SettingsShell', () => {
     await user.click(screen.getByRole('button', { name: 'Queue' }));
     expect(await screen.findByTestId('settings-queue-section')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Queue' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Logs' }));
+    expect(await screen.findByTestId('settings-logs-section')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Logs' })).toBeInTheDocument();
   });
 
   it('calls setRoute("mail") and nothing else when Back to Mail is clicked', async () => {

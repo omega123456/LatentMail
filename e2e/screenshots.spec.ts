@@ -4,6 +4,7 @@ import { formatISO, getTime, parseISO } from 'date-fns';
 import { installPlaywrightIpc } from './helpers';
 import {
   playwrightContactSuggestionMatches,
+  playwrightLogEntries,
   playwrightMailAccount,
   playwrightParsedSearchQuery,
   playwrightQueueOperationsSnapshot,
@@ -577,6 +578,18 @@ for (const theme of themes) {
       'settings-queue-section',
       theme,
     );
+  });
+
+  test(`settings logs section ${theme}`, async ({ page }) => {
+    await page.clock.setFixedTime(parseISO('2026-08-19T14:41:30Z'));
+    await installPlaywrightIpc(page, {
+      list_accounts: playwrightSidebarAccounts,
+      read_log_entries: playwrightLogEntries,
+    });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Logs' }).click();
+    await screenshot(page, page.getByTestId('settings-logs-section'), 'settings-logs-section', theme);
   });
 
   test(`quote disclosure ${theme}`, async ({ page }) => {

@@ -41,6 +41,7 @@ describe('KeyboardSection', () => {
       alwaysLoadRemoteImages: false,
       allowedImageSenders: [],
       commandOverrides: {},
+      logLevel: 'info',
     });
 
     render(

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-log-entries"
+description = "Enables the read_log_entries command without any pre-configured scope."
+commands.allow = ["read_log_entries"]
+
+[[permission]]
+identifier = "deny-read-log-entries"
+description = "Denies the read_log_entries command without any pre-configured scope."
+commands.deny = ["read_log_entries"]

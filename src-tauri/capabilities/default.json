@@ -10,6 +10,7 @@
     "allow-write-frontend-log",
     "allow-read-settings",
     "allow-write-setting",
+    "allow-read-log-entries",
     "allow-pause-queue",
     "allow-resume-queue",
     "allow-read-queue-summary",

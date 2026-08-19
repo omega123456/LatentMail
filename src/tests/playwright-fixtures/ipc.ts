@@ -6,6 +6,7 @@ import { playwrightConversation } from './conversations';
 import { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
 import { playwrightTraversalStatus } from './traversal';
 import { playwrightSettings } from './settings';
+import { playwrightLogEntries } from './logs';
 import { playwrightContactSuggestions, playwrightStagedAttachment } from './compose';
 import {
   playwrightPausedQueueSummary,
@@ -20,6 +21,7 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   write_frontend_log: undefined,
   read_settings: playwrightSettings,
   write_setting: undefined,
+  read_log_entries: playwrightLogEntries,
   pause_queue: playwrightPausedQueueSummary,
   resume_queue: playwrightResumedQueueSummary,
   read_queue_summary: playwrightQueueSummary,

@@ -38,6 +38,7 @@ describe('layout store', () => {
       alwaysLoadRemoteImages: false,
       allowedImageSenders: [],
       commandOverrides: {},
+      logLevel: 'info',
     });
     const store = await loadStore();
     store.getState().setRoute('settings');

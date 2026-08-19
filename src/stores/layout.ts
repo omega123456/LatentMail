@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/ipc/commands';
-import type { Density, LayoutMode, Settings } from '@/lib/types/ipc';
+import type { Density, LayoutMode, LogLevel, Settings } from '@/lib/types/ipc';
 
 export type Route = 'auth' | 'mail' | 'settings';
 
@@ -19,6 +19,7 @@ type LayoutState = Pick<
   | 'syncIntervalSeconds'
   | 'alwaysLoadRemoteImages'
   | 'allowedImageSenders'
+  | 'logLevel'
 > & {
   route: Route;
   hydrated: boolean;
@@ -38,6 +39,7 @@ type LayoutState = Pick<
   setSyncOnStartup: (syncOnStartup: boolean) => void;
   setSyncIntervalSeconds: (syncIntervalSeconds: number) => void;
   setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages: boolean) => void;
+  setLogLevel: (logLevel: LogLevel) => void;
   trustImageSender: (address: string) => void;
   untrustImageSender: (address: string) => void;
 };
@@ -73,6 +75,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   syncIntervalSeconds: 300,
   alwaysLoadRemoteImages: false,
   allowedImageSenders: [],
+  logLevel: 'info',
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -92,6 +95,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         syncIntervalSeconds: settings.syncIntervalSeconds,
         alwaysLoadRemoteImages: settings.alwaysLoadRemoteImages,
         allowedImageSenders: settings.allowedImageSenders,
+        logLevel: settings.logLevel,
         hydrated: true,
       });
     });
@@ -161,6 +165,10 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages) => {
     set({ alwaysLoadRemoteImages });
     persist('alwaysLoadRemoteImages', alwaysLoadRemoteImages);
+  },
+  setLogLevel: (logLevel) => {
+    set({ logLevel });
+    persist('logLevel', logLevel);
   },
   trustImageSender: (address) => {
     const normalized = address.trim().toLowerCase();

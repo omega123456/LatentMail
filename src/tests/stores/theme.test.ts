@@ -85,6 +85,7 @@ describe('theme store', () => {
       alwaysLoadRemoteImages: false,
       allowedImageSenders: [],
       commandOverrides: {},
+      logLevel: 'info',
     });
     const { useThemeStore } = await loadThemeStore();
     const writes: Array<{ key: string; value: unknown }> = [];

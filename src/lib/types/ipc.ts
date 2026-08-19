@@ -7,6 +7,7 @@ export interface IpcCommandMap {
   };
   read_settings: { args: Record<string, never>; result: Settings };
   write_setting: { args: { key: SettingKey; value: SettingValue }; result: void };
+  read_log_entries: { args: Record<string, never>; result: LogEntryDto[] };
   pause_queue: { args: Record<string, never>; result: QueueSummary };
   resume_queue: { args: Record<string, never>; result: QueueSummary };
   read_queue_summary: { args: Record<string, never>; result: QueueSummary };
@@ -222,6 +223,7 @@ export interface Account {
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type LayoutMode = 'three-column' | 'bottom-preview' | 'list-only';
 export type Density = 'compact' | 'comfortable' | 'spacious';
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface Settings {
   theme: ThemePreference;
@@ -239,6 +241,13 @@ export interface Settings {
   alwaysLoadRemoteImages: boolean;
   allowedImageSenders: string[];
   commandOverrides: Partial<Record<string, string[]>>;
+  logLevel: LogLevel;
+}
+
+export interface LogEntryDto {
+  timestampMillis: number;
+  level: string;
+  message: string;
 }
 
 export type SettingKey = keyof Settings;

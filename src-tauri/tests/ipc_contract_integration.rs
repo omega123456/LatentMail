@@ -176,6 +176,10 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_ok());
     assert_eq!(
+        invoke(&webview, "read_log_entries", serde_json::json!({})).unwrap(),
+        serde_json::json!([])
+    );
+    assert_eq!(
         invoke(
             &webview,
             "read_sender_avatar",

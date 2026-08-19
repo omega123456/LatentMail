@@ -1,5 +1,5 @@
 use latentmail_lib::{
-    settings::{Density, Layout, Settings, SettingsService, ThemePreference, WindowState},
+    settings::{Density, Layout, LogLevel, Settings, SettingsService, ThemePreference, WindowState},
     storage::Storage,
 };
 use serde_json::json;
@@ -11,6 +11,23 @@ async fn fresh_settings_use_documented_defaults() {
         SettingsService::new(Storage::open(directory.path().join("mail.sqlite")).unwrap());
 
     assert_eq!(service.read().await.unwrap(), Settings::default());
+    assert_eq!(service.read().await.unwrap().log_level, LogLevel::Info);
+    assert_eq!(service.log_level(), LogLevel::Info);
+}
+
+#[tokio::test]
+async fn log_level_round_trips_and_defaults_to_info() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mail.sqlite");
+    let service = SettingsService::new(Storage::open(&path).unwrap());
+
+    assert_eq!(service.log_level(), LogLevel::Info);
+    service.write("logLevel".into(), json!("debug")).await.unwrap();
+    assert_eq!(service.log_level(), LogLevel::Debug);
+    assert_eq!(service.read().await.unwrap().log_level, LogLevel::Debug);
+
+    let reopened = SettingsService::new(Storage::open(path).unwrap());
+    assert_eq!(reopened.log_level(), LogLevel::Debug);
 }
 
 #[tokio::test]

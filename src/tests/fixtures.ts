@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import type { IpcCommandMap } from '@/lib/types/ipc';
 
 export const sidebarAccounts = [
@@ -46,8 +47,27 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     alwaysLoadRemoteImages: false,
     allowedImageSenders: [],
     commandOverrides: {},
+    logLevel: 'info',
   },
   write_setting: undefined,
+  read_log_entries: [
+    {
+      timestampMillis: getTime(parseISO('2026-08-19T09:41:22.118Z')),
+      level: 'ERROR',
+      message: 'sync: history sync failed for alex@example.com',
+    },
+    {
+      timestampMillis: getTime(parseISO('2026-08-19T09:40:58.702Z')),
+      level: 'INFO',
+      message: 'queue: mutation lane seated mutation:star:17f3a2c9',
+    },
+    {
+      timestampMillis: getTime(parseISO('2026-08-19T09:38:11.365Z')),
+      level: 'ERROR',
+      message:
+        'frontend: load_conversation failed: database is locked\n    at dispatchInvoke (commands.ts:14:11)',
+    },
+  ],
   pause_queue: { pending: 0, active: 0, failed: 0, done: 0, paused: true },
   resume_queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false },
   read_queue_summary: { pending: 0, active: 0, failed: 0, done: 0, paused: false },

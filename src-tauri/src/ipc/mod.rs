@@ -111,6 +111,7 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::auth::remove_account,
         crate::settings::read_settings,
         crate::settings::write_setting,
+        crate::logging::read_log_entries,
         crate::sync::commands::list_labels,
         crate::sync::commands::lookup_contacts,
         crate::sync::commands::reply_context,

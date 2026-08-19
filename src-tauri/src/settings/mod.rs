@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
+use tracing_subscriber::filter::LevelFilter;
 
 use crate::storage::{SettingRepository, Storage, StorageError};
 
@@ -44,6 +45,7 @@ pub struct Settings {
     pub always_load_remote_images: bool,
     pub allowed_image_senders: Vec<String>,
     pub command_overrides: HashMap<String, Vec<String>>,
+    pub log_level: LogLevel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,6 +70,26 @@ pub enum Density {
     Compact,
     Comfortable,
     Spacious,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<&LogLevel> for LevelFilter {
+    fn from(level: &LogLevel) -> Self {
+        match level {
+            LogLevel::Debug => LevelFilter::DEBUG,
+            LogLevel::Info => LevelFilter::INFO,
+            LogLevel::Warn => LevelFilter::WARN,
+            LogLevel::Error => LevelFilter::ERROR,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,6 +122,7 @@ impl Default for Settings {
             always_load_remote_images: false,
             allowed_image_senders: Vec::new(),
             command_overrides: HashMap::new(),
+            log_level: LogLevel::Info,
         }
     }
 }
@@ -152,6 +175,15 @@ impl SettingsService {
         Ok(SettingRepository::get(&connection, WINDOW_STATE_KEY)?
             .and_then(|value| serde_json::from_str(&value).ok()))
     }
+
+    pub fn log_level(&self) -> LogLevel {
+        self.storage
+            .connection()
+            .ok()
+            .and_then(|connection| SettingRepository::get(&connection, "logLevel").ok().flatten())
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or(LogLevel::Info)
+    }
 }
 
 impl Settings {
@@ -172,6 +204,7 @@ impl Settings {
             "alwaysLoadRemoteImages" => set_value(&mut self.always_load_remote_images, value),
             "allowedImageSenders" => set_value(&mut self.allowed_image_senders, value),
             "commandOverrides" => set_value(&mut self.command_overrides, value),
+            "logLevel" => set_value(&mut self.log_level, value),
             _ => false,
         }
     }
@@ -202,18 +235,26 @@ pub async fn write_setting<R: Runtime>(
 
 
 fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
-    if key != "syncIntervalSeconds" {
-        return;
+    match key {
+        "syncIntervalSeconds" => {
+            let (Some(seconds), Some(schedulers)) = (
+                value.as_u64().and_then(|value| u32::try_from(value).ok()),
+                app.try_state::<crate::sync::SyncSchedulers>(),
+            ) else {
+                return;
+            };
+            schedulers.periodic.set_interval(std::time::Duration::from_secs(
+                u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
+            ));
+        }
+        "logLevel" => {
+            let Ok(level) = serde_json::from_value::<LogLevel>(value.clone()) else {
+                return;
+            };
+            crate::logging::set_level(app, (&level).into());
+        }
+        _ => {}
     }
-    let (Some(seconds), Some(schedulers)) = (
-        value.as_u64().and_then(|value| u32::try_from(value).ok()),
-        app.try_state::<crate::sync::SyncSchedulers>(),
-    ) else {
-        return;
-    };
-    schedulers.periodic.set_interval(std::time::Duration::from_secs(
-        u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
-    ));
 }
 
 pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsService) {
@@ -249,6 +290,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let service = SettingsService::new(string_try!(Storage::open(
         directory.join("latentmail.sqlite")
     )));
+    crate::logging::set_level(app, (&service.log_level()).into());
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Main window is missing".to_owned())?;

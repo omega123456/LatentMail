@@ -18,6 +18,7 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   commandOverrides: {
     replyAllToMessage: ['Shift+A'],
   },
+  logLevel: 'info',
 };
 
 export const playwrightTrustedSenderSettings: IpcCommandMap['read_settings']['result'] = {

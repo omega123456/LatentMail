@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SettingsNav } from '@/components/settings/SettingsNav';
 
 describe('SettingsNav', () => {
-  it('lists Back to Mail and the four sections in order, marking the active one', () => {
+  it('lists Back to Mail and the five sections in order, marking the active one', () => {
     render(
       <SettingsNav
         activeSection="general"
@@ -21,6 +21,7 @@ describe('SettingsNav', () => {
       'Accounts',
       'Keyboard',
       'Queue',
+      'Logs',
     ]);
     expect(screen.getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('button', { name: 'Accounts' })).not.toHaveAttribute('aria-current');

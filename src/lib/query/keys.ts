@@ -20,4 +20,5 @@ export const queryKeys = {
   senderAvatar: (domain: string) => ['senderAvatar', domain] as const,
   accountAvatar: (accountId: string) => ['accountAvatar', accountId] as const,
   queueOperations: ['queueOperations'] as const,
+  logEntries: ['logEntries'] as const,
 };
