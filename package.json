@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tsc -b && vite build && tauri build",
+    "build": "tsc -b && vite build && tauri build --no-bundle",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:rust": "cargo nextest run --features test-utils --manifest-path src-tauri/Cargo.toml",
