@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as readline from 'node:readline/promises';
@@ -156,17 +156,13 @@ function restoreFiles(snapshot) {
   writeFileSync(cargoTomlPath, snapshot.cargoTomlRaw, 'utf8');
 
   if (snapshot.cargoLockRaw === null) {
-    try {
-      unlinkSync(cargoLockPath);
-    } catch {}
+    rmSync(cargoLockPath, { force: true });
   } else {
     writeFileSync(cargoLockPath, snapshot.cargoLockRaw, 'utf8');
   }
 
   if (snapshot.releaseBodyRaw === null) {
-    try {
-      unlinkSync(releaseBodyPath);
-    } catch {}
+    rmSync(releaseBodyPath, { force: true });
   } else {
     writeFileSync(releaseBodyPath, snapshot.releaseBodyRaw, 'utf8');
   }

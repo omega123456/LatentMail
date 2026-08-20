@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import DOMPurify from 'dompurify';
+import interUrl from '@/assets/inter-latin.woff2?url';
 import { invoke } from '@/lib/ipc/commands';
 
 const maxFrameHeight = 1600;
@@ -29,8 +30,9 @@ export function BodyFrame({
       </pre>
     );
   const dark = document.documentElement.classList.contains('dark');
-  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src data:">`;
-  const srcDoc = `${frameCsp}<style>body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
+  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src 'self'">`;
+  const frameFont = `@font-face{font-family:Inter;src:url(${interUrl}) format('woff2');font-weight:100 900;font-display:swap}`;
+  const srcDoc = `${frameCsp}<style>${frameFont}body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
   return (
     <iframe
       aria-label="Message body"
