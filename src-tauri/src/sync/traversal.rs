@@ -1,4 +1,3 @@
-
 use std::collections::HashSet;
 
 use serde::Serialize;
@@ -16,11 +15,9 @@ use super::materialize::attachment_records;
 
 use super::{EventSink, SyncError};
 
-
 pub fn traversal_entity_key(account_id: &str) -> String {
     format!("traversal:{account_id}")
 }
-
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,14 +29,12 @@ pub struct TraversalProgressEvent {
     pub completed: bool,
 }
 
-
 pub fn emit_traversal_progress(sink: &EventSink, event: TraversalProgressEvent) {
     sink(
         "sync://traversal",
         serde_json::to_value(event).expect("TraversalProgressEvent always serializes"),
     );
 }
-
 
 pub async fn run_backfill_step(
     storage: &Storage,
@@ -49,7 +44,6 @@ pub async fn run_backfill_step(
     resumed: bool,
     cache: Option<AttachmentCache>,
 ) -> Result<bool, SyncError> {
-
     let existing = storage
         .run({
             let account = account_id.to_owned();
@@ -61,7 +55,6 @@ pub async fn run_backfill_step(
 
     if let Some(cursor) = &existing {
         if cursor.completed {
-
             return Ok(true);
         }
     }
@@ -88,7 +81,6 @@ pub async fn run_backfill_step(
         include_spam_and_trash: true,
         page_size: MAX_PAGE_SIZE,
     };
-
 
     let page = client
         .list_messages_page_matching(&[], None, token.as_deref(), options)
@@ -147,7 +139,6 @@ pub async fn run_backfill_step(
     Ok(is_last_page)
 }
 
-
 pub async fn fetch_and_persist(
     storage: &Storage,
     client: &GmailClient,
@@ -175,7 +166,6 @@ pub async fn fetch_and_persist(
         .await?;
     Ok(thread_ids)
 }
-
 
 fn write_traversal_message(
     connection: &rusqlite::Connection,

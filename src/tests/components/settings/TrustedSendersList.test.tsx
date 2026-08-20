@@ -81,8 +81,9 @@ describe('TrustedSendersList', () => {
 
     expect(visibleAddresses()).toEqual(['receipts@stripe.com']);
     expect(screen.getByText('1–1 of 1')).toBeInTheDocument();
-    expect(within(screen.getByText('stripe').closest('span') as HTMLElement).getByText('stripe'))
-      .toBeInTheDocument();
+    expect(
+      within(screen.getByText('stripe').closest('span') as HTMLElement).getByText('stripe'),
+    ).toBeInTheDocument();
   });
 
   it('offers a way back out of a filter that matches nothing', async () => {

@@ -24,7 +24,13 @@ describe('RowContextMenu', () => {
   it('opens at a right-click and lists entries in the wireframe order', async () => {
     const user = userEvent.setup();
     render(
-      <RowContextMenu systemLabelIds={[]} unread starred={false} labels={labels} {...baseHandlers()}>
+      <RowContextMenu
+        systemLabelIds={[]}
+        unread
+        starred={false}
+        labels={labels}
+        {...baseHandlers()}
+      >
         <div>row</div>
       </RowContextMenu>,
     );
@@ -110,7 +116,13 @@ describe('RowContextMenu', () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
     render(
-      <RowContextMenu systemLabelIds={['SPAM']} unread={false} starred={false} labels={labels} {...handlers}>
+      <RowContextMenu
+        systemLabelIds={['SPAM']}
+        unread={false}
+        starred={false}
+        labels={labels}
+        {...handlers}
+      >
         <div>row</div>
       </RowContextMenu>,
     );

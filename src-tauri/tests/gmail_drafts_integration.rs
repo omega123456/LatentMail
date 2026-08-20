@@ -8,7 +8,6 @@ fn draft(id: &str, message: &str) -> serde_json::Value {
     serde_json::json!({"id": id, "message": {"id": message, "threadId": "t", "historyId": "1", "payload": {"headers": []}}})
 }
 
-
 fn written_draft(id: &str, message: &str) -> serde_json::Value {
     serde_json::json!({"id": id, "message": {"id": message, "threadId": "t", "labelIds": ["DRAFT"]}})
 }
@@ -50,7 +49,6 @@ async fn draft_lifecycle_uses_upload_for_writes_and_standard_routes_for_read_and
     assert_eq!((full.id.as_str(), full.message.id.as_str()), ("d", "m2"));
     assert_eq!(client.send_draft("d").await.unwrap(), "sent");
 }
-
 
 #[tokio::test]
 async fn draft_upload_posts_a_multipart_related_document_with_an_upload_type() {

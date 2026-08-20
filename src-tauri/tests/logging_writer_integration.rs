@@ -20,21 +20,24 @@ fn writer_records_frontend_messages_but_filters_debug() {
 
     drop(guard);
 
-    let contents = fs::read_to_string(
-        fs::read_dir(directory.path())
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path(),
-    )
-    .unwrap();
+    let path = fs::read_dir(directory.path())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(path.extension().unwrap(), "log");
+    assert_eq!(
+        path.file_stem().unwrap().to_str().unwrap(),
+        format!("latentmail.{}", chrono::Utc::now().format("%Y-%m-%d"))
+    );
+
+    let contents = fs::read_to_string(path).unwrap();
     assert!(contents.contains("info record"));
     assert!(contents.contains("warn record"));
     assert!(contents.contains("error record"));
     assert!(!contents.contains("filtered record"));
 }
-
 
 #[test]
 fn init_installs_a_global_dispatcher_and_creates_the_log_directory() {
@@ -80,8 +83,9 @@ fn reload_handle_changes_the_level_without_a_restart() {
 #[test]
 fn cleanup_removes_files_older_than_seven_days() {
     let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join("latentmail.log.2026-08-03"), "old").unwrap();
-    fs::write(directory.path().join("latentmail.log.2026-08-04"), "kept").unwrap();
+    fs::write(directory.path().join("latentmail.2026-08-03.log"), "old").unwrap();
+    fs::write(directory.path().join("latentmail.2026-08-04.log"), "kept").unwrap();
+    fs::write(directory.path().join("latentmail.2026-08-03.txt"), "other").unwrap();
 
     cleanup(
         directory.path(),
@@ -89,6 +93,7 @@ fn cleanup_removes_files_older_than_seven_days() {
     )
     .unwrap();
 
-    assert!(!directory.path().join("latentmail.log.2026-08-03").exists());
-    assert!(directory.path().join("latentmail.log.2026-08-04").exists());
+    assert!(!directory.path().join("latentmail.2026-08-03.log").exists());
+    assert!(directory.path().join("latentmail.2026-08-04.log").exists());
+    assert!(directory.path().join("latentmail.2026-08-03.txt").exists());
 }

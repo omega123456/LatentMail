@@ -93,6 +93,8 @@ export function ConversationList({
   const cursor = useSelectionStore((value) => value.keyboardCursor);
   const setCursor = useSelectionStore((value) => value.setKeyboardCursor);
   const setThread = useSelectionStore((value) => value.setActiveThreadId);
+  const flashThreadId = useSelectionStore((value) => value.flashThreadId);
+  const setFlashThreadId = useSelectionStore((value) => value.setFlashThreadId);
   const selectedIds = useMultiSelectStore((value) => value.selectedIds);
   const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
   const toggleSelected = useMultiSelectStore((value) => value.toggle);
@@ -133,6 +135,13 @@ export function ConversationList({
   useEffect(() => {
     virtualizer.measure();
   }, [density, virtualizer]);
+  useEffect(() => {
+    if (!flashThreadId) return;
+    const index = rows.findIndex((row) => row.id === flashThreadId);
+    if (index < 0) return;
+    virtualizer.scrollToIndex(index, { align: 'auto' });
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) setFlashThreadId(null);
+  }, [flashThreadId, rows, setFlashThreadId, virtualizer]);
   const open = useCallback(
     (index: number) => {
       const row = rows[index];
@@ -324,6 +333,8 @@ export function ConversationList({
                 density={density}
                 active={cursor === item.index}
                 selected={selectedIds.has(rows[item.index].id)}
+                flash={flashThreadId === rows[item.index].id}
+                onFlashComplete={() => useSelectionStore.getState().setFlashThreadId(null)}
                 multiSelectActive={multiSelectActive}
                 allLabels={allLabels}
                 selectionCount={selectedIds.size}
@@ -418,7 +429,9 @@ export function ConversationListContainer() {
   );
   const rows = useMemo(
     () =>
-      (activeQuery.data?.pages ?? []).flatMap((page) => page.items.map((thread) => mapThreadToRow(thread))),
+      (activeQuery.data?.pages ?? []).flatMap((page) =>
+        page.items.map((thread) => mapThreadToRow(thread)),
+      ),
     [activeQuery.data],
   );
   const backfillIncomplete =

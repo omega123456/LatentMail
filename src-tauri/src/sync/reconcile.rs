@@ -152,7 +152,6 @@ pub async fn run(
         }
     }
 
-
     let mut fetched_threads = Vec::new();
     for ids in new_ids.chunks(MAX_PAGE_SIZE as usize) {
         if let Some(queue) = queue {
@@ -205,7 +204,6 @@ pub async fn run(
             }
             for (id, label_ids) in &memberships {
                 if let Some(message) = current.get(id) {
-
                     let current_label_ids: HashSet<&str> =
                         message.label_ids.iter().map(String::as_str).collect();
                     let wanted_label_ids: HashSet<&str> =

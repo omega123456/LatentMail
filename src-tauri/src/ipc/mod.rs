@@ -36,7 +36,6 @@ pub enum FrontendLogLevel {
     Error,
 }
 
-
 #[tauri::command]
 pub fn write_frontend_log(level: FrontendLogLevel, message: String) {
     match level {

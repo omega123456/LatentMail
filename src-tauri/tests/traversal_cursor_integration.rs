@@ -1,4 +1,3 @@
-
 use std::sync::{Arc, Mutex};
 
 use latentmail_lib::gmail::GmailClient;
@@ -12,7 +11,6 @@ use wiremock::{
     matchers::{method, path, query_param, query_param_is_missing},
     Mock, MockServer, ResponseTemplate,
 };
-
 
 fn temp_storage() -> (Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
@@ -69,7 +67,6 @@ async fn mount_profile(server: &MockServer, messages_total: i64) {
         .mount(server)
         .await;
 }
-
 
 #[tokio::test]
 async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cursor() {
@@ -158,7 +155,6 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
         "page 2 of a fresh, uninterrupted run must not read as resumed"
     );
 
-
     for _ in 0..200 {
         tokio::task::yield_now().await;
     }
@@ -205,7 +201,6 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
         "a fresh run's final page must still read as not-resumed"
     );
 }
-
 
 #[tokio::test]
 async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
@@ -260,7 +255,6 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
 
     let (storage, _directory) = temp_storage();
 
-
     storage
         .run(|connection| {
             TraversalCursorRepository::upsert(
@@ -295,7 +289,6 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
     let client = GmailClient::with_base_url("token", server.uri());
     engine.initial_sync("account", client).await.unwrap();
 
-
     let mut cursor = None;
     for _ in 0..1_000 {
         cursor = storage
@@ -321,7 +314,6 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
 
     queue.resume();
 
-
     let mut final_cursor = None;
     for _ in 0..1_000 {
         let candidate = storage
@@ -343,7 +335,6 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
         "page 2+ of the same resumed run must still read as resumed, not flip back"
     );
 }
-
 
 #[tokio::test]
 async fn backfill_enumeration_has_no_label_filter_no_date_bound_and_includes_spam_and_trash() {
@@ -385,7 +376,6 @@ async fn backfill_enumeration_has_no_label_filter_no_date_bound_and_includes_spa
 
     server.verify().await;
 }
-
 
 #[tokio::test]
 async fn persisted_messages_carry_metadata_membership_and_truncated_body_only() {
@@ -439,7 +429,6 @@ async fn persisted_messages_carry_metadata_membership_and_truncated_body_only() 
     assert_eq!(label_ids, vec!["STARRED".to_owned(), "TRASH".to_owned()]);
 }
 
-
 #[tokio::test]
 async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     let server = MockServer::start().await;
@@ -488,7 +477,6 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     let (storage, _directory) = temp_storage();
     let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
 
-
     let page_one = run_backfill_step(
         &storage,
         &client,
@@ -500,7 +488,6 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     .await;
     assert!(page_one.is_ok(), "page 1 must commit cleanly");
     assert!(!page_one.unwrap(), "page 1 alone is not the whole backfill");
-
 
     let page_two = run_backfill_step(
         &storage,
@@ -516,7 +503,6 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
         "page 2's message fetch was mocked to fail"
     );
 
-
     let connection = storage.connection().unwrap();
     let cursor = TraversalCursorRepository::get(&connection, "account", TraversalKind::Backfill)
         .unwrap()
@@ -526,7 +512,6 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
     assert_eq!(cursor.persisted_count, 1);
     assert!(!cursor.completed);
     drop(connection);
-
 
     let second_attempt = run_backfill_step(
         &storage,
@@ -555,7 +540,6 @@ async fn interrupted_backfill_resumes_from_the_last_completed_batch() {
 
     server.verify().await;
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_flight() {
@@ -655,7 +639,6 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         count
     };
 
-
     let mut cursor = None;
     for _ in 0..1_000 {
         cursor = storage
@@ -684,9 +667,7 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         "only page 1 has completed so far"
     );
 
-
     engine.enqueue_backfill("account", client.clone()).await;
-
 
     for _ in 0..200 {
         tokio::task::yield_now().await;
@@ -696,7 +677,6 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         1,
         "a second enqueue_backfill call while the first chain is in-flight must not start a new chain"
     );
-
 
     queue.resume();
     let mut completed = false;
@@ -721,7 +701,6 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         "the completed chain must be exactly the original two pages — no interleaved third op"
     );
     server.verify().await;
-
 
     queue.resume();
     engine.enqueue_backfill("account", client).await;
@@ -810,7 +789,6 @@ async fn enqueue_backfill_still_starts_a_chain_when_the_cursor_stopped_short_of_
     );
 }
 
-
 #[tokio::test]
 async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row() {
     let server = MockServer::start().await;
@@ -889,7 +867,6 @@ async fn backfill_runs_normally_alongside_an_unrelated_reconciliation_cursor_row
     );
 }
 
-
 #[tokio::test]
 async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes() {
     let server = MockServer::start().await;
@@ -939,7 +916,6 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         .await
         .unwrap();
 
-
     storage
         .run(|connection| {
             TraversalCursorRepository::upsert(
@@ -971,7 +947,6 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         .await
         .unwrap();
 
-
     let backfill_cursor = storage
         .run(|connection| {
             TraversalCursorRepository::get(connection, "account", TraversalKind::Backfill)
@@ -995,7 +970,6 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         .unwrap()
         .unwrap();
     assert!(reconciliation_cursor.completed);
-
 
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))
@@ -1045,7 +1019,6 @@ async fn backfill_cursor_survives_reconciliation_and_resumes_after_it_completes(
         .unwrap()
         .is_some());
 }
-
 
 #[tokio::test]
 async fn fetch_and_persist_writes_messages_and_returns_touched_thread_ids() {
@@ -1103,7 +1076,6 @@ async fn fetch_and_persist_writes_messages_and_returns_touched_thread_ids() {
     );
 }
 
-
 #[tokio::test]
 async fn a_completed_cursor_is_not_restarted() {
     let server = MockServer::start().await;
@@ -1139,7 +1111,6 @@ async fn a_completed_cursor_is_not_restarted() {
     .await
     .unwrap();
 }
-
 
 #[tokio::test]
 async fn progress_events_carry_counts_only_never_a_percentage_or_estimate() {
@@ -1182,7 +1153,6 @@ async fn progress_events_carry_counts_only_never_a_percentage_or_estimate() {
         );
     }
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
@@ -1247,7 +1217,6 @@ async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
 
     engine.initial_sync("account", client).await.unwrap();
 
-
     let mut cursor = None;
     for _ in 0..10_000 {
         cursor = storage
@@ -1266,7 +1235,6 @@ async fn initial_sync_completion_enqueues_backfill_which_advances_the_cursor() {
         "backfill enqueued by initial_sync never completed"
     );
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn backfill_advances_as_one_discrete_queue_operation_per_page() {

@@ -8,7 +8,6 @@ test('renders the sign-in screen', async ({ page }) => {
   await expect(page.getByTestId('sign-in-screen')).toBeVisible();
 });
 
-
 test('the whole conversation row opens it, except the star', async ({ page }) => {
   await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
   await page.goto('/');
@@ -22,7 +21,6 @@ test('the whole conversation row opens it, except the star', async ({ page }) =>
   await other.getByRole('button', { name: /^Star / }).click();
   await expect(other).not.toHaveAttribute('data-active', 'true');
 });
-
 
 const userSelectOf = (locator: Locator) =>
   locator.evaluate((element) => getComputedStyle(element).userSelect);

@@ -44,9 +44,8 @@ pub fn sanitize(
                 {
                     None
                 }
-                ("img", "src") => {
-                    image_source(value, &cid_parts, &blocked_in_filter, allow_remote).map(Cow::Owned)
-                }
+                ("img", "src") => image_source(value, &cid_parts, &blocked_in_filter, allow_remote)
+                    .map(Cow::Owned),
                 _ => Some(Cow::Borrowed(value)),
             },
         );

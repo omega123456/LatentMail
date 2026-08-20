@@ -27,7 +27,9 @@ pub async fn cancel_queue_operation(
     }
     let id = operation_id.clone();
     storage
-        .run(move |connection| OperationRepository::mark_terminal(connection, &id, "cancelled", None))
+        .run(move |connection| {
+            OperationRepository::mark_terminal(connection, &id, "cancelled", None)
+        })
         .await
         .map_err(|error| error.to_string())?;
     Ok(true)
@@ -67,7 +69,9 @@ pub async fn retry_failed_operations(
     account_id: Option<String>,
 ) -> Result<usize, String> {
     let rows = storage
-        .run(move |connection| OperationRepository::failed_durable(connection, account_id.as_deref()))
+        .run(move |connection| {
+            OperationRepository::failed_durable(connection, account_id.as_deref())
+        })
         .await
         .map_err(|error| error.to_string())?;
     let mut retried = 0usize;

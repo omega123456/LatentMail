@@ -79,7 +79,6 @@ describe('Toast', () => {
     show(() => useToastStore.getState().showSuccess('Message sent.'));
     await waitFor(() => expect(rails()).toHaveLength(2));
 
-
     await act(async () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });

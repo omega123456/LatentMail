@@ -20,6 +20,10 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   },
   logLevel: 'info',
   prefetchImageAttachments: false,
+  startAtLogin: false,
+  closeToTray: true,
+  startMinimized: false,
+  desktopNotifications: true,
 };
 
 export const playwrightTrustedSenderSettings: IpcCommandMap['read_settings']['result'] = {

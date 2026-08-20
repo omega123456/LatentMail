@@ -234,7 +234,11 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
     let mut fts_negative: Vec<String> = Vec::new();
 
     for token in tokens {
-        let RawToken { negated, key, value } = token;
+        let RawToken {
+            negated,
+            key,
+            value,
+        } = token;
         match key.as_deref() {
             None => {
                 if value.trim().is_empty() {

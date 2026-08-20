@@ -1,4 +1,3 @@
-
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage, ThreadRepository,

@@ -60,7 +60,10 @@ fn drained_contains_summary(
     found
 }
 
-fn controllable_executor() -> (Executor, mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>) {
+fn controllable_executor() -> (
+    Executor,
+    mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation: QueueOperation| {
         let tx = tx.clone();
@@ -157,7 +160,12 @@ async fn cancelling_an_interactive_operation_does_not_block_that_accounts_other_
     queue.resume();
 
     queue
-        .enqueue(operation("background-after", "account", Lane::Background, "e2"))
+        .enqueue(operation(
+            "background-after",
+            "account",
+            Lane::Background,
+            "e2",
+        ))
         .await
         .unwrap();
     wait_for_item_status(&mut events_rx, "background-after", "done").await;
@@ -221,7 +229,10 @@ async fn scoped_lane_pause_holds_only_that_lane_and_resuming_wakes_parked_work()
         .await;
     assert!(resumed);
 
-    let (id, release) = started.recv().await.expect("scoped resume wakes parked work");
+    let (id, release) = started
+        .recv()
+        .await
+        .expect("scoped resume wakes parked work");
     assert_eq!(id, "parked");
     release.send(()).unwrap();
 }

@@ -22,7 +22,11 @@ export function EmptyState({
         data-testid="empty-state-search"
         className="flex flex-col items-center gap-stack-gap-sm p-container-padding text-center text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant"
       >
-        <SearchX aria-hidden="true" size={24} className="text-on-surface-variant dark:text-dark-on-surface-variant" />
+        <SearchX
+          aria-hidden="true"
+          size={24}
+          className="text-on-surface-variant dark:text-dark-on-surface-variant"
+        />
         <p className="text-body-md text-on-surface dark:text-dark-on-surface">
           No results for &ldquo;{query}&rdquo;
         </p>

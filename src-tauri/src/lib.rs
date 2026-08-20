@@ -6,6 +6,7 @@ pub mod contacts;
 pub mod gmail;
 pub mod ipc;
 pub mod logging;
+pub mod os;
 pub mod queue;
 pub mod sanitize;
 pub mod search;
@@ -20,11 +21,7 @@ use tauri::Manager;
 #[cfg(not(coverage))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    ipc::register(tauri::Builder::default())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(shell::prevent_default_plugin())
+    shell::register_plugins(ipc::register(tauri::Builder::default()))
         .setup(|app| {
             let handle = app.handle();
             let directory = handle.path().app_log_dir()?;
@@ -34,19 +31,19 @@ pub fn run() {
             settings::initialize(handle).map_err(std::io::Error::other)?;
             auth::initialize(handle).map_err(std::io::Error::other)?;
             avatars::initialize(handle).map_err(std::io::Error::other)?;
-            Ok(sync::initialize(handle).map_err(std::io::Error::other)?)
+            sync::initialize(handle).map_err(std::io::Error::other)?;
+            Ok(os::initialize(handle).map_err(std::io::Error::other)?)
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                settings::save_window(
-                    window,
-                    window
-                        .app_handle()
-                        .state::<settings::SettingsService>()
-                        .inner(),
-                );
+                os::window::on_close(window, event);
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running LatentMail");
+        .build(tauri::generate_context!())
+        .expect("error while running LatentMail")
+        .run(|handle, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                os::window::save_geometry(handle);
+            }
+        });
 }

@@ -1,10 +1,8 @@
-
 use latentmail_lib::avatars::bimi::{candidate_domains, parse_logo_url, resolve_logo};
 use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheDomain};
 use latentmail_lib::avatars::image::OUTPUT_SIZE;
 use latentmail_lib::avatars::resolver::{fake_txt_lookup_count, set_fake_download, set_fake_txt};
 use latentmail_lib::storage::Storage;
-
 
 fn test_cache() -> (AvatarCache, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
@@ -15,7 +13,6 @@ fn test_cache() -> (AvatarCache, tempfile::TempDir) {
 
 #[test]
 fn candidate_domains_walks_from_full_domain_to_registrable_domain_inclusive() {
-
     assert_eq!(
         candidate_domains("news.corp.aviva.co.uk"),
         vec![
@@ -58,7 +55,10 @@ fn parse_logo_url_tolerates_surrounding_quotes() {
 
 #[test]
 fn parse_logo_url_rejects_a_non_https_value() {
-    assert_eq!(parse_logo_url("v=BIMI1; l=http://example.com/logo.svg;"), None);
+    assert_eq!(
+        parse_logo_url("v=BIMI1; l=http://example.com/logo.svg;"),
+        None
+    );
 }
 
 #[test]
@@ -91,7 +91,9 @@ async fn a_published_record_resolves_to_a_validated_normalized_png() {
 #[tokio::test]
 async fn a_domain_with_no_record_at_any_candidate_yields_no_logo() {
     let (cache, _dir) = test_cache();
-    assert!(resolve_logo(&cache, "no-bimi-anywhere.example").await.is_none());
+    assert!(resolve_logo(&cache, "no-bimi-anywhere.example")
+        .await
+        .is_none());
 }
 
 #[tokio::test]
@@ -102,10 +104,7 @@ async fn resolution_falls_through_to_a_parent_candidate_when_the_full_domain_has
         "default._bimi.falls-through.example",
         vec!["v=BIMI1; l=https://cdn.falls-through.example/logo.svg;".to_owned()],
     );
-    set_fake_download(
-        "https://cdn.falls-through.example/logo.svg",
-        tiny_svg(),
-    );
+    set_fake_download("https://cdn.falls-through.example/logo.svg", tiny_svg());
 
     let png = resolve_logo(&cache, "news.falls-through.example")
         .await
@@ -131,16 +130,13 @@ async fn multi_string_txt_records_are_rejoined_before_parsing() {
         "default._bimi.split-record.example",
         vec!["v=BIMI1; l=https://cdn.split-record.example/logo.svg;".to_owned()],
     );
-    set_fake_download(
-        "https://cdn.split-record.example/logo.svg",
-        tiny_svg(),
-    );
+    set_fake_download("https://cdn.split-record.example/logo.svg", tiny_svg());
     assert!(resolve_logo(&cache, "split-record.example").await.is_some());
 }
 
 #[tokio::test]
-async fn a_candidate_already_cache_positive_is_reused_by_a_sibling_subdomain_without_re_querying_it()
-{
+async fn a_candidate_already_cache_positive_is_reused_by_a_sibling_subdomain_without_re_querying_it(
+) {
     let (cache, _dir) = test_cache();
     let parent_key = hash_key("aviva.co.uk");
     cache
@@ -163,8 +159,8 @@ async fn a_candidate_already_cache_positive_is_reused_by_a_sibling_subdomain_wit
 }
 
 #[tokio::test]
-async fn a_candidate_already_cache_negative_is_reused_by_a_sibling_subdomain_without_re_querying_it()
-{
+async fn a_candidate_already_cache_negative_is_reused_by_a_sibling_subdomain_without_re_querying_it(
+) {
     let (cache, _dir) = test_cache();
     let parent_key = hash_key("shared-negative.example");
     cache.store_miss(&parent_key).await.unwrap();

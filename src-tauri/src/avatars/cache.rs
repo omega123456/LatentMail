@@ -49,7 +49,6 @@ pub struct AvatarCache {
 }
 
 impl AvatarCache {
-
     pub fn new(storage: Storage, root: PathBuf) -> Result<Self, String> {
         std::fs::create_dir_all(root.join(CacheDomain::Sender.subdir()))
             .map_err(|error| error.to_string())?;
@@ -61,7 +60,6 @@ impl AvatarCache {
     pub fn root(&self) -> &Path {
         &self.root
     }
-
 
     pub async fn answer(&self, cache_key: &str, domain: CacheDomain) -> CacheAnswer {
         let key = cache_key.to_owned();
@@ -85,7 +83,6 @@ impl AvatarCache {
         }
     }
 
-
     pub async fn store_hit(
         &self,
         cache_key: &str,
@@ -107,7 +104,6 @@ impl AvatarCache {
             .map_err(|error| error.to_string())?;
         Ok(absolute)
     }
-
 
     pub async fn store_miss(&self, cache_key: &str) -> Result<(), String> {
         let record = AvatarCacheRecord {

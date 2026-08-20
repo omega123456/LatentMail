@@ -1,10 +1,18 @@
-
 use latentmail_lib::gmail::GmailMessage;
-use latentmail_lib::storage::addresses::{domain_of, first_identity, parse_address, split_addresses};
+use latentmail_lib::storage::addresses::{
+    domain_of, first_identity, parse_address, split_addresses,
+};
 use latentmail_lib::storage::{Account, AccountRepository, Storage, ThreadRepository};
 use latentmail_lib::sync::materialize;
 
-fn message(id: &str, thread_id: &str, sender: &str, to: &str, sent_at: i64, sent_label: bool) -> GmailMessage {
+fn message(
+    id: &str,
+    thread_id: &str,
+    sender: &str,
+    to: &str,
+    sent_at: i64,
+    sent_label: bool,
+) -> GmailMessage {
     GmailMessage {
         id: id.into(),
         thread_id: thread_id.into(),
@@ -45,8 +53,6 @@ fn account_row() -> Account {
         updated_at: 1,
     }
 }
-
-
 
 #[test]
 fn split_addresses_respects_a_comma_inside_a_quoted_display_name() {
@@ -101,7 +107,10 @@ fn first_identity_takes_the_first_recoverable_entry() {
 
 #[test]
 fn domain_of_lower_cases_and_handles_missing_at_sign() {
-    assert_eq!(domain_of("Someone@Example.COM").as_deref(), Some("example.com"));
+    assert_eq!(
+        domain_of("Someone@Example.COM").as_deref(),
+        Some("example.com")
+    );
     assert_eq!(domain_of("not-an-address"), None);
 }
 
@@ -109,8 +118,6 @@ fn domain_of_lower_cases_and_handles_missing_at_sign() {
 fn domain_of_is_none_when_the_domain_portion_is_empty() {
     assert_eq!(domain_of("user@"), None);
 }
-
-
 
 #[test]
 fn the_stored_sender_is_the_newest_messages_sender_not_the_first() {
@@ -138,10 +145,15 @@ fn the_stored_sender_is_the_newest_messages_sender_not_the_first() {
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-    let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
+    let thread = ThreadRepository::get(&connection, "a", "t1")
+        .unwrap()
+        .unwrap();
 
     assert_eq!(thread.sender_identity.display, "Kovacs, Jozsef");
-    assert_eq!(thread.sender_identity.address.as_deref(), Some("j@example.com"));
+    assert_eq!(
+        thread.sender_identity.address.as_deref(),
+        Some("j@example.com")
+    );
 }
 
 #[test]
@@ -151,12 +163,21 @@ fn a_thread_with_no_sent_message_carries_no_recipient_identity() {
     materialize::persist(
         &connection,
         "a",
-        &message("m1", "t1", "sender@example.com", "me@example.com", 100, false),
+        &message(
+            "m1",
+            "t1",
+            "sender@example.com",
+            "me@example.com",
+            100,
+            false,
+        ),
     )
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-    let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
+    let thread = ThreadRepository::get(&connection, "a", "t1")
+        .unwrap()
+        .unwrap();
     assert!(thread.recipient_identity.is_none());
 }
 
@@ -167,7 +188,14 @@ fn a_sent_thread_carries_the_newest_sent_messages_first_recipient() {
     materialize::persist(
         &connection,
         "a",
-        &message("m1", "t1", "me@example.com", "old-recipient@example.com", 100, true),
+        &message(
+            "m1",
+            "t1",
+            "me@example.com",
+            "old-recipient@example.com",
+            100,
+            true,
+        ),
     )
     .unwrap();
     materialize::persist(
@@ -185,8 +213,12 @@ fn a_sent_thread_carries_the_newest_sent_messages_first_recipient() {
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-    let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
-    let recipient = thread.recipient_identity.expect("Sent thread must carry a recipient identity");
+    let thread = ThreadRepository::get(&connection, "a", "t1")
+        .unwrap()
+        .unwrap();
+    let recipient = thread
+        .recipient_identity
+        .expect("Sent thread must carry a recipient identity");
     assert_eq!(recipient.display, "Doe, Jane");
     assert_eq!(recipient.address.as_deref(), Some("jane@example.com"));
 }
@@ -198,10 +230,14 @@ fn missing_sender_and_recipient_data_produce_both_fallback_strings() {
     materialize::persist(&connection, "a", &message("m1", "t1", "", "", 100, true)).unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
 
-    let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
+    let thread = ThreadRepository::get(&connection, "a", "t1")
+        .unwrap()
+        .unwrap();
     assert_eq!(thread.sender_identity.display, "(No sender)");
     assert_eq!(thread.sender_identity.address, None);
-    let recipient = thread.recipient_identity.expect("still carries an identity slot for the Sent message");
+    let recipient = thread
+        .recipient_identity
+        .expect("still carries an identity slot for the Sent message");
     assert_eq!(recipient.display, "(No recipient)");
     assert_eq!(recipient.address, None);
 }
@@ -213,7 +249,14 @@ fn a_thread_with_malformed_stored_identity_json_falls_back_instead_of_erroring()
     materialize::persist(
         &connection,
         "a",
-        &message("m1", "t1", "sender@example.com", "me@example.com", 100, true),
+        &message(
+            "m1",
+            "t1",
+            "sender@example.com",
+            "me@example.com",
+            100,
+            true,
+        ),
     )
     .unwrap();
     ThreadRepository::recompute(&connection, "a", "t1").unwrap();
@@ -225,11 +268,14 @@ fn a_thread_with_malformed_stored_identity_json_falls_back_instead_of_erroring()
         )
         .unwrap();
 
-    let thread = ThreadRepository::get(&connection, "a", "t1").unwrap().unwrap();
+    let thread = ThreadRepository::get(&connection, "a", "t1")
+        .unwrap()
+        .unwrap();
     assert_eq!(thread.sender_identity.display, "(No sender)");
     assert_eq!(thread.sender_identity.address, None);
-    let recipient = thread.recipient_identity.expect("still carries an identity slot");
+    let recipient = thread
+        .recipient_identity
+        .expect("still carries an identity slot");
     assert_eq!(recipient.display, "(No recipient)");
     assert_eq!(recipient.address, None);
 }
-

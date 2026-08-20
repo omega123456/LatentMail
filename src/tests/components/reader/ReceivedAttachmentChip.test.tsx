@@ -186,9 +186,7 @@ describe('ReceivedAttachmentChip', () => {
       />,
     );
     await user.click(screen.getByRole('button', { name: 'Download ../../etc/passwd' }));
-    await waitFor(() =>
-      expect(receivedArgs).toEqual({ options: { defaultPath: 'passwd' } }),
-    );
+    await waitFor(() => expect(receivedArgs).toEqual({ options: { defaultPath: 'passwd' } }));
   });
 
   it('shows an inline error and a Retry control on a failed download, without a toast', async () => {

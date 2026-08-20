@@ -208,7 +208,6 @@ impl LabelRepository {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtmlPresence {
     NeverFetched,
@@ -242,7 +241,6 @@ impl HtmlPresence {
         }
     }
 }
-
 
 pub fn truncate_body(plain: Option<&str>, html: Option<&str>) -> Option<String> {
     const MAX_CHARS: usize = 10_000;
@@ -286,7 +284,6 @@ pub struct Message {
 }
 
 impl Message {
-
     pub fn body_is_empty(&self) -> bool {
         self.html_body.is_none() && self.plain_body.is_none()
     }
@@ -1067,7 +1064,6 @@ pub struct InlinePart {
     pub bytes: Vec<u8>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadIdentity {
     pub display: String,
@@ -1229,7 +1225,8 @@ impl ThreadRepository {
         }
         let latest = rows.last().expect("checked non-empty above");
 
-        let sender_identity = ThreadIdentity::from_header(&latest.sender, ThreadIdentity::no_sender);
+        let sender_identity =
+            ThreadIdentity::from_header(&latest.sender, ThreadIdentity::no_sender);
 
         let recipient_identity = rows.iter().rev().find(|row| row.is_sent).map(|row| {
             ThreadIdentity::from_header(&row.to_recipients, ThreadIdentity::no_recipient)
@@ -1313,9 +1310,9 @@ impl ThreadRepository {
             Some(_) => ("tl.latest_at", "tl.thread_id"),
             None => ("t.latest_at", "t.id"),
         };
-        let cursor_sql = cursor
-            .as_ref()
-            .map_or_else(String::new, |_| format!("AND ({order_at},{order_id})<(?3,?4)"));
+        let cursor_sql = cursor.as_ref().map_or_else(String::new, |_| {
+            format!("AND ({order_at},{order_id})<(?3,?4)")
+        });
         let sql = format!(
             "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
                     COALESCE((SELECT m.snippet FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1),'')
@@ -1587,9 +1584,7 @@ fn search_message_conditions(
     (sql, values)
 }
 
-fn search_predicate_fragment(
-    predicate: &crate::search::query::Predicate,
-) -> (String, Vec<Value>) {
+fn search_predicate_fragment(predicate: &crate::search::query::Predicate) -> (String, Vec<Value>) {
     use crate::search::query::PredicateKind;
     let (inner, values): (String, Vec<Value>) = match &predicate.kind {
         PredicateKind::Label(label) => (
@@ -1673,7 +1668,9 @@ impl OperationRepository {
         match account_id {
             Some(account_id) => {
                 let mut statement = connection.prepare("SELECT id,account_id,lane,kind,entity_key,payload,status,attempts,next_attempt_at,error,created_at,updated_at FROM operations WHERE kind IN ('send','draft') AND status='failed' AND account_id=?1 ORDER BY created_at")?;
-                let rows = statement.query_map(params![account_id], operation)?.collect();
+                let rows = statement
+                    .query_map(params![account_id], operation)?
+                    .collect();
                 rows
             }
             None => {
@@ -1762,7 +1759,6 @@ impl SettingRepository {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvatarCacheOutcome {
     Hit,
@@ -1826,7 +1822,6 @@ impl AvatarCacheRepository {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraversalKind {
     Backfill,
@@ -1859,7 +1854,6 @@ pub struct TraversalCursor {
 
     pub resumed: bool,
 }
-
 
 pub struct TraversalCursorRepository;
 impl TraversalCursorRepository {

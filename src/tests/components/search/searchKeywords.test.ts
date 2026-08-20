@@ -64,7 +64,9 @@ describe('suggestionsFor', () => {
       { id: 'My Label', name: 'Side', kind: 'user', color: null, messageCount: 0, unreadCount: 0 },
     ];
     const result = suggestionsFor('label:si', spaced);
-    expect(result).toEqual([{ insert: 'label:"My Label"', primary: 'Side', secondary: 'My Label' }]);
+    expect(result).toEqual([
+      { insert: 'label:"My Label"', primary: 'Side', secondary: 'My Label' },
+    ]);
   });
 
   it('preserves negation on both keyword and value suggestions', () => {

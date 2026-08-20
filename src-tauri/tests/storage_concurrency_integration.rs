@@ -1,4 +1,3 @@
-
 use std::sync::mpsc;
 
 use latentmail_lib::storage::{Account, AccountRepository, Storage};
@@ -26,7 +25,6 @@ fn a_file_backed_database_reports_wal_enabled() {
         .unwrap();
     assert_eq!(mode.to_ascii_lowercase(), "wal");
 }
-
 
 #[test]
 fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
@@ -71,7 +69,6 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
         .unwrap()
         .is_some());
 }
-
 
 #[test]
 fn a_connection_reports_a_nonzero_busy_timeout() {

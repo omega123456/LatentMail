@@ -15,6 +15,10 @@ use wiremock::{
 
 type FiredEvents = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
 
+fn fixture_now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp(3, 0).unwrap()
+}
+
 fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Message {
     Message {
         account_id: "account".into(),
@@ -97,7 +101,7 @@ fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEven
     });
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, sink);
+    let engine = SyncEngine::new_with_clock(storage.clone(), queue, registry, sink, fixture_now);
     (engine, storage, directory, events)
 }
 
@@ -212,19 +216,21 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
                 "messagesAdded": [
                     {"message": {"id": "arrival", "threadId": "t2"}},
                     {"message": {"id": "sentcopy", "threadId": "t4"}},
-                    {"message": {"id": "alreadyread", "threadId": "t5"}}
+                    {"message": {"id": "alreadyread", "threadId": "t5"}},
+                    {"message": {"id": "stale", "threadId": "t6"}}
                 ]
             }]
         })))
         .mount(&server)
         .await;
-    for (id, thread, labels, from, subject) in [
+    for (id, thread, labels, from, subject, internal_date) in [
         (
             "arrival",
             "t2",
             serde_json::json!(["INBOX", "UNREAD"]),
             "Carol <carol@example.com>",
             "New mail",
+            "3000",
         ),
         (
             "sentcopy",
@@ -232,6 +238,7 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
             serde_json::json!(["SENT"]),
             "me@example.com",
             "My own reply",
+            "3000",
         ),
         (
             "alreadyread",
@@ -239,13 +246,22 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
             serde_json::json!(["INBOX"]),
             "Dave <dave@example.com>",
             "Read on my phone",
+            "3000",
+        ),
+        (
+            "stale",
+            "t6",
+            serde_json::json!(["INBOX", "UNREAD"]),
+            "Eve <eve@example.com>",
+            "Old mail",
+            "-600000",
         ),
     ] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": id, "threadId": thread, "historyId": "50", "labelIds": labels, "snippet": "s",
-                "internalDate": "3000",
+                "internalDate": internal_date,
                 "payload": {"mimeType": "text/plain", "headers": [
                     {"name": "From", "value": from},
                     {"name": "Subject", "value": subject}
@@ -270,7 +286,7 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
     assert_eq!(
         new_mail.get("arrivals"),
         Some(&serde_json::json!([
-            {"sender": "Carol <carol@example.com>", "subject": "New mail"}
+            {"threadId": "t2", "sender": "Carol <carol@example.com>", "subject": "New mail"}
         ]))
     );
 }

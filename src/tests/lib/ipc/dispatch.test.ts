@@ -47,6 +47,14 @@ describe('IPC dispatch', () => {
     expect(received).toHaveBeenCalledWith({ status: 'ok' });
   });
 
+  it('emits frontend readiness through the shared dispatch boundary', async () => {
+    const { emitFrontendReady } = await import('@/lib/ipc/events');
+
+    await emitFrontendReady();
+
+    expect(ipc.tauriEmit).toHaveBeenCalledWith('frontend://ready', {});
+  });
+
   it('supports overrides and Tauri event subscriptions through the shared harness', async () => {
     ipc.override('health_check', () => ({ status: 'ok' }));
     ipc.useTauriApi();
@@ -73,7 +81,6 @@ describe('IPC dispatch', () => {
     delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
     const { invoke } = await import('@/lib/ipc/commands');
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
 
     await expect(invoke('health_check', {})).rejects.toThrow(
       'Playwright IPC router is not installed',

@@ -80,7 +80,8 @@ fn seeded_storage(directory: &std::path::Path) -> Storage {
         )
         .unwrap();
         LabelRepository::ensure_placeholder(&connection, "account", label_id).unwrap();
-        MessageRepository::set_label_membership(&connection, "account", id, label_id, true).unwrap();
+        MessageRepository::set_label_membership(&connection, "account", id, label_id, true)
+            .unwrap();
     }
     ThreadRepository::recompute(&connection, "account", "t1").unwrap();
     drop(connection);

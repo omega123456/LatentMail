@@ -57,7 +57,9 @@ fn message(id: &str, thread_id: &str, sent_at: i64) -> Message {
 }
 
 fn seed_labels(connection: &rusqlite::Connection) {
-    for label_id in ["INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "UNREAD", "STARRED", "Label_1"] {
+    for label_id in [
+        "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "UNREAD", "STARRED", "Label_1",
+    ] {
         LabelRepository::ensure_placeholder(connection, "account", label_id).unwrap();
     }
 }
@@ -80,8 +82,8 @@ fn thread_exists_under_label(
     label_id: &str,
     thread_id: &str,
 ) -> bool {
-    let rows = ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100)
-        .unwrap();
+    let rows =
+        ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100).unwrap();
     rows.iter().any(|row| row.thread.id == thread_id)
 }
 
@@ -92,8 +94,7 @@ fn deleting_a_thread_found_in_sent_removes_it_from_sent_and_shows_it_in_trash() 
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
     MessageRepository::set_label_membership(&connection, "account", "m1", "SENT", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true)
-        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true).unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     assert!(thread_exists_under_label(&connection, "SENT", "thread-1"));
@@ -145,7 +146,10 @@ fn trash_and_spam_list_exactly_what_they_contain() {
     MessageRepository::set_label_membership(&connection, "account", "m1", "TRASH", true).unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
-    assert_eq!(indexed_labels(&connection, "thread-1"), vec!["TRASH".to_owned()]);
+    assert_eq!(
+        indexed_labels(&connection, "thread-1"),
+        vec!["TRASH".to_owned()]
+    );
     assert!(thread_exists_under_label(&connection, "TRASH", "thread-1"));
     assert!(
         !thread_exists_under_label(&connection, "INBOX", "thread-1"),
@@ -157,7 +161,10 @@ fn trash_and_spam_list_exactly_what_they_contain() {
     MessageRepository::set_label_membership(&connection, "account", "m2", "SPAM", true).unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-2").unwrap();
 
-    assert_eq!(indexed_labels(&connection, "thread-2"), vec!["SPAM".to_owned()]);
+    assert_eq!(
+        indexed_labels(&connection, "thread-2"),
+        vec!["SPAM".to_owned()]
+    );
     assert!(thread_exists_under_label(&connection, "SPAM", "thread-2"));
     assert!(!thread_exists_under_label(&connection, "INBOX", "thread-2"));
 }
@@ -196,7 +203,10 @@ fn trashing_every_message_removes_the_thread_from_every_listing_but_trash() {
     MessageRepository::set_label_membership(&connection, "account", "m2", "TRASH", true).unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
-    assert_eq!(indexed_labels(&connection, "thread-1"), vec!["TRASH".to_owned()]);
+    assert_eq!(
+        indexed_labels(&connection, "thread-1"),
+        vec!["TRASH".to_owned()]
+    );
     assert!(!thread_exists_under_label(&connection, "INBOX", "thread-1"));
     assert!(thread_exists_under_label(&connection, "TRASH", "thread-1"));
 }
@@ -230,8 +240,7 @@ fn delete_and_move_produce_identical_label_changes_regardless_of_which_mailbox_i
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
     MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true)
-        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true).unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     let membership = thread_raw_membership(&connection, "account", "thread-1").unwrap();
@@ -254,8 +263,7 @@ fn moving_a_thread_out_of_a_user_label_view_leaves_it_in_that_label() {
     seed_labels(&connection);
     MessageRepository::write_full_state(&connection, &message("m1", "thread-1", 10)).unwrap();
     MessageRepository::set_label_membership(&connection, "account", "m1", "INBOX", true).unwrap();
-    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true)
-        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m1", "Label_1", true).unwrap();
     ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
 
     let membership = thread_raw_membership(&connection, "account", "thread-1").unwrap();
@@ -368,9 +376,11 @@ fn seeded_intent_engine(account_id: &str) -> (Arc<SyncEngine>, tempfile::TempDir
 async fn mount_token_and_message_mocks(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+            ),
+        )
         .mount(server)
         .await;
     Mock::given(method("POST"))

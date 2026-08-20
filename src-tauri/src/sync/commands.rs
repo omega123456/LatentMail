@@ -1,4 +1,3 @@
-
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -19,8 +18,8 @@ use crate::{
 
 use super::{
     dto::{message_dto, ImagePolicy},
-    ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
-    ThreadCursor, ThreadDto, ThreadPage, TraversalStatusDto,
+    ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto, ThreadCursor,
+    ThreadDto, ThreadPage, TraversalStatusDto,
 };
 
 const DEFAULT_PAGE_SIZE: i64 = 50;
@@ -184,7 +183,6 @@ pub async fn send_compose_draft(
 ) -> Result<ComposeQueueAcceptance, String> {
     admit_compose(&queue, &storage, &staging, &coalescer, draft, true).await
 }
-
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -446,7 +444,10 @@ pub async fn reply_context(
                 size: attachment.size,
             })
             .collect::<Vec<_>>();
-        Ok(crate::compose::context::forward(&context.message, attachments))
+        Ok(crate::compose::context::forward(
+            &context.message,
+            attachments,
+        ))
     } else {
         Ok(crate::compose::context::reply(
             &context.message,
@@ -459,7 +460,6 @@ pub async fn reply_context(
         ))
     }
 }
-
 
 #[tauri::command]
 pub async fn stage_attachment_from_path(
@@ -481,7 +481,6 @@ pub async fn stage_attachment_from_path(
     ));
     Ok(part.into())
 }
-
 
 #[tauri::command]
 pub async fn stage_attachment_from_bytes(
@@ -506,7 +505,6 @@ pub async fn stage_attachment_from_bytes(
     let part = string_try!(staging.stage_bytes(&account_id, &owner, &descriptor, &bytes));
     Ok(part.into())
 }
-
 
 #[tauri::command]
 pub async fn release_staged_attachment(
@@ -634,7 +632,6 @@ pub async fn load_conversation(
     })
 }
 
-
 #[tauri::command]
 pub async fn fetch_message_body<R: Runtime>(
     app: AppHandle<R>,
@@ -649,8 +646,9 @@ pub async fn fetch_message_body<R: Runtime>(
     let stored = string_try!(
         storage
             .run(move |connection| {
-                MessageRepository::get(connection, &account, &id)
-                    .map(|message| message.map(|value| (value.html_presence, value.body_is_empty())))
+                MessageRepository::get(connection, &account, &id).map(|message| {
+                    message.map(|value| (value.html_presence, value.body_is_empty()))
+                })
             })
             .await
     )
@@ -679,9 +677,8 @@ pub async fn fetch_message_body<R: Runtime>(
             bytes: part.bytes,
         })
         .collect::<Vec<_>>();
-    let attachments = crate::sync::materialize::attachment_records_from_parts(
-        &message.attachment_parts,
-    );
+    let attachments =
+        crate::sync::materialize::attachment_records_from_parts(&message.attachment_parts);
     if let Some(cache) = engine.attachment_cache() {
         crate::attachments::seed_cache(cache, &account_id, &message_id, &message.attachment_parts);
     }
@@ -814,7 +811,6 @@ pub async fn read_sync_status(
     Ok(engine.status(&account_id).await)
 }
 
-
 #[tauri::command]
 pub async fn mutate_threads<R: Runtime>(
     app: AppHandle<R>,
@@ -878,7 +874,6 @@ pub async fn mutate_threads<R: Runtime>(
     Ok(results)
 }
 
-
 #[tauri::command]
 pub async fn mutate_messages<R: Runtime>(
     app: AppHandle<R>,
@@ -911,8 +906,10 @@ pub async fn mutate_messages<R: Runtime>(
     Ok(())
 }
 
-
-pub(super) fn reject_protected_label_mutation(add: &[String], remove: &[String]) -> Result<(), String> {
+pub(super) fn reject_protected_label_mutation(
+    add: &[String],
+    remove: &[String],
+) -> Result<(), String> {
     if add
         .iter()
         .chain(remove)
@@ -922,7 +919,6 @@ pub(super) fn reject_protected_label_mutation(add: &[String], remove: &[String])
     }
     Ok(())
 }
-
 
 #[tauri::command]
 pub async fn delete_draft<R: Runtime>(
@@ -940,7 +936,6 @@ pub async fn delete_draft<R: Runtime>(
     super::mutations::delete_draft(&storage, &client, &account_id, &message_id).await
 }
 
-
 pub(crate) async fn gmail_client_for<R: Runtime>(
     app: &AppHandle<R>,
     auth: &tauri::State<'_, AuthService>,
@@ -952,7 +947,6 @@ pub(crate) async fn gmail_client_for<R: Runtime>(
         .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
     Ok(engine.gmail_client(account_id, token, base_url).await)
 }
-
 
 fn resolve_color_or_error(color_id: Option<&str>) -> Result<Option<LabelColor>, String> {
     match color_id {
@@ -1123,7 +1117,6 @@ pub async fn delete_label<R: Runtime>(
         .await
         .map_err(|error| error.to_string())
 }
-
 
 #[tauri::command]
 pub async fn read_traversal_status(

@@ -1,4 +1,3 @@
-
 use std::{
     collections::{HashMap, HashSet},
     sync::atomic::Ordering,
@@ -38,7 +37,6 @@ fn mutation_description(kind: OperationKind) -> String {
     }
 }
 
-
 pub(super) async fn delete_draft(
     storage: &Storage,
     client: &GmailClient,
@@ -62,7 +60,6 @@ pub(super) async fn delete_draft(
     );
     Ok(())
 }
-
 
 async fn resolve_draft_id(
     storage: &Storage,
@@ -98,7 +95,6 @@ async fn resolve_draft_id(
     Ok(draft_id)
 }
 
-
 pub(super) async fn draft_message_ids(
     storage: &Storage,
     account_id: &str,
@@ -116,24 +112,18 @@ pub(super) async fn draft_message_ids(
     Ok(ids)
 }
 
-
 const COALESCE_WINDOW: Duration = Duration::from_millis(1);
-
 
 pub const BATCH_MODIFY_CHUNK_SIZE: usize = 1_000;
 
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MutationOutcome {
-
     Applied,
 
     Superseded,
 }
 
-
 pub(super) type PendingMutations = HashMap<String, HashMap<String, EntityAccumulator>>;
-
 
 #[derive(Clone, Debug, Default)]
 struct LabelDelta {
@@ -142,7 +132,6 @@ struct LabelDelta {
 }
 
 impl LabelDelta {
-
     fn merge(&mut self, add: &HashSet<String>, remove: &HashSet<String>) {
         for label in add {
             self.removals.remove(label);
@@ -153,7 +142,6 @@ impl LabelDelta {
             self.removals.insert(label.clone());
         }
     }
-
 
     fn signature(&self) -> (Vec<String>, Vec<String>) {
         let mut additions: Vec<String> = self.additions.iter().cloned().collect();
@@ -171,7 +159,6 @@ struct PendingRequest {
 }
 
 impl PendingRequest {
-
     fn survives(&self, delta: &LabelDelta) -> bool {
         self.add.iter().any(|label| delta.additions.contains(label))
             || self
@@ -180,7 +167,6 @@ impl PendingRequest {
                 .any(|label| delta.removals.contains(label))
     }
 }
-
 
 #[derive(Default)]
 pub(super) struct EntityAccumulator {
@@ -196,7 +182,6 @@ enum MutationTarget {
 }
 
 impl SyncEngine {
-
     pub async fn mutate_message(
         &self,
         account_id: &str,
@@ -215,7 +200,6 @@ impl SyncEngine {
         .await
         .map(|_| ())
     }
-
 
     pub async fn mutate(
         &self,
@@ -243,7 +227,6 @@ impl SyncEngine {
         add: HashSet<String>,
         remove: HashSet<String>,
     ) -> Result<MutationOutcome, SyncError> {
-
         let kind = super::derive_operation_kind(&add, &remove);
         let (reply_tx, reply_rx) = oneshot::channel();
         let is_leader = {
@@ -268,13 +251,11 @@ impl SyncEngine {
             return reply_rx.await.map_err(|_| SyncError::QueueStopped)?;
         }
 
-
         tokio::time::sleep(COALESCE_WINDOW).await;
         let drained: HashMap<String, EntityAccumulator> = {
             let mut pending = self.pending.lock().await;
             pending.remove(account_id).unwrap_or_default()
         };
-
 
         let mut surviving: HashMap<String, EntityAccumulator> = HashMap::new();
         for (entity_thread_id, mut accumulator) in drained {
@@ -293,7 +274,6 @@ impl SyncEngine {
             }
         }
         if surviving.is_empty() {
-
             return reply_rx.await.map_err(|_| SyncError::QueueStopped)?;
         }
 
@@ -324,9 +304,7 @@ impl SyncEngine {
     }
 }
 
-
 type ResolvedEntity = (String, Vec<Message>, EntityAccumulator);
-
 
 async fn execute_flush(
     storage: Storage,
@@ -427,7 +405,6 @@ async fn execute_flush(
             }
         }
         if let Some(message) = failure {
-
             any_failed = true;
             for (_, _, entity) in entities {
                 for request in entity.requests {
@@ -436,7 +413,6 @@ async fn execute_flush(
             }
             continue;
         }
-
 
         let mut write_tasks = tokio::task::JoinSet::new();
         for (thread_id, messages, entity) in entities {
@@ -467,7 +443,6 @@ async fn execute_flush(
         Ok(())
     }
 }
-
 
 async fn write_entity(
     storage: &Storage,

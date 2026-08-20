@@ -24,7 +24,6 @@ describe('appLog', () => {
 
     appLog.error('Unreachable backend');
 
-
     await Promise.resolve();
     expect(consoleMethod).toHaveBeenCalledWith('Unreachable backend');
   });

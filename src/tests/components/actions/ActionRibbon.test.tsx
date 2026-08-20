@@ -54,7 +54,9 @@ describe('ActionRibbon', () => {
   it('renders the full action set in Inbox and dispatches read/star/delete', async () => {
     const user = userEvent.setup();
     const handlers = baseHandlers();
-    render(<ActionRibbon systemLabelIds={[]} unread starred={false} labels={labels} {...handlers} />);
+    render(
+      <ActionRibbon systemLabelIds={[]} unread starred={false} labels={labels} {...handlers} />,
+    );
     await user.click(screen.getByRole('button', { name: 'Mark read' }));
     expect(handlers.onToggleRead).toHaveBeenCalledOnce();
     await user.click(screen.getByRole('button', { name: 'Star' }));

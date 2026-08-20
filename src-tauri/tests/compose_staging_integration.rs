@@ -171,7 +171,9 @@ fn owners_can_move_and_release_without_affecting_unrelated_snapshots() {
         )
         .unwrap();
 
-    staging.move_owner("account", "nonexistent-owner", "draft").unwrap();
+    staging
+        .move_owner("account", "nonexistent-owner", "draft")
+        .unwrap();
     staging.move_owner("account", "session", "draft").unwrap();
     staging.move_owner("account", "draft", "draft").unwrap();
     let moved = staging

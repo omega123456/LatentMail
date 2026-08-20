@@ -1,11 +1,9 @@
-
 use serde::{Deserialize, Serialize};
 
 use super::{
     GmailClient, GmailError, GmailLabel, LabelColorPair, DRAFTS_DELETE_COST, LABELS_CREATE_COST,
     LABELS_DELETE_COST, LABELS_UPDATE_COST,
 };
-
 
 pub const LABEL_PALETTE: &[(&str, &str, &str)] = &[
     ("black", "#000000", "#ffffff"),
@@ -111,7 +109,6 @@ pub const LABEL_PALETTE: &[(&str, &str, &str)] = &[
     ("deep-emerald-4", "#42d692", "#000000"),
     ("deep-emerald-5", "#16a765", "#ffffff"),
 ];
-
 
 pub fn resolve_color(id: &str) -> Option<LabelColorPair> {
     LABEL_PALETTE

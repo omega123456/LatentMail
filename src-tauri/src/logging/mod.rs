@@ -8,7 +8,8 @@ use tracing_subscriber::{
 };
 
 pub const DEFAULT_LEVEL: LevelFilter = LevelFilter::INFO;
-const FILE_PREFIX: &str = "latentmail.log.";
+const FILE_STEM: &str = "latentmail";
+const FILE_SUFFIX: &str = "log";
 
 pub type LevelHandle = reload::Handle<LevelFilter, Registry>;
 
@@ -27,10 +28,12 @@ pub fn subscriber(
     let directory = directory.as_ref();
     fs::create_dir_all(directory)?;
     cleanup(directory, Utc::now().date_naive())?;
-    let (writer, guard) = tracing_appender::non_blocking(tracing_appender::rolling::daily(
-        directory,
-        "latentmail.log",
-    ));
+    let appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(FILE_STEM)
+        .filename_suffix(FILE_SUFFIX)
+        .build(directory)?;
+    let (writer, guard) = tracing_appender::non_blocking(appender);
     let (reload_layer, handle) = reload::Layer::new(level);
     let subscriber = Registry::default().with(reload_layer).with(
         fmt::layer()
@@ -94,8 +97,12 @@ pub fn read_entries(directory: &Path, today: NaiveDate, minimum: usize) -> Vec<L
     entries
 }
 
+fn file_name(date: NaiveDate) -> String {
+    format!("{FILE_STEM}.{}.{FILE_SUFFIX}", date.format("%Y-%m-%d"))
+}
+
 fn read_file_entries(directory: &Path, date: NaiveDate) -> Vec<LogEntry> {
-    let path = directory.join(format!("{FILE_PREFIX}{}", date.format("%Y-%m-%d")));
+    let path = directory.join(file_name(date));
     fs::read_to_string(path)
         .map(|contents| parse_entries(&contents))
         .unwrap_or_default()
@@ -103,7 +110,10 @@ fn read_file_entries(directory: &Path, date: NaiveDate) -> Vec<LogEntry> {
 
 #[tauri::command]
 pub fn read_log_entries<R: Runtime>(app: AppHandle<R>) -> Result<Vec<LogEntry>, String> {
-    let directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
+    let directory = app
+        .path()
+        .app_log_dir()
+        .map_err(|error| error.to_string())?;
     Ok(read_entries(&directory, Utc::now().date_naive(), 100))
 }
 
@@ -114,7 +124,12 @@ pub fn cleanup(directory: impl AsRef<Path>, today: NaiveDate) -> std::io::Result
         let Some(date) = path
             .file_name()
             .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_prefix(FILE_PREFIX))
+            .and_then(|name| {
+                name.strip_prefix(FILE_STEM)?
+                    .strip_prefix('.')?
+                    .strip_suffix(FILE_SUFFIX)?
+                    .strip_suffix('.')
+            })
             .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
         else {
             continue;

@@ -28,7 +28,6 @@ pub const DRAFTS_GET_COST: u32 = 5;
 pub const MESSAGES_SEND_COST: u32 = 5;
 pub const ATTACHMENTS_GET_COST: u32 = 5;
 
-
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 pub const MAX_PAGE_SIZE: u32 = 500;
 
@@ -170,12 +169,9 @@ pub enum GmailError {
     ResponseTooLarge,
 }
 
-
 pub const ACCOUNT_RATE_PER_SECOND: f64 = 100.0;
 
-
 pub const TRAVERSAL_SHARE: f64 = 0.4;
-
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuotaClass {
@@ -219,7 +215,6 @@ impl Bucket {
         }
     }
 }
-
 
 struct AccountBuckets {
     shared: Bucket,
@@ -982,7 +977,6 @@ fn map_message(raw: RawMessage) -> GmailMessage {
                 raw.internal_date
                     .as_deref()
                     .and_then(|value| value.parse::<i64>().ok())
-
                     .and_then(DateTime::from_timestamp_millis)
                     .map(|value| value.timestamp())
             })
@@ -1033,7 +1027,6 @@ struct AttachmentCandidate {
 }
 
 fn collect_part(part: &RawPart, content: &mut Content) {
-
     let mime = part
         .mime_type
         .as_deref()
@@ -1148,9 +1141,10 @@ fn classify_attachments(
         if cid_referenced && locally_held {
             continue;
         }
-        let attachment_id = candidate.attachment_id.clone().unwrap_or_else(|| {
-            synthesize_attachment_id(candidate.content_id.as_deref(), position)
-        });
+        let attachment_id = candidate
+            .attachment_id
+            .clone()
+            .unwrap_or_else(|| synthesize_attachment_id(candidate.content_id.as_deref(), position));
         let filename = candidate
             .filename
             .clone()

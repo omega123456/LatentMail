@@ -30,7 +30,10 @@ async fn wait_for_item_status(
     }
 }
 
-fn controllable_executor() -> (Executor, mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>) {
+fn controllable_executor() -> (
+    Executor,
+    mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation: QueueOperation| {
         let tx = tx.clone();
@@ -44,7 +47,13 @@ fn controllable_executor() -> (Executor, mpsc::UnboundedReceiver<(String, onesho
     (executor, rx)
 }
 
-fn operation(id: &str, account_id: &str, lane: Lane, entity_key: &str, description: &str) -> QueueOperation {
+fn operation(
+    id: &str,
+    account_id: &str,
+    lane: Lane,
+    entity_key: &str,
+    description: &str,
+) -> QueueOperation {
     QueueOperation {
         id: id.into(),
         account_id: account_id.into(),
@@ -199,7 +208,10 @@ async fn snapshot_groups_records_by_account_then_lane() {
     assert_eq!(account_ids, ["account-1", "account-2"]);
     for account in &snapshot {
         let lanes: Vec<Lane> = account.lanes.iter().map(|lane| lane.lane).collect();
-        assert_eq!(lanes, [Lane::Interactive, Lane::Background, Lane::Traversal]);
+        assert_eq!(
+            lanes,
+            [Lane::Interactive, Lane::Background, Lane::Traversal]
+        );
     }
 }
 
@@ -300,7 +312,10 @@ async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_inter
     let (_, background_release) = started.recv().await.expect("background operation unblocks");
     background_release.send(()).unwrap();
 
-    let (_, fifth_release) = started.recv().await.expect("fifth interactive operation runs");
+    let (_, fifth_release) = started
+        .recv()
+        .await
+        .expect("fifth interactive operation runs");
     fifth_release.send(()).unwrap();
 
     let mut settled = false;
@@ -353,11 +368,7 @@ fn re_enqueuing_a_retried_operation_evicts_its_stale_terminal_history_entry() {
         "Send",
     );
     registry.record_enqueued(&failing);
-    registry.transition_terminal(
-        &failing,
-        OperationStatus::Failed,
-        Some("boom".to_owned()),
-    );
+    registry.transition_terminal(&failing, OperationStatus::Failed, Some("boom".to_owned()));
 
     registry.record_enqueued(&failing);
 

@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -122,7 +121,8 @@ impl AttachmentCache {
         filename: &str,
         mime_type: &str,
     ) -> Result<CachedAttachment, String> {
-        if let Some(cached) = self.lookup(account_id, message_id, attachment_id, filename, mime_type)
+        if let Some(cached) =
+            self.lookup(account_id, message_id, attachment_id, filename, mime_type)
         {
             return Ok(cached);
         }
@@ -130,8 +130,15 @@ impl AttachmentCache {
             .attachment(message_id, attachment_id)
             .await
             .map_err(|error| error.to_string())?;
-        self.write_bytes(account_id, message_id, attachment_id, filename, mime_type, &bytes)
-            .map_err(|error| error.to_string())
+        self.write_bytes(
+            account_id,
+            message_id,
+            attachment_id,
+            filename,
+            mime_type,
+            &bytes,
+        )
+        .map_err(|error| error.to_string())
     }
 
     pub fn sweep(&self, ceiling_bytes: u64) -> io::Result<()> {

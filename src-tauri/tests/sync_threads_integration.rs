@@ -1,11 +1,9 @@
-
 use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart,
-    Label, LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity,
-    ThreadRepository,
+    Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart, Label,
+    LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::commands::{
     fetch_message_body, list_labels, list_threads, load_conversation, read_sync_status,
@@ -544,7 +542,6 @@ async fn trigger_sync_runs_initial_sync_and_read_sync_status_reflects_it() {
     assert_eq!(account.history_id, Some(1));
 }
 
-
 #[tokio::test]
 async fn initialize_manages_the_storage_the_read_commands_resolve() {
     let server = MockServer::start().await;
@@ -578,7 +575,6 @@ async fn initialize_manages_the_storage_the_read_commands_resolve() {
 
     assert!(application.try_state::<Storage>().is_some());
 }
-
 
 #[tokio::test]
 async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {

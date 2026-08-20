@@ -75,7 +75,7 @@ fn write_entries(directory: &std::path::Path, date: NaiveDate, count: usize) {
         ));
     }
     fs::write(
-        directory.join(format!("latentmail.log.{}", date.format("%Y-%m-%d"))),
+        directory.join(format!("latentmail.{}.log", date.format("%Y-%m-%d"))),
         contents,
     )
     .unwrap();
@@ -121,7 +121,7 @@ fn a_missing_directory_or_unparseable_file_returns_empty_without_an_error() {
     fs::write(
         directory
             .path()
-            .join(format!("latentmail.log.{}", today.format("%Y-%m-%d"))),
+            .join(format!("latentmail.{}.log", today.format("%Y-%m-%d"))),
         "not a log line at all\nnor this one\n",
     )
     .unwrap();

@@ -88,11 +88,15 @@ describe('Avatar', () => {
   });
 
   it('applies the correct stock Tailwind size utility for every size', () => {
-    const sizes = { 24: 'size-6', 32: 'size-8', 36: 'size-9', 40: 'size-10', 48: 'size-12' } as const;
+    const sizes = {
+      24: 'size-6',
+      32: 'size-8',
+      36: 'size-9',
+      40: 'size-10',
+      48: 'size-12',
+    } as const;
     for (const [size, className] of Object.entries(sizes)) {
-      const { container, unmount } = render(
-        <Avatar size={Number(size) as AvatarSize} label="X" />,
-      );
+      const { container, unmount } = render(<Avatar size={Number(size) as AvatarSize} label="X" />);
       expect(container.firstElementChild).toHaveClass(className);
       unmount();
     }

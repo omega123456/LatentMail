@@ -1,4 +1,3 @@
-
 use latentmail_lib::settings::{
     initialize, read_settings, restore_window, save_window, write_setting, Settings,
     SettingsService, WindowState,
@@ -136,10 +135,7 @@ async fn writing_an_invalid_log_level_value_leaves_the_persisted_setting_unchang
     assert!(error.contains("Unknown or invalid setting"));
 
     let settings = read_settings(app.state()).await.unwrap();
-    assert_eq!(
-        settings.log_level,
-        latentmail_lib::settings::LogLevel::Info
-    );
+    assert_eq!(settings.log_level, latentmail_lib::settings::LogLevel::Info);
 }
 
 #[tokio::test]
@@ -162,7 +158,6 @@ async fn restore_window_applies_saved_position_size_and_maximized_state() {
         .build()
         .unwrap();
 
-
     restore_window(&window, &service);
 }
 
@@ -176,7 +171,6 @@ async fn restore_window_is_a_no_op_when_no_state_was_saved() {
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
-
 
     restore_window(&window, &service);
 }
@@ -224,7 +218,6 @@ async fn write_surfaces_a_storage_error_when_the_settings_table_cannot_accept_an
 
 #[test]
 fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window() {
-
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -240,7 +233,6 @@ fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window(
 
     assert!(app.try_state::<SettingsService>().is_some());
 }
-
 
 #[tokio::test]
 async fn writing_the_sync_interval_reaches_a_running_scheduler() {
@@ -296,7 +288,6 @@ async fn writing_the_sync_interval_reaches_a_running_scheduler() {
         std::time::Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS)
     );
 }
-
 
 #[tokio::test]
 async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() {

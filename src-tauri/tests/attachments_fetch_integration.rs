@@ -9,7 +9,9 @@ async fn ensure_fetches_once_then_reuses_the_disk_cache_on_a_second_call() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages/m1/attachments/a1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": "aGVsbG8" })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": "aGVsbG8" })),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -48,7 +50,14 @@ async fn attachment_bytes_larger_than_ten_megabytes_are_fetched_successfully() {
     let client = GmailClient::with_base_url("token", server.uri());
 
     let cached = cache
-        .ensure(&client, "account", "m1", "big", "big.bin", "application/octet-stream")
+        .ensure(
+            &client,
+            "account",
+            "m1",
+            "big",
+            "big.bin",
+            "application/octet-stream",
+        )
         .await
         .expect("an attachment past the old 10MB ceiling must still be fetchable");
 

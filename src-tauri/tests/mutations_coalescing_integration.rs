@@ -1,4 +1,3 @@
-
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -62,7 +61,6 @@ fn message(id: &str, thread_id: &str) -> Message {
         html_presence: HtmlPresence::Absent,
     }
 }
-
 
 fn seed_many_threads(count: usize) -> (Storage, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
@@ -139,12 +137,10 @@ async fn a_move_produces_one_batch_call_carrying_both_directions() {
     assert_eq!(body["removeLabelIds"], serde_json::json!(["INBOX"]));
 }
 
-
 #[test]
 fn batch_modify_chunk_size_matches_gmails_documented_identifier_limit() {
     assert_eq!(latentmail_lib::sync::BATCH_MODIFY_CHUNK_SIZE, 1_000);
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
@@ -222,7 +218,6 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
     assert_eq!(ids, COUNT);
 }
 
-
 #[tokio::test(start_paused = true)]
 async fn sequential_mutations_outside_the_coalescing_window_are_separate_batch_calls() {
     let server = MockServer::start().await;
@@ -276,7 +271,6 @@ async fn sequential_mutations_outside_the_coalescing_window_are_separate_batch_c
     assert_eq!(second, MutationOutcome::Applied);
 }
 
-
 #[tokio::test(start_paused = true)]
 async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition() {
     let server = MockServer::start().await;
@@ -309,7 +303,6 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         noop_event_sink(),
     );
 
-
     let read = engine
         .mutate(
             "account",
@@ -321,7 +314,6 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
         .await
         .unwrap();
     assert_eq!(read, MutationOutcome::Applied);
-
 
     let unread = engine
         .mutate(
@@ -351,7 +343,6 @@ async fn mark_read_and_unread_reach_gmail_as_unread_label_removal_and_addition()
     );
 }
 
-
 #[tokio::test(start_paused = true)]
 async fn a_request_with_no_labels_settles_as_superseded_without_dispatching() {
     let (storage, _directory) = seed_many_threads(1);
@@ -367,7 +358,6 @@ async fn a_request_with_no_labels_settles_as_superseded_without_dispatching() {
     let outcome = engine
         .mutate(
             "account",
-
             GmailClient::with_base_url("token", "http://127.0.0.1:0"),
             "thread-0".into(),
             HashSet::new(),

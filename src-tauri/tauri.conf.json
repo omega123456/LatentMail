@@ -45,7 +45,17 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "15.0"
+    },
+    "resources": [
+      "resources/THIRD-PARTY-LICENSES.md",
+      "resources/LGPL-3.0.txt",
+      "resources/GPL-3.0.txt"
+    ]
+  },
+  "plugins": {
+    "deep-link": {
+      "schemes": ["mailto"]
     }
   }
 }

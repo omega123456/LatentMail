@@ -75,7 +75,6 @@ impl OperationKind {
     }
 
     fn retries(self) -> bool {
-
         !matches!(self, Self::Send | Self::Sync | Self::Traversal)
     }
 }
@@ -171,7 +170,6 @@ impl TokenBucket {
     }
 }
 
-
 type EntityLocks = Mutex<HashMap<(String, String), Arc<Mutex<()>>>>;
 
 pub struct QueueEngine {
@@ -202,13 +200,7 @@ impl QueueEngine {
         executor: Executor,
         events: QueueEventSink,
     ) -> Arc<Self> {
-        Self::new_with_events_and_hook(
-            rate_per_second,
-            burst,
-            executor,
-            events,
-            Arc::new(|_| {}),
-        )
+        Self::new_with_events_and_hook(rate_per_second, burst, executor, events, Arc::new(|_| {}))
     }
 
     pub fn new_with_events_and_hook(
@@ -359,7 +351,8 @@ impl QueueEngine {
             .map(|(account_id, _)| account_id.clone())
             .collect();
         let global_paused = self.paused.load(Ordering::Acquire);
-        self.registry.snapshot(global_paused, &interactive_outstanding)
+        self.registry
+            .snapshot(global_paused, &interactive_outstanding)
     }
 
     fn emit(&self, id: &str, account_id: &str, lane: Lane, status: &'static str) {
@@ -454,7 +447,12 @@ impl QueueEngine {
             }
             self.counters.pending.fetch_sub(1, Ordering::Relaxed);
             self.counters.active.fetch_add(1, Ordering::Relaxed);
-            self.emit(&operation.id, &operation.account_id, operation.lane, "active");
+            self.emit(
+                &operation.id,
+                &operation.account_id,
+                operation.lane,
+                "active",
+            );
             if operation.lane == Lane::Interactive {
                 self.finish_interactive(&operation.account_id).await;
                 self.interactive_drained.notify_waiters();
@@ -492,17 +490,20 @@ impl QueueEngine {
                         OperationStatus::Failed,
                         Some(format!("{error:?}")),
                     );
-                    self.emit(&operation.id, &operation.account_id, operation.lane, "failed");
+                    self.emit(
+                        &operation.id,
+                        &operation.account_id,
+                        operation.lane,
+                        "failed",
+                    );
                     return;
                 }
             }
         }
     }
 
-
     pub async fn wait_until_resumed(&self) {
         loop {
-
             let notified = self.resumed.notified();
             if !self.paused.load(Ordering::Acquire) {
                 return;
@@ -528,7 +529,6 @@ impl QueueEngine {
     async fn wait_for_interactive(&self, operation: &QueueOperation) {
         if matches!(operation.lane, Lane::Background | Lane::Traversal) {
             loop {
-
                 let notified = self.interactive_drained.notified();
                 if self
                     .registry
@@ -577,7 +577,6 @@ pub fn retry_delay(attempt: u8) -> Duration {
     Duration::from_secs((1_u64 << attempt.saturating_sub(1).min(6)).min(60))
 }
 
-
 pub fn recover_durable_operations(
     connection: &rusqlite::Connection,
 ) -> rusqlite::Result<(Vec<Operation>, Vec<String>)> {
@@ -588,7 +587,6 @@ pub fn recover_durable_operations(
     transaction.commit()?;
     Ok((recovered, uncertain_accounts))
 }
-
 
 pub async fn admit_durable(
     engine: &Arc<QueueEngine>,
@@ -628,7 +626,6 @@ pub async fn admit_durable(
         .map_err(|_| "failed to persist durable operation")?;
     engine.enqueue(operation).await
 }
-
 
 pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation> {
     let kind = match operation.kind.as_str() {

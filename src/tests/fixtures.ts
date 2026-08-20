@@ -49,6 +49,10 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     commandOverrides: {},
     logLevel: 'info',
     prefetchImageAttachments: false,
+    startAtLogin: false,
+    closeToTray: true,
+    startMinimized: false,
+    desktopNotifications: true,
   },
   write_setting: undefined,
   read_log_entries: [

@@ -71,7 +71,9 @@ fn unique_indexed_column_sets(connection: &rusqlite::Connection, table: &str) ->
         .prepare(&format!("PRAGMA index_list({table})"))
         .unwrap();
     let indexes: Vec<(String, bool)> = index_statement
-        .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)? == 1)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)? == 1))
+        })
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
@@ -232,7 +234,6 @@ fn migrations_are_idempotent_and_repositories_round_trip() {
     migrations::runner().run(&mut connection).unwrap();
 }
 
-
 #[test]
 fn html_presence_carries_three_distinguishable_states() {
     let connection = Storage::in_memory().unwrap();
@@ -281,7 +282,6 @@ fn html_presence_carries_three_distinguishable_states() {
     assert_eq!(present.html_body.as_deref(), Some("<p>hi</p>"));
 }
 
-
 #[test]
 fn truncated_body_caps_at_ten_thousand_chars_and_prefers_plain_text() {
     let long_plain = "a".repeat(12_000);
@@ -297,7 +297,6 @@ fn truncated_body_caps_at_ten_thousand_chars_and_prefers_plain_text() {
 
     assert_eq!(truncate_body(None, None), None);
 }
-
 
 #[test]
 fn traversal_cursor_round_trips_and_survives_reopening() {
@@ -564,7 +563,9 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(labelled_plan
         .iter()
         .any(|step| step.contains("SEARCH tl USING PRIMARY KEY")));
-    assert!(!labelled_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(!labelled_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
     assert!(!labelled_plan.iter().any(|step| step.contains("SCAN")));
     let labelled_cursor_plan = query_plan(
         &connection,
@@ -686,9 +687,9 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         &connection,
         "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at DESC, t.id DESC LIMIT 51",
     );
-    assert!(search_predicate_only_plan
-        .iter()
-        .any(|step| step.contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=?)")));
+    assert!(search_predicate_only_plan.iter().any(
+        |step| step.contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=?)")
+    ));
     assert!(search_predicate_only_plan
         .iter()
         .any(|step| step.contains("SEARCH m USING INDEX messages_by_thread")));
@@ -737,7 +738,9 @@ fn every_rowid_table_carries_a_leading_autoincrement_seq_and_its_former_key_as_a
         );
         let unique_sets = unique_indexed_column_sets(&connection, table);
         assert!(
-            unique_sets.iter().any(|set| set == &[former_key.to_owned()]),
+            unique_sets
+                .iter()
+                .any(|set| set == &[former_key.to_owned()]),
             "{table}.{former_key} must be covered by a UNIQUE constraint"
         );
     }
@@ -745,7 +748,10 @@ fn every_rowid_table_carries_a_leading_autoincrement_seq_and_its_former_key_as_a
     let composite_key_tables = [
         ("labels", vec!["account_id", "id"]),
         ("messages", vec!["account_id", "id"]),
-        ("message_labels", vec!["account_id", "message_id", "label_id"]),
+        (
+            "message_labels",
+            vec!["account_id", "message_id", "label_id"],
+        ),
         ("threads", vec!["account_id", "id"]),
         (
             "message_inline_parts",
@@ -794,7 +800,9 @@ fn thread_labels_stays_without_rowid_with_no_integer_key() {
         .unwrap();
     assert!(schema.contains("WITHOUT ROWID"));
 
-    let mut statement = connection.prepare("PRAGMA index_list(thread_labels)").unwrap();
+    let mut statement = connection
+        .prepare("PRAGMA index_list(thread_labels)")
+        .unwrap();
     let indexes: Vec<String> = statement
         .query_map([], |row| row.get::<_, String>(1))
         .unwrap()
@@ -826,7 +834,10 @@ fn a_fresh_database_migrates_cleanly_with_no_foreign_key_violations() {
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
-    assert!(violations.is_empty(), "unexpected FK violations: {violations:?}");
+    assert!(
+        violations.is_empty(),
+        "unexpected FK violations: {violations:?}"
+    );
 }
 
 #[test]
@@ -958,7 +969,10 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
 
     let stored = AttachmentRepository::for_message(&connection, "account", "message").unwrap();
     assert_eq!(
-        stored.iter().map(|value| value.attachment_id.as_str()).collect::<Vec<_>>(),
+        stored
+            .iter()
+            .map(|value| value.attachment_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["att-1", "att-2"],
         "attachments must read back ordered by sender position, not insertion order"
     );
@@ -976,7 +990,10 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
-    assert!(violations.is_empty(), "unexpected FK violations: {violations:?}");
+    assert!(
+        violations.is_empty(),
+        "unexpected FK violations: {violations:?}"
+    );
 
     let cascade_plan = query_plan(
         &connection,
@@ -985,12 +1002,16 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
     assert!(cascade_plan
         .iter()
         .any(|step| step.contains("message_attachments") || step.contains("SEARCH")));
-    assert!(!cascade_plan.iter().any(|step| step.contains("SCAN message_attachments")));
+    assert!(!cascade_plan
+        .iter()
+        .any(|step| step.contains("SCAN message_attachments")));
 
     MessageRepository::delete(&connection, "account", "message").unwrap();
-    assert!(AttachmentRepository::for_message(&connection, "account", "message")
-        .unwrap()
-        .is_empty());
+    assert!(
+        AttachmentRepository::for_message(&connection, "account", "message")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

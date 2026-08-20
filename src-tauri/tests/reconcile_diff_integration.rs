@@ -1,4 +1,3 @@
-
 use latentmail_lib::{
     gmail::GmailClient,
     storage::{

@@ -21,6 +21,10 @@ type LayoutState = Pick<
   | 'allowedImageSenders'
   | 'logLevel'
   | 'prefetchImageAttachments'
+  | 'startAtLogin'
+  | 'closeToTray'
+  | 'startMinimized'
+  | 'desktopNotifications'
 > & {
   route: Route;
   hydrated: boolean;
@@ -42,6 +46,10 @@ type LayoutState = Pick<
   setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages: boolean) => void;
   setLogLevel: (logLevel: LogLevel) => void;
   setPrefetchImageAttachments: (prefetchImageAttachments: boolean) => void;
+  setStartAtLogin: (startAtLogin: boolean) => void;
+  setCloseToTray: (closeToTray: boolean) => void;
+  setStartMinimized: (startMinimized: boolean) => void;
+  setDesktopNotifications: (desktopNotifications: boolean) => void;
   trustImageSender: (address: string) => void;
   untrustImageSender: (address: string) => void;
 };
@@ -79,6 +87,10 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   allowedImageSenders: [],
   logLevel: 'info',
   prefetchImageAttachments: false,
+  startAtLogin: false,
+  closeToTray: true,
+  startMinimized: false,
+  desktopNotifications: true,
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -100,6 +112,10 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         allowedImageSenders: settings.allowedImageSenders,
         logLevel: settings.logLevel,
         prefetchImageAttachments: settings.prefetchImageAttachments,
+        startAtLogin: settings.startAtLogin,
+        closeToTray: settings.closeToTray,
+        startMinimized: settings.startMinimized,
+        desktopNotifications: settings.desktopNotifications,
         hydrated: true,
       });
     });
@@ -177,6 +193,22 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setPrefetchImageAttachments: (prefetchImageAttachments) => {
     set({ prefetchImageAttachments });
     persist('prefetchImageAttachments', prefetchImageAttachments);
+  },
+  setStartAtLogin: (startAtLogin) => {
+    set({ startAtLogin });
+    persist('startAtLogin', startAtLogin);
+  },
+  setCloseToTray: (closeToTray) => {
+    set({ closeToTray });
+    persist('closeToTray', closeToTray);
+  },
+  setStartMinimized: (startMinimized) => {
+    set({ startMinimized });
+    persist('startMinimized', startMinimized);
+  },
+  setDesktopNotifications: (desktopNotifications) => {
+    set({ desktopNotifications });
+    persist('desktopNotifications', desktopNotifications);
   },
   trustImageSender: (address) => {
     const normalized = address.trim().toLowerCase();

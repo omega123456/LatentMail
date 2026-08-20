@@ -1,9 +1,9 @@
-
-
 use latentmail_lib::auth::{self, token_has_scope, UserInfo};
 use latentmail_lib::avatars::profile::acquire_photo;
 use latentmail_lib::avatars::resolver::set_fake_download;
-use oauth2::{basic::BasicTokenType, AccessToken, EmptyExtraTokenFields, Scope, StandardTokenResponse};
+use oauth2::{
+    basic::BasicTokenType, AccessToken, EmptyExtraTokenFields, Scope, StandardTokenResponse,
+};
 
 fn token_with_scopes(
     scopes: Option<Vec<&str>>,
@@ -13,9 +13,12 @@ fn token_with_scopes(
         BasicTokenType::Bearer,
         EmptyExtraTokenFields {},
     );
-    token.set_scopes(
-        scopes.map(|scopes| scopes.into_iter().map(|s| Scope::new(s.to_owned())).collect()),
-    );
+    token.set_scopes(scopes.map(|scopes| {
+        scopes
+            .into_iter()
+            .map(|s| Scope::new(s.to_owned()))
+            .collect()
+    }));
     token
 }
 
@@ -39,7 +42,6 @@ fn token_has_scope_is_false_when_profile_was_never_granted() {
 
 #[tokio::test]
 async fn userinfo_maps_name_and_picture_claims() {
-
     auth::set_fake_userinfo(
         "token-with-picture",
         UserInfo {
@@ -75,7 +77,8 @@ async fn userinfo_tolerates_a_document_with_no_picture_claim() {
 #[tokio::test]
 async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untouched() {
     let directory = tempfile::tempdir().unwrap();
-    let storage = latentmail_lib::storage::Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let storage =
+        latentmail_lib::storage::Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let service = auth::AuthService::new(storage);
     let saved = service
         .save_account("me@example.com".into(), "refresh".into(), None)
@@ -85,13 +88,19 @@ async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untou
     assert_eq!(saved.avatar_url, None);
 
     let updated = service
-        .apply_profile(&saved.id, Some("Real Name".into()), Some("https://example.com/a.png".into()))
+        .apply_profile(
+            &saved.id,
+            Some("Real Name".into()),
+            Some("https://example.com/a.png".into()),
+        )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(updated.display_name, "Real Name");
-    assert_eq!(updated.avatar_url.as_deref(), Some("https://example.com/a.png"));
-
+    assert_eq!(
+        updated.avatar_url.as_deref(),
+        Some("https://example.com/a.png")
+    );
 
     let unchanged = service
         .apply_profile(&saved.id, None, None)
@@ -99,13 +108,17 @@ async fn apply_profile_updates_an_existing_account_and_leaves_unset_fields_untou
         .unwrap()
         .unwrap();
     assert_eq!(unchanged.display_name, "Real Name");
-    assert_eq!(unchanged.avatar_url.as_deref(), Some("https://example.com/a.png"));
+    assert_eq!(
+        unchanged.avatar_url.as_deref(),
+        Some("https://example.com/a.png")
+    );
 }
 
 #[tokio::test]
 async fn apply_profile_on_an_unknown_account_returns_none_without_erroring() {
     let directory = tempfile::tempdir().unwrap();
-    let storage = latentmail_lib::storage::Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let storage =
+        latentmail_lib::storage::Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let service = auth::AuthService::new(storage);
 
     let result = service
@@ -129,6 +142,7 @@ async fn acquire_photo_downloads_validates_and_normalizes_the_account_photograph
 
 #[tokio::test]
 async fn acquire_photo_degrades_silently_when_the_download_fails() {
-
-    assert!(acquire_photo("https://missing.example/me.png").await.is_none());
+    assert!(acquire_photo("https://missing.example/me.png")
+        .await
+        .is_none());
 }

@@ -39,6 +39,7 @@ beforeEach(() => {
     activeMailboxId: 'INBOX',
     activeThreadId: null,
     keyboardCursor: null,
+    flashThreadId: null,
   });
   useMultiSelectStore.setState({ selectedIds: new Set(), anchorId: null });
 });
@@ -99,6 +100,26 @@ describe('ConversationList', () => {
 
     rerender(<ConversationList state="error" errorMessage="no such column: snippet" />);
     expect(screen.getByText('no such column: snippet')).toBeInTheDocument();
+  });
+
+  it('clears a notification flash without animating when reduced motion is requested', async () => {
+    vi.mocked(window.matchMedia).mockReturnValue({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList);
+    useSelectionStore.getState().setFlashThreadId('thread-1');
+    renderWithQueryClient(<ConversationList />);
+    expect(screen.getAllByTestId('conversation-row')).not.toHaveLength(0);
+    expect(useSelectionStore.getState().flashThreadId).toBeNull();
+    expect(screen.getAllByTestId('conversation-row')[0]).not.toHaveClass(
+      'motion-safe:animate-row-flash',
+    );
+    vi.mocked(window.matchMedia).mockReturnValue({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList);
   });
 
   it('renders the still-syncing empty state with a spinner and n/total progress counts', () => {

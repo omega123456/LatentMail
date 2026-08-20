@@ -1,33 +1,18 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { listen } from '@/lib/ipc/events';
+import { emitFrontendReady, listen } from '@/lib/ipc/events';
 import { useSyncStore } from '@/stores/sync';
-import type { IpcEventMap, MailArrival } from '@/lib/types/ipc';
-import { parseParticipant } from '@/lib/format/participants';
+import type { IpcEventMap } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useComposeStore } from '@/stores/compose';
 import { appLog } from '@/lib/app-log';
-
-async function notifyArrivals(arrivals: MailArrival[]) {
-  const [first, ...rest] = arrivals;
-  if (!first) return;
-  if (
-    Notification.permission !== 'granted' &&
-    (await Notification.requestPermission()) !== 'granted'
-  ) {
-    return;
-  }
-  const { name, address } = parseParticipant(first.sender);
-  const subject = first.subject || '(No subject)';
-  new Notification(name || address, {
-    body: rest.length > 0 ? `${subject} — and ${rest.length} more` : subject,
-  });
-}
+import { handleOsIntent } from '@/lib/os/intent';
 
 export function EventBridge() {
   const queryClient = useQueryClient();
   useEffect(() => {
+    void emitFrontendReady();
     let disposed = false;
     const unlistens: Array<() => void | Promise<void>> = [];
     const traversalAccounts = new Set<string>();
@@ -108,7 +93,10 @@ export function EventBridge() {
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
-      void notifyArrivals(event.arrivals);
+    });
+
+    subscribe('os://intent', (intent) => {
+      void handleOsIntent(intent);
     });
 
     subscribe('send://uncertain', () => {

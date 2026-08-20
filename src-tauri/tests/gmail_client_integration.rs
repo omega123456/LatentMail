@@ -239,7 +239,9 @@ async fn a_forwarded_message_with_no_plain_text_of_its_own_falls_back_to_its_htm
         .await
         .unwrap();
 
-    let plain = fetched.plain_body.expect("falls back to the embedded html body as plain text");
+    let plain = fetched
+        .plain_body
+        .expect("falls back to the embedded html body as plain text");
     assert!(plain.contains("Forwarded message"));
     assert!(plain.contains("hi"));
 }

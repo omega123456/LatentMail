@@ -41,7 +41,9 @@ fn message(account_id: &str, id: &str, history_id: i64) -> Message {
 }
 
 fn search_index_rowids(connection: &rusqlite::Connection) -> HashSet<i64> {
-    let mut statement = connection.prepare("SELECT rowid FROM message_search").unwrap();
+    let mut statement = connection
+        .prepare("SELECT rowid FROM message_search")
+        .unwrap();
     statement
         .query_map([], |row| row.get(0))
         .unwrap()
@@ -250,8 +252,7 @@ fn marking_unread_or_starred_leaves_the_search_index_untouched() {
     MessageRepository::write_full_state(&connection, &message("account", "one", 1)).unwrap();
     let before = search_index_rowids(&connection);
 
-    MessageRepository::set_label_membership(&connection, "account", "one", "UNREAD", true)
-        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "one", "UNREAD", true).unwrap();
     MessageRepository::set_label_membership(&connection, "account", "one", "STARRED", true)
         .unwrap();
 
@@ -279,13 +280,8 @@ fn changing_label_membership_leaves_the_search_index_untouched() {
     MessageRepository::write_full_state(&connection, &message("account", "one", 1)).unwrap();
     let before = search_index_rowids(&connection);
 
-    MessageRepository::overwrite_membership(
-        &connection,
-        "account",
-        "one",
-        &["INBOX".to_owned()],
-    )
-    .unwrap();
+    MessageRepository::overwrite_membership(&connection, "account", "one", &["INBOX".to_owned()])
+        .unwrap();
 
     assert_eq!(
         search_index_rowids(&connection),

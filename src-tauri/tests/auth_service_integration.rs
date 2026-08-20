@@ -1,4 +1,3 @@
-
 use std::sync::{Arc, Mutex};
 
 use latentmail_lib::auth::{
@@ -15,7 +14,6 @@ use wiremock::{
 };
 
 fn app() -> tauri::App<tauri::test::MockRuntime> {
-
     tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap()
@@ -31,7 +29,6 @@ fn service_with_storage() -> (AuthService, tempfile::TempDir) {
 async fn accounts_lists_what_is_persisted() {
     let (service, _directory) = service_with_storage();
     assert_eq!(service.accounts().await.unwrap(), Vec::new());
-
 
     let saved = service
         .save_account("me@example.com".into(), "refresh-token".into(), None)
@@ -500,7 +497,6 @@ async fn profile_maps_the_camel_case_email_address_field() {
 
 #[test]
 fn initialize_creates_the_app_data_directory_and_manages_auth_service_state() {
-
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -532,8 +528,6 @@ fn account_repository_round_trip_matches_the_auth_dto_mapping() {
         Some(account)
     );
 }
-
-
 
 #[test]
 fn authorization_uses_pkce_offline_consent_and_gmail_scopes() {

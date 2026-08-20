@@ -2,7 +2,7 @@ use latentmail_lib::{
     attachments::cache::AttachmentCache,
     gmail::{AttachmentPart, GmailMessage},
     storage::{Account, AccountRepository, AttachmentRepository, MessageRepository, Storage},
-    sync::{materialize, traversal::run_backfill_step, noop_event_sink},
+    sync::{materialize, noop_event_sink, traversal::run_backfill_step},
 };
 
 fn account() -> Account {
@@ -66,7 +66,9 @@ fn materialize_persists_attachment_rows_in_sender_order() {
 
     let rows = AttachmentRepository::for_message(&connection, "account", "m1").unwrap();
     assert_eq!(
-        rows.iter().map(|row| row.attachment_id.as_str()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|row| row.attachment_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["att-1", "att-2"]
     );
     assert_eq!(rows[0].filename, "file.pdf");
@@ -87,9 +89,11 @@ fn deleting_a_message_cascades_its_attachment_rows() {
 
     MessageRepository::delete(&connection, "account", "m1").unwrap();
 
-    assert!(AttachmentRepository::for_message(&connection, "account", "m1")
-        .unwrap()
-        .is_empty());
+    assert!(
+        AttachmentRepository::for_message(&connection, "account", "m1")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -102,9 +106,11 @@ fn an_existing_message_acquires_attachment_rows_on_its_next_sync_even_though_the
     without_attachments.attachment_parts.clear();
     without_attachments.has_attachments = false;
     materialize::persist(&connection, "account", &without_attachments).unwrap();
-    assert!(AttachmentRepository::for_message(&connection, "account", "m1")
-        .unwrap()
-        .is_empty());
+    assert!(
+        AttachmentRepository::for_message(&connection, "account", "m1")
+            .unwrap()
+            .is_empty()
+    );
 
     let same_history_but_with_attachments = base_message("m1", 5);
     materialize::persist(&connection, "account", &same_history_but_with_attachments).unwrap();
@@ -122,39 +128,45 @@ async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_mess
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/profile"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com",
-            "messagesTotal": 1,
-            "threadsTotal": 1,
-            "historyId": "1"
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "emailAddress": "me@example.com",
+                "messagesTotal": 1,
+                "threadsTotal": 1,
+                "historyId": "1"
+            })),
+        )
         .mount(&server)
         .await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/messages"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{ "id": "m1", "threadId": "t1" }]
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [{ "id": "m1", "threadId": "t1" }]
+            })),
+        )
         .mount(&server)
         .await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/messages/m1"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "m1",
-            "threadId": "t1",
-            "historyId": "1",
-            "payload": {
-                "mimeType": "multipart/mixed",
-                "parts": [
-                    { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
-                    {
-                        "mimeType": "application/pdf",
-                        "filename": "report.pdf",
-                        "body": { "attachmentId": "gmail-att-1", "size": 2048 }
-                    }
-                ]
-            }
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "m1",
+                "threadId": "t1",
+                "historyId": "1",
+                "payload": {
+                    "mimeType": "multipart/mixed",
+                    "parts": [
+                        { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
+                        {
+                            "mimeType": "application/pdf",
+                            "filename": "report.pdf",
+                            "body": { "attachmentId": "gmail-att-1", "size": 2048 }
+                        }
+                    ]
+                }
+            })),
+        )
         .mount(&server)
         .await;
 
@@ -165,9 +177,16 @@ async fn backfill_traversal_writes_attachment_rows_for_a_never_body_fetched_mess
     drop(connection);
 
     let client = latentmail_lib::gmail::GmailClient::with_base_url("token", server.uri());
-    run_backfill_step(&storage, &client, "account", &noop_event_sink(), false, None)
-        .await
-        .unwrap();
+    run_backfill_step(
+        &storage,
+        &client,
+        "account",
+        &noop_event_sink(),
+        false,
+        None,
+    )
+    .await
+    .unwrap();
 
     let connection = storage.connection().unwrap();
     let rows = AttachmentRepository::for_message(&connection, "account", "m1").unwrap();
@@ -182,39 +201,45 @@ async fn backfill_seeds_cache_bytes_for_an_inline_data_attachment_with_no_intera
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/profile"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "emailAddress": "me@example.com",
-            "messagesTotal": 1,
-            "threadsTotal": 1,
-            "historyId": "1"
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "emailAddress": "me@example.com",
+                "messagesTotal": 1,
+                "threadsTotal": 1,
+                "historyId": "1"
+            })),
+        )
         .mount(&server)
         .await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/messages"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "messages": [{ "id": "m1", "threadId": "t1" }]
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [{ "id": "m1", "threadId": "t1" }]
+            })),
+        )
         .mount(&server)
         .await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/users/me/messages/m1"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "m1",
-            "threadId": "t1",
-            "historyId": "1",
-            "payload": {
-                "mimeType": "multipart/mixed",
-                "parts": [
-                    { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
-                    {
-                        "mimeType": "image/jpeg",
-                        "filename": "photo.jpg",
-                        "body": { "data": "cGhvdG8" }
-                    }
-                ]
-            }
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "m1",
+                "threadId": "t1",
+                "historyId": "1",
+                "payload": {
+                    "mimeType": "multipart/mixed",
+                    "parts": [
+                        { "mimeType": "text/plain", "body": { "data": "Ym9keQ" } },
+                        {
+                            "mimeType": "image/jpeg",
+                            "filename": "photo.jpg",
+                            "body": { "data": "cGhvdG8" }
+                        }
+                    ]
+                }
+            })),
+        )
         .mount(&server)
         .await;
 
@@ -291,8 +316,7 @@ fn list_conversation_attributes_attachments_to_the_right_message_sorted_by_posit
     second.has_attachments = false;
     materialize::persist(&connection, "account", &second).unwrap();
 
-    let messages =
-        MessageRepository::list_conversation(&connection, "account", "thread").unwrap();
+    let messages = MessageRepository::list_conversation(&connection, "account", "thread").unwrap();
     assert_eq!(messages.len(), 2);
     let by_id: std::collections::HashMap<_, _> = messages
         .into_iter()

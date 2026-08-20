@@ -92,7 +92,10 @@ describe('ReadingPane', () => {
     const ribbon = within(screen.getByRole('toolbar', { name: 'Message actions' }));
     await user.click(ribbon.getByRole('button', { name: 'Mark as spam' }));
     await user.click(ribbon.getByRole('button', { name: 'Delete' }));
-    expect(onMessageTriage).toHaveBeenCalledWith('message-2', { kind: 'move', destination: 'SPAM' });
+    expect(onMessageTriage).toHaveBeenCalledWith('message-2', {
+      kind: 'move',
+      destination: 'SPAM',
+    });
     expect(onMessageTriage).toHaveBeenCalledWith('message-2', { kind: 'delete' });
   });
 

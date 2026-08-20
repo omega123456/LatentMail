@@ -10,8 +10,8 @@ export async function installPlaywrightIpc(
   rejectedCommands: string[] = [],
   pendingCommands: string[] = [],
   composeSession?: OpenComposeArgs,
+  platform: 'windows' | 'macos' = 'macos',
 ) {
-
   const syncOverride = syncStatus
     ? {
         read_sync_status: {
@@ -31,6 +31,7 @@ export async function installPlaywrightIpc(
       pendingCommands,
       voidCommands,
       composeSession: session,
+      platform,
     }) => {
       const responses = { ...fixtures, ...supplied } as Record<string, unknown>;
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
@@ -46,6 +47,15 @@ export async function installPlaywrightIpc(
       };
       window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__ = state;
       window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__ = session;
+      window.__TAURI_OS_PLUGIN_INTERNALS__ = {
+        eol: '\n',
+        os_type: platform,
+        platform,
+        family: platform === 'windows' ? 'windows' : 'unix',
+        version: '',
+        arch: 'x86_64',
+        exe_extension: platform === 'windows' ? 'exe' : '',
+      };
     },
     {
       fixtures: playwrightIpcFixtures,
@@ -55,6 +65,7 @@ export async function installPlaywrightIpc(
       pendingCommands,
       voidCommands: Object.keys(playwrightIpcFixtures),
       composeSession,
+      platform,
     },
   );
 }

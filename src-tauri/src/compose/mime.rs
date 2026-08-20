@@ -86,9 +86,7 @@ pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
             });
     let from = outgoing.from.parse::<Mailbox>()?;
     let mut builder = Message::builder()
-
         .keep_bcc()
-
         .envelope(Envelope::new(
             Some(from.email.clone()),
             vec![from.email.clone()],

@@ -165,7 +165,6 @@ impl AuthService {
         .inspect_err(|error: &String| tracing::error!(target: "auth", "sign-in failed: {error}"))
     }
 
-
     pub async fn save_account(
         &self,
         email: String,
@@ -215,7 +214,6 @@ impl AuthService {
         save_refresh_token(&account.id, &refresh_token)?;
         Ok(account_dto(account))
     }
-
 
     pub async fn apply_profile(
         &self,
@@ -386,7 +384,6 @@ pub fn authorization(client_id: &str, redirect: &str) -> Result<Authorization, S
         .add_scope(Scope::new(
             "https://www.googleapis.com/auth/gmail.labels".to_owned(),
         ))
-
         .add_scope(Scope::new("openid".to_owned()))
         .add_scope(Scope::new("profile".to_owned()))
         .add_extra_param("access_type", "offline")
@@ -447,7 +444,6 @@ pub fn parse_callback(target: &str, expected_state: &str) -> Result<Authorizatio
         .ok_or_else(|| "OAuth callback had no code".to_owned())
 }
 
-
 pub async fn exchange_code(
     client_id: &str,
     redirect: &str,
@@ -475,7 +471,6 @@ pub async fn exchange_code(
         .map_err(|e| e.to_string())
 }
 
-
 pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
     reqwest::Client::new()
         .get(oauth_endpoint("LATENTMAIL_GOOGLE_PROFILE_URL", PROFILE_URL))
@@ -490,11 +485,13 @@ pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
         .map_err(|e| e.to_string())
 }
 
-
 #[cfg(not(feature = "test-utils"))]
 pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
     reqwest::Client::new()
-        .get(oauth_endpoint("LATENTMAIL_GOOGLE_USERINFO_URL", USERINFO_URL))
+        .get(oauth_endpoint(
+            "LATENTMAIL_GOOGLE_USERINFO_URL",
+            USERINFO_URL,
+        ))
         .bearer_auth(access_token)
         .send()
         .await
@@ -512,7 +509,6 @@ fn fake_userinfo_store() -> &'static std::sync::Mutex<HashMap<String, Result<Use
         OnceLock::new();
     STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
-
 
 #[cfg(feature = "test-utils")]
 pub fn set_fake_userinfo(access_token: &str, info: UserInfo) {
@@ -532,11 +528,7 @@ pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
         .unwrap_or_else(|| Err("no fake userinfo programmed for this access token".to_owned()))
 }
 
-
-pub fn token_has_scope<EF, TT>(
-    token: &oauth2::StandardTokenResponse<EF, TT>,
-    name: &str,
-) -> bool
+pub fn token_has_scope<EF, TT>(token: &oauth2::StandardTokenResponse<EF, TT>, name: &str) -> bool
 where
     EF: oauth2::ExtraTokenFields,
     TT: oauth2::TokenType,
@@ -648,7 +640,6 @@ pub async fn remove_account(
 ) -> Result<(), String> {
     service.remove_account(queue.inner(), &account_id).await
 }
-
 
 fn local_part(email: &str) -> String {
     email.split('@').next().unwrap_or(email).to_owned()

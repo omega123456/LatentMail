@@ -51,9 +51,11 @@ pub fn message_raw_membership(
     account_id: &str,
     message_id: &str,
 ) -> rusqlite::Result<HashSet<String>> {
-    Ok(MessageRepository::label_ids(connection, account_id, message_id)?
-        .into_iter()
-        .collect())
+    Ok(
+        MessageRepository::label_ids(connection, account_id, message_id)?
+            .into_iter()
+            .collect(),
+    )
 }
 
 async fn thread_raw_membership_many(
@@ -115,7 +117,10 @@ enum Intent {
     Move(String),
 }
 
-fn compute_labels(intent: &Intent, membership: &HashSet<String>) -> (HashSet<String>, HashSet<String>) {
+fn compute_labels(
+    intent: &Intent,
+    membership: &HashSet<String>,
+) -> (HashSet<String>, HashSet<String>) {
     match intent {
         Intent::Delete => delete_labels(membership),
         Intent::Move(destination) => move_labels(membership, destination),
@@ -166,12 +171,10 @@ async fn apply_thread_intent<R: Runtime>(
             .unwrap_or_default();
         tasks.spawn(async move {
             let (add, remove) = compute_labels(&intent, &membership);
-            if let Err(error) =
-                super::commands::reject_protected_label_mutation(
-                    &add.iter().cloned().collect::<Vec<_>>(),
-                    &remove.iter().cloned().collect::<Vec<_>>(),
-                )
-            {
+            if let Err(error) = super::commands::reject_protected_label_mutation(
+                &add.iter().cloned().collect::<Vec<_>>(),
+                &remove.iter().cloned().collect::<Vec<_>>(),
+            ) {
                 return (thread_id, Err(error));
             }
             let outcome = engine_ref
@@ -253,7 +256,15 @@ pub async fn move_threads<R: Runtime>(
     destination: String,
 ) -> Result<Vec<MutationResultDto>, String> {
     validate_destination(&destination)?;
-    apply_thread_intent(app, auth, engine, account_id, thread_ids, Intent::Move(destination)).await
+    apply_thread_intent(
+        app,
+        auth,
+        engine,
+        account_id,
+        thread_ids,
+        Intent::Move(destination),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -277,5 +288,13 @@ pub async fn move_messages<R: Runtime>(
     destination: String,
 ) -> Result<(), String> {
     validate_destination(&destination)?;
-    apply_message_intent(app, auth, engine, account_id, message_ids, Intent::Move(destination)).await
+    apply_message_intent(
+        app,
+        auth,
+        engine,
+        account_id,
+        message_ids,
+        Intent::Move(destination),
+    )
+    .await
 }

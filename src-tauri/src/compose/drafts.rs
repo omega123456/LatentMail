@@ -235,7 +235,6 @@ async fn run<R: Runtime>(
             .map_err(|_| QueueError::Permanent)?
     };
     let Some(row) = row else {
-
         return Ok(());
     };
     if row.status == "discarded" {
@@ -270,7 +269,6 @@ async fn run<R: Runtime>(
         return Ok(());
     }
 
-
     let created_server_draft = matches!(payload.mode, DraftOperationMode::Create);
     if created_server_draft {
         if let Some(draft_id) = coalescer.draft_id(&operation.entity_key).await {
@@ -298,7 +296,6 @@ async fn run<R: Runtime>(
             }
         }
     }
-
 
     let (quote_html, original_inline) = if let Some(original_id) = &payload.original_message_id {
         let account_id = operation.account_id.clone();
@@ -389,7 +386,6 @@ async fn run<R: Runtime>(
             .await;
     }
 
-
     let discarded = {
         let id = id.clone();
         storage
@@ -455,7 +451,6 @@ async fn run<R: Runtime>(
                 if !consumed {
                     ComposeDraftMetadataRepository::upsert(&transaction, &metadata)?;
                 } else {
-
                     crate::contacts::observe_now(&transaction, &account_id, &message.sender)?;
                     for mailbox in message
                         .to_recipients
@@ -479,7 +474,6 @@ async fn run<R: Runtime>(
 
     let _ = staging.release_snapshot(&id);
     if consumed {
-
         let _ = staging.release_owner(&account_id, &draft_id);
 
         if payload.draft_id.is_none() {
@@ -526,7 +520,6 @@ async fn execute_gmail(
             Ok((full.message, false, full.id))
         }
         DraftOperationMode::Send => {
-
             let draft_id = match &payload.draft_id {
                 Some(draft_id) => {
                     client
@@ -547,7 +540,6 @@ async fn execute_gmail(
         }
     }
 }
-
 
 pub async fn hydrate(
     client: &GmailClient,

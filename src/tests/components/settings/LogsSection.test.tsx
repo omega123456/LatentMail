@@ -45,7 +45,9 @@ describe('LogsSection', () => {
     ipc.override('read_log_entries', entries);
     renderWithQueryClient(<LogsSection />);
 
-    const messages = await screen.findAllByText(/sync: history sync failed|sync: applied|auth: access token/);
+    const messages = await screen.findAllByText(
+      /sync: history sync failed|sync: applied|auth: access token/,
+    );
     expect(messages.map((node) => node.textContent)).toEqual([
       'sync: history sync failed for alex@example.com',
       'sync: applied 14 history records',
@@ -127,9 +129,7 @@ describe('LogsSection', () => {
     await user.click(screen.getByRole('combobox', { name: 'Application log level' }));
     await user.click(await screen.findByRole('option', { name: 'Debug' }));
 
-    await waitFor(() =>
-      expect(write).toHaveBeenCalledWith({ key: 'logLevel', value: 'debug' }),
-    );
+    await waitFor(() => expect(write).toHaveBeenCalledWith({ key: 'logLevel', value: 'debug' }));
     expect(useLayoutStore.getState().logLevel).toBe('debug');
   });
 

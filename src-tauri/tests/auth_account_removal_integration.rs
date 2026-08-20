@@ -6,12 +6,13 @@ use latentmail_lib::auth::AuthService;
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::queue::{Executor, Lane, OperationKind, QueueEngine, QueueOperation};
 use latentmail_lib::storage::{
-    Account, AccountRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository,
-    HtmlPresence, Label, LabelRepository, Message, MessageRepository, Operation,
-    OperationRepository, Storage, ThreadRepository, TraversalCursor, TraversalCursorRepository,
-    TraversalKind,
+    Account, AccountRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository, HtmlPresence,
+    Label, LabelRepository, Message, MessageRepository, Operation, OperationRepository, Storage,
+    ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
-use latentmail_lib::sync::{create_queue_engine_with_events, noop_event_sink, SyncEngine, WorkRegistry};
+use latentmail_lib::sync::{
+    create_queue_engine_with_events, noop_event_sink, SyncEngine, WorkRegistry,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
@@ -71,8 +72,11 @@ fn seed_account(connection: &rusqlite::Connection, account_id: &str) {
     for n in 0..5 {
         let message_id = format!("{account_id}-message-{n}");
         let thread_id = format!("{account_id}-thread-{n}");
-        MessageRepository::write_full_state(connection, &seed_message(account_id, &message_id, &thread_id))
-            .unwrap();
+        MessageRepository::write_full_state(
+            connection,
+            &seed_message(account_id, &message_id, &thread_id),
+        )
+        .unwrap();
         MessageRepository::set_label_membership(connection, account_id, &message_id, "INBOX", true)
             .unwrap();
         MessageRepository::replace_inline_parts(
@@ -163,7 +167,9 @@ fn message_search_row_count_for_seqs(connection: &rusqlite::Connection, seqs: &[
     let placeholders = seqs.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!("SELECT COUNT(*) FROM message_search WHERE rowid IN ({placeholders})");
     let params = rusqlite::params_from_iter(seqs.iter());
-    connection.query_row(&sql, params, |row| row.get(0)).unwrap()
+    connection
+        .query_row(&sql, params, |row| row.get(0))
+        .unwrap()
 }
 
 fn message_seqs_for_account(connection: &rusqlite::Connection, account_id: &str) -> Vec<i64> {
@@ -181,17 +187,94 @@ fn all_rows_for_account_gone(
     account_id: &str,
     removed_message_seqs: &[i64],
 ) {
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM accounts WHERE id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM labels WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM messages WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM threads WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM operations WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM traversal_cursors WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM contacts WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM compose_draft_metadata WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM message_labels WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM message_inline_parts WHERE account_id=?1", account_id), 0);
-    assert_eq!(count(connection, "SELECT COUNT(*) FROM thread_labels WHERE account_id=?1", account_id), 0);
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM accounts WHERE id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM labels WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM messages WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM threads WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM operations WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM traversal_cursors WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM contacts WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM compose_draft_metadata WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM message_labels WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM message_inline_parts WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            connection,
+            "SELECT COUNT(*) FROM thread_labels WHERE account_id=?1",
+            account_id
+        ),
+        0
+    );
     assert_eq!(
         message_search_row_count_for_seqs(connection, removed_message_seqs),
         0,
@@ -216,7 +299,11 @@ async fn removing_an_account_clears_every_direct_and_indirect_dependent_table() 
         let connection = storage.connection().unwrap();
         message_seqs_for_account(&connection, "removed")
     };
-    assert_eq!(removed_message_seqs.len(), 5, "the fixture seeds five messages per account");
+    assert_eq!(
+        removed_message_seqs.len(),
+        5,
+        "the fixture seeds five messages per account"
+    );
     assert_eq!(
         message_search_row_count_for_seqs(&storage.connection().unwrap(), &removed_message_seqs),
         5,
@@ -231,9 +318,30 @@ async fn removing_an_account_clears_every_direct_and_indirect_dependent_table() 
     let connection = storage.connection().unwrap();
     all_rows_for_account_gone(&connection, "removed", &removed_message_seqs);
 
-    assert_eq!(count(&connection, "SELECT COUNT(*) FROM accounts WHERE id=?1", "kept"), 1);
-    assert_eq!(count(&connection, "SELECT COUNT(*) FROM messages WHERE account_id=?1", "kept"), 5);
-    assert_eq!(count(&connection, "SELECT COUNT(*) FROM thread_labels WHERE account_id=?1", "kept"), 5);
+    assert_eq!(
+        count(
+            &connection,
+            "SELECT COUNT(*) FROM accounts WHERE id=?1",
+            "kept"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &connection,
+            "SELECT COUNT(*) FROM messages WHERE account_id=?1",
+            "kept"
+        ),
+        5
+    );
+    assert_eq!(
+        count(
+            &connection,
+            "SELECT COUNT(*) FROM thread_labels WHERE account_id=?1",
+            "kept"
+        ),
+        5
+    );
 
     let violations: i64 = connection
         .prepare("PRAGMA foreign_key_check")
@@ -241,12 +349,17 @@ async fn removing_an_account_clears_every_direct_and_indirect_dependent_table() 
         .query_map([], |_row| Ok(()))
         .unwrap()
         .count() as i64;
-    assert_eq!(violations, 0, "PRAGMA foreign_key_check must report no violations");
+    assert_eq!(
+        violations, 0,
+        "PRAGMA foreign_key_check must report no violations"
+    );
 
     assert!(!latentmail_lib::auth::has_refresh_token("removed"));
     assert!(latentmail_lib::auth::has_refresh_token("kept"));
 
-    assert!(AccountRepository::get(&connection, "removed").unwrap().is_none());
+    assert!(AccountRepository::get(&connection, "removed")
+        .unwrap()
+        .is_none());
 
     for (label, sql) in [
         (
@@ -286,7 +399,10 @@ async fn removing_an_unknown_account_reports_an_error_and_leaves_nothing_to_clea
     assert!(auth.remove_account(&queue, "missing").await.is_err());
 }
 
-fn controllable_executor() -> (Executor, mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>) {
+fn controllable_executor() -> (
+    Executor,
+    mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation: QueueOperation| {
         let tx = tx.clone();
@@ -353,7 +469,9 @@ async fn removing_an_account_with_pending_queued_work_cancels_it_and_no_operatio
     let _ = release.send(());
 
     let snapshot = queue.snapshot().await;
-    let removed_account = snapshot.into_iter().find(|account| account.account_id == "removed");
+    let removed_account = snapshot
+        .into_iter()
+        .find(|account| account.account_id == "removed");
     let remaining_pending = removed_account
         .map(|account| {
             account
@@ -370,11 +488,15 @@ async fn removing_an_account_with_pending_queued_work_cancels_it_and_no_operatio
                 .count()
         })
         .unwrap_or(0);
-    assert_eq!(remaining_pending, 0, "no queued work should remain for the removed account");
+    assert_eq!(
+        remaining_pending, 0,
+        "no queued work should remain for the removed account"
+    );
 }
 
 #[tokio::test]
-async fn removing_an_account_evicts_a_registry_backed_operations_closure_so_its_caller_never_hangs() {
+async fn removing_an_account_evicts_a_registry_backed_operations_closure_so_its_caller_never_hangs()
+{
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     {
@@ -397,8 +519,14 @@ async fn removing_an_account_evicts_a_registry_backed_operations_closure_so_its_
     latentmail_lib::auth::save_refresh_token("removed", "token").unwrap();
 
     let registry = WorkRegistry::new();
-    let queue = create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
-    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, noop_event_sink());
+    let queue =
+        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        noop_event_sink(),
+    );
 
     queue.pause();
 
@@ -420,12 +548,7 @@ async fn removing_an_account_evicts_a_registry_backed_operations_closure_so_its_
         let has_registered_operation = snapshot
             .iter()
             .find(|account| account.account_id == "removed")
-            .is_some_and(|account| {
-                account
-                    .lanes
-                    .iter()
-                    .any(|lane| !lane.operations.is_empty())
-            });
+            .is_some_and(|account| account.lanes.iter().any(|lane| !lane.operations.is_empty()));
         if has_registered_operation {
             break;
         }

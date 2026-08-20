@@ -1,5 +1,7 @@
 use latentmail_lib::{
-    settings::{Density, Layout, LogLevel, Settings, SettingsService, ThemePreference, WindowState},
+    settings::{
+        Density, Layout, LogLevel, Settings, SettingsService, ThemePreference, WindowState,
+    },
     storage::Storage,
 };
 use serde_json::json;
@@ -22,7 +24,10 @@ async fn log_level_round_trips_and_defaults_to_info() {
     let service = SettingsService::new(Storage::open(&path).unwrap());
 
     assert_eq!(service.log_level(), LogLevel::Info);
-    service.write("logLevel".into(), json!("debug")).await.unwrap();
+    service
+        .write("logLevel".into(), json!("debug"))
+        .await
+        .unwrap();
     assert_eq!(service.log_level(), LogLevel::Debug);
     assert_eq!(service.read().await.unwrap().log_level, LogLevel::Debug);
 
@@ -160,6 +165,9 @@ async fn remote_image_preferences_round_trip_and_reject_a_malformed_sender_list(
     assert!(settings.always_load_remote_images);
     assert_eq!(
         settings.allowed_image_senders,
-        vec!["receipts@stripe.com".to_owned(), "team@linear.app".to_owned()]
+        vec![
+            "receipts@stripe.com".to_owned(),
+            "team@linear.app".to_owned()
+        ]
     );
 }

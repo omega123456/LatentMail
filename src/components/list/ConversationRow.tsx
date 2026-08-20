@@ -1,5 +1,5 @@
 import { Paperclip, Star } from 'lucide-react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import type { MoveDestinationId } from '@/components/actions/MoveToMenu';
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { RowContextMenu } from '@/components/actions/RowContextMenu';
@@ -19,6 +19,8 @@ type Props = {
   density: Density;
   active: boolean;
   selected?: boolean;
+  flash?: boolean;
+  onFlashComplete?: () => void;
   multiSelectActive?: boolean;
   allLabels?: LabelMenuEntry[];
   selectionCount?: number;
@@ -35,6 +37,8 @@ export function ConversationRow({
   density,
   active,
   selected = false,
+  flash = false,
+  onFlashComplete,
   multiSelectActive = false,
   allLabels = [],
   selectionCount = 1,
@@ -45,6 +49,13 @@ export function ConversationRow({
   onTriage = () => undefined,
   onCompose,
 }: Props) {
+  const flashRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const row = flashRef.current;
+    if (!flash || !row || !onFlashComplete) return;
+    row.addEventListener('animationend', onFlashComplete, { once: true });
+    return () => row.removeEventListener('animationend', onFlashComplete);
+  }, [flash, onFlashComplete]);
   const systemLabelIds = conversation.systemLabelIds ?? [];
   const effectiveSelectionCount = selected && multiSelectActive ? selectionCount : 1;
   const contextMenuSystemLabelIds =
@@ -105,11 +116,12 @@ export function ConversationRow({
       onEditDraft={conversation.draft && onCompose ? () => onCompose('edit-draft') : undefined}
     >
       <article
+        ref={flashRef}
         data-testid="conversation-row"
         data-density={density}
         data-active={showActive || undefined}
         data-selected={selected || undefined}
-        className={`group relative mb-1 flex shrink-0 items-center gap-2 rounded border p-3 transition-colors ${stateClasses}`}
+        className={`group relative mb-1 flex shrink-0 items-center gap-2 rounded border p-3 transition-colors ${flash ? 'motion-safe:animate-row-flash dark:motion-safe:animate-row-flash-dark' : ''} ${stateClasses}`}
       >
         {selected && (
           <span
@@ -164,7 +176,9 @@ export function ConversationRow({
                   {conversation.draft ? ' · Draft' : ''}
                 </span>
                 <span className="relative z-10 flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
-                  {conversation.hasAttachment && <Paperclip aria-label="Has attachment" size={15} />}
+                  {conversation.hasAttachment && (
+                    <Paperclip aria-label="Has attachment" size={15} />
+                  )}
                   {(rowBadges.length > 0 || showSource) && (
                     <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
                       {showSource && (

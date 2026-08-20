@@ -27,7 +27,7 @@ describe('EmptyState', () => {
   });
 
   it('renders the search variant naming the query and suggesting a next step', () => {
-    render(<EmptyState variant="search" query='from:anna quarterly' />);
+    render(<EmptyState variant="search" query="from:anna quarterly" />);
     const container = screen.getByTestId('empty-state-search');
     expect(container).toHaveTextContent('No results for “from:anna quarterly”');
     expect(

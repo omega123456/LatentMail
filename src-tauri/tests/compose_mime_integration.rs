@@ -14,7 +14,6 @@ fn assembles_plain_and_html_with_threading_headers() {
     assert!(raw.contains("Heading"));
 }
 
-
 #[test]
 fn assembles_a_draft_that_has_no_recipients_yet() {
     let mut message = outgoing();
@@ -24,7 +23,6 @@ fn assembles_a_draft_that_has_no_recipients_yet() {
 
     assert!(!raw.contains("\r\nTo:"));
 }
-
 
 #[test]
 fn keeps_the_bcc_header_gmail_delivers_from() {

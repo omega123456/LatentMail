@@ -4,6 +4,17 @@ import { afterEach, beforeEach, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+Object.assign(window, {
+  __TAURI_OS_PLUGIN_INTERNALS__: {
+    eol: '\n',
+    os_type: 'macos',
+    platform: 'macos',
+    family: 'unix',
+    version: '',
+    arch: 'aarch64',
+    exe_extension: '',
+  },
+});
 
 function silenceConsole() {
   vi.spyOn(console, 'debug').mockImplementation(() => {});
@@ -40,29 +51,6 @@ vi.stubGlobal(
     disconnect() {}
   },
 );
-declare global {
-  interface Window {
-    __notifications__?: { title: string; body?: string }[];
-  }
-}
-function installNotificationStub() {
-  window.__notifications__ = [];
-  vi.stubGlobal(
-    'Notification',
-    Object.assign(
-      class {
-        constructor(title: string, options?: NotificationOptions) {
-          window.__notifications__?.push({ title, body: options?.body });
-        }
-      },
-      {
-        permission: 'granted' as NotificationPermission,
-        requestPermission: vi.fn(async (): Promise<NotificationPermission> => 'granted'),
-      },
-    ),
-  );
-}
-installNotificationStub();
 HTMLElement.prototype.scrollIntoView = vi.fn();
 Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
   configurable: true,
@@ -108,7 +96,6 @@ if (!Element.prototype.releasePointerCapture) {
 beforeEach(() => {
   ipc.reset();
   window.__resizeObserverInstances__ = [];
-  installNotificationStub();
   silenceConsole();
 });
 afterEach(cleanup);

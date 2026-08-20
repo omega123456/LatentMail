@@ -40,7 +40,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 usvg = "0.48.1"
-tauri = { version = "2", features = ["test", "protocol-asset"] }
+url = "2"
+tauri = { version = "2", features = ["test", "protocol-asset", "tray-icon", "image-png", "image-ico"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-prevent-default = "4"
@@ -49,13 +50,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = "0.3"
-tauri-plugin-notification = "2.3.3"
+user-notify = "0.4.2"
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
+tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-os = "2.3.2"
 
-# WebView2-specific knobs (autofill popups, browser accelerator keys) live
-# behind this feature and only exist on Windows; macOS gets the same policy
-# from the plugin's injected script alone.
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-prevent-default = { version = "4", features = ["platform-windows"] }
+tauri-plugin-autostart = "2.5.1"
 
 [dev-dependencies]
 tempfile = "3"

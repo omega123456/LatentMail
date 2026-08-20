@@ -7,6 +7,8 @@ import { QueryProvider } from '@/providers/QueryProvider';
 import { useSyncStore } from '@/stores/sync';
 import { useComposeStore } from '@/stores/compose';
 import { useToastStore } from '@/stores/toast';
+import { useLayoutStore } from '@/stores/layout';
+import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
 
 function SpyClient({ onReady }: { onReady: (client: ReturnType<typeof useQueryClient>) => void }) {
@@ -36,6 +38,7 @@ describe('EventBridge', () => {
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('queue://summary', expect.any(Function)),
     );
+    expect(ipc.tauriEmit).toHaveBeenCalledWith('frontend://ready', {});
     act(() =>
       ipc.emit('queue://summary', { pending: 3, active: 1, failed: 0, done: 0, paused: true }),
     );
@@ -207,99 +210,20 @@ describe('EventBridge', () => {
       queryKey: queryKeys.searchForAccount('account-1'),
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
-    expect(window.__notifications__).toEqual([]);
   });
 
-  it('raises one OS notification naming the sender and subject of a new arrival', async () => {
+  it('handles an OS folder intent in the event bridge', async () => {
     render(
       <QueryProvider>
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
-      expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
+      expect(ipc.tauriListen).toHaveBeenCalledWith('os://intent', expect.any(Function)),
     );
-    act(() =>
-      ipc.emit('mail://new', {
-        accountId: 'account-1',
-        threadIds: ['thread-1'],
-        arrivals: [{ sender: 'Alex Morgan <alex@example.com>', subject: 'Lunch?' }],
-      }),
-    );
-    await waitFor(() =>
-      expect(window.__notifications__).toEqual([{ title: 'Alex Morgan', body: 'Lunch?' }]),
-    );
-  });
-
-  it('summarizes a multi-message poll and falls back for a missing subject', async () => {
-    render(
-      <QueryProvider>
-        <EventBridge />
-      </QueryProvider>,
-    );
-    await waitFor(() =>
-      expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
-    );
-    act(() =>
-      ipc.emit('mail://new', {
-        accountId: 'account-1',
-        threadIds: ['thread-1'],
-        arrivals: [
-          { sender: 'ops@example.com', subject: '' },
-          { sender: 'b@example.com', subject: 'Second' },
-          { sender: 'c@example.com', subject: 'Third' },
-        ],
-      }),
-    );
-    await waitFor(() =>
-      expect(window.__notifications__).toEqual([
-        { title: 'ops@example.com', body: '(No subject) — and 2 more' },
-      ]),
-    );
-  });
-
-  it('asks for permission when it is not already granted, and stays quiet if refused', async () => {
-    (Notification as { permission: NotificationPermission }).permission = 'denied';
-    vi.mocked(Notification.requestPermission).mockResolvedValue('denied');
-    render(
-      <QueryProvider>
-        <EventBridge />
-      </QueryProvider>,
-    );
-    await waitFor(() =>
-      expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
-    );
-    act(() =>
-      ipc.emit('mail://new', {
-        accountId: 'account-1',
-        threadIds: ['thread-1'],
-        arrivals: [{ sender: 'a@example.com', subject: 'Hi' }],
-      }),
-    );
-    await waitFor(() => expect(Notification.requestPermission).toHaveBeenCalled());
-    expect(window.__notifications__).toEqual([]);
-  });
-
-  it('notifies once permission is granted on request — the Windows path', async () => {
-    (Notification as { permission: NotificationPermission }).permission = 'denied';
-    render(
-      <QueryProvider>
-        <EventBridge />
-      </QueryProvider>,
-    );
-    await waitFor(() =>
-      expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
-    );
-    act(() =>
-      ipc.emit('mail://new', {
-        accountId: 'account-1',
-        threadIds: ['thread-1'],
-        arrivals: [{ sender: 'a@example.com', subject: 'Hi' }],
-      }),
-    );
-    await waitFor(() =>
-      expect(window.__notifications__).toEqual([{ title: 'a@example.com', body: 'Hi' }]),
-    );
+    act(() => ipc.emit('os://intent', { kind: 'openFolder', accountId: 'account-1' }));
+    await waitFor(() => expect(useSelectionStore.getState().activeMailboxId).toBe('INBOX'));
+    expect(useLayoutStore.getState().route).toBe('mail');
   });
 
   it('coalesces a large traversal into one bounded invalidation burst', async () => {

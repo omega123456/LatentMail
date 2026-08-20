@@ -1,7 +1,8 @@
-
 use chrono::{Duration, Utc};
 use latentmail_lib::avatars::cache::{hash_key, AvatarCache, CacheAnswer, CacheDomain};
-use latentmail_lib::storage::{AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, Storage};
+use latentmail_lib::storage::{
+    AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, Storage,
+};
 
 fn cache() -> (AvatarCache, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
@@ -13,7 +14,10 @@ fn cache() -> (AvatarCache, tempfile::TempDir) {
 #[test]
 fn root_exposes_the_cache_directory_the_cache_was_built_with() {
     let (cache, directory) = cache();
-    assert_eq!(cache.root(), directory.path().join("avatar-cache").as_path());
+    assert_eq!(
+        cache.root(),
+        directory.path().join("avatar-cache").as_path()
+    );
 }
 
 #[test]
@@ -110,7 +114,6 @@ async fn store_miss_surfaces_a_readable_error_when_the_cache_record_cannot_be_pe
 
 #[tokio::test]
 async fn a_record_with_an_out_of_range_timestamp_is_treated_as_expired() {
-
     let (cache, directory) = cache();
     let db_path = directory.path().join("mail.sqlite");
     let storage = Storage::open(&db_path).unwrap();
@@ -125,12 +128,14 @@ async fn a_record_with_an_out_of_range_timestamp_is_treated_as_expired() {
         .run(move |connection| AvatarCacheRepository::upsert(connection, &record))
         .await
         .unwrap();
-    assert_eq!(cache.answer(&key, CacheDomain::Sender).await, CacheAnswer::Stale);
+    assert_eq!(
+        cache.answer(&key, CacheDomain::Sender).await,
+        CacheAnswer::Stale
+    );
 }
 
 #[test]
 fn hash_key_never_contains_the_raw_identifier() {
-
     let key = hash_key("kovacsjozsef89@hotmail.com");
     assert!(!key.contains('@'));
     assert!(!key.contains("kovacsjozsef89"));
@@ -145,7 +150,10 @@ async fn a_cache_miss_answers_stale_and_a_stored_hit_answers_fresh_with_a_path()
     let (cache, _directory) = cache();
     let key = hash_key("example.com");
 
-    assert_eq!(cache.answer(&key, CacheDomain::Sender).await, CacheAnswer::Stale);
+    assert_eq!(
+        cache.answer(&key, CacheDomain::Sender).await,
+        CacheAnswer::Stale
+    );
 
     let path = cache
         .store_hit(&key, CacheDomain::Sender, b"not-really-a-png")

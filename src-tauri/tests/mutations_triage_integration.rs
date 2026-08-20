@@ -341,7 +341,6 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
     });
 }
 
-
 #[test]
 fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
     let runtime = tokio::runtime::Runtime::new().unwrap();

@@ -11,6 +11,7 @@ beforeEach(() => {
     activeThreadId: null,
     keyboardCursor: null,
     imagesAllowedFor: [],
+    flashThreadId: null,
   });
   useMultiSelectStore.setState({ selectedIds: new Set(['a', 'b']), anchorId: 'b' });
 });
@@ -56,6 +57,26 @@ describe('selection store coordination with multi-select', () => {
   });
 });
 
+describe('notification flash selection', () => {
+  it('keeps a flash target until it is selected and clears it for another selection', () => {
+    useSelectionStore.getState().setFlashThreadId('thread-1');
+    useSelectionStore.getState().setActiveThreadId('thread-1');
+    expect(useSelectionStore.getState().flashThreadId).toBe('thread-1');
+    useSelectionStore.getState().setActiveThreadId('thread-2');
+    expect(useSelectionStore.getState().flashThreadId).toBeNull();
+  });
+
+  it.each([
+    ['switching account', () => useSelectionStore.getState().setActiveAccountId('account-2')],
+    ['switching mailbox', () => useSelectionStore.getState().setActiveMailboxId('SENT')],
+    ['clearing selection', () => useSelectionStore.getState().clearSelection()],
+  ])('clears the target when %s', (_name, change) => {
+    useSelectionStore.getState().setFlashThreadId('thread-1');
+    change();
+    expect(useSelectionStore.getState().flashThreadId).toBeNull();
+  });
+});
+
 describe('clearStateForRemovedAccount', () => {
   beforeEach(() => {
     useSearchStore.setState({
@@ -74,6 +95,7 @@ describe('clearStateForRemovedAccount', () => {
       activeMailboxId: 'INBOX',
       activeThreadId: 'thread-1',
       keyboardCursor: 3,
+      flashThreadId: 'thread-1',
     });
     useComposeStore.getState().open({
       id: 'session-1',
@@ -92,6 +114,7 @@ describe('clearStateForRemovedAccount', () => {
       activeMailboxId: null,
       activeThreadId: null,
       keyboardCursor: null,
+      flashThreadId: null,
     });
     expect(useMultiSelectStore.getState().selectedIds.size).toBe(0);
     expect(useSearchStore.getState().active).toBe(false);

@@ -15,6 +15,20 @@ const account = {
   needsReauthentication: false,
 };
 
+function setPlatform(platform: 'macos' | 'windows') {
+  Object.assign(window, {
+    __TAURI_OS_PLUGIN_INTERNALS__: {
+      eol: '\n',
+      os_type: platform,
+      platform,
+      family: platform === 'windows' ? 'windows' : 'unix',
+      version: '',
+      arch: 'x86_64',
+      exe_extension: platform === 'windows' ? 'exe' : '',
+    },
+  });
+}
+
 async function openGeneral() {
   const user = userEvent.setup();
   ipc.override('list_accounts', [account]);
@@ -48,6 +62,7 @@ async function openGeneralWithDefaults() {
 
 describe('GeneralSection', () => {
   beforeEach(() => {
+    setPlatform('macos');
     act(() => {
       useLayoutStore.setState({
         route: 'mail',
@@ -188,5 +203,41 @@ describe('GeneralSection', () => {
     expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^apply$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
+  });
+
+  it('shows all System rows on Windows and disables start minimized without tray closing', async () => {
+    setPlatform('windows');
+    await openGeneral();
+    act(() => {
+      useLayoutStore.setState({
+        closeToTray: false,
+        startMinimized: false,
+      });
+    });
+
+    expect(screen.getByRole('switch', { name: 'Start at login' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Close to system tray' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Start minimized' })).toBeDisabled();
+    expect(screen.getByText('Requires closing to the tray.')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Desktop notifications' })).toBeInTheDocument();
+  });
+
+  it('shows only desktop notifications in System on macOS', async () => {
+    await openGeneral();
+
+    expect(screen.queryByRole('switch', { name: 'Start at login' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Close to system tray' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Start minimized' })).not.toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Desktop notifications' })).toBeInTheDocument();
+  });
+
+  it('defaults start minimized to off', async () => {
+    setPlatform('windows');
+    await openGeneral();
+
+    expect(screen.getByRole('switch', { name: 'Start minimized' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
   });
 });

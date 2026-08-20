@@ -94,7 +94,10 @@ describe('compose entry actions', () => {
     });
     await act(async () => openForward('account', 'me@example.com', message));
     expect(useComposeStore.getState().session?.attachments).toEqual([]);
-    expect(ipc.tauriInvoke).not.toHaveBeenCalledWith('stage_attachment_into_draft', expect.anything());
+    expect(ipc.tauriInvoke).not.toHaveBeenCalledWith(
+      'stage_attachment_into_draft',
+      expect.anything(),
+    );
   });
 
   it('stages each forwarded attachment through the compose store, independently reporting failures', async () => {

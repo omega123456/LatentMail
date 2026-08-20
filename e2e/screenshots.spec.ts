@@ -519,9 +519,19 @@ for (const theme of themes) {
   });
 
   test(`settings general section ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(
+      page,
+      { list_accounts: [playwrightMailAccount] },
+      undefined,
+      undefined,
+      [],
+      [],
+      undefined,
+      'windows',
+    );
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.setViewportSize({ width: 1280, height: 1600 });
     await screenshot(
       page,
       page.getByTestId('settings-general-section'),

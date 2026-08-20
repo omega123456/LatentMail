@@ -1,4 +1,4 @@
-import { dispatchListen } from './dispatch';
+import { dispatchEmit, dispatchListen } from './dispatch';
 import type { Unlisten } from './playwright-ipc-mock';
 import type { IpcEventMap } from '@/lib/types/ipc';
 
@@ -7,4 +7,8 @@ export function listen<E extends keyof IpcEventMap>(
   listener: (payload: IpcEventMap[E]) => void,
 ): Promise<Unlisten> {
   return dispatchListen<IpcEventMap[E]>(event, listener);
+}
+
+export function emitFrontendReady(): Promise<void> {
+  return dispatchEmit('frontend://ready', {});
 }

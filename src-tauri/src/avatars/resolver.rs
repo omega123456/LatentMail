@@ -45,7 +45,6 @@ impl Default for Scheduler {
     }
 }
 
-
 #[cfg(not(feature = "test-utils"))]
 pub async fn lookup_txt(domain: &str) -> Vec<String> {
     use hickory_resolver::proto::rr::{RData, RecordType};
@@ -54,11 +53,8 @@ pub async fn lookup_txt(domain: &str) -> Vec<String> {
         return Vec::new();
     };
     let fqdn = format!("{domain}.");
-    let Ok(Ok(lookup)) = tokio::time::timeout(
-        DNS_LOOKUP_BUDGET,
-        resolver.lookup(fqdn, RecordType::TXT),
-    )
-    .await
+    let Ok(Ok(lookup)) =
+        tokio::time::timeout(DNS_LOOKUP_BUDGET, resolver.lookup(fqdn, RecordType::TXT)).await
     else {
         return Vec::new();
     };
@@ -77,7 +73,6 @@ pub async fn lookup_txt(domain: &str) -> Vec<String> {
         .collect()
 }
 
-
 #[cfg(not(feature = "test-utils"))]
 fn system_resolver() -> Option<&'static hickory_resolver::TokioResolver> {
     static RESOLVER: std::sync::OnceLock<Option<hickory_resolver::TokioResolver>> =
@@ -90,7 +85,6 @@ fn system_resolver() -> Option<&'static hickory_resolver::TokioResolver> {
         })
         .as_ref()
 }
-
 
 #[cfg(not(feature = "test-utils"))]
 pub async fn download(url: &str) -> Option<Vec<u8>> {
@@ -124,7 +118,6 @@ fn fake_downloads() -> &'static std::sync::Mutex<HashMap<String, FakeDownload>> 
     STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-
 #[cfg(feature = "test-utils")]
 pub fn set_fake_download(url: &str, bytes: Vec<u8>) {
     fake_downloads()
@@ -132,7 +125,6 @@ pub fn set_fake_download(url: &str, bytes: Vec<u8>) {
         .expect("fake download lock poisoned")
         .insert(url.to_owned(), FakeDownload::Bytes(bytes));
 }
-
 
 #[cfg(feature = "test-utils")]
 pub fn set_fake_download_delayed(url: &str, bytes: Vec<u8>, delay: Duration) {
@@ -179,7 +171,6 @@ fn fake_dns() -> &'static std::sync::Mutex<HashMap<String, FakeAnswer>> {
     STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-
 #[cfg(feature = "test-utils")]
 pub fn set_fake_txt(domain: &str, records: Vec<String>) {
     fake_dns()
@@ -187,7 +178,6 @@ pub fn set_fake_txt(domain: &str, records: Vec<String>) {
         .expect("fake DNS lock poisoned")
         .insert(domain.to_owned(), FakeAnswer::Records(records));
 }
-
 
 #[cfg(feature = "test-utils")]
 pub fn set_fake_txt_delayed(domain: &str, records: Vec<String>, delay: Duration) {
@@ -203,7 +193,6 @@ fn fake_txt_lookup_counts() -> &'static std::sync::Mutex<HashMap<String, usize>>
         std::sync::OnceLock::new();
     STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
-
 
 #[cfg(feature = "test-utils")]
 pub fn fake_txt_lookup_count(domain: &str) -> usize {

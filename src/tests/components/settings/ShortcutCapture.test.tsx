@@ -59,7 +59,10 @@ describe('ShortcutCapture', () => {
     const field = screen.getByRole('textbox');
     field.focus();
     await user.keyboard('{Control>}k{/Control}');
-    await user.pointer({ keys: '[MouseLeft>]', target: screen.getByRole('button', { name: 'Apply' }) });
+    await user.pointer({
+      keys: '[MouseLeft>]',
+      target: screen.getByRole('button', { name: 'Apply' }),
+    });
 
     expect(document.activeElement).toBe(field);
   });

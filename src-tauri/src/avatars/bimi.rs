@@ -77,4 +77,3 @@ async fn lookup_logo_url(candidate: &str) -> Option<String> {
         .iter()
         .find_map(|record| parse_logo_url(record))
 }
-

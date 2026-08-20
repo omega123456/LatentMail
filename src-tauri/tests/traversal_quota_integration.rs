@@ -1,4 +1,3 @@
-
 use latentmail_lib::gmail::{
     GmailClient, GmailRateLimiters, ACCOUNT_RATE_PER_SECOND, TRAVERSAL_SHARE,
 };
@@ -6,7 +5,6 @@ use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-
 
 async fn drain_traversal_bucket(client: &GmailClient) {
     let capacity = (ACCOUNT_RATE_PER_SECOND * TRAVERSAL_SHARE) as usize;
@@ -26,7 +24,6 @@ fn profile_body() -> serde_json::Value {
         "historyId": "1"
     })
 }
-
 
 #[tokio::test]
 async fn saturating_traversal_quota_does_not_delay_a_non_traversal_request() {
@@ -52,7 +49,6 @@ async fn saturating_traversal_quota_does_not_delay_a_non_traversal_request() {
          (took {elapsed:?}, expected well under the ~25ms traversal-bucket refill tick)"
     );
 }
-
 
 #[tokio::test]
 async fn a_traversal_request_beyond_its_cap_genuinely_waits_for_refill() {

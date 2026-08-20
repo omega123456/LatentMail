@@ -15,7 +15,13 @@ fn app() -> tauri::App<tauri::test::MockRuntime> {
         .unwrap()
 }
 
-fn service() -> (AvatarService, AvatarCache, SettingsService, Storage, tempfile::TempDir) {
+fn service() -> (
+    AvatarService,
+    AvatarCache,
+    SettingsService,
+    Storage,
+    tempfile::TempDir,
+) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let cache = AvatarCache::new(storage.clone(), directory.path().join("avatar-cache")).unwrap();
@@ -85,7 +91,10 @@ async fn read_sender_avatar_answers_from_cache_and_schedules_resolution_on_a_mis
         .read_sender_avatar(handle.clone(), "svc-example.com".into())
         .await
         .unwrap();
-    assert!(resolved.is_some(), "the scheduled resolution must have populated the cache");
+    assert!(
+        resolved.is_some(),
+        "the scheduled resolution must have populated the cache"
+    );
 
     let second = service
         .read_sender_avatar(handle, "svc-example.com".into())
@@ -163,7 +172,10 @@ async fn showsenderavatars_off_prevents_the_command_from_scheduling_any_lookup()
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let key = hash_key("gated-domain.example");
-    assert_eq!(cache.answer(&key, CacheDomain::Sender).await, CacheAnswer::Stale);
+    assert_eq!(
+        cache.answer(&key, CacheDomain::Sender).await,
+        CacheAnswer::Stale
+    );
 }
 
 #[tokio::test]
@@ -172,11 +184,17 @@ async fn an_empty_or_blank_domain_answers_none_immediately() {
     let application = app();
     let handle = emitter(&application);
     assert_eq!(
-        service.read_sender_avatar(handle.clone(), "".into()).await.unwrap(),
+        service
+            .read_sender_avatar(handle.clone(), "".into())
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(
-        service.read_sender_avatar(handle, "   ".into()).await.unwrap(),
+        service
+            .read_sender_avatar(handle, "   ".into())
+            .await
+            .unwrap(),
         None
     );
 }
@@ -187,11 +205,17 @@ async fn an_empty_or_blank_account_id_answers_none_immediately() {
     let application = app();
     let handle = emitter(&application);
     assert_eq!(
-        service.read_account_avatar(handle.clone(), "".into()).await.unwrap(),
+        service
+            .read_account_avatar(handle.clone(), "".into())
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(
-        service.read_account_avatar(handle, "   ".into()).await.unwrap(),
+        service
+            .read_account_avatar(handle, "   ".into())
+            .await
+            .unwrap(),
         None
     );
 }
@@ -232,7 +256,10 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
         .unwrap();
 
     assert_eq!(
-        service.read_account_avatar(handle, "acct-3".into()).await.unwrap(),
+        service
+            .read_account_avatar(handle, "acct-3".into())
+            .await
+            .unwrap(),
         None
     );
 
@@ -337,7 +364,10 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
         .unwrap();
 
     assert_eq!(
-        service.read_account_avatar(handle, "acct-2".into()).await.unwrap(),
+        service
+            .read_account_avatar(handle, "acct-2".into())
+            .await
+            .unwrap(),
         None
     );
 
@@ -578,8 +608,7 @@ fn initialize_surfaces_a_readable_error_when_the_database_path_is_unusable() {
 fn avatar_commands_are_reachable_through_real_ipc_dispatch() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
-    let cache =
-        AvatarCache::new(storage.clone(), directory.path().join("avatar-cache")).unwrap();
+    let cache = AvatarCache::new(storage.clone(), directory.path().join("avatar-cache")).unwrap();
     let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();

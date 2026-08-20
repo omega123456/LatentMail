@@ -511,6 +511,10 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
     assert_eq!(contacts[0].display_name.as_deref(), Some("First Recipient"));
 
     let cc_contacts = latentmail_lib::contacts::lookup(&connection, "account", "second").unwrap();
-    assert_eq!(cc_contacts.len(), 1, "the `cc` recipient must be observed too");
+    assert_eq!(
+        cc_contacts.len(),
+        1,
+        "the `cc` recipient must be observed too"
+    );
     assert_eq!(cc_contacts[0].address, "second@example.com");
 }

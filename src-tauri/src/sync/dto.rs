@@ -247,7 +247,11 @@ pub struct ThreadSearchPage {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum SearchPredicateDto {
     Label { value: String, negated: bool },
     Unread { negated: bool },
@@ -350,7 +354,11 @@ pub fn message_dto(
     attachments: Vec<Attachment>,
 ) -> MessageDto {
     let (html_body, remote_images_blocked, truncated) = match sanitized {
-        Some(value) => (Some(value.html), value.remote_images_blocked, value.truncated),
+        Some(value) => (
+            Some(value.html),
+            value.remote_images_blocked,
+            value.truncated,
+        ),
         None => (None, false, false),
     };
     MessageDto {

@@ -1,4 +1,3 @@
-
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::queue::QueueEngine;
 use latentmail_lib::storage::{
@@ -16,6 +15,10 @@ fn engine_with_storage() -> (std::sync::Arc<SyncEngine>, Storage, tempfile::Temp
 }
 
 type RecordedEvents = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>;
+
+fn fixture_now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp(3, 0).unwrap()
+}
 
 fn engine_with_recorded_events() -> (
     std::sync::Arc<SyncEngine>,
@@ -45,11 +48,12 @@ fn engine_with_recorded_events() -> (
         latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
     let events: RecordedEvents = Default::default();
     let recorder = std::sync::Arc::clone(&events);
-    let engine = SyncEngine::new(
+    let engine = SyncEngine::new_with_clock(
         storage.clone(),
         queue,
         registry,
         std::sync::Arc::new(move |name, payload| recorder.lock().unwrap().push((name, payload))),
+        fixture_now,
     );
     (engine, storage, directory, events)
 }
@@ -163,7 +167,6 @@ async fn initial_sync_populates_labels_messages_membership_and_threads() {
     assert!(status.last_synced_at.is_some());
 }
 
-
 #[tokio::test]
 async fn initial_sync_announces_no_arrivals_to_notify_about() {
     let server = MockServer::start().await;
@@ -184,7 +187,6 @@ async fn initial_sync_announces_no_arrivals_to_notify_about() {
         .expect("initial sync still announces new mail so the list refreshes");
     assert_eq!(new_mail.get("arrivals"), Some(&serde_json::json!([])));
 }
-
 
 #[tokio::test]
 async fn a_message_that_vanishes_between_listing_and_retrieval_is_skipped() {

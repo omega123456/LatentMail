@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
@@ -108,7 +107,10 @@ fn lazy_body_cache_distinguishes_never_fetched_present_and_absent() {
     assert_eq!(absent.html_presence, HtmlPresence::Absent);
     assert!(absent.html_body.is_none());
 
-    assert_eq!(absent.plain_body.as_deref(), Some("plain-only bounce notice"));
+    assert_eq!(
+        absent.plain_body.as_deref(),
+        Some("plain-only bounce notice")
+    );
     assert!(!absent.body_is_empty());
 }
 

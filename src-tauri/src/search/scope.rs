@@ -3,7 +3,11 @@ use serde::Deserialize;
 pub const DEFAULT_EXCLUDED_LABELS: [&str; 3] = ["TRASH", "SPAM", "DRAFT"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SearchScope {
     Default,
     All,

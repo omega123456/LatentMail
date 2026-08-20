@@ -9,7 +9,6 @@ use crate::storage::{SettingRepository, Storage, StorageError};
 
 const WINDOW_STATE_KEY: &str = "windowState";
 
-
 pub const MIN_SYNC_INTERVAL_SECS: u64 = 15;
 
 macro_rules! string_try {
@@ -47,6 +46,10 @@ pub struct Settings {
     pub command_overrides: HashMap<String, Vec<String>>,
     pub log_level: LogLevel,
     pub prefetch_image_attachments: bool,
+    pub start_at_login: bool,
+    pub close_to_tray: bool,
+    pub start_minimized: bool,
+    pub desktop_notifications: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,10 +117,8 @@ impl Default for Settings {
             reader_height: 40,
             sync_on_startup: true,
             show_unread_counts: true,
-            sync_interval_seconds: u32::try_from(
-                chrono::Duration::minutes(5).num_seconds(),
-            )
-            .expect("five minutes fits in u32 seconds"),
+            sync_interval_seconds: u32::try_from(chrono::Duration::minutes(5).num_seconds())
+                .expect("five minutes fits in u32 seconds"),
             show_sender_avatars: true,
             zoom_percent: 100,
             always_load_remote_images: false,
@@ -125,6 +126,10 @@ impl Default for Settings {
             command_overrides: HashMap::new(),
             log_level: LogLevel::Info,
             prefetch_image_attachments: false,
+            start_at_login: false,
+            close_to_tray: true,
+            start_minimized: false,
+            desktop_notifications: true,
         }
     }
 }
@@ -182,9 +187,36 @@ impl SettingsService {
         self.storage
             .connection()
             .ok()
-            .and_then(|connection| SettingRepository::get(&connection, "logLevel").ok().flatten())
+            .and_then(|connection| {
+                SettingRepository::get(&connection, "logLevel")
+                    .ok()
+                    .flatten()
+            })
             .and_then(|value| serde_json::from_str(&value).ok())
             .unwrap_or(LogLevel::Info)
+    }
+
+    pub fn close_to_tray(&self) -> bool {
+        self.bool_setting("closeToTray", true)
+    }
+
+    pub fn start_minimized(&self) -> bool {
+        self.bool_setting("startMinimized", false)
+    }
+
+    pub fn set_start_at_login(&self, enabled: bool) -> Result<(), StorageError> {
+        let connection = self.storage.connection()?;
+        let value = serde_json::to_string(&enabled).expect("boolean is serializable");
+        Ok(SettingRepository::set(&connection, "startAtLogin", &value)?)
+    }
+
+    fn bool_setting(&self, key: &str, default: bool) -> bool {
+        self.storage
+            .connection()
+            .ok()
+            .and_then(|connection| SettingRepository::get(&connection, key).ok().flatten())
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or(default)
     }
 }
 
@@ -208,6 +240,10 @@ impl Settings {
             "commandOverrides" => set_value(&mut self.command_overrides, value),
             "logLevel" => set_value(&mut self.log_level, value),
             "prefetchImageAttachments" => set_value(&mut self.prefetch_image_attachments, value),
+            "startAtLogin" => set_value(&mut self.start_at_login, value),
+            "closeToTray" => set_value(&mut self.close_to_tray, value),
+            "startMinimized" => set_value(&mut self.start_minimized, value),
+            "desktopNotifications" => set_value(&mut self.desktop_notifications, value),
             _ => false,
         }
     }
@@ -231,11 +267,16 @@ pub async fn write_setting<R: Runtime>(
     key: String,
     value: Value,
 ) -> Result<(), String> {
+    if key == "startAtLogin" {
+        let enabled = value
+            .as_bool()
+            .ok_or_else(|| "Unknown or invalid setting: startAtLogin".to_owned())?;
+        crate::os::autostart::set_enabled(&app, enabled)?;
+    }
     service.write(key.clone(), value.clone()).await?;
     apply_live(&app, &key, &value);
     Ok(())
 }
-
 
 fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
     match key {
@@ -246,9 +287,11 @@ fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
             ) else {
                 return;
             };
-            schedulers.periodic.set_interval(std::time::Duration::from_secs(
-                u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
-            ));
+            schedulers
+                .periodic
+                .set_interval(std::time::Duration::from_secs(
+                    u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
+                ));
         }
         "logLevel" => {
             let Ok(level) = serde_json::from_value::<LogLevel>(value.clone()) else {
@@ -273,7 +316,7 @@ pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsS
 pub fn save_window<R: Runtime>(window: &tauri::Window<R>, service: &SettingsService) {
     let (Ok(position), Ok(size), Ok(maximized)) = (
         window.outer_position(),
-        window.outer_size(),
+        window.inner_size(),
         window.is_maximized(),
     ) else {
         return;
@@ -298,7 +341,18 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "Main window is missing".to_owned())?;
     restore_window(&window, &service);
+    if cfg!(windows) {
+        let enabled = string_try!(crate::os::autostart::is_enabled(app));
+        string_try!(service.set_start_at_login(enabled));
+    }
+    let show = crate::os::window::should_show_on_startup(
+        service.start_minimized(),
+        service.close_to_tray(),
+        cfg!(windows),
+    );
     app.manage(service);
-    string_try!(window.show());
+    if show {
+        string_try!(window.show());
+    }
     Ok(())
 }

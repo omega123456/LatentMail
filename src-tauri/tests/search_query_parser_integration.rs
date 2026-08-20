@@ -167,8 +167,14 @@ fn negated_has_attachment_requires_the_message_have_none() {
 #[test]
 fn before_and_after_resolve_absolute_dates_through_chrono() {
     let parsed = parse("after:2026/01/15 before:2026-02-01", now()).unwrap();
-    let expected_after = Utc.with_ymd_and_hms(2026, 1, 15, 0, 0, 0).unwrap().timestamp();
-    let expected_before = Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap().timestamp();
+    let expected_after = Utc
+        .with_ymd_and_hms(2026, 1, 15, 0, 0, 0)
+        .unwrap()
+        .timestamp();
+    let expected_before = Utc
+        .with_ymd_and_hms(2026, 2, 1, 0, 0, 0)
+        .unwrap()
+        .timestamp();
     assert_eq!(
         parsed.predicates,
         vec![
@@ -187,7 +193,10 @@ fn before_and_after_resolve_absolute_dates_through_chrono() {
 #[test]
 fn newer_than_two_months_means_two_calendar_months_not_minutes() {
     let parsed = parse("newer_than:2m", now()).unwrap();
-    let expected = now().checked_sub_months(Months::new(2)).unwrap().timestamp();
+    let expected = now()
+        .checked_sub_months(Months::new(2))
+        .unwrap()
+        .timestamp();
     assert_eq!(
         parsed.predicates,
         vec![latentmail_lib::search::query::Predicate {
@@ -213,7 +222,10 @@ fn older_than_thirty_days_resolves_through_chrono_duration() {
 #[test]
 fn newer_than_one_year_means_twelve_calendar_months() {
     let parsed = parse("newer_than:1y", now()).unwrap();
-    let expected = now().checked_sub_months(Months::new(12)).unwrap().timestamp();
+    let expected = now()
+        .checked_sub_months(Months::new(12))
+        .unwrap()
+        .timestamp();
     assert_eq!(
         parsed.predicates,
         vec![latentmail_lib::search::query::Predicate {

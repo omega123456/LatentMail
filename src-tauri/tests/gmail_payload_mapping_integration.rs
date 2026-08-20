@@ -58,7 +58,11 @@ async fn committed_message_corpus_maps_payload_trees() {
         }
 
         if let Some(expected) = shape.expect_inline_mime {
-            assert_eq!(message.inline_parts[0].mime_type, expected, "{}", shape.name);
+            assert_eq!(
+                message.inline_parts[0].mime_type, expected,
+                "{}",
+                shape.name
+            );
         }
         if shape.name == "missing_headers" {
             assert!(message.sender.is_empty() && message.subject.is_empty());

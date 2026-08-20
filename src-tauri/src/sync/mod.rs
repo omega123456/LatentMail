@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::{oneshot, watch, Mutex as AsyncMutex};
 
@@ -37,10 +37,9 @@ pub mod triage;
 
 pub use dto::{
     AttachmentDto, ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto, LabelDto,
-    MessageDto, MutationOutcomeDto,
-    MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto, StagedAttachmentDto, SyncStatusDto,
-    ThreadCursor, ThreadDto, ThreadPage, ThreadSearchPage, TraversalKind, TraversalState,
-    TraversalStatusDto,
+    MessageDto, MutationOutcomeDto, MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto,
+    StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, ThreadSearchPage,
+    TraversalKind, TraversalState, TraversalStatusDto,
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 
@@ -92,10 +91,9 @@ pub fn create_queue_engine_with_events(
     events: QueueEventSink,
 ) -> Arc<QueueEngine> {
     let hook_registry = Arc::clone(&registry);
-    let cancellation_hook: crate::queue::CancellationHook =
-        Arc::new(move |id: &str| {
-            hook_registry.take(id);
-        });
+    let cancellation_hook: crate::queue::CancellationHook = Arc::new(move |id: &str| {
+        hook_registry.take(id);
+    });
     QueueEngine::new_with_events_and_hook(
         rate_per_second,
         burst,
@@ -148,7 +146,6 @@ where
     )
     .await
 }
-
 
 async fn run_via_traversal_queue<F, T>(
     queue: &Arc<QueueEngine>,
@@ -223,7 +220,6 @@ where
     rx.await.map_err(|_| SyncError::QueueStopped)?
 }
 
-
 fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> OperationKind {
     if add.contains("STARRED") {
         OperationKind::Star
@@ -245,7 +241,6 @@ fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> Ope
         OperationKind::LabelMutation
     }
 }
-
 
 #[derive(Debug)]
 pub enum SyncError {
@@ -295,7 +290,6 @@ struct AccountStatus {
     last_error: Option<String>,
 }
 
-
 pub type EventSink = Arc<dyn Fn(&'static str, serde_json::Value) + Send + Sync>;
 
 pub fn noop_event_sink() -> EventSink {
@@ -332,15 +326,15 @@ pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
     );
 }
 
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailArrival {
+    pub thread_id: String,
     pub sender: String,
     pub subject: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewMailEvent {
     pub account_id: String,
@@ -355,7 +349,6 @@ pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
     );
 }
 
-
 pub struct SyncEngine {
     storage: Storage,
     queue: Arc<QueueEngine>,
@@ -367,6 +360,7 @@ pub struct SyncEngine {
     gmail_limiters: GmailRateLimiters,
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
     attachment_cache: std::sync::OnceLock<crate::attachments::AttachmentCache>,
+    clock: fn() -> chrono::DateTime<chrono::Utc>,
 }
 
 impl SyncEngine {
@@ -375,6 +369,16 @@ impl SyncEngine {
         queue: Arc<QueueEngine>,
         registry: Arc<WorkRegistry>,
         events: EventSink,
+    ) -> Arc<Self> {
+        Self::with_clock(storage, queue, registry, events, chrono::Utc::now)
+    }
+
+    fn with_clock(
+        storage: Storage,
+        queue: Arc<QueueEngine>,
+        registry: Arc<WorkRegistry>,
+        events: EventSink,
+        clock: fn() -> chrono::DateTime<chrono::Utc>,
     ) -> Arc<Self> {
         Arc::new(Self {
             storage,
@@ -387,7 +391,19 @@ impl SyncEngine {
             gmail_limiters: GmailRateLimiters::default(),
             active_backfills: Arc::new(AsyncMutex::new(std::collections::HashSet::new())),
             attachment_cache: std::sync::OnceLock::new(),
+            clock,
         })
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn new_with_clock(
+        storage: Storage,
+        queue: Arc<QueueEngine>,
+        registry: Arc<WorkRegistry>,
+        events: EventSink,
+        clock: fn() -> chrono::DateTime<chrono::Utc>,
+    ) -> Arc<Self> {
+        Self::with_clock(storage, queue, registry, events, clock)
     }
 
     pub fn set_attachment_cache(&self, cache: crate::attachments::AttachmentCache) {
@@ -583,8 +599,11 @@ impl SyncEngine {
         let account_owned = account_id.to_owned();
         let cache = self.attachment_cache().cloned();
         let reconciliation_cache = cache.clone();
+        let now = (self.clock)();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            match incremental_body(&storage, &client, &account_owned, checkpoint, cache).await? {
+            match incremental_body(&storage, &client, &account_owned, checkpoint, cache, now)
+                .await?
+            {
                 IncrementalOutcome::Updated {
                     history_id,
                     added_count,
@@ -599,7 +618,6 @@ impl SyncEngine {
                     arrivals,
                 }),
                 IncrementalOutcome::Expired => {
-
                     let reconciliation_client = client.traversal_scoped();
                     let reconciliation_storage = storage.clone();
                     let reconciliation_account = account_owned.clone();
@@ -645,12 +663,7 @@ impl SyncEngine {
         }
     }
 
-
-    async fn complete(
-        &self,
-        account_id: &str,
-        outcome: FullSyncOutcome,
-    ) -> Result<(), SyncError> {
+    async fn complete(&self, account_id: &str, outcome: FullSyncOutcome) -> Result<(), SyncError> {
         let FullSyncOutcome {
             history_id,
             added_count,
@@ -687,8 +700,9 @@ impl SyncEngine {
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
         let cache = self.attachment_cache().cloned();
+        let now = (self.clock)();
         let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            probe_only_body(&storage, &client, &account_owned, cache).await
+            probe_only_body(&storage, &client, &account_owned, cache, now).await
         })
         .await;
         match outcome {
@@ -709,7 +723,6 @@ impl SyncEngine {
         }
     }
 }
-
 
 fn enqueue_backfill_step(
     handles: BackfillHandles,
@@ -759,16 +772,13 @@ fn enqueue_backfill_step(
                     let completed = match step_result {
                         Ok(completed) => completed,
                         Err(_) => {
-
                             step_active_backfills.lock().await.remove(&step_account);
                             return Err(QueueError::Permanent);
                         }
                     };
                     if completed {
-
                         step_active_backfills.lock().await.remove(&step_account);
                     } else {
-
                         enqueue_backfill_step(
                             BackfillHandles {
                                 queue: step_queue,
@@ -802,12 +812,10 @@ fn enqueue_backfill_step(
             })
             .await;
         if enqueue_result.is_err() {
-
             active_backfills.lock().await.remove(&account_id);
         }
     })
 }
-
 
 struct BackfillHandles {
     queue: Arc<QueueEngine>,
@@ -819,7 +827,6 @@ struct BackfillHandles {
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
     attachment_cache: Option<crate::attachments::AttachmentCache>,
 }
-
 
 pub(crate) struct FullSyncOutcome {
     history_id: i64,
@@ -889,9 +896,7 @@ async fn full_sync_body(
     })
 }
 
-
 const INBOX_PROBE_SIZE: u32 = 25;
-
 
 async fn probe_inbox(
     storage: &Storage,
@@ -925,7 +930,6 @@ async fn probe_inbox(
     )
     .await
 }
-
 
 async fn fetch_unknown(
     storage: &Storage,
@@ -973,14 +977,22 @@ pub(crate) struct MaterializedBatch {
     added_count: u32,
 }
 
-fn compute_arrivals(messages: &[GmailMessage]) -> Vec<MailArrival> {
+fn compute_arrivals(
+    messages: &[GmailMessage],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<MailArrival> {
     messages
         .iter()
         .filter(|message| {
             let has = |label: &str| message.label_ids.iter().any(|id| id == label);
-            has("INBOX") && has("UNREAD")
+            has("INBOX")
+                && has("UNREAD")
+                && chrono::DateTime::from_timestamp(message.sent_at, 0).is_some_and(|sent_at| {
+                    now.signed_duration_since(sent_at) <= chrono::Duration::minutes(10)
+                })
         })
         .map(|message| MailArrival {
+            thread_id: message.thread_id.clone(),
             sender: message.sender.clone(),
             subject: message.subject.clone(),
         })
@@ -1011,6 +1023,7 @@ async fn probe_only_body(
     client: &GmailClient,
     account_id: &str,
     cache: Option<crate::attachments::AttachmentCache>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<MaterializedBatch, SyncError> {
     let messages = probe_inbox(storage, client, account_id, &[]).await?;
     let added_count = messages.len() as u32;
@@ -1021,8 +1034,11 @@ async fn probe_only_body(
             added_count: 0,
         });
     }
-    let arrivals = compute_arrivals(&messages);
-    let thread_ids: HashSet<String> = messages.iter().map(|message| message.thread_id.clone()).collect();
+    let arrivals = compute_arrivals(&messages, now);
+    let thread_ids: HashSet<String> = messages
+        .iter()
+        .map(|message| message.thread_id.clone())
+        .collect();
     let account_owned = account_id.to_owned();
     let thread_ids_for_write = thread_ids.clone();
     storage
@@ -1059,6 +1075,7 @@ async fn incremental_body(
     account_id: &str,
     start_history_id: i64,
     cache: Option<crate::attachments::AttachmentCache>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<IncrementalOutcome, SyncError> {
     let gmail_labels = client.labels().await?;
     let mut token = None;
@@ -1079,7 +1096,6 @@ async fn incremental_body(
         token = page.next_page_token;
     }
 
-
     let final_history_id = records
         .iter()
         .map(|record| record.id)
@@ -1089,7 +1105,6 @@ async fn incremental_body(
     let mut added_messages = Vec::new();
     for record in &records {
         for reference in &record.messages_added {
-
             added_messages.extend(client.message_if_present(&reference.id).await?);
         }
     }
@@ -1116,7 +1131,6 @@ async fn incremental_body(
     .await?;
     added_messages.extend(untyped);
 
-
     match probe_inbox(storage, client, account_id, &added_messages).await {
         Ok(probed) => added_messages.extend(probed),
         Err(error) => {
@@ -1126,7 +1140,7 @@ async fn incremental_body(
     let added_count = added_messages.len() as u32;
     let changed = !records.is_empty() || !added_messages.is_empty();
 
-    let arrivals = compute_arrivals(&added_messages);
+    let arrivals = compute_arrivals(&added_messages, now);
     let added_thread_ids: HashSet<String> = added_messages
         .iter()
         .map(|message| message.thread_id.clone())
@@ -1199,9 +1213,7 @@ async fn incremental_body(
     })
 }
 
-
 pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
-
     let color = if label.kind == "user" {
         label.color.as_ref().map(|pair| LabelColor {
             text: pair.text_color.clone(),
@@ -1232,7 +1244,6 @@ fn write_message(
     }
     Ok(())
 }
-
 
 pub struct SyncScheduler {
     interval_tx: watch::Sender<Duration>,
@@ -1265,7 +1276,6 @@ impl SyncScheduler {
         Arc::new(Self { interval_tx: tx })
     }
 
-
     pub fn set_interval(&self, interval: Duration) {
         let _ = self.interval_tx.send(interval);
     }
@@ -1282,7 +1292,6 @@ pub struct SyncSchedulers {
     pub fast: Arc<SyncScheduler>,
     pub periodic: Arc<SyncScheduler>,
 }
-
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app
@@ -1340,10 +1349,9 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         }
     });
     let hook_registry = Arc::clone(&registry);
-    let cancellation_hook: crate::queue::CancellationHook =
-        Arc::new(move |id: &str| {
-            hook_registry.take(id);
-        });
+    let cancellation_hook: crate::queue::CancellationHook = Arc::new(move |id: &str| {
+        hook_registry.take(id);
+    });
     let queue = QueueEngine::new_with_events_and_hook(
         250,
         250,
@@ -1366,7 +1374,6 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     spawn_startup_recovery(app.clone(), storage, queue, engine, events);
     Ok(())
 }
-
 
 fn spawn_startup_recovery<R: Runtime>(
     app: AppHandle<R>,
@@ -1439,7 +1446,9 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                         let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
                             continue;
                         };
-                        let client = engine.gmail_client(&account.id, token, gmail_base_url()).await;
+                        let client = engine
+                            .gmail_client(&account.id, token, gmail_base_url())
+                            .await;
                         let _ = engine.probe_only(&account.id, client).await;
                     }
                 }
@@ -1448,10 +1457,8 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
 
         let periodic_auth = auth.clone();
         let periodic_engine = Arc::clone(&engine);
-        let periodic = SyncScheduler::start(
-            periodic_interval,
-            preferences.sync_on_startup,
-            move || {
+        let periodic =
+            SyncScheduler::start(periodic_interval, preferences.sync_on_startup, move || {
                 let app = app.clone();
                 let auth = periodic_auth.clone();
                 let engine = Arc::clone(&periodic_engine);
@@ -1467,7 +1474,9 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                         let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
                             continue;
                         };
-                        let client = engine.gmail_client(&account.id, token, gmail_base_url()).await;
+                        let client = engine
+                            .gmail_client(&account.id, token, gmail_base_url())
+                            .await;
                         if engine.run_sync(&account.id, client.clone()).await.is_ok() {
                             engine.enqueue_backfill(&account.id, client).await;
                         } else {
@@ -1475,8 +1484,7 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                         }
                     }
                 }
-            },
-        );
+            });
         app_for_manage.manage(SyncSchedulers { fast, periodic });
     });
 }

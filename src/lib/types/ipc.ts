@@ -268,6 +268,10 @@ export interface Settings {
   commandOverrides: Partial<Record<string, string[]>>;
   logLevel: LogLevel;
   prefetchImageAttachments: boolean;
+  startAtLogin: boolean;
+  closeToTray: boolean;
+  startMinimized: boolean;
+  desktopNotifications: boolean;
 }
 
 export interface LogEntryDto {
@@ -527,6 +531,7 @@ export interface SyncCompleteEvent {
 }
 
 export interface MailArrival {
+  threadId: string;
   sender: string;
   subject: string;
 }
@@ -536,6 +541,17 @@ export interface NewMailEvent {
   threadIds: string[];
   arrivals: MailArrival[];
 }
+
+export type OsIntent =
+  | { kind: 'compose' }
+  | { kind: 'syncNow' }
+  | { kind: 'openAccounts' }
+  | {
+      kind: 'mailto';
+      mailto: { to: string[]; cc: string[]; bcc: string[]; subject: string; body: string };
+    }
+  | { kind: 'openThread'; accountId: string; threadId: string }
+  | { kind: 'openFolder'; accountId: string };
 
 export interface TraversalProgressEvent {
   accountId: string;
@@ -560,6 +576,7 @@ export interface IpcEventMap {
   'sync://progress': SyncProgressEvent;
   'sync://complete': SyncCompleteEvent;
   'mail://new': NewMailEvent;
+  'os://intent': OsIntent;
   'sync://traversal': TraversalProgressEvent;
   'send://uncertain': { accountId: string };
   'draft://saved': { accountId: string; sessionId: string; draftId: string };

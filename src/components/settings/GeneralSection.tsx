@@ -10,6 +10,7 @@ import { SettingRow } from './SettingRow';
 import { settingsTriggerClass } from './styles';
 import { SettingsSection } from './SettingsSection';
 import { TrustedSendersList } from './TrustedSendersList';
+import { isWindows } from '@/lib/os/platform';
 
 const themeOptions: { value: ThemePreference; label: string }[] = [
   { value: 'light', label: 'Light' },
@@ -37,16 +38,19 @@ function SettingSwitch({
   checked,
   onChange,
   label,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <Switch.Root
       checked={checked}
       onCheckedChange={onChange}
       aria-label={label}
+      disabled={disabled}
       className="relative h-5.5 w-9.5 shrink-0 cursor-pointer rounded-full bg-settings-outline-variant transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary data-[state=checked]:bg-settings-primary dark:bg-dark-settings-outline-variant dark:data-[state=checked]:bg-dark-settings-primary"
     >
       <Switch.Thumb className="absolute left-0.75 top-0.75 block size-4 rounded-full bg-white transition-transform data-[state=checked]:translate-x-4" />
@@ -83,6 +87,14 @@ export function GeneralSection() {
   const setAlwaysLoadRemoteImages = useLayoutStore((state) => state.setAlwaysLoadRemoteImages);
   const prefetchImageAttachments = useLayoutStore((state) => state.prefetchImageAttachments);
   const setPrefetchImageAttachments = useLayoutStore((state) => state.setPrefetchImageAttachments);
+  const startAtLogin = useLayoutStore((state) => state.startAtLogin);
+  const setStartAtLogin = useLayoutStore((state) => state.setStartAtLogin);
+  const closeToTray = useLayoutStore((state) => state.closeToTray);
+  const setCloseToTray = useLayoutStore((state) => state.setCloseToTray);
+  const startMinimized = useLayoutStore((state) => state.startMinimized);
+  const setStartMinimized = useLayoutStore((state) => state.setStartMinimized);
+  const desktopNotifications = useLayoutStore((state) => state.desktopNotifications);
+  const setDesktopNotifications = useLayoutStore((state) => state.setDesktopNotifications);
 
   return (
     <SettingsSection title="General" description="Changes apply immediately.">
@@ -216,6 +228,55 @@ export function GeneralSection() {
               label: `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`,
             }))}
             className={settingsTriggerClass}
+          />
+        </SettingRow>
+      </div>
+      <div
+        aria-hidden="true"
+        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
+      />
+      <div className="flex flex-col">
+        <SubsectionHeading>System</SubsectionHeading>
+        {isWindows() && (
+          <>
+            <SettingRow label="Start at login" description="Open LatentMail when you sign in.">
+              <SettingSwitch
+                checked={startAtLogin}
+                onChange={setStartAtLogin}
+                label="Start at login"
+              />
+            </SettingRow>
+            <SettingRow
+              label="Close to system tray"
+              description="Keep running when the window closes."
+            >
+              <SettingSwitch
+                checked={closeToTray}
+                onChange={setCloseToTray}
+                label="Close to system tray"
+              />
+            </SettingRow>
+            <SettingRow
+              label="Start minimized"
+              description={
+                closeToTray ? 'Open hidden in the tray.' : 'Requires closing to the tray.'
+              }
+              disabled={!closeToTray}
+            >
+              <SettingSwitch
+                checked={startMinimized}
+                onChange={setStartMinimized}
+                label="Start minimized"
+                disabled={!closeToTray}
+              />
+            </SettingRow>
+          </>
+        )}
+        <SettingRow label="Desktop notifications" description="Alert me when new mail arrives.">
+          <SettingSwitch
+            checked={desktopNotifications}
+            onChange={setDesktopNotifications}
+            label="Desktop notifications"
           />
         </SettingRow>
       </div>

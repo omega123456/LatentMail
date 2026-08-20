@@ -121,13 +121,18 @@ export async function openForward(
 export function openNewMessage(
   accountId: string,
   accountEmail: string,
-  presetTo?: Participant,
+  preset?:
+    Participant | { to?: string[]; cc?: string[]; bcc?: string[]; subject?: string; body?: string },
 ): void {
+  const recipients =
+    preset && 'address' in preset
+      ? { to: [formatRaw(preset)], cc: [], bcc: [] }
+      : { to: preset?.to ?? [], cc: preset?.cc ?? [], bcc: preset?.bcc ?? [] };
   openOrRetarget({
     ...baseSession('new', accountId, accountEmail),
-    recipients: { to: presetTo ? [formatRaw(presetTo)] : [], cc: [], bcc: [] },
-    subject: '',
-    html: '',
+    recipients,
+    subject: preset && 'address' in preset ? '' : (preset?.subject ?? ''),
+    html: preset && 'address' in preset ? '' : (preset?.body ?? ''),
   });
 }
 

@@ -6,7 +6,10 @@ fn valid_png_bytes() -> Vec<u8> {
     let image = image::RgbaImage::from_pixel(16, 16, image::Rgba([200, 30, 30, 255]));
     let mut bytes = Vec::new();
     image::DynamicImage::ImageRgba8(image)
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
         .unwrap();
     bytes
 }
@@ -20,7 +23,8 @@ fn a_valid_png_validates_and_normalizes_to_the_stored_size() {
     let validated = validate(&valid_png_bytes()).expect("valid PNG must validate");
     assert!(matches!(validated, ValidatedImage::Png(_)));
     let normalized = normalize_to_png(validated);
-    let decoded = image::load_from_memory_with_format(&normalized, image::ImageFormat::Png).unwrap();
+    let decoded =
+        image::load_from_memory_with_format(&normalized, image::ImageFormat::Png).unwrap();
     assert_eq!(decoded.width(), OUTPUT_SIZE);
     assert_eq!(decoded.height(), OUTPUT_SIZE);
 }
@@ -55,8 +59,7 @@ fn a_valid_svg_rasterizes_to_the_stored_output_size() {
     assert!(matches!(validated, ValidatedImage::Svg(_)));
     let png_bytes = normalize_to_png(validated);
     assert!(!png_bytes.starts_with(b"<svg"));
-    let decoded =
-        image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png).unwrap();
+    let decoded = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png).unwrap();
     assert_eq!(decoded.width(), OUTPUT_SIZE);
     assert_eq!(decoded.height(), OUTPUT_SIZE);
 }
@@ -81,7 +84,10 @@ fn an_oversized_png_source_is_rejected() {
     let image = image::RgbaImage::from_pixel(4100, 1, image::Rgba([10, 10, 10, 255]));
     let mut bytes = Vec::new();
     image::DynamicImage::ImageRgba8(image)
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
         .unwrap();
     let error = validate(&bytes).unwrap_err();
     assert!(error.contains("maximum accepted dimension"));

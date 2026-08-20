@@ -151,7 +151,6 @@ describe('RecipientField', () => {
     }
     expect(useComposeStore.getState().session?.overflow.to).toBe(0);
 
-
     act(() => {
       window.__resizeObserverInstances__?.forEach((instance) =>
         instance.callback(
@@ -162,7 +161,6 @@ describe('RecipientField', () => {
     });
     expect(screen.queryByRole('button', { name: /more recipient/ })).not.toBeInTheDocument();
 
-
     act(() => {
       window.__resizeObserverInstances__?.forEach((instance) =>
         instance.callback(
@@ -172,7 +170,6 @@ describe('RecipientField', () => {
       );
     });
     expect(screen.queryByRole('button', { name: /more recipient/ })).not.toBeInTheDocument();
-
 
     act(() => {
       window.__resizeObserverInstances__?.forEach((instance) =>

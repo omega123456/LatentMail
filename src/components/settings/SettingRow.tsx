@@ -4,13 +4,17 @@ export function SettingRow({
   label,
   description,
   children,
+  disabled = false,
 }: {
   label: string;
   description: string;
   children: ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-8 py-3.25">
+    <div
+      className={`flex items-center justify-between gap-8 py-3.25 ${disabled ? 'opacity-45' : ''}`}
+    >
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="text-body-sm font-medium text-settings-ink dark:text-dark-settings-ink">
           {label}

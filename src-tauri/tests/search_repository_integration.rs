@@ -124,13 +124,13 @@ fn a_diacritic_bearing_term_matches_its_unaccented_form_and_vice_versa() {
     let scope = resolve(&SearchScope::Default);
 
     let unaccented = parse("cafe", now()).unwrap();
-    let rows = SearchRepository::search(&connection, "account", &unaccented, &scope, None, 10)
-        .unwrap();
+    let rows =
+        SearchRepository::search(&connection, "account", &unaccented, &scope, None, 10).unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 
     let accented = parse("café", now()).unwrap();
-    let rows = SearchRepository::search(&connection, "account", &accented, &scope, None, 10)
-        .unwrap();
+    let rows =
+        SearchRepository::search(&connection, "account", &accented, &scope, None, 10).unwrap();
     assert_eq!(thread_ids(&rows), vec!["thread-1"]);
 }
 

@@ -4,7 +4,9 @@ pub mod scope;
 use chrono::Utc;
 
 use crate::storage::{SearchRepository, Storage};
-use crate::sync::{ParsedSearchQueryDto, SearchPredicateDto, ThreadCursor, ThreadDto, ThreadSearchPage};
+use crate::sync::{
+    ParsedSearchQueryDto, SearchPredicateDto, ThreadCursor, ThreadDto, ThreadSearchPage,
+};
 
 use query::{ParsedQuery, Predicate, PredicateKind};
 use scope::SearchScope;
@@ -43,7 +45,11 @@ fn to_dto(parsed: &ParsedQuery) -> ParsedSearchQueryDto {
         subject: parsed.subject.clone(),
         includes: parsed.includes.clone(),
         excludes: parsed.excludes.clone(),
-        predicates: parsed.predicates.iter().map(SearchPredicateDto::from).collect(),
+        predicates: parsed
+            .predicates
+            .iter()
+            .map(SearchPredicateDto::from)
+            .collect(),
     }
 }
 

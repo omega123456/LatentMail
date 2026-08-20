@@ -20,9 +20,7 @@ use std::{
 use rusqlite::Connection;
 use thiserror::Error;
 
-
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-
 
 const STATEMENT_CACHE_CAPACITY: usize = 52;
 
@@ -32,7 +30,6 @@ fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     Ok(())
 }
-
 
 fn configure_database(connection: &Connection) -> rusqlite::Result<()> {
     configure(connection)?;

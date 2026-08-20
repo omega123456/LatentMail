@@ -23,7 +23,6 @@ fn app() -> tauri::App<tauri::test::MockRuntime> {
         .unwrap()
 }
 
-
 fn invoke(
     webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
     cmd: &str,
@@ -83,7 +82,6 @@ fn pause_and_resume_queue_commands_emit_summaries_and_toggle_the_engine() {
     assert_eq!(summary.pending, 0);
 }
 
-
 #[test]
 fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     let app = app();
@@ -139,7 +137,6 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     assert!(invoke(
         &webview,
         "write_frontend_log",
-
         serde_json::json!({ "level": "info", "message": "from ipc" })
     )
     .is_ok());
@@ -266,13 +263,29 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         "attachmentId": "missing-attachment"
     });
     assert!(
-        invoke(&webview, "ensure_attachment_cached", missing_attachment_args.clone()).is_err(),
+        invoke(
+            &webview,
+            "ensure_attachment_cached",
+            missing_attachment_args.clone()
+        )
+        .is_err(),
         "reachable through IPC and fails cleanly on missing metadata, not a permission error"
     );
-    assert!(invoke(&webview, "read_attachment_bytes", missing_attachment_args.clone()).is_err());
-    assert!(invoke(&webview, "read_attachment_text", missing_attachment_args.clone()).is_err());
+    assert!(invoke(
+        &webview,
+        "read_attachment_bytes",
+        missing_attachment_args.clone()
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "read_attachment_text",
+        missing_attachment_args.clone()
+    )
+    .is_err());
     let mut save_args = missing_attachment_args.clone();
-    save_args["destination"] = serde_json::json!(directory.path().join("saved.bin").to_string_lossy());
+    save_args["destination"] =
+        serde_json::json!(directory.path().join("saved.bin").to_string_lossy());
     assert!(invoke(&webview, "save_attachment_to_path", save_args).is_err());
     let mut stage_args = missing_attachment_args;
     stage_args["owner"] = serde_json::json!("owner");
@@ -433,8 +446,10 @@ fn manage_attachment_command_dependencies(
         latentmail_lib::compose::staging::Staging::new(directory.join("compose-staging")),
     ));
     app.manage(
-        latentmail_lib::attachments::cache::AttachmentCache::new(directory.join("attachment-cache"))
-            .unwrap(),
+        latentmail_lib::attachments::cache::AttachmentCache::new(
+            directory.join("attachment-cache"),
+        )
+        .unwrap(),
     );
 }
 
@@ -538,7 +553,10 @@ async fn ensure_attachment_cached_fails_when_the_attachment_row_is_missing() {
         }),
     )
     .unwrap_err();
-    assert_eq!(error, serde_json::json!("Attachment metadata is unavailable"));
+    assert_eq!(
+        error,
+        serde_json::json!("Attachment metadata is unavailable")
+    );
 }
 
 #[tokio::test]
@@ -575,7 +593,11 @@ async fn ensure_attachment_cached_fails_when_gmail_rejects_the_fetch() {
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let auth_service = AuthService::new(storage.clone());
     let account_id = auth_service
-        .save_account("gmail-rejects@example.com".into(), "refresh-token".into(), None)
+        .save_account(
+            "gmail-rejects@example.com".into(),
+            "refresh-token".into(),
+            None,
+        )
         .await
         .unwrap()
         .id;
@@ -995,8 +1017,6 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
     }
 }
 
-
-
 #[tokio::test]
 async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     let directory = tempfile::tempdir().unwrap();
@@ -1025,7 +1045,6 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     );
     std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
     latentmail_lib::auth::save_refresh_token(&account_id, "refresh-token").unwrap();
-
 
     let connection = storage.connection().unwrap();
     AccountRepository::upsert(
@@ -1200,7 +1219,6 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         .build()
         .unwrap();
 
-
     let status = invoke(
         &webview,
         "read_traversal_status",
@@ -1354,7 +1372,6 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_err());
 
-
     let created = invoke(
         &webview,
         "create_label",
@@ -1387,14 +1404,12 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_ok());
 
-
     assert!(invoke(
         &webview,
         "create_label",
         serde_json::json!({ "accountId": account_id, "name": "Bogus", "colorId": "not-real" })
     )
     .is_err());
-
 
     let results = invoke(
         &webview,
@@ -1454,14 +1469,12 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_ok());
 
-
     assert!(invoke(
         &webview,
         "delete_draft",
         serde_json::json!({ "accountId": account_id, "messageId": "message-1" })
     )
     .is_ok());
-
 
     let second = invoke(
         &webview,
@@ -1477,7 +1490,6 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .is_err());
 }
-
 
 #[tokio::test]
 async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_ipc_dispatch() {
@@ -1653,7 +1665,6 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
     )
     .is_ok());
 
-
     Mock::given(method("GET"))
         .and(path("/users/me/profile"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1686,7 +1697,6 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
     .unwrap();
     assert_eq!(read_back["state"], "idle");
 
-
     latentmail_lib::storage::TraversalCursorRepository::upsert(
         &storage_for_cursor.connection().unwrap(),
         &latentmail_lib::storage::TraversalCursor {
@@ -1714,7 +1724,6 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
 
     assert_eq!(mid_status["isResumed"], true);
 }
-
 
 #[tokio::test]
 async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_through_real_ipc_dispatch(
@@ -1845,7 +1854,6 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
         .unwrap();
     assert_eq!(stored.html_body.as_deref(), Some("hello"));
     assert_eq!(stored.html_presence, HtmlPresence::Present);
-
 
     assert!(invoke(
         &webview,
@@ -2083,8 +2091,6 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
     }
 }
 
-
-
 #[tokio::test]
 async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() {
     let directory = tempfile::tempdir().unwrap();
@@ -2195,7 +2201,6 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         .unwrap()
         .contains("Draft messages cannot be modified"));
 
-
     assert!(server
         .received_requests()
         .await
@@ -2203,7 +2208,6 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         .iter()
         .all(|request| request.url.path() != "/users/me/messages/batchModify"));
 }
-
 
 #[test]
 fn staging_commands_stage_and_release_through_real_ipc() {
@@ -2274,7 +2278,6 @@ fn staging_commands_stage_and_release_through_real_ipc() {
     )
     .is_ok());
 }
-
 
 #[tokio::test]
 async fn reply_contacts_html_conversation_and_traversal_status_round_trip_through_ipc() {
@@ -2595,7 +2598,8 @@ async fn forwarding_a_message_whose_only_attachment_shaped_parts_are_inline_imag
         }],
     )
     .unwrap();
-    AttachmentRepository::replace_for_message(&connection, &account_id, "message-inline", &[]).unwrap();
+    AttachmentRepository::replace_for_message(&connection, &account_id, "message-inline", &[])
+        .unwrap();
     drop(connection);
 
     let app = app();

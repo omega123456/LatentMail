@@ -37,8 +37,11 @@ pub fn validate(bytes: &[u8]) -> Result<ValidatedImage, String> {
 pub fn normalize_to_png(image: ValidatedImage) -> Vec<u8> {
     match image {
         ValidatedImage::Png(decoded) => {
-            let resized =
-                decoded.resize_exact(OUTPUT_SIZE, OUTPUT_SIZE, image::imageops::FilterType::Lanczos3);
+            let resized = decoded.resize_exact(
+                OUTPUT_SIZE,
+                OUTPUT_SIZE,
+                image::imageops::FilterType::Lanczos3,
+            );
             let mut bytes = Vec::new();
             resized
                 .write_to(&mut std::io::Cursor::new(&mut bytes), ImageFormat::Png)

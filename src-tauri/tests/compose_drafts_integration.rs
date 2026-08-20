@@ -660,7 +660,9 @@ fn boot(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile:
     (application, home)
 }
 
-fn boot_with_dead_gmail_base(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
+fn boot_with_dead_gmail_base(
+    server: &MockServer,
+) -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let dead_port = listener.local_addr().unwrap().port();
     drop(listener);

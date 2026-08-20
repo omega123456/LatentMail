@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use latentmail_lib::queue::{
@@ -18,7 +17,6 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
         description: "test operation".into(),
     }
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn traversal_and_background_have_independent_concurrency() {
@@ -52,7 +50,6 @@ async fn traversal_and_background_have_independent_concurrency() {
         vec!["background-stuck".to_owned(), "traversal-a".to_owned()]
     );
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn traversal_yields_to_interactive_like_background() {
@@ -88,7 +85,6 @@ async fn traversal_yields_to_interactive_like_background() {
         "traversal must not dispatch while interactive work is still pending"
     );
 }
-
 
 #[tokio::test(start_paused = true)]
 async fn interactive_dispatches_promptly_with_many_traversal_operations_queued() {

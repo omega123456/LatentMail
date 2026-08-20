@@ -32,7 +32,6 @@ pub struct AvatarResolvedEvent {
     pub resolved: bool,
 }
 
-
 pub trait AvatarEmitter: Send + Sync + 'static {
     fn emit_resolved(&self, event: AvatarResolvedEvent);
 }
@@ -60,7 +59,6 @@ impl AvatarService {
             settings,
         }
     }
-
 
     pub async fn read_sender_avatar(
         &self,
@@ -124,7 +122,6 @@ impl AvatarService {
             });
         });
     }
-
 
     pub async fn read_account_avatar(
         &self,
@@ -200,7 +197,6 @@ impl AvatarService {
 fn path_to_string(path: std::path::PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
-
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app

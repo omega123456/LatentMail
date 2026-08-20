@@ -31,7 +31,11 @@ fn resolves_cid_images_and_rewrites_remote_images() {
 
 #[test]
 fn passes_through_an_already_inlined_data_image_uri_unchanged() {
-    let result = sanitize(r#"<img src="data:image/png;base64,AQID">"#, &HashMap::new(), false);
+    let result = sanitize(
+        r#"<img src="data:image/png;base64,AQID">"#,
+        &HashMap::new(),
+        false,
+    );
     assert!(result.html.contains("data:image/png;base64,AQID"));
     assert!(!result.remote_images_blocked, "nothing was rewritten");
 }

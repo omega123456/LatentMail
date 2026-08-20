@@ -108,7 +108,9 @@ export function LogsSection() {
   const pageEntries = visible.slice(pageStart, pageStart + ENTRIES_PER_PAGE);
 
   const handleCopyEntry = (entry: LogEntry) => {
-    void navigator.clipboard.writeText(entryLine(entry)).then(() => showSuccess('Copied log entry.'));
+    void navigator.clipboard
+      .writeText(entryLine(entry))
+      .then(() => showSuccess('Copied log entry.'));
   };
 
   useEffect(() => {
@@ -234,7 +236,9 @@ export function LogsSection() {
                     {timeLabel(entry.timestamp)}
                   </span>
                   <QueueStateChip
-                    pipClassName={pipClass[level] ?? 'bg-settings-ink-mute dark:bg-dark-settings-ink-mute'}
+                    pipClassName={
+                      pipClass[level] ?? 'bg-settings-ink-mute dark:bg-dark-settings-ink-mute'
+                    }
                     label={entry.level.toUpperCase()}
                     className={`w-20.5 shrink-0 font-mono font-semibold ${
                       labelClass[level] ?? 'text-settings-ink-mute dark:text-dark-settings-ink-mute'
@@ -252,8 +256,8 @@ export function LogsSection() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-settings-card-line bg-settings-container-low px-4 py-2.5 text-settings-meta text-settings-ink-mute dark:border-dark-settings-card-line dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
           <span className="flex items-center gap-3 tabular-nums">
             <span>
-              {visible.length === 0 ? 0 : pageStart + 1}–{Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)} of{' '}
-              {visible.length} entries
+              {visible.length === 0 ? 0 : pageStart + 1}–
+              {Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)} of {visible.length} entries
             </span>
             {pageCount > 1 && (
               <span className="flex items-center gap-0.5">

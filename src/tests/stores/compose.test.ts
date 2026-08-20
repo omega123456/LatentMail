@@ -53,23 +53,19 @@ describe('compose store', () => {
     };
     const original = { width: window.innerWidth, height: window.innerHeight };
     try {
-
       resize(1280, 800);
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 538, height: 500 });
-
 
       useComposeStore.getState().close();
       resize(1920, 1080);
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 806, height: 670 });
 
-
       useComposeStore.getState().close();
       resize(3440, 1440);
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 840, height: 820 });
-
 
       useComposeStore.getState().close();
       resize(500, 400);

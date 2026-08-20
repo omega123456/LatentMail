@@ -19,6 +19,24 @@ const conversation: Conversation = {
 };
 
 describe('ConversationRow', () => {
+  it('reports completion only after its notification flash animation ends', () => {
+    const onFlashComplete = vi.fn();
+    renderWithQueryClient(
+      <ConversationRow
+        conversation={conversation}
+        density="comfortable"
+        active={false}
+        flash
+        onFlashComplete={onFlashComplete}
+        onOpen={vi.fn()}
+        onStar={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('conversation-row');
+    expect(row).toHaveClass('motion-safe:animate-row-flash');
+    fireEvent(row, new Event('animationend', { bubbles: true }));
+    expect(onFlashComplete).toHaveBeenCalledOnce();
+  });
   it('shows the active highlight when active and no multi-selection is in play', () => {
     renderWithQueryClient(
       <ConversationRow
@@ -208,8 +226,12 @@ describe('ConversationRow', () => {
           onStar={vi.fn()}
         />,
       );
-      expect(screen.getByTestId('conversation-row').querySelector('.size-8')).not.toBeInTheDocument();
-      expect(screen.getByTestId('conversation-row').querySelector('.size-10')).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId('conversation-row').querySelector('.size-8'),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId('conversation-row').querySelector('.size-10'),
+      ).not.toBeInTheDocument();
       expect(screen.getByLabelText('Unread')).toBeInTheDocument();
     });
 
@@ -224,7 +246,9 @@ describe('ConversationRow', () => {
           onStar={vi.fn()}
         />,
       );
-      expect(screen.getByTestId('conversation-row').querySelector('.size-8')).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId('conversation-row').querySelector('.size-8'),
+      ).not.toBeInTheDocument();
       act(() => useLayoutStore.setState({ showSenderAvatars: true }));
     });
   });

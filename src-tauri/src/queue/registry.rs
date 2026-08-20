@@ -103,9 +103,7 @@ impl Inner {
 
     fn is_scope_paused(&self, account_id: &str, lane: Lane) -> bool {
         self.account_paused.contains(account_id)
-            || self
-                .lane_paused
-                .contains(&(account_id.to_owned(), lane))
+            || self.lane_paused.contains(&(account_id.to_owned(), lane))
     }
 }
 
@@ -171,8 +169,8 @@ impl QueueRegistry {
             return;
         };
         let now = chrono::Utc::now();
-        let delay = chrono::Duration::from_std(super::retry_delay(operation.attempts))
-            .unwrap_or_default();
+        let delay =
+            chrono::Duration::from_std(super::retry_delay(operation.attempts)).unwrap_or_default();
         record.status = OperationStatus::Retrying;
         record.attempts = operation.attempts;
         record.next_attempt_at = Some((now + delay).timestamp());
@@ -280,17 +278,11 @@ impl QueueRegistry {
                         let mut operations: Vec<OperationRecord> = inner
                             .operations
                             .values()
-                            .filter(|record| {
-                                record.account_id == account_id && record.lane == lane
-                            })
+                            .filter(|record| record.account_id == account_id && record.lane == lane)
                             .cloned()
                             .collect();
-                        operations.extend(
-                            history
-                                .iter()
-                                .filter(|record| record.lane == lane)
-                                .cloned(),
-                        );
+                        operations
+                            .extend(history.iter().filter(|record| record.lane == lane).cloned());
 
                         let active = operations
                             .iter()
