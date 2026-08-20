@@ -23,6 +23,8 @@ on:
 jobs:
   rust-macos-arm:
     runs-on: macos-latest
+    # swatinem/rust-cache hashes these into the cache key. Keep them identical to
+    # the workflow env in .github/workflows/release.yml.
     env:
       CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
       CARGO_NET_RETRY: 10
@@ -69,6 +71,8 @@ jobs:
 
   rust-windows:
     runs-on: windows-latest
+    # swatinem/rust-cache hashes these into the cache key. Keep them identical to
+    # the workflow env in .github/workflows/release.yml.
     env:
       CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
       CARGO_NET_RETRY: 10

@@ -6,9 +6,13 @@ on:
     tags:
       - 'v*'
 
+# swatinem/rust-cache hashes every CARGO_*/RUST_* variable into the cache key,
+# so this block must stay identical to the job env in .github/workflows/ci.yml.
+# Any difference (even CARGO_TERM_COLOR) produces a key the CI cache cannot serve.
 env:
-  CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  CARGO_NET_RETRY: 10
+  CARGO_HTTP_MULTIPLEXING: 'false'
 
 jobs:
   publish-tauri-windows:
