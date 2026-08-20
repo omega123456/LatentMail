@@ -17,7 +17,8 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "typecheck": "tsc -b",
-    "clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings"
+    "clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "release:tauri-version": "node scripts/bump-tauri-version.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.1",
