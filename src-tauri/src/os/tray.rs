@@ -225,10 +225,7 @@ fn initialize_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(
 
 #[cfg(all(windows, not(feature = "test-utils")))]
 fn apply_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &IndicatorState) {
-    use tauri::{
-        menu::{Menu, MenuItem, PredefinedMenuItem},
-        Manager,
-    };
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let Some(tray) = app.tray_by_id("mail") else {
         return;
@@ -264,14 +261,12 @@ fn apply_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &Indicato
     if let Some(Ok(item)) = reauthenticate.as_ref() {
         items.push(item);
     }
-    items.extend([
-        &compose,
-        &sync,
-        &second_separator,
-        &show,
-        &third_separator,
-        &quit,
-    ]);
+    items.push(&compose);
+    items.push(&sync);
+    items.push(&second_separator);
+    items.push(&show);
+    items.push(&third_separator);
+    items.push(&quit);
     if let Ok(menu) = Menu::with_items(app, &items) {
         if let Ok(icon) = super::icon::tray_icon(state.unread_count, state.needs_reauthentication) {
             let _ = tray.set_icon(Some(tauri::image::Image::new_owned(
