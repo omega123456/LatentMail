@@ -75,6 +75,7 @@ jobs:
         env:
           LATENTMAIL_GOOGLE_CLIENT_ID: ${{ secrets.LATENTMAIL_GOOGLE_CLIENT_ID }}
           LATENTMAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.LATENTMAIL_GOOGLE_CLIENT_SECRET }}
+        shell: bash
         run: |
           printf '{"googleClientId":"%s","googleClientSecret":"%s"}\n' \
             "$LATENTMAIL_GOOGLE_CLIENT_ID" "$LATENTMAIL_GOOGLE_CLIENT_SECRET" \
