@@ -1,0 +1,379 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+
+jobs:
+  publish-tauri-windows:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache key aligned with .github/workflows/ci.yml so this release job
+      # restores the cache warmed on the default branch.
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          cache-on-failure: true
+          prefix-key: v0-rust-latentmail-windows
+          add-job-id-key: false
+          cache-all-crates: true
+          save-if: false
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Assert updater release config is real
+        shell: bash
+        run: |
+          set -euo pipefail
+          pubkey="$(jq -r '.plugins.updater.pubkey // empty' src-tauri/tauri.conf.json)"
+          endpoint="$(jq -r '.plugins.updater.endpoints[0] // empty' src-tauri/tauri.conf.json)"
+          identifier="$(jq -r '.identifier // empty' src-tauri/tauri.conf.json)"
+
+          test -n "$pubkey"
+          test -n "$endpoint"
+          test -n "$identifier"
+
+          if [[ "$pubkey" == REPLACE_WITH_* ]]; then
+            echo "[release] Replace plugins.updater.pubkey before the first signed release."
+            exit 1
+          fi
+
+          if [[ "$endpoint" == *"/OWNER/REPO/"* ]]; then
+            echo "[release] Replace plugins.updater.endpoints[0] with the canonical GitHub Releases latest.json URL."
+            exit 1
+          fi
+
+          if [[ "$identifier" != "com.latentmail.desktop" ]]; then
+            echo "[release] Bundle identifier does not match the expected com.latentmail.desktop."
+            exit 1
+          fi
+
+      - name: Write OAuth client secrets
+        env:
+          LATENTMAIL_GOOGLE_CLIENT_ID: ${{ secrets.LATENTMAIL_GOOGLE_CLIENT_ID }}
+          LATENTMAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.LATENTMAIL_GOOGLE_CLIENT_SECRET }}
+        run: |
+          printf '{"googleClientId":"%s","googleClientSecret":"%s"}\n' \
+            "$LATENTMAIL_GOOGLE_CLIENT_ID" "$LATENTMAIL_GOOGLE_CLIENT_SECRET" \
+            > src-tauri/secrets.json
+
+      - name: Read release body for tauri-action
+        id: release_body
+        shell: bash
+        run: |
+          delim="TAURI_RELEASE_BODY_${GITHUB_SHA}"
+          {
+            echo "body<<${delim}"
+            if [ -f .github/tauri-release-body.md ]; then
+              cat .github/tauri-release-body.md
+            else
+              printf '%s\n' "See release assets for platform installers."
+            fi
+            echo "${delim}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: pnpm tauri
+          tagName: v__VERSION__
+          releaseName: LatentMail v__VERSION__
+          releaseBody: ${{ steps.release_body.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          assetNamePattern: '[name]-[version]-[platform]-[arch][setup][ext]'
+          args: --bundles msi,nsis -- --locked
+
+  publish-tauri-macos:
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # Restore the cache warmed on main (see ci.yml). Tag-scoped caches are not
+      # reused across releases, so releases only restore and do not save.
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          cache-on-failure: true
+          prefix-key: v0-rust-latentmail-macos-arm
+          add-job-id-key: false
+          cache-all-crates: true
+          save-if: false
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Import LatentMail code signing certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          EXPECTED_APPLE_CERTIFICATE_SHA1: REPLACE_WITH_APPLE_CERTIFICATE_SHA1
+        run: |
+          set -euo pipefail
+
+          : "${APPLE_CERTIFICATE:?Missing APPLE_CERTIFICATE secret. Export LatentMail Local Code Signing as a base64-encoded .p12.}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing APPLE_CERTIFICATE_PASSWORD secret.}"
+          : "${KEYCHAIN_PASSWORD:?Missing KEYCHAIN_PASSWORD secret.}"
+
+          if [[ "$EXPECTED_APPLE_CERTIFICATE_SHA1" == REPLACE_WITH_* ]]; then
+            echo "[release] Replace EXPECTED_APPLE_CERTIFICATE_SHA1 with the LatentMail Local Code Signing certificate SHA1 before the first signed release."
+            exit 1
+          fi
+
+          printf '%s' "$APPLE_CERTIFICATE" > certificate-base64.txt
+          openssl base64 -d -A -in certificate-base64.txt -out certificate.p12
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security list-keychains -d user -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-certificate -c "LatentMail Local Code Signing" -p build.keychain > certificate.cer
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain certificate.cer
+
+          security find-certificate -c "LatentMail Local Code Signing" -Z build.keychain
+          identities="$(security find-identity -v -p codesigning build.keychain)"
+          printf '%s\n' "$identities"
+          if [[ "$identities" != *"$EXPECTED_APPLE_CERTIFICATE_SHA1"*"LatentMail Local Code Signing"* ]]; then
+            echo "[release] Imported certificate does not match LatentMail Local Code Signing (${EXPECTED_APPLE_CERTIFICATE_SHA1})."
+            exit 1
+          fi
+
+      - name: Write OAuth client secrets
+        env:
+          LATENTMAIL_GOOGLE_CLIENT_ID: ${{ secrets.LATENTMAIL_GOOGLE_CLIENT_ID }}
+          LATENTMAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.LATENTMAIL_GOOGLE_CLIENT_SECRET }}
+        run: |
+          printf '{"googleClientId":"%s","googleClientSecret":"%s"}\n' \
+            "$LATENTMAIL_GOOGLE_CLIENT_ID" "$LATENTMAIL_GOOGLE_CLIENT_SECRET" \
+            > src-tauri/secrets.json
+
+      - name: Read release body for tauri-action
+        id: release_body
+        shell: bash
+        run: |
+          delim="TAURI_RELEASE_BODY_${GITHUB_SHA}"
+          {
+            echo "body<<${delim}"
+            if [ -f .github/tauri-release-body.md ]; then
+              cat .github/tauri-release-body.md
+            else
+              printf '%s\n' "See release assets for platform installers."
+            fi
+            echo "${delim}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: LatentMail Local Code Signing
+        with:
+          tauriScript: pnpm tauri
+          tagName: v__VERSION__
+          releaseName: LatentMail v__VERSION__
+          releaseBody: ${{ steps.release_body.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          assetNamePattern: '[name]-[version]-[platform]-[arch][setup][ext]'
+          args: --target aarch64-apple-darwin --bundles dmg,app -- --locked
+
+      - name: Verify macOS code signing requirement
+        shell: bash
+        env:
+          EXPECTED_APPLE_CERTIFICATE_SHA1: REPLACE_WITH_APPLE_CERTIFICATE_SHA1
+        run: |
+          set -euo pipefail
+
+          app_path="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name 'LatentMail.app' -type d -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo "[release] Built LatentMail.app was not found."
+            exit 1
+          fi
+
+          requirement="$(codesign -d -r- "$app_path" 2>&1)"
+          printf '%s\n' "$requirement"
+          if [[ "$requirement" != *"certificate leaf = H\"${EXPECTED_APPLE_CERTIFICATE_SHA1}\""* ]]; then
+            echo "[release] macOS app was not signed by the expected LatentMail Local Code Signing certificate."
+            echo "[release] A cdhash-based requirement means Full Disk Access will not persist across updates."
+            exit 1
+          fi
+
+  validate-release:
+    needs:
+      - publish-tauri-windows
+      - publish-tauri-macos
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate published updater feed and release assets
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_CANONICAL: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          endpoint="$(jq -r '.plugins.updater.endpoints[0] // empty' src-tauri/tauri.conf.json)"
+          if [ -z "$endpoint" ]; then
+            echo "[validate-release] Missing updater endpoint in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+
+          if [[ "$endpoint" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/latest/download/latest\.json$ ]]; then
+            endpoint_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+          else
+            echo "[validate-release] Updater endpoint format is unsupported: $endpoint"
+            exit 1
+          fi
+
+          if [ "$endpoint_repo" != "$GITHUB_REPOSITORY_CANONICAL" ]; then
+            echo "[validate-release] Updater endpoint repository mismatch."
+            echo "[validate-release] Configured endpoint repo: $endpoint_repo"
+            echo "[validate-release] Workflow repository: $GITHUB_REPOSITORY_CANONICAL"
+            exit 1
+          fi
+
+          latest_json_file="$(mktemp)"
+          release_assets_file="$(mktemp)"
+          release_api_url="https://api.github.com/repos/${endpoint_repo}/releases/tags/${RELEASE_TAG}"
+          release_latest_json_url="https://github.com/${endpoint_repo}/releases/download/${RELEASE_TAG}/latest.json"
+
+          fetch_and_validate() {
+            curl --fail --silent --show-error --location "$release_latest_json_url" --output "$latest_json_file"
+            curl --fail --silent --show-error \
+              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              "$release_api_url" > "$release_assets_file"
+
+            windows_url="$(jq -r '.platforms["windows-x86_64"]?.url // ""' "$latest_json_file")"
+            windows_signature="$(jq -r '.platforms["windows-x86_64"]?.signature // ""' "$latest_json_file")"
+            macos_platform_key="$(jq -r 'if .platforms["darwin-aarch64-app"] then "darwin-aarch64-app" elif .platforms["darwin-aarch64"] then "darwin-aarch64" else "" end' "$latest_json_file")"
+            macos_url=""
+            macos_signature=""
+            if [ -n "$macos_platform_key" ]; then
+              macos_url="$(jq -r --arg key "$macos_platform_key" '.platforms[$key]?.url // ""' "$latest_json_file")"
+              macos_signature="$(jq -r --arg key "$macos_platform_key" '.platforms[$key]?.signature // ""' "$latest_json_file")"
+            fi
+
+            if [ -z "$windows_url" ]; then
+              echo "[validate-release] latest.json is missing a Windows x64 updater URL."
+              return 1
+            fi
+
+            if [ -z "$windows_signature" ]; then
+              echo "[validate-release] latest.json is missing a Windows x64 updater signature."
+              return 1
+            fi
+
+            windows_filename="${windows_url##*/}"
+            windows_filename_lower="$(printf '%s' "$windows_filename" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$windows_filename_lower" != *nsis* && "$windows_filename_lower" != *.exe ]]; then
+              echo "[validate-release] Windows x64 updater URL must reference the NSIS updater artifact when updaterJsonPreferNsis=true."
+              echo "[validate-release] Received URL: $windows_url"
+              return 1
+            fi
+
+            if [ -z "$macos_platform_key" ]; then
+              echo "[validate-release] latest.json is missing the macOS Apple Silicon updater platform entry."
+              return 1
+            fi
+
+            if [ -z "$macos_url" ]; then
+              echo "[validate-release] latest.json is missing a macOS Apple Silicon updater URL."
+              return 1
+            fi
+
+            if [ -z "$macos_signature" ]; then
+              echo "[validate-release] latest.json is missing a macOS Apple Silicon updater signature."
+              return 1
+            fi
+
+            macos_filename="${macos_url##*/}"
+            macos_filename_lower="$(printf '%s' "$macos_filename" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$macos_filename_lower" != *.app.tar.gz ]]; then
+              echo "[validate-release] macOS Apple Silicon updater URL must reference the signed .app.tar.gz updater artifact."
+              echo "[validate-release] Received URL: $macos_url"
+              return 1
+            fi
+
+            jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag' "$release_assets_file" > /dev/null
+            jq -e '.assets | map(.name) | any(test("\\.msi$"))' "$release_assets_file" > /dev/null
+            jq -e '.assets | map(.name) | any(test("nsis"; "i") or test("\\.exe$"))' "$release_assets_file" > /dev/null
+            jq -e '.assets | map(.name) | any(test("\\.dmg$"))' "$release_assets_file" > /dev/null
+            jq -e '.assets | map(.name) | any(test("\\.app\\.tar\\.gz$"))' "$release_assets_file" > /dev/null
+          }
+
+          success=0
+          for attempt in 1 2 3 4 5; do
+            if fetch_and_validate; then
+              success=1
+              echo "[validate-release] Tagged latest.json and release assets validated on attempt $attempt."
+              break
+            fi
+
+            echo "[validate-release] Validation attempt $attempt failed."
+            if [ "$attempt" -lt 5 ]; then
+              echo "[validate-release] Waiting 15 seconds before retrying latest.json and release asset validation..."
+              sleep 15
+            fi
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "[validate-release] Release validation failed after 5 attempts."
+            exit 1
+          fi

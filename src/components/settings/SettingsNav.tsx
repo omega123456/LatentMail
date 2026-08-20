@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  Download,
   Keyboard,
   ListChecks,
   ScrollText,
@@ -15,6 +16,7 @@ const sections: { id: SettingsSectionId; label: string; Icon: LucideIcon }[] = [
   { id: 'keyboard', label: 'Keyboard', Icon: Keyboard },
   { id: 'queue', label: 'Queue', Icon: ListChecks },
   { id: 'logs', label: 'Logs', Icon: ScrollText },
+  { id: 'updates', label: 'Updates', Icon: Download },
 ];
 
 const navRow = (active: boolean) =>

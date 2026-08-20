@@ -13,6 +13,7 @@ import {
   playwrightSettings,
   playwrightSidebarAccounts,
   playwrightTrustedSenderSettings,
+  playwrightUpdateAvailable,
 } from '@/tests/playwright-fixtures';
 
 const themes = ['light', 'dark'] as const;
@@ -43,6 +44,15 @@ for (const theme of themes) {
     await installPlaywrightIpc(page, { list_accounts: [playwrightReauthAccount] });
     await page.goto('/');
     await screenshot(page, page.getByTestId('reauth-banner'), 'reauth-banner', theme);
+  });
+
+  test(`update banner ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      check_for_update: playwrightUpdateAvailable,
+    });
+    await page.goto('/');
+    await screenshot(page, page.getByTestId('update-banner'), 'update-banner', theme);
   });
 
   test(`sidebar ${theme}`, async ({ page }) => {
@@ -536,6 +546,22 @@ for (const theme of themes) {
       page,
       page.getByTestId('settings-general-section'),
       'settings-general-section',
+      theme,
+    );
+  });
+
+  test(`settings updates section ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      check_for_update: playwrightUpdateAvailable,
+    });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Updates' }).click();
+    await screenshot(
+      page,
+      page.getByTestId('settings-updates-section'),
+      'settings-updates-section',
       theme,
     );
   });

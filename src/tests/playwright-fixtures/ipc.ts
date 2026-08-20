@@ -116,6 +116,8 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   retry_failed_operations: 0,
   clear_queue_history: undefined,
   set_queue_paused: true,
+  check_for_update: { currentVersion: '0.1.0', available: null },
+  install_update: undefined,
 };
 
 export { playwrightSidebarAccounts };

@@ -36,10 +36,10 @@ pub mod traversal;
 pub mod triage;
 
 pub use dto::{
-    AttachmentDto, ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto, LabelDto,
-    MessageDto, MutationOutcomeDto, MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto,
-    StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, ThreadSearchPage,
-    TraversalKind, TraversalState, TraversalStatusDto,
+    to_millis, AttachmentDto, ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto,
+    LabelDto, MessageDto, MutationOutcomeDto, MutationResultDto, ParsedSearchQueryDto,
+    SearchPredicateDto, StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage,
+    ThreadSearchPage, TraversalKind, TraversalState, TraversalStatusDto,
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 

@@ -169,6 +169,8 @@ export interface IpcCommandMap {
   retry_failed_operations: { args: { accountId?: string | null }; result: number };
   clear_queue_history: { args: { accountId?: string | null }; result: void };
   set_queue_paused: { args: { scope: PauseScope; paused: boolean }; result: boolean };
+  check_for_update: { args: Record<string, never>; result: UpdateCheckResult };
+  install_update: { args: Record<string, never>; result: void };
 }
 
 export interface QueueSummary {
@@ -249,6 +251,18 @@ export type ThemePreference = 'light' | 'dark' | 'system';
 export type LayoutMode = 'three-column' | 'bottom-preview' | 'list-only';
 export type Density = 'compact' | 'comfortable' | 'spacious';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type UpdateCheckInterval = '1h' | '5h' | '1d' | '7d' | 'off';
+
+export interface UpdateSummary {
+  version: string;
+  notes: string | null;
+  dateMillis: number | null;
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  available: UpdateSummary | null;
+}
 
 export interface Settings {
   theme: ThemePreference;
@@ -272,6 +286,8 @@ export interface Settings {
   closeToTray: boolean;
   startMinimized: boolean;
   desktopNotifications: boolean;
+  updateCheckInterval: UpdateCheckInterval;
+  installUpdateOnQuit: boolean;
 }
 
 export interface LogEntryDto {

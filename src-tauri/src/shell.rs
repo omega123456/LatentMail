@@ -46,5 +46,6 @@ pub fn register_plugins(builder: Builder<Wry>) -> Builder<Wry> {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(prevent_default_plugin())
 }

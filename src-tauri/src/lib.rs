@@ -14,6 +14,7 @@ pub mod settings;
 pub mod shell;
 pub mod storage;
 pub mod sync;
+pub mod updater;
 
 #[cfg(not(coverage))]
 use tauri::Manager;

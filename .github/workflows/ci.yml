@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.cargo/**'
+      - '.github/workflows/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'src/**'
+      - 'src-tauri/**'
+  pull_request:
+    paths:
+      - '.cargo/**'
+      - '.github/workflows/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'src/**'
+      - 'src-tauri/**'
+
+jobs:
+  rust-macos-arm:
+    runs-on: macos-latest
+    env:
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+      CARGO_NET_RETRY: 10
+      CARGO_HTTP_MULTIPLEXING: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # Keep cache keys aligned with .github/workflows/release.yml so tag releases
+      # can restore this cache from the default branch.
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          cache-on-failure: true
+          prefix-key: v0-rust-latentmail-macos-arm
+          add-job-id-key: false
+          cache-all-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The Rust build embeds the frontend via `generate_context!`, which requires
+      # `frontendDist` (../dist) to exist. `cargo build` does not run the Tauri
+      # `beforeBuildCommand`, so build the frontend explicitly first.
+      - name: Build frontend
+        run: pnpm exec vite build
+
+      - name: Build Rust release binary
+        run: cargo build --release --locked --target aarch64-apple-darwin --manifest-path src-tauri/Cargo.toml
+
+  rust-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+      CARGO_NET_RETRY: 10
+      CARGO_HTTP_MULTIPLEXING: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Keep cache keys aligned with .github/workflows/release.yml so tag releases
+      # can restore this cache from the default branch.
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          cache-on-failure: true
+          prefix-key: v0-rust-latentmail-windows
+          add-job-id-key: false
+          cache-all-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The Rust build embeds the frontend via `generate_context!`, which requires
+      # `frontendDist` (../dist) to exist. `cargo build` does not run the Tauri
+      # `beforeBuildCommand`, so build the frontend explicitly first.
+      - name: Build frontend
+        run: pnpm exec vite build
+
+      - name: Build Rust release binary
+        run: cargo build --release --locked --manifest-path src-tauri/Cargo.toml

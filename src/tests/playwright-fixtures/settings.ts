@@ -24,6 +24,8 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   closeToTray: true,
   startMinimized: false,
   desktopNotifications: true,
+  updateCheckInterval: '1d',
+  installUpdateOnQuit: true,
 };
 
 export const playwrightTrustedSenderSettings: IpcCommandMap['read_settings']['result'] = {

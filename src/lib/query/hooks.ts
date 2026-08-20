@@ -16,6 +16,7 @@ import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useLayoutStore } from '@/stores/layout';
+import { UPDATE_INTERVAL_MS } from '@/lib/update-intervals';
 import type { MailThread, ThreadPage, ThreadSearchPage } from '@/lib/types/ipc';
 
 const LOCAL_FIRST_STALE_TIME = 15_000;
@@ -97,6 +98,25 @@ export function useLogEntriesQuery() {
     queryFn: () => invoke('read_log_entries', {}),
     select: (entries) => entries.map(toLogEntry),
     staleTime: 0,
+  });
+}
+
+export function useAppUpdateQuery() {
+  const updateCheckInterval = useLayoutStore((state) => state.updateCheckInterval);
+  return useQuery({
+    queryKey: queryKeys.appUpdate,
+    queryFn: () => invoke('check_for_update', {}),
+    refetchInterval:
+      updateCheckInterval === 'off' ? false : UPDATE_INTERVAL_MS[updateCheckInterval],
+    staleTime: 0,
+  });
+}
+
+export function useInstallUpdateMutation() {
+  const showError = useToastStore((state) => state.showError);
+  return useMutation({
+    mutationFn: () => invoke('install_update', {}),
+    onError: () => showError('Couldn’t install the update.'),
   });
 }
 

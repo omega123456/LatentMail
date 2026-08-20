@@ -44,6 +44,8 @@ fn main() {
             "health_check",
             "open_external_url",
             "write_frontend_log",
+            "check_for_update",
+            "install_update",
         ]),
     ))
     .expect("failed to build Tauri permissions");

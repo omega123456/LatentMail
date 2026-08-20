@@ -50,6 +50,8 @@ pub struct Settings {
     pub close_to_tray: bool,
     pub start_minimized: bool,
     pub desktop_notifications: bool,
+    pub update_check_interval: UpdateCheckInterval,
+    pub install_update_on_quit: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,6 +85,20 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum UpdateCheckInterval {
+    #[serde(rename = "1h")]
+    Hourly,
+    #[serde(rename = "5h")]
+    FiveHours,
+    #[serde(rename = "1d")]
+    Daily,
+    #[serde(rename = "7d")]
+    Weekly,
+    #[serde(rename = "off")]
+    Off,
 }
 
 impl From<&LogLevel> for LevelFilter {
@@ -130,6 +146,8 @@ impl Default for Settings {
             close_to_tray: true,
             start_minimized: false,
             desktop_notifications: true,
+            update_check_interval: UpdateCheckInterval::Daily,
+            install_update_on_quit: true,
         }
     }
 }
@@ -244,6 +262,8 @@ impl Settings {
             "closeToTray" => set_value(&mut self.close_to_tray, value),
             "startMinimized" => set_value(&mut self.start_minimized, value),
             "desktopNotifications" => set_value(&mut self.desktop_notifications, value),
+            "updateCheckInterval" => set_value(&mut self.update_check_interval, value),
+            "installUpdateOnQuit" => set_value(&mut self.install_update_on_quit, value),
             _ => false,
         }
     }

@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import type { Lane } from '@/lib/types/ipc';
 
-export type SettingsSectionId = 'general' | 'accounts' | 'keyboard' | 'queue' | 'logs';
+export type SettingsSectionId =
+  | 'general'
+  | 'accounts'
+  | 'keyboard'
+  | 'queue'
+  | 'logs'
+  | 'updates';
 export type QueueStatusFilter = 'all' | 'failed';
 
 export function laneKey(accountId: string, lane: Lane) {

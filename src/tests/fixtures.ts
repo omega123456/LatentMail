@@ -53,6 +53,8 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     closeToTray: true,
     startMinimized: false,
     desktopNotifications: true,
+    updateCheckInterval: '1d',
+    installUpdateOnQuit: true,
   },
   write_setting: undefined,
   read_log_entries: [
@@ -222,4 +224,6 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
   retry_failed_operations: 0,
   clear_queue_history: undefined,
   set_queue_paused: true,
+  check_for_update: { currentVersion: '0.1.0', available: null },
+  install_update: undefined,
 };

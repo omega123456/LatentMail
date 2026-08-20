@@ -64,6 +64,8 @@
     "allow-read-attachment-text",
     "allow-save-attachment-to-path",
     "allow-stage-attachment-into-draft",
+    "allow-check-for-update",
+    "allow-install-update",
     "dialog:allow-open",
     "dialog:allow-save",
     "os:default",

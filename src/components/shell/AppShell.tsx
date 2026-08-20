@@ -5,6 +5,7 @@ import { SignInScreen } from '@/components/auth/SignInScreen';
 import { CommandProvider } from '@/providers/CommandProvider';
 import { MailLayout } from './MailLayout';
 import { Toast } from '@/components/states/Toast';
+import { UpdateBanner } from '@/components/states/UpdateBanner';
 import { SettingsShell } from '@/components/settings/SettingsShell';
 
 export function AppShell() {
@@ -33,7 +34,10 @@ export function AppShell() {
     );
   return (
     <CommandProvider>
-      {content}
+      <div className="flex h-full flex-col">
+        <UpdateBanner />
+        <div className="min-h-0 flex-1">{content}</div>
+      </div>
       <Toast />
     </CommandProvider>
   );

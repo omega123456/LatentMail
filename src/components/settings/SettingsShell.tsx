@@ -6,6 +6,7 @@ import { GeneralSection } from './GeneralSection';
 import { KeyboardSection } from './KeyboardSection';
 import { LogsSection } from './LogsSection';
 import { SettingsNav } from './SettingsNav';
+import { UpdatesSection } from './UpdatesSection';
 
 export function SettingsShell() {
   const setRoute = useLayoutStore((state) => state.setRoute);
@@ -61,6 +62,14 @@ export function SettingsShell() {
             className="flex min-h-0 min-w-0 flex-1 flex-col gap-5.5"
           >
             <LogsSection />
+          </div>
+        )}
+        {activeSection === 'updates' && (
+          <div
+            data-testid="settings-updates-section"
+            className="mx-auto flex w-full max-w-settings-content-max flex-col gap-5.5"
+          >
+            <UpdatesSection />
           </div>
         )}
       </div>

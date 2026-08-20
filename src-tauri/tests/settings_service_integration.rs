@@ -310,3 +310,51 @@ async fn writing_the_sync_interval_without_a_managed_scheduler_still_persists() 
         20
     );
 }
+
+#[tokio::test]
+async fn writing_every_update_check_interval_persists_it() {
+    let (app, _directory) = app_with_service();
+
+    let defaults = read_settings(app.state()).await.unwrap();
+    assert_eq!(
+        defaults.update_check_interval,
+        latentmail_lib::settings::UpdateCheckInterval::Daily
+    );
+    assert!(defaults.install_update_on_quit);
+
+    for (wire, expected) in [
+        ("1h", latentmail_lib::settings::UpdateCheckInterval::Hourly),
+        ("5h", latentmail_lib::settings::UpdateCheckInterval::FiveHours),
+        ("1d", latentmail_lib::settings::UpdateCheckInterval::Daily),
+        ("7d", latentmail_lib::settings::UpdateCheckInterval::Weekly),
+        ("off", latentmail_lib::settings::UpdateCheckInterval::Off),
+    ] {
+        write_setting(
+            app.handle().clone(),
+            app.state(),
+            "updateCheckInterval".into(),
+            serde_json::json!(wire),
+        )
+        .await
+        .unwrap();
+
+        let settings = read_settings(app.state()).await.unwrap();
+        assert_eq!(settings.update_check_interval, expected);
+    }
+
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "installUpdateOnQuit".into(),
+        serde_json::json!(false),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !read_settings(app.state())
+            .await
+            .unwrap()
+            .install_update_on_quit
+    );
+}

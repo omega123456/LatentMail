@@ -456,7 +456,7 @@ impl From<crate::compose::staging::StagedPart> for StagedAttachmentDto {
     }
 }
 
-pub(crate) fn to_millis(seconds: i64) -> i64 {
+pub fn to_millis(seconds: i64) -> i64 {
     chrono::DateTime::from_timestamp(seconds, 0).map_or(0, |value| value.timestamp_millis())
 }
 

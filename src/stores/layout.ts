@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/ipc/commands';
-import type { Density, LayoutMode, LogLevel, Settings } from '@/lib/types/ipc';
+import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } from '@/lib/types/ipc';
 
 export type Route = 'auth' | 'mail' | 'settings';
 
@@ -25,6 +25,8 @@ type LayoutState = Pick<
   | 'closeToTray'
   | 'startMinimized'
   | 'desktopNotifications'
+  | 'updateCheckInterval'
+  | 'installUpdateOnQuit'
 > & {
   route: Route;
   hydrated: boolean;
@@ -50,6 +52,8 @@ type LayoutState = Pick<
   setCloseToTray: (closeToTray: boolean) => void;
   setStartMinimized: (startMinimized: boolean) => void;
   setDesktopNotifications: (desktopNotifications: boolean) => void;
+  setUpdateCheckInterval: (updateCheckInterval: UpdateCheckInterval) => void;
+  setInstallUpdateOnQuit: (installUpdateOnQuit: boolean) => void;
   trustImageSender: (address: string) => void;
   untrustImageSender: (address: string) => void;
 };
@@ -91,6 +95,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   closeToTray: true,
   startMinimized: false,
   desktopNotifications: true,
+  updateCheckInterval: '1d',
+  installUpdateOnQuit: true,
   route: 'mail',
   hydrated: false,
   hydrate: () => {
@@ -116,6 +122,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         closeToTray: settings.closeToTray,
         startMinimized: settings.startMinimized,
         desktopNotifications: settings.desktopNotifications,
+        updateCheckInterval: settings.updateCheckInterval,
+        installUpdateOnQuit: settings.installUpdateOnQuit,
         hydrated: true,
       });
     });
@@ -209,6 +217,14 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setDesktopNotifications: (desktopNotifications) => {
     set({ desktopNotifications });
     persist('desktopNotifications', desktopNotifications);
+  },
+  setUpdateCheckInterval: (updateCheckInterval) => {
+    set({ updateCheckInterval });
+    persist('updateCheckInterval', updateCheckInterval);
+  },
+  setInstallUpdateOnQuit: (installUpdateOnQuit) => {
+    set({ installUpdateOnQuit });
+    persist('installUpdateOnQuit', installUpdateOnQuit);
   },
   trustImageSender: (address) => {
     const normalized = address.trim().toLowerCase();

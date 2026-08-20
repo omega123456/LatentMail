@@ -21,6 +21,7 @@ export const queryKeys = {
   accountAvatar: (accountId: string) => ['accountAvatar', accountId] as const,
   queueOperations: ['queueOperations'] as const,
   logEntries: ['logEntries'] as const,
+  appUpdate: ['appUpdate'] as const,
   cachedAttachment: (accountId: string, messageId: string, attachmentId: string) =>
     ['cachedAttachment', accountId, messageId, attachmentId] as const,
   attachmentBytes: (accountId: string, messageId: string, attachmentId: string) =>

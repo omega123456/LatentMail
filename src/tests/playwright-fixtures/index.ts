@@ -33,3 +33,4 @@ export {
   playwrightSearchThreadPage,
   playwrightSearchThreads,
 } from './search';
+export { playwrightUpdateAvailable } from './update';
