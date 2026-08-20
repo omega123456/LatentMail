@@ -153,7 +153,7 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          EXPECTED_APPLE_CERTIFICATE_SHA1: REPLACE_WITH_APPLE_CERTIFICATE_SHA1
+          EXPECTED_APPLE_CERTIFICATE_SHA1: C71B5698735A49ED9B2D8E3B3C36E80C925D4CD4
         run: |
           set -euo pipefail
 
@@ -231,7 +231,7 @@ jobs:
       - name: Verify macOS code signing requirement
         shell: bash
         env:
-          EXPECTED_APPLE_CERTIFICATE_SHA1: REPLACE_WITH_APPLE_CERTIFICATE_SHA1
+          EXPECTED_APPLE_CERTIFICATE_SHA1: C71B5698735A49ED9B2D8E3B3C36E80C925D4CD4
         run: |
           set -euo pipefail
 
@@ -243,7 +243,7 @@ jobs:
 
           requirement="$(codesign -d -r- "$app_path" 2>&1)"
           printf '%s\n' "$requirement"
-          if [[ "$requirement" != *"certificate leaf = H\"${EXPECTED_APPLE_CERTIFICATE_SHA1}\""* ]]; then
+          if ! printf '%s\n' "$requirement" | grep -qiE "certificate (root|leaf) = H\"${EXPECTED_APPLE_CERTIFICATE_SHA1}\""; then
             echo "[release] macOS app was not signed by the expected LatentMail Local Code Signing certificate."
             echo "[release] A cdhash-based requirement means Full Disk Access will not persist across updates."
             exit 1
