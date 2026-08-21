@@ -271,17 +271,9 @@ export function LogsSection() {
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-settings-card-line bg-settings-container-low px-4 py-2.5 text-settings-meta text-settings-ink-mute dark:border-dark-settings-card-line dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
           <span className="flex items-center gap-3 tabular-nums">
-            <span>
-              <span className="inline-block w-counter-digits text-right">
-                {visible.length === 0 ? 0 : pageStart + 1}
-              </span>
-              –
-              <span className="inline-block w-counter-digits text-right">
-                {Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)}
-              </span>{' '}
-              of{' '}
-              <span className="inline-block w-counter-digits text-right">{visible.length}</span>{' '}
-              entries
+            <span data-testid="log-page-summary" className="inline-block min-w-log-summary">
+              {visible.length === 0 ? 0 : pageStart + 1}–
+              {Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)} of {visible.length} entries
             </span>
             {pageCount > 1 && (
               <span className="flex items-center gap-0.5">

@@ -172,16 +172,16 @@ describe('LogsSection', () => {
     renderWithQueryClient(<LogsSection />);
     await screen.findByText('entry number 0');
 
-    expect(screen.getByText('1–50 of 60 entries')).toBeInTheDocument();
+    expect(screen.getByTestId('log-page-summary')).toHaveTextContent('1–50 of 60 entries');
     expect(screen.queryByText('entry number 50')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
     expect(await screen.findByText('entry number 50')).toBeInTheDocument();
-    expect(screen.getByText('51–60 of 60 entries')).toBeInTheDocument();
+    expect(screen.getByTestId('log-page-summary')).toHaveTextContent('51–60 of 60 entries');
     expect(screen.queryByText('entry number 0')).not.toBeInTheDocument();
 
     await user.type(screen.getByRole('searchbox', { name: 'Search log entries' }), 'number 0');
-    expect(await screen.findByText('1–1 of 1 entries')).toBeInTheDocument();
+    expect(screen.getByTestId('log-page-summary')).toHaveTextContent('1–1 of 1 entries');
     expect(screen.getByText(/entry/)).toBeInTheDocument();
   });
 
