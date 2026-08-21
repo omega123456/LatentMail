@@ -133,6 +133,36 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
 }
 
 #[tokio::test]
+async fn a_lane_lists_the_most_recently_finished_operation_first() {
+    let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let (events, mut events_rx) = events_channel();
+    let queue = QueueEngine::new_with_events(250, 250, executor, events);
+
+    for id in ["op-1", "op-2", "op-3"] {
+        queue
+            .enqueue(operation(
+                id,
+                "account-1",
+                Lane::Background,
+                id,
+                "Sync mailbox",
+            ))
+            .await
+            .unwrap();
+        wait_for_item_status(&mut events_rx, id, "done").await;
+    }
+
+    let snapshot = queue.snapshot().await;
+    let lane = find_lane(&snapshot, "account-1", Lane::Background);
+    let ids: Vec<&str> = lane
+        .operations
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["op-3", "op-2", "op-1"]);
+}
+
+#[tokio::test]
 async fn history_caps_at_two_hundred_records_per_account_evicting_oldest_first() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
     let (events, mut events_rx) = events_channel();

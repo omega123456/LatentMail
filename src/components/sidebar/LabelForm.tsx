@@ -39,6 +39,7 @@ export function validateLabelName(
 export type LabelFormProps = {
   mode: 'create' | 'rename';
   initialName?: string;
+  initialColorId?: LabelColorId;
   existingNames: string[];
   submitError?: string | null;
   submitting?: boolean;
@@ -49,6 +50,7 @@ export type LabelFormProps = {
 export function LabelForm({
   mode,
   initialName = '',
+  initialColorId = LABEL_COLOR_PALETTE[0].id,
   existingNames,
   submitError,
   submitting = false,
@@ -56,7 +58,7 @@ export function LabelForm({
   onCancel,
 }: LabelFormProps) {
   const [name, setName] = useState(initialName);
-  const [colorId, setColorId] = useState<LabelColorId>(LABEL_COLOR_PALETTE[0].id);
+  const [colorId, setColorId] = useState<LabelColorId>(initialColorId);
   const [touched, setTouched] = useState(false);
   const localError = touched
     ? validateLabelName(name, existingNames, mode === 'rename' ? initialName : undefined)
@@ -76,7 +78,7 @@ export function LabelForm({
 
   return (
     <form
-      aria-label={mode === 'create' ? 'Create label' : 'Rename label'}
+      aria-label={mode === 'create' ? 'Create label' : 'Edit label'}
       className="flex flex-col gap-2 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-2 dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
       onSubmit={(event) => {
         event.preventDefault();
@@ -128,7 +130,7 @@ export function LabelForm({
           disabled={submitting}
           className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
         >
-          {mode === 'create' ? 'Create' : 'Rename'}
+          {mode === 'create' ? 'Create' : 'Save'}
         </button>
       </div>
     </form>

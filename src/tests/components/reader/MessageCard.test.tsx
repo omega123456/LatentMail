@@ -116,14 +116,14 @@ describe('MessageCard', () => {
     expect(onTrustSender).toHaveBeenCalledWith('alex@example.com');
   });
 
-  it('offers no bypass at all on a spammed message', () => {
+  it.each(['SPAM', 'TRASH'])('offers no bypass at all on a %s message', (labelId) => {
     renderWithQueryClient(
       <MessageCard
         message={{
           ...message,
           html: '<p>Body</p>',
           htmlPresence: 'present',
-          labelIds: ['SPAM'],
+          labelIds: [labelId],
           remoteImagesBlocked: true,
         }}
         expanded

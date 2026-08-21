@@ -85,7 +85,7 @@ describe('MailLayout — label lifecycle wiring', () => {
     const input = screen.getByDisplayValue('Work');
     await user.clear(input);
     await user.type(input, 'Projects');
-    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(renamed).toMatchObject({
         accountId: 'account-1',

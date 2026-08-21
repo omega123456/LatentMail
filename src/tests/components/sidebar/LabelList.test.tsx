@@ -140,10 +140,34 @@ describe('LabelList', () => {
     const input = screen.getByDisplayValue('Clients');
     await user.clear(input);
     await user.type(input, 'Key Clients');
-    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(onRenameLabel).toHaveBeenCalledWith({ id: 'Label_1', name: 'Key Clients' }),
     );
+  });
+
+  it('saves the colour from the inline form without renaming', async () => {
+    const user = userEvent.setup();
+    const onRenameLabel = vi.fn().mockResolvedValue(undefined);
+    const onRecolorLabel = vi.fn().mockResolvedValue(undefined);
+    render(
+      <LabelList
+        activeMailboxId={null}
+        labels={labels}
+        showUnreadCounts
+        onSelect={vi.fn()}
+        onRenameLabel={onRenameLabel}
+        onRecolorLabel={onRecolorLabel}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Edit Clients' }));
+    expect(screen.getByRole('radio', { name: 'Blue' })).toHaveAttribute('aria-checked', 'true');
+    await user.click(screen.getByRole('radio', { name: 'Red' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(onRecolorLabel).toHaveBeenCalledWith({ id: 'Label_1', colorId: 'red' }),
+    );
+    expect(onRenameLabel).not.toHaveBeenCalled();
   });
 
   it('recolours a label through the colour picker', async () => {

@@ -153,6 +153,7 @@ export function LabelList({
                     <LabelForm
                       mode="rename"
                       initialName={label.name}
+                      initialColorId={label.color}
                       existingNames={existingNames}
                       submitError={error}
                       submitting={submitting}
@@ -160,17 +161,22 @@ export function LabelList({
                         closeRow();
                         setError(null);
                       }}
-                      onSubmit={async ({ name }) => {
+                      onSubmit={async ({ name, colorId }) => {
                         setSubmitting(true);
                         setError(null);
                         try {
-                          await onRenameLabel({ id: label.id, name });
+                          if (name !== label.name) {
+                            await onRenameLabel({ id: label.id, name });
+                          }
+                          if (colorId !== label.color) {
+                            await onRecolorLabel({ id: label.id, colorId });
+                          }
                           closeRow();
                         } catch (submitError) {
                           setError(
                             submitError instanceof Error
                               ? submitError.message
-                              : "Couldn't rename the label. Try again.",
+                              : "Couldn't save the label. Try again.",
                           );
                         } finally {
                           setSubmitting(false);

@@ -55,6 +55,7 @@ fn seeded_storage(directory: &std::path::Path) -> Storage {
     for (id, sender, label_id) in [
         ("m1", "Elena Rodriguez <Elena.R@Example.com>", "INBOX"),
         ("m2", "spammer@example.com", "SPAM"),
+        ("m3", "Elena Rodriguez <Elena.R@Example.com>", "TRASH"),
     ] {
         MessageRepository::write_full_state(
             &connection,
@@ -130,12 +131,13 @@ async fn no_policy_blocks_every_remote_image() {
         vec![
             ("m1".to_owned(), false, true, false),
             ("m2".to_owned(), false, true, false),
+            ("m3".to_owned(), false, true, false),
         ]
     );
 }
 
 #[tokio::test]
-async fn always_load_allows_every_message_except_the_spammed_one() {
+async fn always_load_allows_every_message_except_the_spammed_and_trashed_ones() {
     let directory = tempfile::tempdir().unwrap();
     let storage = seeded_storage(directory.path());
 
@@ -151,6 +153,7 @@ async fn always_load_allows_every_message_except_the_spammed_one() {
         vec![
             ("m1".to_owned(), true, false, true),
             ("m2".to_owned(), false, true, false),
+            ("m3".to_owned(), false, true, false),
         ]
     );
 }
@@ -172,12 +175,13 @@ async fn a_trusted_sender_matches_the_header_address_case_insensitively() {
         vec![
             ("m1".to_owned(), true, false, true),
             ("m2".to_owned(), false, true, false),
+            ("m3".to_owned(), false, true, false),
         ]
     );
 }
 
 #[tokio::test]
-async fn load_for_allows_only_the_named_message_and_never_a_spammed_one() {
+async fn load_for_allows_only_the_named_message_and_never_a_spammed_or_trashed_one() {
     let directory = tempfile::tempdir().unwrap();
     let storage = seeded_storage(directory.path());
 
@@ -185,7 +189,7 @@ async fn load_for_allows_only_the_named_message_and_never_a_spammed_one() {
         conversation_under(
             storage,
             Some(ImagePolicy {
-                load_for: vec!["m1".into(), "m2".into()],
+                load_for: vec!["m1".into(), "m2".into(), "m3".into()],
                 ..ImagePolicy::default()
             })
         )
@@ -193,6 +197,7 @@ async fn load_for_allows_only_the_named_message_and_never_a_spammed_one() {
         vec![
             ("m1".to_owned(), true, false, true),
             ("m2".to_owned(), false, true, false),
+            ("m3".to_owned(), false, true, false),
         ]
     );
 }
@@ -214,6 +219,7 @@ async fn a_trusted_sender_that_is_not_this_sender_changes_nothing() {
         vec![
             ("m1".to_owned(), false, true, false),
             ("m2".to_owned(), false, true, false),
+            ("m3".to_owned(), false, true, false),
         ]
     );
 }

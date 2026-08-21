@@ -289,8 +289,20 @@ impl QueueRegistry {
                             .filter(|record| record.account_id == account_id && record.lane == lane)
                             .cloned()
                             .collect();
-                        operations
-                            .extend(history.iter().filter(|record| record.lane == lane).cloned());
+                        operations.sort_by(|left, right| {
+                            right
+                                .updated_at
+                                .cmp(&left.updated_at)
+                                .then_with(|| left.id.cmp(&right.id))
+                        });
+                        operations.extend(
+                            history
+                                .iter()
+                                .rev()
+                                .filter(|record| record.lane == lane)
+                                .cloned(),
+                        );
+                        operations.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
 
                         let active = operations
                             .iter()

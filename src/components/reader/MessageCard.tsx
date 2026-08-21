@@ -79,7 +79,9 @@ export function MessageCard({
   const needsBody =
     message.htmlPresence !== 'tooLarge' &&
     (message.htmlPresence === 'neverFetched' || (!message.html && !message.text));
-  const isSpam = (message.labelIds ?? []).includes('SPAM');
+  const remoteImagesLocked = (message.labelIds ?? []).some(
+    (label) => label === 'SPAM' || label === 'TRASH',
+  );
   useEffect(() => {
     if (!open || !needsBody || requested.current === message.id) return;
     requested.current = message.id;
@@ -131,7 +133,7 @@ export function MessageCard({
             <div className="mb-stack-gap-md flex flex-wrap items-center gap-2.5 rounded-control bg-surface-container px-3 py-2.5 text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
               <ImageOff className="shrink-0" size={16} />
               <span>Remote images are blocked.</span>
-              {!isSpam && (
+              {!remoteImagesLocked && (
                 <span className="ml-auto flex items-center gap-2.5">
                   <button
                     type="button"

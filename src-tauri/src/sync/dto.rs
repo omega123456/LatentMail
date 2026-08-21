@@ -310,7 +310,10 @@ pub struct ImagePolicy {
 
 impl ImagePolicy {
     pub fn allows(&self, label_ids: &[String], message_id: &str, sender: &str) -> bool {
-        if label_ids.iter().any(|label| label == "SPAM") {
+        if label_ids
+            .iter()
+            .any(|label| label == "SPAM" || label == "TRASH")
+        {
             return false;
         }
         self.always_load
