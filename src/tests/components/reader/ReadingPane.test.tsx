@@ -33,13 +33,13 @@ describe('ReadingPane', () => {
     expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
   });
 
-  it('sanitizes HTML before it reaches the sandboxed iframe', async () => {
+  it('sanitizes HTML before it reaches the script-free iframe', async () => {
     const conversation = structuredClone(readerFixtures['thread-1']);
     conversation.messages[1].html =
       '<p>Safe</p><script>window.bad = true</script><img src=x onerror="window.bad = true">';
     renderWithQueryClient(<ReadingPane threadId="thread-1" conversation={conversation} />);
     const frame = screen.getByLabelText('Message body');
-    expect(frame).toHaveAttribute('sandbox', 'allow-same-origin');
+    expect(frame).not.toHaveAttribute('sandbox');
     expect(frame.getAttribute('srcdoc')).not.toContain('script');
     expect(frame.getAttribute('srcdoc')).not.toContain('onerror');
     await waitFor(() => expect(frame).toHaveAttribute('height', '0'));

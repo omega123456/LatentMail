@@ -21,7 +21,9 @@ describe('BodyFrame', () => {
       />,
     );
     const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
-    expect(frame).toHaveAttribute('sandbox', 'allow-same-origin');
+    expect(frame).not.toHaveAttribute('sandbox');
+    expect(frame.getAttribute('srcdoc')).toContain("default-src 'none'");
+    expect(frame.getAttribute('srcdoc')).toContain("form-action 'none'");
     expect(frame.getAttribute('srcdoc')).not.toContain('<script>');
     frame.contentDocument?.write('<a href="https://example.com">Safe link</a>');
     await act(async () => {

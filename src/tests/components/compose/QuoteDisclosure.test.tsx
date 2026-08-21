@@ -33,7 +33,7 @@ describe('QuoteDisclosure', () => {
     expect(region).toBeInTheDocument();
     expect(screen.getByText('On 14 Mar 2024 at 10:42, Elena Rodriguez wrote:')).toBeInTheDocument();
     const frame = region.querySelector('iframe');
-    expect(frame).toHaveAttribute('sandbox', 'allow-same-origin');
+    expect(frame).not.toHaveAttribute('sandbox');
     await waitFor(() => expect(frame).toHaveAttribute('height', '0'));
   });
 

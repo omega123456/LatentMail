@@ -75,3 +75,14 @@ fn preserves_inert_class_and_id_attributes() {
     assert!(result.html.contains("id=\"mail-body\""));
     assert!(result.html.contains("class=\"newsletter hero\""));
 }
+
+#[test]
+fn drops_document_title_text_instead_of_leaking_it_into_the_body() {
+    let result = sanitize(
+        r#"<html><head><title>View in browser</title></head><body><p>Real content</p></body></html>"#,
+        &HashMap::new(),
+        false,
+    );
+    assert!(!result.html.contains("View in browser"), "{}", result.html);
+    assert!(result.html.contains("Real content"));
+}

@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod auth;
 pub mod avatars;
+pub mod cli;
 pub mod compose;
 pub mod contacts;
 pub mod gmail;
@@ -22,6 +23,10 @@ use tauri::Manager;
 #[cfg(not(coverage))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some((message, code)) = cli::run_client(&std::env::args().collect::<Vec<_>>()) {
+        println!("{message}");
+        std::process::exit(code);
+    }
     shell::register_plugins(ipc::register(tauri::Builder::default()))
         .setup(|app| {
             let handle = app.handle();
@@ -33,6 +38,7 @@ pub fn run() {
             auth::initialize(handle).map_err(std::io::Error::other)?;
             avatars::initialize(handle).map_err(std::io::Error::other)?;
             sync::initialize(handle).map_err(std::io::Error::other)?;
+            cli::start(handle);
             Ok(os::initialize(handle).map_err(std::io::Error::other)?)
         })
         .on_window_event(|window, event| {

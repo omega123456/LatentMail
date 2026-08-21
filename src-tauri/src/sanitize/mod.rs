@@ -32,6 +32,7 @@ pub fn sanitize(
     builder
         .add_tags(&["style", "font"])
         .rm_clean_content_tags(&["style"])
+        .add_clean_content_tags(&["title"])
         .add_generic_attributes(&[
             "style",
             "class",
