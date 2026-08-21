@@ -191,4 +191,22 @@ describe('SearchField', () => {
     await user.click(screen.getByRole('option', { name: /Work/ }));
     expect(field).toHaveValue('label:Label_1 ');
   });
+
+  it('keeps the suggestion popup closed for a draft set while the field is not focused', () => {
+    renderWithQueryClient(<SearchField labels={[]} />);
+    act(() => {
+      useSearchStore.getState().setDraft('has:attachment');
+    });
+    expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument();
+  });
+
+  it('closes the suggestion popup when the field loses focus', async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<SearchField labels={[]} />);
+    const field = screen.getByLabelText('Search mail');
+    await user.type(field, 'fro');
+    expect(screen.getByRole('listbox', { name: 'Search suggestions' })).toBeInTheDocument();
+    fireEvent.blur(field);
+    expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument();
+  });
 });

@@ -23,10 +23,11 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
 
     const [activeIndex, setActiveIndex] = useState(-1);
     const [dismissed, setDismissed] = useState(false);
+    const [focused, setFocused] = useState(false);
     const listboxId = useId();
 
     const suggestions = useMemo(() => suggestionsFor(draft, labels), [draft, labels]);
-    const open = !dismissed && !panelOpen && suggestions.length > 0;
+    const open = focused && !dismissed && !panelOpen && suggestions.length > 0;
 
     useEffect(() => {
       if (!open) return;
@@ -79,6 +80,8 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
                 aria-expanded={open}
                 aria-controls={listboxId}
                 aria-activedescendant={activeOptionId}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
                 onChange={(event) => {
                   setDraft(event.target.value);
                   setActiveIndex(-1);
