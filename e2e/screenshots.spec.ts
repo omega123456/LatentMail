@@ -218,6 +218,8 @@ for (const theme of themes) {
     await page
       .getByLabel('Open Q3 Marketing Strategy Review')
       .click({ modifiers: ['ControlOrMeta'] });
+    await page.getByLabel('Open Updates to Color Tokens').click({ modifiers: ['ControlOrMeta'] });
+    await expect(page.getByText('2 conversations selected')).toBeVisible();
     await screenshot(page, page.getByTestId('reader-slot'), 'bulk-selection-panel', theme);
   });
 

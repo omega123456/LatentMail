@@ -188,7 +188,7 @@ describe('query hooks', () => {
     error.mockRestore();
   });
 
-  it('applies triage to threads and messages, then clears the selection', async () => {
+  it('applies triage to threads and messages and keeps the selection', async () => {
     const client = new QueryClient();
     client.setQueryData(queryKeys.threads('account', 'INBOX'), {
       pages: [{ items: [thread], nextCursor: null }],
@@ -219,7 +219,7 @@ describe('query hooks', () => {
         remove: ['UNREAD'],
       });
     });
-    expect(useMultiSelectStore.getState().selectedIds.size).toBe(0);
+    expect([...useMultiSelectStore.getState().selectedIds]).toEqual(['thread-1']);
     const message = (
       client.getQueryData(queryKeys.conversationThread('account', 'thread-1')) as {
         messages: Array<{ isStarred: boolean; isUnread: boolean }>;

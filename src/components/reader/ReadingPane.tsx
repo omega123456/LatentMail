@@ -19,7 +19,8 @@ import {
 } from '@/lib/query/hooks';
 import { buildGmailThreadWebUrl } from '@/lib/gmail/thread-url';
 import { messageBadges } from '@/lib/labels/badges';
-import { computeThreadLabelMembership, mapConversation } from '@/lib/query/mappers';
+import { computeThreadLabelMembership, mapConversation, mapThreadToRow } from '@/lib/query/mappers';
+import type { Conversation } from '@/lib/types/conversation';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
@@ -97,6 +98,10 @@ export function ReadingPane({
   moveToCurrentLabelIds,
   labelMenuEntries = [],
   selectedCount = 0,
+  selectedThreads = [],
+  loadedThreadCount = 0,
+  onClearSelection = () => undefined,
+  onSelectAll = () => undefined,
   unread = false,
   starred = false,
   triageHandlers,
@@ -119,6 +124,10 @@ export function ReadingPane({
   moveToCurrentLabelIds?: string[];
   labelMenuEntries?: MessageRibbonProps['labels'];
   selectedCount?: number;
+  selectedThreads?: Conversation[];
+  loadedThreadCount?: number;
+  onClearSelection?: () => void;
+  onSelectAll?: () => void;
   unread?: boolean;
   starred?: boolean;
   onCompose?: (action: ComposeAction, messageId: string) => void;
@@ -140,6 +149,10 @@ export function ReadingPane({
     return (
       <BulkSelectionPanel
         count={selectedCount}
+        selectedThreads={selectedThreads}
+        loadedThreadCount={loadedThreadCount}
+        onClearSelection={onClearSelection}
+        onSelectAll={onSelectAll}
         systemLabelIds={systemLabelIds ?? []}
         moveToCurrentLabelIds={moveToCurrentLabelIds}
         unread={unread}
@@ -289,6 +302,8 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
   const selectedCount = useMultiSelectStore((value) => value.selectedIds.size);
   const selectedIds = useMultiSelectStore((value) => value.selectedIds);
   const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
+  const clearSelection = useMultiSelectStore((value) => value.clear);
+  const selectAll = useMultiSelectStore((value) => value.selectAll);
   const conversationQuery = useConversationQuery(accountId, multiSelectActive ? null : threadId);
   const fetchBody = useFetchMessageBodyMutation(accountId, threadId);
   const triage = useThreadTriageIntentMutation(accountId);
@@ -305,6 +320,10 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
   const selectedThreads = useMemo(
     () => loadedThreads.filter((thread) => selectedIds.has(thread.id)),
     [selectedIds, loadedThreads],
+  );
+  const selectedRows = useMemo<Conversation[]>(
+    () => selectedThreads.map(mapThreadToRow),
+    [selectedThreads],
   );
   const labelMenuEntries = useMemo(
     () =>
@@ -384,6 +403,10 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       moveToCurrentLabelIds={moveToCurrentLabelIds}
       labelMenuEntries={labelMenuEntries}
       selectedCount={selectedCount}
+      selectedThreads={selectedRows}
+      loadedThreadCount={loadedThreads.length}
+      onClearSelection={clearSelection}
+      onSelectAll={() => selectAll(loadedThreads.map((thread) => thread.id))}
       unread={unread}
       starred={starred}
       triageHandlers={triageHandlersFor(activeIds, unread, starred, isSpam, triage.mutate)}

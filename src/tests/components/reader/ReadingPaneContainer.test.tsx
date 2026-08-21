@@ -293,4 +293,54 @@ describe('ReadingPaneContainer', () => {
     ]);
     expect(deleteMessageChanges).toEqual([expect.objectContaining({ messageIds: ['message-1'] })]);
   });
+
+  it('keeps the bulk selection after a bulk action so more actions can follow', async () => {
+    const user = userEvent.setup();
+    useSelectionStore.setState({
+      activeAccountId: 'account-1',
+      activeMailboxId: 'INBOX',
+      activeThreadId: null,
+      keyboardCursor: null,
+    });
+    useMultiSelectStore.setState({
+      selectedIds: new Set(['thread-a', 'thread-b']),
+      anchorId: null,
+    });
+    const threadChanges: unknown[] = [];
+    ipc.override('list_threads', {
+      items: ['thread-a', 'thread-b'].map((id, index) => ({
+        id,
+        subject: `Subject ${id}`,
+        sender: { display: `Sender ${id}`, address: `${id}@example.com` },
+        sentRecipient: null,
+        latestAt: Date.parse('2026-08-11T10:00:00Z') - index,
+        messageCount: 1,
+        isUnread: false,
+        isStarred: false,
+        hasAttachments: false,
+        hasDraft: false,
+        systemLabelIds: ['INBOX'],
+      })),
+      nextCursor: null,
+    });
+    ipc.override('mutate_threads', (args) => {
+      threadChanges.push(args);
+      return [];
+    });
+
+    renderWithClient();
+
+    const panel = within(await screen.findByTestId('bulk-selection-panel'));
+    await user.click(panel.getByRole('button', { name: 'Star' }));
+    await waitFor(() => expect(threadChanges).toHaveLength(1));
+    expect(threadChanges).toEqual([
+      expect.objectContaining({ threadIds: ['thread-a', 'thread-b'], add: ['STARRED'] }),
+    ]);
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(2);
+    expect(
+      within(await screen.findByTestId('bulk-selection-panel')).getByText(
+        '2 conversations selected',
+      ),
+    ).toBeInTheDocument();
+  });
 });

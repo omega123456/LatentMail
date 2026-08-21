@@ -13,7 +13,6 @@ import type {
 import { queryKeys } from './keys';
 import { toLogEntry } from './mappers';
 import { useToastStore } from '@/stores/toast';
-import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useLayoutStore } from '@/stores/layout';
@@ -567,7 +566,6 @@ export function useTriageMutation(accountId: string | null) {
         queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
-      useMultiSelectStore.getState().clear();
     },
   });
 }
@@ -616,7 +614,6 @@ export function useDeleteThreadsMutation(accountId: string | null) {
         queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
-      useMultiSelectStore.getState().clear();
     },
   });
 }
@@ -663,7 +660,6 @@ export function useMoveThreadsMutation(accountId: string | null) {
         queryKey: queryKeys.conversationsForAccount(accountId ?? ''),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
-      useMultiSelectStore.getState().clear();
     },
   });
 }
