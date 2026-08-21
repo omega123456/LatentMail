@@ -26,7 +26,7 @@ describe('ReadingPane', () => {
     );
     expect(screen.getByLabelText('Message body')).toHaveAttribute(
       'srcdoc',
-      expect.stringContaining('body{max-width:42rem;margin:0 auto'),
+      expect.stringContaining('body{margin:0'),
     );
     await user.click(screen.getByRole('button', { name: 'Expand message from Elena Rodriguez' }));
     expect(screen.getAllByLabelText('Message body')).toHaveLength(2);

@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 
 pub const MAX_SANITIZED_HTML_BYTES: usize = 512 * 1024;
 const REMOTE_IMAGE_PLACEHOLDER: &str =
-    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    "data:image/gif;base64,R0lGODlhAQABAIAAAMLCwgAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CidPart {
@@ -30,9 +30,27 @@ pub fn sanitize(
     let blocked_in_filter = std::sync::Arc::clone(&blocked);
     let mut builder = Builder::default();
     builder
-        .add_tags(&["style"])
+        .add_tags(&["style", "font"])
         .rm_clean_content_tags(&["style"])
-        .add_generic_attributes(&["style", "class", "id"])
+        .add_generic_attributes(&[
+            "style",
+            "class",
+            "id",
+            "align",
+            "valign",
+            "width",
+            "height",
+            "bgcolor",
+            "border",
+            "cellpadding",
+            "cellspacing",
+            "color",
+            "face",
+            "size",
+            "dir",
+            "nowrap",
+            "role",
+        ])
         .url_schemes(["http", "https", "mailto", "data", "cid"].into())
         .attribute_filter(
             move |element, attribute, value| match (element, attribute) {

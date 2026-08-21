@@ -32,7 +32,7 @@ export function BodyFrame({
   const dark = document.documentElement.classList.contains('dark');
   const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src 'self'">`;
   const frameFont = `@font-face{font-family:Inter;src:url(${interUrl}) format('woff2');font-weight:100 900;font-display:swap}`;
-  const srcDoc = `${frameCsp}<style>${frameFont}body{max-width:42rem;margin:0 auto;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html)}`;
+  const srcDoc = `${frameCsp}<style>${frameFont}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625;word-break:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true })}`;
   return (
     <iframe
       aria-label="Message body"
@@ -48,8 +48,12 @@ export function BodyFrame({
       onLoad={(event) => {
         const document = event.currentTarget.contentDocument;
         if (!document) return;
-        if (!heightConstrained)
-          setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
+        if (!heightConstrained) {
+          const measure = () =>
+            setHeight(Math.min(document.documentElement.scrollHeight, maxFrameHeight));
+          measure();
+          new ResizeObserver(measure).observe(document.body);
+        }
         document.addEventListener('contextmenu', (menu) => menu.preventDefault());
         document.addEventListener('click', (click) => {
           const link = (click.target as Element | null)?.closest('a[href]');

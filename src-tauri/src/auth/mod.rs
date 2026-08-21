@@ -53,8 +53,10 @@ pub fn client_secret() -> Option<ClientSecret> {
         .filter(|secret| !secret.is_empty())
         .map(ClientSecret::new)
 }
-#[cfg(not(feature = "test-utils"))]
+#[cfg(all(not(feature = "test-utils"), not(debug_assertions)))]
 const KEYCHAIN_SERVICE: &str = "com.latentmail.refresh-token";
+#[cfg(all(not(feature = "test-utils"), debug_assertions))]
+const KEYCHAIN_SERVICE: &str = "com.latentmail.desktop.dev.refresh-token";
 
 const ACCESS_TOKEN_EXPIRY_SKEW: ChronoDuration = ChronoDuration::minutes(5);
 

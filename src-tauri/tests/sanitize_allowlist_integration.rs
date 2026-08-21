@@ -31,19 +31,31 @@ fn strips_executable_markup_and_unsafe_urls() {
 #[test]
 fn preserves_email_layout_markup() {
     let result = sanitize(
-        r#"<style>.notice { color: red; }</style><table style="width:100%"><thead><tr><th>Heading</th></tr></thead><tbody><tr><td style="font-weight:bold">Body</td></tr></tbody></table>"#,
+        r##"<style>.notice { color: red; }</style><center><table width="600" align="center" bgcolor="#eeeeee" cellpadding="0" cellspacing="0" border="0" style="width:100%"><thead><tr><th>Heading</th></tr></thead><tbody><tr><td valign="top" width="300" style="font-weight:bold"><font face="Arial" size="2" color="#333333">Body</font></td></tr></tbody></table></center>"##,
         &HashMap::new(),
         false,
     );
     for expected in [
         "<style>",
         "color: red",
+        "<center>",
         "<table",
         "<thead>",
         "<tbody>",
         "<td",
         "style=",
         "font-weight:bold",
+        "width=\"600\"",
+        "align=\"center\"",
+        "bgcolor=\"#eeeeee\"",
+        "cellpadding=\"0\"",
+        "cellspacing=\"0\"",
+        "border=\"0\"",
+        "valign=\"top\"",
+        "<font",
+        "face=\"Arial\"",
+        "size=\"2\"",
+        "color=\"#333333\"",
     ] {
         assert!(
             result.html.contains(expected),
