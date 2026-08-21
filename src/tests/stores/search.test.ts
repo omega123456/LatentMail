@@ -49,15 +49,17 @@ describe('search store', () => {
       active: false,
       panelOpen: false,
     });
+    expect(useSelectionStore.getState().activeThreadId).toBeNull();
   });
 
-  it('setScope and setDraft update independently of submission', () => {
+  it('setScope clears the thread selection and setDraft updates independently of submission', () => {
     useSearchStore.getState().setDraft('has:attachment');
     useSearchStore.getState().setScope({ kind: 'all' });
     const state = useSearchStore.getState();
     expect(state.draft).toBe('has:attachment');
     expect(state.scope).toEqual({ kind: 'all' });
     expect(state.active).toBe(false);
+    expect(useSelectionStore.getState().activeThreadId).toBeNull();
   });
 
   it('openPanel and closePanel toggle the panel flag', () => {

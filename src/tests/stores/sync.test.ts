@@ -7,6 +7,7 @@ import { ipc } from '@/tests/ipc-mock';
 afterEach(() =>
   act(() => {
     useSyncStore.setState({
+      queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false, suspended: false },
       syncState: 'idle',
       lastSynced: null,
       accountId: null,
@@ -84,5 +85,34 @@ describe('useSyncStore', () => {
     act(() => useSyncStore.getState().setSyncState('idle'));
     act(() => useSyncStore.getState().setSyncState('error'));
     expect(useToastStore.getState().toasts).toHaveLength(2);
+  });
+
+  it('suppresses a sync failure toast while the system is suspended', () => {
+    act(() =>
+      useSyncStore.getState().setQueue({
+        pending: 0,
+        active: 0,
+        failed: 0,
+        done: 0,
+        paused: false,
+        suspended: true,
+      }),
+    );
+    act(() => useSyncStore.getState().setSyncState('error'));
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+
+    act(() => useSyncStore.getState().setSyncState('idle'));
+    act(() =>
+      useSyncStore.getState().setQueue({
+        pending: 0,
+        active: 0,
+        failed: 0,
+        done: 0,
+        paused: false,
+        suspended: false,
+      }),
+    );
+    act(() => useSyncStore.getState().setSyncState('error'));
+    expect(useToastStore.getState().toasts).toHaveLength(1);
   });
 });

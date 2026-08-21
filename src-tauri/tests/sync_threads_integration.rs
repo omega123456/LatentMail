@@ -325,9 +325,15 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
-        .await
-        .unwrap();
+    let conversation = load_conversation(
+        application.state(),
+        "account".into(),
+        "t1".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(conversation.subject, "Subject t1");
     assert_eq!(conversation.messages.len(), 1);
@@ -398,9 +404,15 @@ async fn load_conversation_carries_attachment_metadata_on_the_dto() {
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
-        .await
-        .unwrap();
+    let conversation = load_conversation(
+        application.state(),
+        "account".into(),
+        "t1".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(conversation.messages.len(), 1);
     let attachments = &conversation.messages[0].attachments;
@@ -460,9 +472,15 @@ async fn load_conversation_flags_html_sanitized_past_the_size_cap_as_truncated()
     let application = app();
     application.manage(storage);
 
-    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
-        .await
-        .unwrap();
+    let conversation = load_conversation(
+        application.state(),
+        "account".into(),
+        "t1".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert!(conversation.messages[0].truncated);
 }
@@ -633,9 +651,15 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
     )
     .await
     .unwrap();
-    let conversation = load_conversation(application.state(), "account".into(), "t1".into(), None)
-        .await
-        .unwrap();
+    let conversation = load_conversation(
+        application.state(),
+        "account".into(),
+        "t1".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(page.items[0].latest_at, seconds * 1000);
     assert_eq!(conversation.messages[0].sent_at, seconds * 1000);

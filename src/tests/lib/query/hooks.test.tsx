@@ -98,6 +98,37 @@ describe('query hooks', () => {
     expect(result.current.disabledConversation.fetchStatus).toBe('idle');
   });
 
+  it('loads conversations with the mailbox or active search entry scope', async () => {
+    const client = new QueryClient();
+    const calls: unknown[] = [];
+    ipc.override('load_conversation', (args) => {
+      calls.push(args);
+      return { threadId: 'thread-1', subject: '', messages: [] };
+    });
+    const { rerender } = renderHook(() => useConversationQuery('account', 'thread-1'), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls.at(-1)).toEqual({
+      accountId: 'account',
+      threadId: 'thread-1',
+      imagePolicy: { alwaysLoad: false, allowedSenders: [], loadFor: [] },
+      entryScope: { kind: 'mailbox', mailboxId: 'INBOX' },
+    });
+    act(() =>
+      useSearchStore.setState({ active: true, scope: { kind: 'label', labelId: 'TRASH' } }),
+    );
+    rerender();
+    await waitFor(() =>
+      expect(calls.at(-1)).toEqual({
+        accountId: 'account',
+        threadId: 'thread-1',
+        imagePolicy: { alwaysLoad: false, allowedSenders: [], loadFor: [] },
+        entryScope: { kind: 'search', scope: { kind: 'label', labelId: 'TRASH' } },
+      }),
+    );
+  });
+
   it('looks up contact suggestions only once an account and a two-character query are present', async () => {
     ipc.override('lookup_contacts', () => [{ address: 'a@example.com', displayName: 'A' }]);
     const client = new QueryClient();

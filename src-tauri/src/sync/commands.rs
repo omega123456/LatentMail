@@ -11,8 +11,8 @@ use crate::{
     gmail::labels::resolve_color,
     sanitize::{self, CidPart},
     storage::{
-        LabelColor, LabelRepository, MessageRepository, Storage, ThreadRepository,
-        TraversalCursorRepository, TraversalKind,
+        ConversationEntryScope, LabelColor, LabelRepository, MessageRepository, Storage,
+        ThreadRepository, TraversalCursorRepository, TraversalKind,
     },
 };
 
@@ -568,6 +568,7 @@ pub async fn load_conversation(
     account_id: String,
     thread_id: String,
     image_policy: Option<ImagePolicy>,
+    entry_scope: Option<ConversationEntryScope>,
 ) -> Result<ConversationDto, String> {
     let image_policy = image_policy.unwrap_or_default();
     let (account_for_read, thread_for_read) = (account_id.clone(), thread_id.clone());
@@ -578,6 +579,7 @@ pub async fn load_conversation(
                     connection,
                     &account_for_read,
                     &thread_for_read,
+                    entry_scope.as_ref(),
                 )?;
                 let subject =
                     ThreadRepository::get(connection, &account_for_read, &thread_for_read)?

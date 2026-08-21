@@ -4,6 +4,7 @@ import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc, dispatchInvoke } from '@/lib/ipc/dispatch';
 import type {
   ImagePolicy,
+  ConversationEntryScope,
   MoveDestination,
   PauseScope,
   SearchScope,
@@ -186,6 +187,9 @@ export function useConversationQuery(accountId: string | null, threadId: string 
   const alwaysLoad = useLayoutStore((state) => state.alwaysLoadRemoteImages);
   const allowedSenders = useLayoutStore((state) => state.allowedImageSenders);
   const loadFor = useSelectionStore((state) => state.imagesAllowedFor);
+  const mailboxId = useSelectionStore((state) => state.activeMailboxId) ?? 'INBOX';
+  const searchActive = useSearchStore((state) => state.active);
+  const searchScope = useSearchStore((state) => state.scope);
   const imagePolicy: ImagePolicy = useMemo(
     () => ({
       alwaysLoad,
@@ -194,13 +198,22 @@ export function useConversationQuery(accountId: string | null, threadId: string 
     }),
     [alwaysLoad, allowedSenders, loadFor],
   );
+  const entryScope: ConversationEntryScope = searchActive
+    ? { kind: 'search', scope: searchScope }
+    : { kind: 'mailbox', mailboxId };
   return useQuery({
-    queryKey: queryKeys.conversation(accountId ?? '', threadId ?? '', JSON.stringify(imagePolicy)),
+    queryKey: queryKeys.conversation(
+      accountId ?? '',
+      threadId ?? '',
+      JSON.stringify(imagePolicy),
+      entryScope,
+    ),
     queryFn: () =>
       invoke('load_conversation', {
         accountId: accountId as string,
         threadId: threadId as string,
         imagePolicy,
+        entryScope,
       }),
     enabled: accountId !== null && threadId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,

@@ -4,7 +4,9 @@ pub mod deeplink;
 pub mod icon;
 pub mod indicator;
 pub mod instance;
+pub mod lifecycle;
 pub mod notifications;
+pub mod power;
 pub mod tray;
 pub mod window;
 
@@ -17,6 +19,7 @@ use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 use tokio::sync::Mutex;
 
 use self::deeplink::Mailto;
+use self::lifecycle::Lifecycle;
 
 pub struct OsIntegration {
     tray: Arc<dyn tray::TrayController>,
@@ -26,9 +29,14 @@ pub struct OsIntegration {
     frontend_ready: AtomicBool,
     pending_mailto: Arc<Mutex<Vec<Mailto>>>,
     indicator: Arc<Mutex<indicator::IndicatorState>>,
+    lifecycle: Option<Arc<Lifecycle>>,
+    power: std::sync::Mutex<Option<power::Registration>>,
 }
 
 impl OsIntegration {
+    pub fn lifecycle(&self) -> Option<&Arc<Lifecycle>> {
+        self.lifecycle.as_ref()
+    }
     pub async fn indicator(&self) -> indicator::IndicatorState {
         self.indicator.lock().await.clone()
     }
@@ -45,6 +53,26 @@ impl OsIntegration {
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if app.try_state::<OsIntegration>().is_none() {
+        let lifecycle = app
+            .try_state::<Arc<crate::queue::QueueEngine>>()
+            .map(|queue| {
+                let queue = queue.inner().clone();
+                let handle = app.clone();
+                let resume_work = Arc::new(move || {
+                    let app = handle.clone();
+                    Box::pin(async move {
+                        let auth = app.state::<crate::auth::AuthService>().inner().clone();
+                        let engine = app.state::<Arc<crate::sync::SyncEngine>>().inner().clone();
+                        crate::sync::run_periodic_cadence(&app, &auth, &engine).await;
+                    })
+                        as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                });
+                Arc::new(Lifecycle::new(
+                    queue,
+                    lifecycle::settling_delay(),
+                    resume_work,
+                ))
+            });
         app.manage(OsIntegration {
             tray: tray::controller(app),
             badge: badge::controller(app),
@@ -53,7 +81,22 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             frontend_ready: AtomicBool::new(false),
             pending_mailto: Arc::new(Mutex::new(Vec::new())),
             indicator: Arc::new(Mutex::new(indicator::IndicatorState::empty())),
+            lifecycle: lifecycle.clone(),
+            power: std::sync::Mutex::new(None),
         });
+        if let Some(lifecycle) = lifecycle {
+            let registration = power::register(Arc::new(move |signal| {
+                let lifecycle = Arc::clone(&lifecycle);
+                tauri::async_runtime::spawn(async move {
+                    lifecycle.handle(signal).await;
+                });
+            }));
+            app.state::<OsIntegration>()
+                .power
+                .lock()
+                .expect("power registration lock poisoned")
+                .replace(registration);
+        }
     }
     app.state::<OsIntegration>().tray.initialize()?;
     notifications::initialize(app)?;

@@ -83,8 +83,9 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   }, [accountId]);
 
   const paused = queue.paused;
-  const failed = syncState === 'error' && !paused;
-  const working = !paused && (traversal !== null || refreshing);
+  const reconnecting = queue.suspended && !paused;
+  const failed = syncState === 'error' && !paused && !reconnecting;
+  const working = !paused && !reconnecting && (traversal !== null || refreshing);
   const refresh = () => {
     if (accountId) void useSyncStore.getState().triggerSync(accountId);
   };
@@ -95,13 +96,15 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
 
   const label = paused
     ? `Paused · ${queue.pending} queued`
-    : traversal
-      ? traversalLabel(traversal)
-      : refreshing
-        ? 'Checking for new mail…'
-        : failed
-          ? "Couldn't sync"
-          : freshness(lastSynced, now);
+    : reconnecting
+      ? 'Sync resumes shortly'
+      : traversal
+        ? traversalLabel(traversal)
+        : refreshing
+          ? 'Checking for new mail…'
+          : failed
+            ? "Couldn't sync"
+            : freshness(lastSynced, now);
 
   const dotClass = failed
     ? 'bg-error dark:bg-dark-error'
@@ -129,7 +132,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
         >
           {label}
         </span>
-        {traversal && <ProgressTrack traversal={traversal} />}
+        {traversal && !reconnecting && <ProgressTrack traversal={traversal} />}
         {failed && (
           <button
             type="button"
@@ -142,7 +145,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
         {!paused && (
           <button
             type="button"
-            disabled={!accountId || refreshing}
+            disabled={!accountId || refreshing || reconnecting}
             aria-label="Refresh mail"
             title="Refresh mail"
             onClick={refresh}

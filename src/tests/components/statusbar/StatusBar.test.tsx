@@ -10,7 +10,7 @@ import { ipc } from '@/tests/ipc-mock';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
 
-const emptyQueue = { pending: 0, active: 0, failed: 0, done: 0, paused: false };
+const emptyQueue = { pending: 0, active: 0, failed: 0, done: 0, paused: false, suspended: false };
 
 function renderStatusBar(ui: React.ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -75,7 +75,14 @@ describe('StatusBar', () => {
   });
 
   it('tints the whole bar and swaps refresh for resume while the queue is paused', async () => {
-    setStatus('idle', { pending: 3, active: 0, failed: 0, done: 0, paused: true });
+    setStatus('idle', {
+      pending: 3,
+      active: 0,
+      failed: 0,
+      done: 0,
+      paused: true,
+      suspended: false,
+    });
     renderStatusBar(<StatusBar accountId="account-1" />);
     expect(await screen.findByText('Paused · 3 queued')).toBeInTheDocument();
     expect(screen.getByTestId('status-bar')).toHaveClass('bg-warning-container');
@@ -89,6 +96,45 @@ describe('StatusBar', () => {
     renderStatusBar(<StatusBar />);
     await screen.findByText("Couldn't sync");
     expect(screen.getByTestId('status-bar')).not.toHaveClass('bg-warning-container');
+  });
+
+  it('shows a quiet reconnect state while the system is suspended', async () => {
+    overrideTraversal('backfilling');
+    setStatus('error', { ...emptyQueue, suspended: true });
+    renderStatusBar(<StatusBar accountId="account-1" />);
+
+    const label = await screen.findByRole('status');
+    expect(label).toHaveTextContent('Sync resumes shortly');
+    expect(label).not.toHaveClass('text-error');
+    expect(label).not.toHaveAttribute('title');
+    expect(screen.getByTestId('status-bar')).not.toHaveClass('bg-warning-container');
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh mail' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pause sync' })).toBeEnabled();
+    expect(screen.getByTestId('status-bar').querySelector('.size-chip-dot')).not.toHaveClass(
+      'bg-error',
+    );
+  });
+
+  it('restores the previous status presentation after suspension clears', async () => {
+    overrideTraversal('backfilling');
+    setStatus('error', { ...emptyQueue, suspended: true });
+    renderStatusBar(<StatusBar accountId="account-1" />);
+    await screen.findByText('Sync resumes shortly');
+
+    setStatus('error');
+    expect(await screen.findByText('Downloading mail')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh mail' })).toBeEnabled();
+  });
+
+  it('keeps a user pause ahead of the reconnect state', async () => {
+    setStatus('error', { ...emptyQueue, pending: 3, paused: true, suspended: true });
+    renderStatusBar(<StatusBar accountId="account-1" />);
+    expect(await screen.findByText('Paused · 3 queued')).toBeInTheDocument();
+    expect(screen.queryByText('Sync resumes shortly')).not.toBeInTheDocument();
   });
 
   it('offers an inline retry when the last sync failed', async () => {
@@ -152,7 +198,14 @@ describe('StatusBar', () => {
     await screen.findByRole('status');
     expect(screen.queryByRole('button', { name: 'Open queue settings' })).not.toBeInTheDocument();
 
-    setStatus('idle', { pending: 4, active: 0, failed: 0, done: 0, paused: false });
+    setStatus('idle', {
+      pending: 4,
+      active: 0,
+      failed: 0,
+      done: 0,
+      paused: false,
+      suspended: false,
+    });
     rerender(
       <QueryClientProvider client={new QueryClient()}>
         <StatusBar />
@@ -162,7 +215,14 @@ describe('StatusBar', () => {
       '4 queued',
     );
 
-    setStatus('idle', { pending: 4, active: 0, failed: 2, done: 0, paused: false });
+    setStatus('idle', {
+      pending: 4,
+      active: 0,
+      failed: 2,
+      done: 0,
+      paused: false,
+      suspended: false,
+    });
     expect(screen.getByRole('button', { name: 'Open queue settings' })).toHaveTextContent(
       '2 failed',
     );
@@ -171,8 +231,22 @@ describe('StatusBar', () => {
   it('pauses and resumes through the queue commands while keeping refresh disabled without an account', async () => {
     const user = userEvent.setup();
     setStatus('idle');
-    ipc.override('pause_queue', { pending: 2, active: 0, failed: 0, done: 0, paused: true });
-    ipc.override('resume_queue', { pending: 0, active: 0, failed: 0, done: 0, paused: false });
+    ipc.override('pause_queue', {
+      pending: 2,
+      active: 0,
+      failed: 0,
+      done: 0,
+      paused: true,
+      suspended: false,
+    });
+    ipc.override('resume_queue', {
+      pending: 0,
+      active: 0,
+      failed: 0,
+      done: 0,
+      paused: false,
+      suspended: false,
+    });
     renderStatusBar(<StatusBar />);
     await user.click(screen.getByRole('button', { name: 'Pause sync' }));
     await waitFor(() => expect(screen.getByText('Paused · 2 queued')).toBeInTheDocument());
@@ -220,7 +294,14 @@ describe('StatusBar', () => {
   it('selects the Queue settings section when the queue indicator is activated', async () => {
     const user = userEvent.setup();
     useSettingsUiStore.setState({ activeSection: 'general' });
-    setStatus('idle', { pending: 1, active: 0, failed: 0, done: 0, paused: false });
+    setStatus('idle', {
+      pending: 1,
+      active: 0,
+      failed: 0,
+      done: 0,
+      paused: false,
+      suspended: false,
+    });
     renderStatusBar(<StatusBar />);
     await user.click(screen.getByRole('button', { name: 'Open queue settings' }));
     expect(useSettingsUiStore.getState().activeSection).toBe('queue');

@@ -316,7 +316,8 @@ fn list_conversation_attributes_attachments_to_the_right_message_sorted_by_posit
     second.has_attachments = false;
     materialize::persist(&connection, "account", &second).unwrap();
 
-    let messages = MessageRepository::list_conversation(&connection, "account", "thread").unwrap();
+    let messages =
+        MessageRepository::list_conversation(&connection, "account", "thread", None).unwrap();
     assert_eq!(messages.len(), 2);
     let by_id: std::collections::HashMap<_, _> = messages
         .into_iter()

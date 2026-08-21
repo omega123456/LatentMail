@@ -101,7 +101,12 @@ export interface IpcCommandMap {
     result: ThreadPage;
   };
   load_conversation: {
-    args: { accountId: string; threadId: string; imagePolicy: ImagePolicy };
+    args: {
+      accountId: string;
+      threadId: string;
+      imagePolicy: ImagePolicy;
+      entryScope?: ConversationEntryScope;
+    };
     result: Conversation;
   };
   fetch_message_body: { args: { accountId: string; messageId: string }; result: void };
@@ -179,6 +184,7 @@ export interface QueueSummary {
   failed: number;
   done: number;
   paused: boolean;
+  suspended: boolean;
 }
 export type Lane = 'interactive' | 'background' | 'traversal';
 
@@ -238,6 +244,9 @@ export type PauseScope =
   | { scope: 'global' }
   | { scope: 'account'; accountId: string }
   | { scope: 'lane'; accountId: string; lane: Lane };
+
+export type ConversationEntryScope =
+  { kind: 'mailbox'; mailboxId: string } | { kind: 'search'; scope: SearchScope };
 
 export interface Account {
   id: string;

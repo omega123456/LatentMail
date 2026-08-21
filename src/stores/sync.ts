@@ -6,7 +6,14 @@ import type { QueueSummary, SyncStatus } from '@/lib/types/ipc';
 
 export type SyncState = 'idle' | 'syncing' | 'error';
 
-const emptySummary: QueueSummary = { pending: 0, active: 0, failed: 0, done: 0, paused: false };
+const emptySummary: QueueSummary = {
+  pending: 0,
+  active: 0,
+  failed: 0,
+  done: 0,
+  paused: false,
+  suspended: false,
+};
 
 const SYNC_FAILURE_MESSAGE = "Couldn't sync your mail. Check your connection and try again.";
 
@@ -54,7 +61,7 @@ export const useSyncStore = create<Store>((set, get) => ({
   },
   setQueue: (queue) => set({ queue }),
   setSyncState: (state) => {
-    if (state === 'error' && get().syncState !== 'error')
+    if (state === 'error' && get().syncState !== 'error' && !get().queue.suspended)
       useToastStore.getState().showError(SYNC_FAILURE_MESSAGE);
     set({ syncState: state });
   },

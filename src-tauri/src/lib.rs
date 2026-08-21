@@ -42,9 +42,40 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while running LatentMail")
-        .run(|handle, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+        .run(|handle, event| match event {
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
                 os::window::save_geometry(handle);
+                let Some(lifecycle) = handle.state::<os::OsIntegration>().lifecycle().cloned()
+                else {
+                    return;
+                };
+                if let os::lifecycle::ExitDecision::Confirm { message, .. } =
+                    lifecycle.exit_decision(code == Some(tauri::RESTART_EXIT_CODE))
+                {
+                    api.prevent_exit();
+                    let app = handle.clone();
+                    tauri_plugin_dialog::DialogExt::dialog(handle)
+                        .message(message)
+                        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+                            "Wait".into(),
+                            "Close Anyway".into(),
+                        ))
+                        .show(move |wait| {
+                            if !wait {
+                                app.state::<os::OsIntegration>()
+                                    .lifecycle()
+                                    .expect("lifecycle initialized")
+                                    .confirm_close();
+                                app.exit(0);
+                            }
+                        });
+                }
             }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => os::window::on_reopen(handle, has_visible_windows),
+            _ => {}
         });
 }

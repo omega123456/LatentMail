@@ -324,7 +324,10 @@ async fn writing_every_update_check_interval_persists_it() {
 
     for (wire, expected) in [
         ("1h", latentmail_lib::settings::UpdateCheckInterval::Hourly),
-        ("5h", latentmail_lib::settings::UpdateCheckInterval::FiveHours),
+        (
+            "5h",
+            latentmail_lib::settings::UpdateCheckInterval::FiveHours,
+        ),
         ("1d", latentmail_lib::settings::UpdateCheckInterval::Daily),
         ("7d", latentmail_lib::settings::UpdateCheckInterval::Weekly),
         ("off", latentmail_lib::settings::UpdateCheckInterval::Off),

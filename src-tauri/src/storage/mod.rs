@@ -4,11 +4,11 @@ mod repositories;
 pub use repositories::{
     truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
     AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, ComposeDraftMetadata,
-    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationMessage, HtmlPresence,
-    InlinePart, Label, LabelColor, LabelNameError, LabelRepository, Message, MessageRepository,
-    Operation, OperationRepository, ReconciliationMessage, SearchRepository, SettingRepository,
-    Thread, ThreadIdentity, ThreadListRow, ThreadRepository, TraversalCursor,
-    TraversalCursorRepository, TraversalKind,
+    ComposeDraftMetadataRepository, ComposeMessageContext, ConversationEntryScope,
+    ConversationMessage, HtmlPresence, InlinePart, Label, LabelColor, LabelNameError,
+    LabelRepository, Message, MessageRepository, Operation, OperationRepository,
+    ReconciliationMessage, SearchRepository, SettingRepository, Thread, ThreadIdentity,
+    ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 use std::{

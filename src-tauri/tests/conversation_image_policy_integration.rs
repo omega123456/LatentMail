@@ -1,6 +1,6 @@
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository, Storage,
-    Thread, ThreadIdentity, ThreadRepository,
+    Account, AccountRepository, ConversationEntryScope, HtmlPresence, LabelRepository, Message,
+    MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::commands::load_conversation;
 use latentmail_lib::sync::ImagePolicy;
@@ -94,22 +94,30 @@ async fn conversation_under(
 ) -> Vec<(String, bool, bool, bool)> {
     let application = app();
     application.manage(storage);
-    load_conversation(application.state(), "account".into(), "t1".into(), policy)
-        .await
-        .unwrap()
-        .messages
-        .into_iter()
-        .map(|message| {
-            (
-                message.id,
-                message.remote_images_allowed,
-                message.remote_images_blocked,
-                message
-                    .html_body
-                    .is_some_and(|html| html.contains("tracker.example")),
-            )
-        })
-        .collect()
+    load_conversation(
+        application.state(),
+        "account".into(),
+        "t1".into(),
+        policy,
+        Some(ConversationEntryScope::Mailbox {
+            mailbox_id: "SPAM".into(),
+        }),
+    )
+    .await
+    .unwrap()
+    .messages
+    .into_iter()
+    .map(|message| {
+        (
+            message.id,
+            message.remote_images_allowed,
+            message.remote_images_blocked,
+            message
+                .html_body
+                .is_some_and(|html| html.contains("tracker.example")),
+        )
+    })
+    .collect()
 }
 
 #[tokio::test]

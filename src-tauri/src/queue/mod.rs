@@ -117,6 +117,7 @@ pub struct QueueSummary {
     pub failed: usize,
     pub done: usize,
     pub paused: bool,
+    pub suspended: bool,
 }
 
 #[derive(Default)]
@@ -176,6 +177,7 @@ pub struct QueueEngine {
     accounts: Mutex<HashMap<String, AccountQueue>>,
     entity_locks: EntityLocks,
     paused: AtomicBool,
+    suspended: AtomicBool,
     resumed: Notify,
     interactive_pending: Mutex<HashMap<String, usize>>,
     interactive_drained: Notify,
@@ -214,6 +216,7 @@ impl QueueEngine {
             accounts: Mutex::new(HashMap::new()),
             entity_locks: Mutex::new(HashMap::new()),
             paused: AtomicBool::new(false),
+            suspended: AtomicBool::new(false),
             resumed: Notify::new(),
             interactive_pending: Mutex::new(HashMap::new()),
             interactive_drained: Notify::new(),
@@ -270,6 +273,25 @@ impl QueueEngine {
     pub fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.resumed.notify_waiters();
+    }
+
+    pub fn suspended(&self) -> bool {
+        self.suspended.load(Ordering::Acquire)
+    }
+
+    pub fn set_suspended(&self, suspended: bool) -> bool {
+        let changed = self.suspended.swap(suspended, Ordering::AcqRel) != suspended;
+        if changed {
+            self.resumed.notify_waiters();
+            self.interactive_drained.notify_waiters();
+            self.emit_summary();
+        }
+        changed
+    }
+
+    pub fn executing_sends(&self) -> usize {
+        self.registry
+            .count(OperationKind::Send, OperationStatus::Active)
     }
 
     pub async fn set_paused(&self, scope: &PauseScope, paused: bool) -> bool {
@@ -376,6 +398,7 @@ impl QueueEngine {
             failed: self.counters.failed.load(Ordering::Relaxed),
             done: self.counters.done.load(Ordering::Relaxed),
             paused: self.paused.load(Ordering::Acquire),
+            suspended: self.suspended(),
         }
     }
 
@@ -435,10 +458,12 @@ impl QueueEngine {
         loop {
             self.wait_until_resumed_for(&operation).await;
             self.wait_for_interactive(&operation).await;
+            self.wait_until_resumed_for(&operation).await;
             self.bucket_for(&operation.account_id)
                 .await
                 .acquire(operation.cost)
                 .await;
+            self.wait_until_resumed_for(&operation).await;
             if !self
                 .registry
                 .try_mark_active(&operation.id, operation.attempts)
@@ -505,7 +530,7 @@ impl QueueEngine {
     pub async fn wait_until_resumed(&self) {
         loop {
             let notified = self.resumed.notified();
-            if !self.paused.load(Ordering::Acquire) {
+            if !self.paused.load(Ordering::Acquire) && !self.suspended() {
                 return;
             }
             notified.await;
@@ -516,6 +541,7 @@ impl QueueEngine {
         loop {
             let notified = self.resumed.notified();
             let paused = self.paused.load(Ordering::Acquire)
+                || self.suspended()
                 || self
                     .registry
                     .is_scope_paused(&operation.account_id, operation.lane);

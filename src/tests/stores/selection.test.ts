@@ -122,7 +122,7 @@ describe('clearStateForRemovedAccount', () => {
     expect(useComposeStore.getState().session).toBeNull();
   });
 
-  it('does not clear the active account when a different account is removed', () => {
+  it('keeps the active account but clears the thread when a different account is removed', () => {
     useSelectionStore.setState({
       activeAccountId: 'account-1',
       activeMailboxId: 'INBOX',
@@ -133,6 +133,6 @@ describe('clearStateForRemovedAccount', () => {
     useSelectionStore.getState().clearStateForRemovedAccount('account-2');
 
     expect(useSelectionStore.getState().activeAccountId).toBe('account-1');
-    expect(useSelectionStore.getState().activeThreadId).toBe('thread-1');
+    expect(useSelectionStore.getState().activeThreadId).toBeNull();
   });
 });

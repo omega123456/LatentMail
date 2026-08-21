@@ -1000,6 +1000,7 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         "account".into(),
         "missing".into(),
         None,
+        None,
     )
     .await
     .unwrap()

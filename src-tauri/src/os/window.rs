@@ -34,6 +34,7 @@ pub fn on_close<R: Runtime>(window: &Window<R>, _event: &tauri::WindowEvent) {
                     .state::<crate::settings::SettingsService>()
                     .close_to_tray(),
                 cfg!(windows),
+                cfg!(target_os = "macos"),
             ),
             CloseAction::Hide
         ) {
@@ -43,11 +44,17 @@ pub fn on_close<R: Runtime>(window: &Window<R>, _event: &tauri::WindowEvent) {
     }
 }
 
-pub fn close_action(close_to_tray: bool, windows: bool) -> CloseAction {
-    if windows && close_to_tray {
+pub fn close_action(close_to_tray: bool, windows: bool, macos: bool) -> CloseAction {
+    if macos || (windows && close_to_tray) {
         CloseAction::Hide
     } else {
         CloseAction::Terminate
+    }
+}
+
+pub fn on_reopen<R: Runtime>(app: &tauri::AppHandle<R>, has_visible_windows: bool) {
+    if !has_visible_windows {
+        show_and_focus(app);
     }
 }
 

@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::Duration as ChronoDuration;
 use latentmail_lib::queue::{
     retry_delay, Executor, Lane, OperationKind, QueueEngine, QueueError, QueueOperation,
 };
@@ -95,6 +96,44 @@ async fn rate_limited_operations_wait_for_the_token_bucket_to_refill() {
 
     tokio::time::advance(Duration::from_secs(1)).await;
 
+    assert_eq!(receiver.recv().await.as_deref(), Some("second"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn suspension_while_waiting_for_tokens_prevents_executor_start_until_resumed() {
+    let (started, mut receiver) = mpsc::unbounded_channel();
+    let executor: Executor = Arc::new(move |operation| {
+        let started = started.clone();
+        Box::pin(async move {
+            started.send(operation.id).unwrap();
+            Ok(())
+        })
+    });
+    let queue = QueueEngine::new(1, 1, executor);
+    for id in ["first", "second"] {
+        queue
+            .enqueue(QueueOperation {
+                id: id.into(),
+                account_id: "account".into(),
+                lane: Lane::Interactive,
+                kind: OperationKind::Noop,
+                entity_key: id.into(),
+                cost: 1,
+                attempts: 0,
+                description: "test operation".into(),
+            })
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(receiver.recv().await.as_deref(), Some("first"));
+    tokio::task::yield_now().await;
+    queue.set_suspended(true);
+    tokio::time::advance(ChronoDuration::seconds(1).to_std().unwrap()).await;
+    tokio::task::yield_now().await;
+    assert!(receiver.try_recv().is_err());
+
+    queue.set_suspended(false);
     assert_eq!(receiver.recv().await.as_deref(), Some("second"));
 }
 

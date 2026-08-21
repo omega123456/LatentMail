@@ -7,6 +7,7 @@ export const playwrightQueueSummary: IpcCommandMap['read_queue_summary']['result
   failed: 0,
   done: 0,
   paused: false,
+  suspended: false,
 };
 
 export const playwrightPausedQueueSummary: IpcCommandMap['pause_queue']['result'] = {

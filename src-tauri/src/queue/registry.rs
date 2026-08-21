@@ -247,6 +247,14 @@ impl QueueRegistry {
         }
     }
 
+    pub fn count(&self, kind: OperationKind, status: OperationStatus) -> usize {
+        self.lock()
+            .operations
+            .values()
+            .filter(|operation| operation.kind == kind && operation.status == status)
+            .count()
+    }
+
     pub fn snapshot(
         &self,
         global_paused: bool,

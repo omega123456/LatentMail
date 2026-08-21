@@ -307,6 +307,36 @@ pub struct ConversationMessage {
     pub attachments: Vec<Attachment>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConversationEntryScope {
+    Mailbox {
+        mailbox_id: String,
+    },
+    Search {
+        scope: crate::search::scope::SearchScope,
+    },
+}
+
+impl ConversationEntryScope {
+    fn includes_trashed_and_spammed(&self) -> bool {
+        match self {
+            Self::Mailbox { mailbox_id } => mailbox_id == "TRASH" || mailbox_id == "SPAM",
+            Self::Search { scope } => match scope {
+                crate::search::scope::SearchScope::All => true,
+                crate::search::scope::SearchScope::Label { label_id } => {
+                    label_id == "TRASH" || label_id == "SPAM"
+                }
+                crate::search::scope::SearchScope::Default => false,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
     pub attachment_id: String,
@@ -607,11 +637,22 @@ impl MessageRepository {
         connection: &Connection,
         account_id: &str,
         thread_id: &str,
+        entry_scope: Option<&ConversationEntryScope>,
     ) -> Result<Vec<ConversationMessage>> {
-        let mut statement = connection.prepare(
+        let sql = if entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed) {
             "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
-             FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at,id",
-        )?;
+             FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at,id"
+        } else {
+            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
+             FROM messages m WHERE account_id=?1 AND thread_id=?2
+               AND NOT EXISTS (
+                 SELECT 1 FROM message_labels ml
+                 WHERE ml.account_id=m.account_id AND ml.message_id=m.id
+                   AND ml.label_id IN ('TRASH','SPAM')
+               )
+             ORDER BY sent_at,id"
+        };
+        let mut statement = connection.prepare_cached(sql)?;
         let mut messages = statement
             .query_map(params![account_id, thread_id], |row| {
                 Ok(ConversationMessage {

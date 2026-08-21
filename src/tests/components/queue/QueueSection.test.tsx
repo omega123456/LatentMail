@@ -37,7 +37,7 @@ describe('QueueSection', () => {
     act(() => {
       useSettingsUiStore.setState({ expandedLanes: new Set() });
       useSyncStore.setState({
-        queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false },
+        queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false, suspended: false },
         syncState: 'idle',
         lastSynced: null,
       });
@@ -135,7 +135,7 @@ describe('QueueSection', () => {
     ipc.override('set_queue_paused', setPaused);
     act(() =>
       useSyncStore.setState({
-        queue: { pending: 0, active: 0, failed: 0, done: 0, paused: true },
+        queue: { pending: 0, active: 0, failed: 0, done: 0, paused: true, suspended: false },
         syncState: 'idle',
         lastSynced: null,
       }),

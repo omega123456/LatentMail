@@ -1293,6 +1293,66 @@ pub struct SyncSchedulers {
     pub periodic: Arc<SyncScheduler>,
 }
 
+pub async fn run_fast_cadence<R: Runtime>(
+    app: &AppHandle<R>,
+    auth: &AuthService,
+    engine: &Arc<SyncEngine>,
+) {
+    if engine.queue.suspended() {
+        return;
+    }
+    let Ok(accounts) = auth.accounts().await else {
+        return;
+    };
+    for account in accounts {
+        if engine.queue.suspended() || account.needs_reauthentication {
+            continue;
+        }
+        let Ok(token) = auth.refresh_access_token(app, &account.id).await else {
+            continue;
+        };
+        if engine.queue.suspended() {
+            continue;
+        }
+        let client = engine
+            .gmail_client(&account.id, token, gmail_base_url())
+            .await;
+        let _ = engine.probe_only(&account.id, client).await;
+    }
+}
+
+pub async fn run_periodic_cadence<R: Runtime>(
+    app: &AppHandle<R>,
+    auth: &AuthService,
+    engine: &Arc<SyncEngine>,
+) {
+    if engine.queue.suspended() {
+        return;
+    }
+    let Ok(accounts) = auth.accounts().await else {
+        return;
+    };
+    for account in accounts {
+        if engine.queue.suspended() || account.needs_reauthentication {
+            continue;
+        }
+        let Ok(token) = auth.refresh_access_token(app, &account.id).await else {
+            continue;
+        };
+        if engine.queue.suspended() {
+            continue;
+        }
+        let client = engine
+            .gmail_client(&account.id, token, gmail_base_url())
+            .await;
+        if engine.run_sync(&account.id, client.clone()).await.is_ok() {
+            engine.enqueue_backfill(&account.id, client).await;
+        } else {
+            auth.invalidate_access_token(&account.id);
+        }
+    }
+}
+
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let directory = app
         .path()
@@ -1436,21 +1496,7 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                 let auth = fast_auth.clone();
                 let engine = Arc::clone(&fast_engine);
                 async move {
-                    let Ok(accounts) = auth.accounts().await else {
-                        return;
-                    };
-                    for account in accounts {
-                        if account.needs_reauthentication {
-                            continue;
-                        }
-                        let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
-                            continue;
-                        };
-                        let client = engine
-                            .gmail_client(&account.id, token, gmail_base_url())
-                            .await;
-                        let _ = engine.probe_only(&account.id, client).await;
-                    }
+                    run_fast_cadence(&app, &auth, &engine).await;
                 }
             },
         );
@@ -1463,26 +1509,7 @@ fn start_scheduler<R: Runtime>(app: AppHandle<R>, engine: Arc<SyncEngine>) {
                 let auth = periodic_auth.clone();
                 let engine = Arc::clone(&periodic_engine);
                 async move {
-                    let Ok(accounts) = auth.accounts().await else {
-                        return;
-                    };
-
-                    for account in accounts {
-                        if account.needs_reauthentication {
-                            continue;
-                        }
-                        let Ok(token) = auth.refresh_access_token(&app, &account.id).await else {
-                            continue;
-                        };
-                        let client = engine
-                            .gmail_client(&account.id, token, gmail_base_url())
-                            .await;
-                        if engine.run_sync(&account.id, client.clone()).await.is_ok() {
-                            engine.enqueue_backfill(&account.id, client).await;
-                        } else {
-                            auth.invalidate_access_token(&account.id);
-                        }
-                    }
+                    run_periodic_cadence(&app, &auth, &engine).await;
                 }
             });
         app_for_manage.manage(SyncSchedulers { fast, periodic });

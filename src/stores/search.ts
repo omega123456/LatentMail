@@ -26,7 +26,10 @@ export const useSearchStore = create<SearchState>((set) => ({
   active: false,
   panelOpen: false,
   setDraft: (draft) => set({ draft }),
-  setScope: (scope) => set({ scope }),
+  setScope: (scope) => {
+    useSelectionStore.getState().clearSelection();
+    set({ scope });
+  },
   openPanel: () => set({ panelOpen: true }),
   closePanel: () => set({ panelOpen: false }),
   submit: (query) => {
@@ -34,5 +37,8 @@ export const useSearchStore = create<SearchState>((set) => ({
     useSelectionStore.getState().clearSelection();
     set({ draft: query, submittedQuery: query, active: true, panelOpen: false });
   },
-  clear: () => set({ draft: '', submittedQuery: '', active: false, panelOpen: false }),
+  clear: () => {
+    useSelectionStore.getState().clearSelection();
+    set({ draft: '', submittedQuery: '', active: false, panelOpen: false });
+  },
 }));

@@ -12,11 +12,17 @@ describe('queryKeys', () => {
       'account-1',
       'thread-1',
     ]);
-    expect(queryKeys.conversation('account-1', 'thread-1', 'policy')).toEqual([
+    expect(
+      queryKeys.conversation('account-1', 'thread-1', 'policy', {
+        kind: 'mailbox',
+        mailboxId: 'INBOX',
+      }),
+    ).toEqual([
       'conversation',
       'account-1',
       'thread-1',
       'policy',
+      '{"kind":"mailbox","mailboxId":"INBOX"}',
     ]);
     expect(queryKeys.syncStatus('account-1')).toEqual(['syncStatus', 'account-1']);
     expect(queryKeys.traversalStatus('account-1')).toEqual(['traversalStatus', 'account-1']);

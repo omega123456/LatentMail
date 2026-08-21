@@ -1028,3 +1028,12 @@ fn conversation_attachment_join_uses_the_composite_index_with_no_temp_b_tree() {
     assert!(!plan.iter().any(|step| step.contains("TEMP B-TREE")));
     assert!(!plan.iter().any(|step| step.contains("SCAN a")));
 }
+
+#[test]
+fn conversation_scope_uses_message_label_membership_without_a_temp_b_tree() {
+    let connection = Storage::in_memory().unwrap();
+    let plan = query_plan(&connection, "EXPLAIN QUERY PLAN SELECT m.id FROM messages m WHERE m.account_id='account' AND m.thread_id='thread' AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ('TRASH','SPAM')) ORDER BY m.sent_at,m.id");
+    assert!(plan.iter().any(|step| step.contains("SEARCH ml")));
+    assert!(!plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    assert!(!plan.iter().any(|step| step.contains("SCAN ml")));
+}

@@ -22,7 +22,7 @@ describe('EventBridge', () => {
   afterEach(() =>
     act(() =>
       useSyncStore.setState({
-        queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false },
+        queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false, suspended: false },
         syncState: 'idle',
         lastSynced: null,
       }),
@@ -40,9 +40,21 @@ describe('EventBridge', () => {
     );
     expect(ipc.tauriEmit).toHaveBeenCalledWith('frontend://ready', {});
     act(() =>
-      ipc.emit('queue://summary', { pending: 3, active: 1, failed: 0, done: 0, paused: true }),
+      ipc.emit('queue://summary', {
+        pending: 3,
+        active: 1,
+        failed: 0,
+        done: 0,
+        paused: true,
+        suspended: true,
+      }),
     );
-    expect(useSyncStore.getState().queue).toMatchObject({ pending: 3, active: 1, paused: true });
+    expect(useSyncStore.getState().queue).toMatchObject({
+      pending: 3,
+      active: 1,
+      paused: true,
+      suspended: true,
+    });
   });
 
   it('updates sync state live from sync progress and completion events', async () => {
@@ -278,7 +290,14 @@ describe('EventBridge', () => {
           accountId: 'account-1',
           lane: 'interactive',
         });
-      ipc.emit('queue://summary', { pending: 1, active: 1, failed: 0, done: 0, paused: false });
+      ipc.emit('queue://summary', {
+        pending: 1,
+        active: 1,
+        failed: 0,
+        done: 0,
+        paused: false,
+        suspended: false,
+      });
       vi.advanceTimersByTime(250);
     });
     const queueSnapshotCalls = invalidate.mock.calls.filter(

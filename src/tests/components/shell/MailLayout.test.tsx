@@ -191,7 +191,7 @@ describe('MailLayout — search', () => {
     expect(screen.queryByTestId('search-results-row')).not.toBeInTheDocument();
   });
 
-  it('Escape with text clears search without touching mail selection; Escape when empty blurs', async () => {
+  it('Escape with text clears search and thread selection; Escape when empty blurs', async () => {
     const user = userEvent.setup();
     ipc.override('list_accounts', [account]);
     ipc.override('search_threads', { items: [searchResultThread], nextCursor: null, total: 1 });
@@ -207,7 +207,7 @@ describe('MailLayout — search', () => {
     expect(screen.queryByTestId('search-results-row')).not.toBeInTheDocument();
     expect(field).toHaveValue('');
     expect(field).toHaveFocus();
-    expect(useSelectionStore.getState().activeThreadId).toBe('thread-1');
+    expect(useSelectionStore.getState().activeThreadId).toBeNull();
     await user.keyboard('{Escape}');
     expect(field).not.toHaveFocus();
   });

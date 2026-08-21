@@ -1,12 +1,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use latentmail_lib::auth::AuthService;
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
     Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
     Storage, ThreadRepository,
 };
-use latentmail_lib::sync::{EventSink, SyncEngine, SyncScheduler, WorkRegistry};
+use latentmail_lib::sync::{
+    run_fast_cadence, run_periodic_cadence, EventSink, SyncEngine, SyncScheduler, WorkRegistry,
+};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -36,7 +39,13 @@ fn seed_message(id: &str, thread_id: &str, sent_at: i64) -> Message {
 
 type FiredEvents = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
 
-fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEvents) {
+fn engine_with_seed() -> (
+    Arc<SyncEngine>,
+    Arc<latentmail_lib::queue::QueueEngine>,
+    Storage,
+    tempfile::TempDir,
+    FiredEvents,
+) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
@@ -84,8 +93,8 @@ fn engine_with_seed() -> (Arc<SyncEngine>, Storage, tempfile::TempDir, FiredEven
     });
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, sink);
-    (engine, storage, directory, events)
+    let engine = SyncEngine::new(storage.clone(), Arc::clone(&queue), registry, sink);
+    (engine, queue, storage, directory, events)
 }
 
 #[tokio::test]
@@ -111,7 +120,7 @@ async fn probe_only_never_advances_the_history_checkpoint_while_run_sync_does() 
         .mount(&server)
         .await;
 
-    let (engine, storage, _directory, events) = engine_with_seed();
+    let (engine, _queue, storage, _directory, events) = engine_with_seed();
     let client = GmailClient::with_base_url("token", server.uri());
 
     engine.probe_only("account", client).await.unwrap();
@@ -159,7 +168,7 @@ async fn run_sync_advances_the_checkpoint_through_the_full_incremental_path() {
         .mount(&server)
         .await;
 
-    let (engine, storage, _directory, _events) = engine_with_seed();
+    let (engine, _queue, storage, _directory, _events) = engine_with_seed();
     let client = GmailClient::with_base_url("token", server.uri());
 
     engine.run_sync("account", client).await.unwrap();
@@ -224,4 +233,41 @@ async fn the_fast_and_periodic_cadences_tick_independently_and_only_the_periodic
         fast_rx.recv().await.is_some(),
         "the fast cadence keeps ticking on its own fixed schedule"
     );
+}
+
+#[tokio::test]
+async fn suspended_queue_skips_both_cadence_network_paths() {
+    let (engine, queue, storage, _directory, events) = engine_with_seed();
+    let auth = AuthService::new(storage);
+    let app = tauri::test::mock_app();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-token", "token_type": "Bearer"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    auth.save_account("cadence@example.com".into(), "refresh-token".into(), None)
+        .await
+        .unwrap();
+    queue.set_suspended(true);
+
+    run_fast_cadence(app.handle(), &auth, &engine).await;
+    run_periodic_cadence(app.handle(), &auth, &engine).await;
+
+    assert!(events.lock().unwrap().is_empty());
+    server.verify().await;
 }

@@ -173,7 +173,14 @@ for (const theme of themes) {
       page,
       {
         list_accounts: [playwrightMailAccount],
-        read_queue_summary: { pending: 2, active: 0, failed: 0, done: 0, paused: false },
+        read_queue_summary: {
+          pending: 2,
+          active: 0,
+          failed: 0,
+          done: 0,
+          paused: false,
+          suspended: false,
+        },
       },
       undefined,
       { state: 'idle', lastSynced: formatISO(Date.now()) },
