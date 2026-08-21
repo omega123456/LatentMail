@@ -110,6 +110,7 @@ export function useAppUpdateQuery() {
     refetchInterval:
       updateCheckInterval === 'off' ? false : UPDATE_INTERVAL_MS[updateCheckInterval],
     staleTime: 0,
+    retry: false,
   });
 }
 

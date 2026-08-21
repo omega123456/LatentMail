@@ -2,6 +2,7 @@ import { Switch } from 'radix-ui';
 import { format, formatDistanceToNow } from 'date-fns';
 import { useAppUpdateQuery, useInstallUpdateMutation } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
+import { useToastStore } from '@/stores/toast';
 import { Select } from '@/components/shared/Select';
 import { SettingRow } from './SettingRow';
 import { settingsButton, settingsTriggerClass } from './styles';
@@ -40,6 +41,8 @@ function SubsectionHeading({ children }: { children: string }) {
 export function UpdatesSection() {
   const { data, dataUpdatedAt, isFetching, refetch } = useAppUpdateQuery();
   const installMutation = useInstallUpdateMutation();
+  const showSuccess = useToastStore((state) => state.showSuccess);
+  const showError = useToastStore((state) => state.showError);
   const updateCheckInterval = useLayoutStore((state) => state.updateCheckInterval);
   const setUpdateCheckInterval = useLayoutStore((state) => state.setUpdateCheckInterval);
   const installUpdateOnQuit = useLayoutStore((state) => state.installUpdateOnQuit);
@@ -96,7 +99,15 @@ export function UpdatesSection() {
         ) : (
           <button
             type="button"
-            onClick={() => void refetch()}
+            onClick={() =>
+              void refetch().then((result) => {
+                if (result.status === 'error') {
+                  showError('Couldn’t check for updates.');
+                } else if (!result.data?.available) {
+                  showSuccess(`LatentMail ${result.data?.currentVersion} is up to date.`);
+                }
+              })
+            }
             disabled={isFetching}
             className={`shrink-0 ${settingsButton} disabled:cursor-not-allowed disabled:opacity-60`}
           >

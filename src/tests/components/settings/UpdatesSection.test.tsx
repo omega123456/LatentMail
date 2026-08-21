@@ -89,6 +89,35 @@ describe('UpdatesSection', () => {
     expect(writes).toContainEqual({ key: 'updateCheckInterval', value: 'off' });
   });
 
+  it('confirms with a toast when a manual check finds no update', async () => {
+    let checks = 0;
+    ipc.override('check_for_update', () => {
+      checks += 1;
+      return { currentVersion: '0.1.0', available: null };
+    });
+    const user = await openUpdates();
+    const checksBeforeClick = checks;
+
+    await user.click(screen.getByRole('button', { name: 'Check now' }));
+
+    expect(await screen.findByText('LatentMail 0.1.0 is up to date.')).toBeInTheDocument();
+    expect(checks).toBeGreaterThan(checksBeforeClick);
+  });
+
+  it('reports a failed manual check with an error toast', async () => {
+    let shouldFail = false;
+    ipc.override('check_for_update', () => {
+      if (shouldFail) throw new Error('network down');
+      return { currentVersion: '0.1.0', available: null };
+    });
+    const user = await openUpdates();
+    shouldFail = true;
+
+    await user.click(screen.getByRole('button', { name: 'Check now' }));
+
+    expect(await screen.findByText('Couldn’t check for updates.')).toBeInTheDocument();
+  });
+
   it('toggles install on quit and persists the change', async () => {
     ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
     const writes: Array<{ key: string; value: unknown }> = [];
