@@ -107,6 +107,50 @@ fn a_bare_term_present_only_in_the_body_is_found() {
 }
 
 #[test]
+fn a_search_result_counts_trashed_messages_only_in_the_trash_scope() {
+    let connection = setup();
+    for (id, sent_at) in [("m1", 10), ("m2", 20)] {
+        insert_message(
+            &connection,
+            id,
+            "thread-1",
+            "sender@example.com",
+            "Quarterly report",
+            "body",
+            sent_at,
+            false,
+            false,
+            &["INBOX"],
+        );
+    }
+    insert_message(
+        &connection,
+        "m3",
+        "thread-1",
+        "sender@example.com",
+        "Quarterly report",
+        "body",
+        30,
+        false,
+        false,
+        &["INBOX", "TRASH"],
+    );
+    let parsed = parse("quarterly", now()).unwrap();
+
+    let default_scope = resolve(&SearchScope::Default);
+    let rows = SearchRepository::search(&connection, "account", &parsed, &default_scope, None, 10)
+        .unwrap();
+    assert_eq!(rows[0].thread.message_count, 2);
+
+    let trash_scope = resolve(&SearchScope::Label {
+        label_id: "TRASH".into(),
+    });
+    let rows =
+        SearchRepository::search(&connection, "account", &parsed, &trash_scope, None, 10).unwrap();
+    assert_eq!(rows[0].thread.message_count, 3);
+}
+
+#[test]
 fn a_diacritic_bearing_term_matches_its_unaccented_form_and_vice_versa() {
     let connection = setup();
     insert_message(

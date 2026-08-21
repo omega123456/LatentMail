@@ -606,6 +606,23 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .any(|step| step.contains("messages_by_thread")));
     assert!(!message_plan.iter().any(|step| step.contains("TEMP B-TREE")));
 
+    let visible_count_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT m.thread_id,COUNT(*) FROM messages m WHERE m.account_id='account' AND m.thread_id IN ('thread-1','thread-2') AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ('TRASH','SPAM')) GROUP BY m.thread_id",
+    );
+    assert!(visible_count_plan
+        .iter()
+        .any(|step| step.contains("COVERING INDEX messages_by_thread")));
+    assert!(visible_count_plan
+        .iter()
+        .any(|step| step.contains("COVERING INDEX sqlite_autoindex_message_labels_1")));
+    assert!(!visible_count_plan
+        .iter()
+        .any(|step| step.contains("SCAN m") || step.contains("SCAN ml")));
+    assert!(!visible_count_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
     let draft_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE account_id='account' AND draft_id='draft'",
@@ -1015,18 +1032,46 @@ fn message_attachments_round_trip_in_sender_order_and_cascade_delete_on_an_index
 }
 
 #[test]
-fn conversation_attachment_join_uses_the_composite_index_with_no_temp_b_tree() {
+fn conversation_payload_joins_are_index_driven_and_carry_no_visibility_subquery() {
     let connection = Storage::in_memory().unwrap();
-    let plan = query_plan(
+    let attachment_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN SELECT a.message_id,a.attachment_id
          FROM messages m CROSS JOIN message_attachments a
          WHERE m.account_id='account' AND m.thread_id='thread'
            AND a.account_id=m.account_id AND a.message_id=m.id",
     );
-    assert!(plan.iter().any(|step| step.contains("SEARCH a")));
-    assert!(!plan.iter().any(|step| step.contains("TEMP B-TREE")));
-    assert!(!plan.iter().any(|step| step.contains("SCAN a")));
+    assert!(attachment_plan.iter().any(|step| step.contains("SEARCH a")));
+    assert!(!attachment_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE") || step.contains("SCAN a")));
+    assert!(!attachment_plan.iter().any(|step| step.contains("SUBQUERY")));
+
+    let inline_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT p.message_id,p.bytes
+         FROM messages m CROSS JOIN message_inline_parts p
+         WHERE m.account_id='account' AND m.thread_id='thread' AND m.html_body IS NOT NULL
+           AND p.account_id=m.account_id AND p.message_id=m.id",
+    );
+    assert!(inline_plan.iter().any(|step| step.contains("SEARCH p")));
+    assert!(!inline_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE") || step.contains("SCAN p")));
+    assert!(!inline_plan.iter().any(|step| step.contains("SUBQUERY")));
+
+    let label_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT ml.message_id,ml.label_id
+         FROM messages m CROSS JOIN message_labels ml
+         WHERE m.account_id='account' AND m.thread_id='thread'
+           AND ml.account_id=m.account_id AND ml.message_id=m.id",
+    );
+    assert!(label_plan.iter().any(|step| step.contains("SEARCH ml")));
+    assert!(!label_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE") || step.contains("SCAN ml")));
+    assert!(!label_plan.iter().any(|step| step.contains("SUBQUERY")));
 }
 
 #[test]

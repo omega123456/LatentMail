@@ -20,6 +20,18 @@ pub struct ScopeFilter {
     pub required_label: Option<String>,
 }
 
+impl ScopeFilter {
+    pub fn includes_trashed_and_spammed(&self) -> bool {
+        match &self.required_label {
+            Some(label) => label == "TRASH" || label == "SPAM",
+            None => !self
+                .excluded_labels
+                .iter()
+                .any(|label| label == "TRASH" || label == "SPAM"),
+        }
+    }
+}
+
 pub fn resolve(scope: &SearchScope) -> ScopeFilter {
     match scope {
         SearchScope::Default => ScopeFilter {

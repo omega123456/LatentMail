@@ -326,13 +326,9 @@ impl ConversationEntryScope {
     fn includes_trashed_and_spammed(&self) -> bool {
         match self {
             Self::Mailbox { mailbox_id } => mailbox_id == "TRASH" || mailbox_id == "SPAM",
-            Self::Search { scope } => match scope {
-                crate::search::scope::SearchScope::All => true,
-                crate::search::scope::SearchScope::Label { label_id } => {
-                    label_id == "TRASH" || label_id == "SPAM"
-                }
-                crate::search::scope::SearchScope::Default => false,
-            },
+            Self::Search { scope } => {
+                crate::search::scope::resolve(scope).includes_trashed_and_spammed()
+            }
         }
     }
 }
@@ -1354,9 +1350,9 @@ impl ThreadRepository {
         let cursor_sql = cursor.as_ref().map_or_else(String::new, |_| {
             format!("AND ({order_at},{order_id})<(?3,?4)")
         });
+        let includes_trashed_and_spammed = matches!(label_id, None | Some("TRASH") | Some("SPAM"));
         let sql = format!(
-            "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
-                    COALESCE((SELECT m.snippet FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1),'')
+            "SELECT {THREAD_LIST_COLUMNS}
              FROM {source}
                {cursor_sql}
              ORDER BY {order_at} DESC, {order_id} DESC
@@ -1380,7 +1376,7 @@ impl ThreadRepository {
                 },
             )?
             .collect::<Result<Vec<_>>>()?;
-        enrich_thread_rows(connection, account_id, rows)
+        enrich_thread_rows(connection, account_id, rows, includes_trashed_and_spammed)
     }
 }
 
@@ -1388,6 +1384,7 @@ fn enrich_thread_rows(
     connection: &Connection,
     account_id: &str,
     mut rows: Vec<ThreadListRow>,
+    includes_trashed_and_spammed: bool,
 ) -> Result<Vec<ThreadListRow>> {
     if rows.is_empty() {
         return Ok(rows);
@@ -1398,6 +1395,36 @@ fn enrich_thread_rows(
         .enumerate()
         .map(|(index, row)| (row.thread.id.clone(), index))
         .collect();
+    if !includes_trashed_and_spammed {
+        let mut counts = HashMap::new();
+        for chunk in rows.chunks(BIND_BATCH_SIZE) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT m.thread_id,COUNT(*)
+                 FROM messages m
+                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                   AND NOT EXISTS (
+                     SELECT 1 FROM message_labels ml
+                     WHERE ml.account_id=m.account_id AND ml.message_id=m.id
+                       AND ml.label_id IN ('TRASH','SPAM')
+                   )
+                 GROUP BY m.thread_id"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let parameters =
+                std::iter::once(account_id).chain(chunk.iter().map(|row| row.thread.id.as_str()));
+            counts.extend(
+                statement
+                    .query_map(rusqlite::params_from_iter(parameters), |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    })?
+                    .collect::<Result<HashMap<_, _>>>()?,
+            );
+        }
+        for row in &mut rows {
+            row.thread.message_count = counts.get(&row.thread.id).copied().unwrap_or_default();
+        }
+    }
     let mut all_labels = Vec::new();
     for chunk in rows.chunks(BIND_BATCH_SIZE) {
         let placeholders = vec!["?"; chunk.len()].join(",");
@@ -1495,7 +1522,12 @@ impl SearchRepository {
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
-        enrich_thread_rows(connection, account_id, rows)
+        enrich_thread_rows(
+            connection,
+            account_id,
+            rows,
+            scope.includes_trashed_and_spammed(),
+        )
     }
 
     pub fn count(

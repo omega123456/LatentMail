@@ -1,8 +1,9 @@
 use latentmail_lib::{
     search::scope::SearchScope,
     storage::{
-        Account, AccountRepository, ConversationEntryScope, HtmlPresence, LabelRepository, Message,
-        MessageRepository, Storage, ThreadRepository,
+        Account, AccountRepository, Attachment, AttachmentRepository, ConversationEntryScope,
+        HtmlPresence, InlinePart, LabelRepository, Message, MessageRepository, Storage,
+        ThreadRepository,
     },
 };
 
@@ -151,4 +152,63 @@ fn ordinary_scope_returns_no_messages_when_every_message_is_trashed() {
         ),
         vec!["trash"]
     );
+}
+
+#[test]
+fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_message() {
+    let connection = seeded_connection();
+    for hidden in ["trash", "spam"] {
+        LabelRepository::ensure_placeholder(&connection, "account", "Label_hidden").unwrap();
+        MessageRepository::set_label_membership(
+            &connection,
+            "account",
+            hidden,
+            "Label_hidden",
+            true,
+        )
+        .unwrap();
+        AttachmentRepository::replace_for_message(
+            &connection,
+            "account",
+            hidden,
+            &[Attachment {
+                attachment_id: format!("{hidden}-attachment"),
+                filename: "hidden.pdf".into(),
+                mime_type: "application/pdf".into(),
+                size: 1,
+                position: 0,
+            }],
+        )
+        .unwrap();
+        MessageRepository::replace_inline_parts(
+            &connection,
+            "account",
+            hidden,
+            &[InlinePart {
+                content_id: format!("{hidden}-cid"),
+                mime_type: "image/png".into(),
+                bytes: vec![1],
+            }],
+        )
+        .unwrap();
+    }
+
+    let visible =
+        MessageRepository::list_conversation(&connection, "account", "thread", None).unwrap();
+
+    assert_eq!(
+        visible
+            .iter()
+            .map(|message| message.message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["live"]
+    );
+    for message in &visible {
+        assert!(!message
+            .label_ids
+            .iter()
+            .any(|label| label == "Label_hidden"));
+        assert!(message.attachments.is_empty());
+        assert!(message.inline_parts.is_empty());
+    }
 }

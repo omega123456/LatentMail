@@ -187,6 +187,42 @@ fn a_thread_with_one_trashed_and_one_live_message_still_appears_in_the_live_fold
     assert!(thread_exists_under_label(&connection, "TRASH", "thread-1"));
 }
 
+fn listed_message_count(connection: &rusqlite::Connection, label_id: &str, thread_id: &str) -> i64 {
+    ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.thread.id == thread_id)
+        .expect("thread must be listed under the label")
+        .thread
+        .message_count
+}
+
+#[test]
+fn the_listed_message_count_leaves_out_trashed_and_spammed_messages_outside_trash_and_spam() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    seed_labels(&connection);
+    for (id, sent_at) in [("m1", 10), ("m2", 20), ("m3", 30)] {
+        MessageRepository::write_full_state(&connection, &message(id, "thread-1", sent_at))
+            .unwrap();
+        MessageRepository::set_label_membership(&connection, "account", id, "INBOX", true).unwrap();
+    }
+    MessageRepository::write_full_state(&connection, &message("m4", "thread-1", 40)).unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m4", "INBOX", true).unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m4", "TRASH", true).unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
+
+    assert_eq!(listed_message_count(&connection, "INBOX", "thread-1"), 3);
+    assert_eq!(listed_message_count(&connection, "TRASH", "thread-1"), 4);
+
+    MessageRepository::set_label_membership(&connection, "account", "m4", "TRASH", false).unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "m4", "SPAM", true).unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread-1").unwrap();
+
+    assert_eq!(listed_message_count(&connection, "INBOX", "thread-1"), 3);
+    assert_eq!(listed_message_count(&connection, "SPAM", "thread-1"), 4);
+}
+
 #[test]
 fn trashing_every_message_removes_the_thread_from_every_listing_but_trash() {
     let connection = Storage::in_memory().unwrap();
