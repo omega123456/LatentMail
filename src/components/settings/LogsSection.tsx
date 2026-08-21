@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { differenceInCalendarDays, format, isToday, isYesterday } from 'date-fns';
-import { RefreshCw, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RefreshCw, Search } from 'lucide-react';
 import { Select } from '@/components/shared/Select';
 import { SettingRow } from '@/components/settings/SettingRow';
 import { SettingsSection } from '@/components/settings/SettingsSection';
@@ -15,8 +15,24 @@ import type { LogLevel } from '@/lib/types/ipc';
 const AUTO_REFRESH_INTERVAL_MS = 5_000;
 const ENTRIES_PER_PAGE = 50;
 
+const PAGE_WINDOW = 1;
+
+function pageItems(page: number, pageCount: number): (number | 'ellipsis')[] {
+  const items: (number | 'ellipsis')[] = [];
+  for (let index = 1; index <= pageCount; index += 1) {
+    const isEdge = index === 1 || index === pageCount;
+    const isNearCurrent = Math.abs(index - page) <= PAGE_WINDOW;
+    if (isEdge || isNearCurrent) {
+      items.push(index);
+    } else if (items[items.length - 1] !== 'ellipsis') {
+      items.push('ellipsis');
+    }
+  }
+  return items;
+}
+
 const pageButtonClass =
-  'cursor-pointer rounded-chip px-1.75 py-1 text-settings-meta font-semibold tabular-nums text-settings-ink-mute hover:bg-settings-container-low hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary disabled:cursor-not-allowed disabled:opacity-35 aria-[current=true]:bg-settings-container aria-[current=true]:text-settings-on-primary-container dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container-low dark:hover:text-dark-settings-ink dark:aria-[current=true]:bg-dark-settings-container dark:aria-[current=true]:text-dark-settings-on-primary-container';
+  'flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-chip text-settings-meta font-semibold tabular-nums text-settings-ink-mute hover:bg-settings-container-low hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary disabled:cursor-not-allowed disabled:opacity-35 aria-[current=true]:bg-settings-container aria-[current=true]:text-settings-on-primary-container dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container-low dark:hover:text-dark-settings-ink dark:aria-[current=true]:bg-dark-settings-container dark:aria-[current=true]:text-dark-settings-on-primary-container';
 
 type LevelFilter = 'all' | LogLevel;
 
@@ -256,37 +272,74 @@ export function LogsSection() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-settings-card-line bg-settings-container-low px-4 py-2.5 text-settings-meta text-settings-ink-mute dark:border-dark-settings-card-line dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
           <span className="flex items-center gap-3 tabular-nums">
             <span>
-              {visible.length === 0 ? 0 : pageStart + 1}–
-              {Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)} of {visible.length} entries
+              <span className="inline-block w-counter-digits text-right">
+                {visible.length === 0 ? 0 : pageStart + 1}
+              </span>
+              –
+              <span className="inline-block w-counter-digits text-right">
+                {Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)}
+              </span>{' '}
+              of{' '}
+              <span className="inline-block w-counter-digits text-right">{visible.length}</span>{' '}
+              entries
             </span>
             {pageCount > 1 && (
               <span className="flex items-center gap-0.5">
                 <button
                   type="button"
+                  aria-label="First page"
+                  disabled={page === 1}
+                  onClick={() => setRequestedPage(1)}
+                  className={pageButtonClass}
+                >
+                  <ChevronsLeft className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Previous page"
                   disabled={page === 1}
                   onClick={() => setRequestedPage(page - 1)}
                   className={pageButtonClass}
                 >
-                  Prev
+                  <ChevronLeft className="size-3.5" />
                 </button>
-                {Array.from({ length: pageCount }, (_unused, index) => (
-                  <button
-                    key={index + 1}
-                    type="button"
-                    aria-current={page === index + 1}
-                    onClick={() => setRequestedPage(index + 1)}
-                    className={pageButtonClass}
-                  >
-                    {index + 1}
-                  </button>
-                ))}
+                {pageItems(page, pageCount).map((item, index) =>
+                  item === 'ellipsis' ? (
+                    <span
+                      key={`ellipsis-${index}`}
+                      className="flex size-7 shrink-0 items-center justify-center text-settings-ink-mute dark:text-dark-settings-ink-mute"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={item}
+                      type="button"
+                      aria-current={page === item}
+                      onClick={() => setRequestedPage(item)}
+                      className={pageButtonClass}
+                    >
+                      {item}
+                    </button>
+                  ),
+                )}
                 <button
                   type="button"
+                  aria-label="Next page"
                   disabled={page === pageCount}
                   onClick={() => setRequestedPage(page + 1)}
                   className={pageButtonClass}
                 >
-                  Next
+                  <ChevronRight className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Last page"
+                  disabled={page === pageCount}
+                  onClick={() => setRequestedPage(pageCount)}
+                  className={pageButtonClass}
+                >
+                  <ChevronsRight className="size-3.5" />
                 </button>
               </span>
             )}
