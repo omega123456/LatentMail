@@ -55,17 +55,4 @@ describe('LabelForm', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }));
     expect(onSubmit).toHaveBeenCalledWith({ name: 'Contracts', colorId: 'red' });
   });
-
-  it('surfaces a submit-time error from the mutation itself', () => {
-    render(
-      <LabelForm
-        mode="create"
-        existingNames={[]}
-        submitError="Network unavailable"
-        onSubmit={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-    expect(screen.getByRole('alert')).toHaveTextContent('Network unavailable');
-  });
 });

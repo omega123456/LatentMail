@@ -9,6 +9,7 @@ import {
   useRenameLabelMutation,
 } from '@/lib/query/hooks';
 import { queryKeys } from '@/lib/query/keys';
+import type { MailLabel } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
 
 function wrapper(client: QueryClient) {
@@ -29,6 +30,83 @@ describe('label lifecycle mutations', () => {
     });
     await waitFor(() =>
       expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(true),
+    );
+  });
+
+  it('shows the created, renamed and deleted label before the request settles', async () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.labels('account-1'), [
+      {
+        id: 'Label_1',
+        name: 'Clients',
+        kind: 'user',
+        color: { text: '#ffffff', background: '#4a86e8' },
+        messageCount: 0,
+        unreadCount: 0,
+      },
+    ]);
+    const pending = new Promise<never>(() => undefined);
+    ipc.override('create_label', () => pending);
+    ipc.override('rename_label', () => pending);
+    ipc.override('delete_label', () => pending);
+
+    const create = renderHook(() => useCreateLabelMutation('account-1'), {
+      wrapper: wrapper(client),
+    });
+    act(() => create.result.current.mutate({ name: 'Archive', colorId: 'red' }));
+    await waitFor(() =>
+      expect(client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))).toEqual([
+        expect.objectContaining({
+          name: 'Archive',
+          color: { text: '#ffffff', background: '#fb4c2f' },
+        }),
+        expect.objectContaining({ name: 'Clients' }),
+      ]),
+    );
+
+    const rename = renderHook(() => useRenameLabelMutation('account-1'), {
+      wrapper: wrapper(client),
+    });
+    act(() => rename.result.current.mutate({ labelId: 'Label_1', name: 'Zebra' }));
+    await waitFor(() =>
+      expect(
+        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((l) => l.name),
+      ).toEqual(['Archive', 'Zebra']),
+    );
+
+    const remove = renderHook(() => useDeleteLabelMutation('account-1'), {
+      wrapper: wrapper(client),
+    });
+    act(() => remove.result.current.mutate({ labelId: 'Label_1' }));
+    await waitFor(() =>
+      expect(
+        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((l) => l.name),
+      ).toEqual(['Archive']),
+    );
+  });
+
+  it('recolours the cached label before the request settles', async () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.labels('account-1'), [
+      {
+        id: 'Label_1',
+        name: 'Clients',
+        kind: 'user',
+        color: { text: '#ffffff', background: '#4a86e8' },
+        messageCount: 0,
+        unreadCount: 0,
+      },
+    ]);
+    ipc.override('recolor_label', () => new Promise<never>(() => undefined));
+    const { result } = renderHook(() => useRecolorLabelMutation('account-1'), {
+      wrapper: wrapper(client),
+    });
+    act(() => result.current.mutate({ labelId: 'Label_1', colorId: 'red' }));
+    await waitFor(() =>
+      expect(client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.[0].color).toEqual({
+        text: '#ffffff',
+        background: '#fb4c2f',
+      }),
     );
   });
 

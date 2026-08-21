@@ -227,6 +227,55 @@ describe('query hooks', () => {
     ).messages[0];
     expect(message).toMatchObject({ isStarred: true, isUnread: false });
   });
+
+  it('shows a thread label change before the request settles', async () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.labels('account'), [
+      {
+        id: 'Label_1',
+        name: 'Clients',
+        kind: 'user',
+        color: null,
+        messageCount: 0,
+        unreadCount: 0,
+      },
+      {
+        id: 'Label_2',
+        name: 'Invoices',
+        kind: 'user',
+        color: null,
+        messageCount: 0,
+        unreadCount: 0,
+      },
+    ]);
+    client.setQueryData(queryKeys.threads('account', 'INBOX'), {
+      pages: [{ items: [{ ...thread, labelIndicators: ['Invoices'] }], nextCursor: null }],
+      pageParams: [null],
+    });
+    client.setQueryData(queryKeys.conversationThread('account', 'thread-1'), {
+      messages: [{ id: 'message-1', labelIds: ['INBOX', 'Label_2'] }],
+    });
+    ipc.override('mutate_threads', () => new Promise<never>(() => undefined));
+    const { result } = renderHook(() => useTriageMutation('account'), { wrapper: wrapper(client) });
+    act(() =>
+      result.current.mutate({ threadIds: ['thread-1'], add: ['Label_1'], remove: ['Label_2'] }),
+    );
+    await waitFor(() => {
+      const page = (
+        client.getQueryData(queryKeys.threads('account', 'INBOX')) as {
+          pages: Array<{ items: { labelIndicators: string[] }[] }>;
+        }
+      ).pages[0];
+      expect(page.items[0].labelIndicators).toEqual(['Clients']);
+    });
+    expect(
+      (
+        client.getQueryData(queryKeys.conversationThread('account', 'thread-1')) as {
+          messages: { labelIds: string[] }[];
+        }
+      ).messages[0].labelIds,
+    ).toEqual(['INBOX', 'Label_1']);
+  });
 });
 
 describe('avatar queries', () => {

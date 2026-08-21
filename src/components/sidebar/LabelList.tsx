@@ -41,7 +41,6 @@ export function LabelList({
   const [creating, setCreating] = useState(false);
   const [rowMode, setRowMode] = useState<RowMode>(null);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   const existingNames = labels.map((label) => label.name);
 
@@ -71,26 +70,21 @@ export function LabelList({
           <LabelForm
             mode="create"
             existingNames={existingNames}
-            submitError={error}
-            submitting={submitting}
             onCancel={() => {
               setCreating(false);
               setError(null);
             }}
             onSubmit={async ({ name, colorId }) => {
-              setSubmitting(true);
+              setCreating(false);
               setError(null);
               try {
                 await onCreateLabel({ name, colorId });
-                setCreating(false);
               } catch (submitError) {
                 setError(
                   submitError instanceof Error
                     ? submitError.message
                     : "Couldn't create the label. Try again.",
                 );
-              } finally {
-                setSubmitting(false);
               }
             }}
           />
@@ -155,14 +149,12 @@ export function LabelList({
                       initialName={label.name}
                       initialColorId={label.color}
                       existingNames={existingNames}
-                      submitError={error}
-                      submitting={submitting}
                       onCancel={() => {
                         closeRow();
                         setError(null);
                       }}
                       onSubmit={async ({ name, colorId }) => {
-                        setSubmitting(true);
+                        closeRow();
                         setError(null);
                         try {
                           if (name !== label.name) {
@@ -171,15 +163,12 @@ export function LabelList({
                           if (colorId !== label.color) {
                             await onRecolorLabel({ id: label.id, colorId });
                           }
-                          closeRow();
                         } catch (submitError) {
                           setError(
                             submitError instanceof Error
                               ? submitError.message
                               : "Couldn't save the label. Try again.",
                           );
-                        } finally {
-                          setSubmitting(false);
                         }
                       }}
                     />
@@ -201,19 +190,16 @@ export function LabelList({
                     selectedId={label.color}
                     onCancel={closeRow}
                     onApply={async (colorId) => {
-                      setSubmitting(true);
+                      closeRow();
                       setError(null);
                       try {
                         await onRecolorLabel({ id: label.id, colorId });
-                        closeRow();
                       } catch (submitError) {
                         setError(
                           submitError instanceof Error
                             ? submitError.message
                             : "Couldn't update the colour. Try again.",
                         );
-                      } finally {
-                        setSubmitting(false);
                       }
                     }}
                   />
@@ -223,19 +209,16 @@ export function LabelList({
                     labelName={label.name}
                     onCancel={closeRow}
                     onConfirm={async () => {
-                      setSubmitting(true);
+                      closeRow();
                       setError(null);
                       try {
                         await onDeleteLabel(label.id);
-                        closeRow();
                       } catch (submitError) {
                         setError(
                           submitError instanceof Error
                             ? submitError.message
                             : "Couldn't delete the label. Try again.",
                         );
-                      } finally {
-                        setSubmitting(false);
                       }
                     }}
                   />
@@ -245,7 +228,7 @@ export function LabelList({
           })}
         </div>
       )}
-      {error && !creating && rowMode?.kind !== 'renaming' && (
+      {error && (
         <p
           role="alert"
           className="mt-stack-gap-sm px-3 text-label-sm text-error dark:text-dark-error"

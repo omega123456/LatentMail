@@ -17,7 +17,14 @@ import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useLayoutStore } from '@/stores/layout';
 import { UPDATE_INTERVAL_MS } from '@/lib/update-intervals';
-import type { MailThread, ThreadPage, ThreadSearchPage } from '@/lib/types/ipc';
+import type {
+  MailLabel,
+  MailLabelColor,
+  MailThread,
+  ThreadPage,
+  ThreadSearchPage,
+} from '@/lib/types/ipc';
+import { LABEL_COLOR_BY_ID } from '@/lib/labels/palette';
 
 const LOCAL_FIRST_STALE_TIME = 15_000;
 
@@ -352,16 +359,33 @@ function useLabelLifecycleMutation<TArgs>(
   accountId: string | null,
   mutationFn: (args: TArgs) => Promise<unknown>,
   copy: { done: string; failed: string },
+  optimistic: (labels: MailLabel[], args: TArgs) => MailLabel[],
 ) {
   const queryClient = useQueryClient();
   const showSuccess = useToastStore((state) => state.showSuccess);
   const showError = useToastStore((state) => state.showError);
   return useMutation({
     mutationFn,
+    onMutate: async (args: TArgs) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.labels(accountId ?? '') });
+      queryClient.setQueryData<MailLabel[]>(
+        queryKeys.labels(accountId ?? ''),
+        (labels) => labels && optimistic(labels, args),
+      );
+    },
     onSuccess: () => showSuccess(copy.done),
     onError: () => showError(copy.failed),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId ?? '') }),
   });
+}
+
+function labelColorFor(colorId: string | null): MailLabelColor | null {
+  const swatch = colorId === null ? undefined : LABEL_COLOR_BY_ID[colorId];
+  return swatch ? { background: swatch.gmailBackground, text: swatch.gmailText } : null;
+}
+
+function byLabelName(left: MailLabel, right: MailLabel) {
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
 }
 
 export function useCreateLabelMutation(accountId: string | null) {
@@ -370,6 +394,18 @@ export function useCreateLabelMutation(accountId: string | null) {
     (args: { name: string; colorId: string | null }) =>
       invoke('create_label', { accountId: accountId as string, ...args }),
     { done: 'Label created.', failed: 'Couldn’t create the label.' },
+    (labels, args) =>
+      [
+        ...labels,
+        {
+          id: `pending-label-${args.name}`,
+          name: args.name,
+          kind: 'user',
+          color: labelColorFor(args.colorId),
+          messageCount: 0,
+          unreadCount: 0,
+        },
+      ].sort(byLabelName),
   );
 }
 
@@ -379,6 +415,10 @@ export function useRenameLabelMutation(accountId: string | null) {
     (args: { labelId: string; name: string }) =>
       invoke('rename_label', { accountId: accountId as string, ...args }),
     { done: 'Label renamed.', failed: 'Couldn’t rename the label.' },
+    (labels, args) =>
+      labels
+        .map((label) => (label.id === args.labelId ? { ...label, name: args.name } : label))
+        .sort(byLabelName),
   );
 }
 
@@ -388,6 +428,10 @@ export function useRecolorLabelMutation(accountId: string | null) {
     (args: { labelId: string; colorId: string }) =>
       invoke('recolor_label', { accountId: accountId as string, ...args }),
     { done: 'Label colour updated.', failed: 'Couldn’t update the colour.' },
+    (labels, args) =>
+      labels.map((label) =>
+        label.id === args.labelId ? { ...label, color: labelColorFor(args.colorId) } : label,
+      ),
   );
 }
 
@@ -397,6 +441,7 @@ export function useDeleteLabelMutation(accountId: string | null) {
     (args: { labelId: string }) =>
       invoke('delete_label', { accountId: accountId as string, ...args }),
     { done: 'Label deleted.', failed: 'Couldn’t delete the label.' },
+    (labels, args) => labels.filter((label) => label.id !== args.labelId),
   );
 }
 
@@ -530,6 +575,15 @@ export function useTriageMutation(accountId: string | null) {
         (remove.includes(mailboxId) ||
           (mailboxId === 'INBOX' && add.includes('TRASH')) ||
           (mailboxId === 'INBOX' && add.includes('SPAM')));
+      const userLabelNames = new Map(
+        (queryClient.getQueryData<MailLabel[]>(queryKeys.labels(accountId ?? '')) ?? [])
+          .filter((label) => label.kind === 'user')
+          .map((label) => [label.id, label.name] as const),
+      );
+      const addedNames = add
+        .map((labelId) => userLabelNames.get(labelId))
+        .filter((name): name is string => name !== undefined);
+      const removedNames = new Set(remove.map((labelId) => userLabelNames.get(labelId)));
       const update = (thread: MailThread) => ({
         ...thread,
         isStarred: add.includes('STARRED')
@@ -542,7 +596,28 @@ export function useTriageMutation(accountId: string | null) {
           : remove.includes('UNREAD')
             ? false
             : thread.isUnread,
+        labelIndicators: [
+          ...new Set([
+            ...(thread.labelIndicators ?? []).filter((name) => !removedNames.has(name)),
+            ...addedNames,
+          ]),
+        ].sort(),
       });
+      for (const threadId of threadIds) {
+        optimisticallyUpdateConversationMessages(
+          queryClient,
+          accountId,
+          threadId,
+          null,
+          false,
+          (message) => ({
+            ...message,
+            labelIds: [
+              ...new Set([...message.labelIds.filter((id) => !remove.includes(id)), ...add]),
+            ],
+          }),
+        );
+      }
       optimisticallyUpdateThreadPages(queryClient, accountId, threadIds, leavesMailbox, update);
       const scopeMailboxId = virtualMailboxIdForScope(useSearchStore.getState().scope);
       const leavesSearch =
@@ -690,18 +765,19 @@ function optimisticallyUpdateConversationMessages(
   queryClient: ReturnType<typeof useQueryClient>,
   accountId: string | null,
   threadId: string,
-  messageIds: string[],
+  messageIds: string[] | null,
   removesMessage: boolean,
   update: (message: ReaderMessageCacheEntry) => ReaderMessageCacheEntry,
 ) {
+  const targeted = (messageId: string) => messageIds === null || messageIds.includes(messageId);
   queryClient.setQueriesData(
     { queryKey: queryKeys.conversationThread(accountId ?? '', threadId) },
     (data: { messages: ReaderMessageCacheEntry[] } | undefined) =>
       data && {
         ...data,
         messages: data.messages
-          .filter((message) => !(removesMessage && messageIds.includes(message.id)))
-          .map((message) => (messageIds.includes(message.id) ? update(message) : message)),
+          .filter((message) => !(removesMessage && targeted(message.id)))
+          .map((message) => (targeted(message.id) ? update(message) : message)),
       },
   );
 }

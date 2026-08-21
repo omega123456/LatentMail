@@ -36,6 +36,27 @@ describe('LabelList', () => {
     );
   });
 
+  it('closes the create form before the mutation resolves', async () => {
+    const user = userEvent.setup();
+    const onCreateLabel = vi.fn(() => new Promise<never>(() => undefined));
+    render(
+      <LabelList
+        activeMailboxId={null}
+        labels={[]}
+        showUnreadCounts
+        onSelect={vi.fn()}
+        onCreateLabel={onCreateLabel}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Create label' }));
+    await user.type(screen.getByPlaceholderText('Label name'), 'Contracts');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onCreateLabel).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'Create label' })).not.toBeInTheDocument(),
+    );
+  });
+
   it('surfaces a validation error without calling onCreateLabel', async () => {
     const user = userEvent.setup();
     const onCreateLabel = vi.fn();

@@ -41,8 +41,6 @@ export type LabelFormProps = {
   initialName?: string;
   initialColorId?: LabelColorId;
   existingNames: string[];
-  submitError?: string | null;
-  submitting?: boolean;
   onSubmit: (input: { name: string; colorId: LabelColorId }) => void;
   onCancel: () => void;
 };
@@ -52,18 +50,15 @@ export function LabelForm({
   initialName = '',
   initialColorId = LABEL_COLOR_PALETTE[0].id,
   existingNames,
-  submitError,
-  submitting = false,
   onSubmit,
   onCancel,
 }: LabelFormProps) {
   const [name, setName] = useState(initialName);
   const [colorId, setColorId] = useState<LabelColorId>(initialColorId);
   const [touched, setTouched] = useState(false);
-  const localError = touched
+  const error = touched
     ? validateLabelName(name, existingNames, mode === 'rename' ? initialName : undefined)
     : null;
-  const error = localError ?? submitError ?? null;
 
   const submit = () => {
     setTouched(true);
@@ -127,8 +122,7 @@ export function LabelForm({
         </button>
         <button
           type="submit"
-          disabled={submitting}
-          className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-primary dark:text-dark-on-primary"
+          className="cursor-pointer rounded bg-primary px-3 py-1 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
         >
           {mode === 'create' ? 'Create' : 'Save'}
         </button>
