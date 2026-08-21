@@ -581,6 +581,8 @@ export function useDeleteThreadsMutation(accountId: string | null) {
     onMutate: async ({ threadIds }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
       await queryClient.cancelQueries({ queryKey: queryKeys.searchForAccount(accountId ?? '') });
+      if (threadIds.includes(useSelectionStore.getState().activeThreadId ?? ''))
+        useSelectionStore.getState().clearSelection();
       const mailboxId = useSelectionStore.getState().activeMailboxId;
       const leavesMailbox = mailboxId !== 'TRASH';
       optimisticallyUpdateThreadPages(

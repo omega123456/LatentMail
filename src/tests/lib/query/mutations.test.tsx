@@ -93,4 +93,15 @@ describe('thread mutations', () => {
       ).toBe(true),
     );
   });
+
+  it('clears the open conversation when it is deleted', async () => {
+    const user = userEvent.setup();
+    renderList();
+    await user.click(await screen.findByLabelText('Open Mutation'));
+    expect(useSelectionStore.getState().activeThreadId).toBe('thread-1');
+
+    await user.keyboard('{Delete}');
+
+    await waitFor(() => expect(useSelectionStore.getState().activeThreadId).toBeNull());
+  });
 });
