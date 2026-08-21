@@ -87,6 +87,30 @@ describe('ConversationList', () => {
     expect(useSelectionStore.getState().activeThreadId).toBeNull();
   });
 
+  it('moves the cursor a screen at a time with PageDown and PageUp, clamped to the loaded rows', () => {
+    renderWithQueryClient(<ConversationList />);
+    Object.defineProperty(screen.getByTestId('conversation-list'), 'clientHeight', {
+      configurable: true,
+      value: 272,
+    });
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' })));
+    expect(useSelectionStore.getState().keyboardCursor).toBe(2);
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' })));
+    expect(useSelectionStore.getState().keyboardCursor).toBe(3);
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp' })));
+    expect(useSelectionStore.getState().keyboardCursor).toBe(0);
+  });
+
+  it('scrolls back to the top when the mailbox changes instead of keeping the previous offset', () => {
+    renderWithQueryClient(<ConversationList />);
+    const list = screen.getByTestId('conversation-list');
+    const scrollTo = vi.fn();
+    Object.defineProperty(list, 'scrollTo', { configurable: true, value: scrollTo });
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 400 });
+    act(() => useSelectionStore.getState().setActiveMailboxId('SENT'));
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 0 }));
+  });
+
   it('renders state-specific copy and retry', async () => {
     const user = userEvent.setup();
     const retry = vi.fn();

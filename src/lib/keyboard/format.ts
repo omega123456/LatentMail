@@ -18,6 +18,8 @@ const MAC_SYMBOLS: Record<string, string> = {
   ArrowDown: '↓',
   ArrowLeft: '←',
   ArrowRight: '→',
+  PageUp: 'PgUp',
+  PageDown: 'PgDn',
 };
 
 const WINDOWS_LABELS: Record<string, string> = {
@@ -32,6 +34,8 @@ const WINDOWS_LABELS: Record<string, string> = {
   ArrowDown: 'Down',
   ArrowLeft: 'Left',
   ArrowRight: 'Right',
+  PageUp: 'PgUp',
+  PageDown: 'PgDn',
 };
 
 export function formatBindingParts(binding: string, isMac: boolean = isMacPlatform()): string[] {

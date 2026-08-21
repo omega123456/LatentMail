@@ -612,6 +612,7 @@ for (const theme of themes) {
     await page.getByRole('button', { name: 'Keyboard' }).click();
     await page.getByRole('button', { name: 'Change shortcut for Forward' }).click();
     await page.getByRole('textbox', { name: 'Recording new shortcut for Forward' }).press('r');
+    await page.setViewportSize({ width: 1280, height: 1500 });
     await screenshot(
       page,
       page.getByTestId('settings-keyboard-section'),

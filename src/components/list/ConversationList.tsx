@@ -135,6 +135,11 @@ export function ConversationList({
   useEffect(() => {
     virtualizer.measure();
   }, [density, virtualizer]);
+  useLayoutEffect(() => {
+    previousRows.current = [];
+    previousHeight.current = 0;
+    virtualizer.scrollToOffset(0);
+  }, [mailboxId, searchActive, virtualizer]);
   useEffect(() => {
     if (!flashThreadId) return;
     const index = rows.findIndex((row) => row.id === flashThreadId);
@@ -152,6 +157,18 @@ export function ConversationList({
     },
     [onTriage, rows, setCursor, setThread],
   );
+  const moveCursor = useCallback(
+    (delta: number) => {
+      if (rows.length === 0) return;
+      const from = cursor ?? (delta > 0 ? -1 : rows.length);
+      const next = Math.min(rows.length - 1, Math.max(0, from + delta));
+      open(next);
+      virtualizer.scrollToIndex(next, { align: 'auto' });
+    },
+    [cursor, open, rows.length, virtualizer],
+  );
+  const visibleRowCount = () =>
+    Math.max(1, Math.floor((parentRef.current?.clientHeight ?? rowHeight) / rowHeight) - 1);
   const currentFolderId = searchActive ? undefined : mailboxId;
   const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
   const selectionSystemLabelIds = useMemo(
@@ -161,15 +178,19 @@ export function ConversationList({
   useCommands({
     moveCursorDown: (event) => {
       event.preventDefault();
-      const next = Math.min(rows.length - 1, (cursor ?? -1) + 1);
-      open(next);
-      virtualizer.scrollToIndex(next, { align: 'auto' });
+      moveCursor(1);
     },
     moveCursorUp: (event) => {
       event.preventDefault();
-      const next = Math.max(0, (cursor ?? rows.length) - 1);
-      open(next);
-      virtualizer.scrollToIndex(next, { align: 'auto' });
+      moveCursor(-1);
+    },
+    pageCursorDown: (event) => {
+      event.preventDefault();
+      moveCursor(visibleRowCount());
+    },
+    pageCursorUp: (event) => {
+      event.preventDefault();
+      moveCursor(-visibleRowCount());
     },
     openConversation: () => {
       if (cursor !== null) open(cursor);

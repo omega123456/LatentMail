@@ -1,6 +1,8 @@
 export type CommandName =
   | 'moveCursorDown'
   | 'moveCursorUp'
+  | 'pageCursorDown'
+  | 'pageCursorUp'
   | 'openConversation'
   | 'dismiss'
   | 'selectAll'
@@ -22,6 +24,8 @@ export type CommandBindings = Record<CommandName, string[]>;
 export const DEFAULT_COMMAND_BINDINGS: CommandBindings = {
   moveCursorDown: ['j', 'J', 'ArrowDown'],
   moveCursorUp: ['k', 'K', 'ArrowUp'],
+  pageCursorDown: ['PageDown'],
+  pageCursorUp: ['PageUp'],
   openConversation: ['Enter', 'o', 'O'],
   dismiss: ['Escape'],
   selectAll: ['Meta+A', 'Control+A'],
@@ -46,6 +50,14 @@ export type CommandMetadata = { label: string; description: string };
 export const COMMAND_METADATA: Record<CommandName, CommandMetadata> = {
   moveCursorDown: { label: 'Move down', description: 'Move the cursor to the next conversation.' },
   moveCursorUp: { label: 'Move up', description: 'Move the cursor to the previous conversation.' },
+  pageCursorDown: {
+    label: 'Page down',
+    description: 'Move the cursor down by one screen of conversations.',
+  },
+  pageCursorUp: {
+    label: 'Page up',
+    description: 'Move the cursor up by one screen of conversations.',
+  },
   openConversation: { label: 'Open', description: 'Open the conversation under the cursor.' },
   dismiss: { label: 'Dismiss', description: 'Close the open conversation or dialog.' },
   selectAll: { label: 'Select all', description: 'Select every conversation in the list.' },
