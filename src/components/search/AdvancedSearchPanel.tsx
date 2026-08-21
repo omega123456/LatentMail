@@ -109,14 +109,14 @@ const selectWrapperClass = 'flex flex-col gap-1';
 
 function scopeOptions(userLabels: MailLabel[]): SelectOption<string>[] {
   return [
-    { value: JSON.stringify({ kind: 'default' }), label: 'All mail without Trash and Spam' },
+    { value: JSON.stringify({ kind: 'default' }), label: 'All mail' },
     { value: JSON.stringify({ kind: 'label', labelId: 'INBOX' }), label: 'Inbox' },
     { value: JSON.stringify({ kind: 'label', labelId: 'SENT' }), label: 'Sent' },
     ...userLabels.map((label) => ({
       value: JSON.stringify({ kind: 'label', labelId: label.id }),
       label: label.name,
     })),
-    { value: JSON.stringify({ kind: 'all' }), label: 'All mail including Trash and Spam' },
+    { value: JSON.stringify({ kind: 'all' }), label: 'Mail, Spam and Trash' },
   ];
 }
 

@@ -64,7 +64,7 @@ export function ReceivedAttachmentChip({
         type="button"
         aria-label={`Preview ${attachment.filename}`}
         onClick={onPreview}
-        className="absolute inset-0 rounded-chip focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+        className="absolute inset-0 z-10 cursor-pointer rounded-chip focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
       />
       <div
         aria-hidden="true"

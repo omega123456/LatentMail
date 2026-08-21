@@ -314,7 +314,7 @@ describe('AdvancedSearchPanel', () => {
     await user.click(screen.getByLabelText('Search in'));
     expect(screen.getByRole('option', { name: 'Receipts' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Inbox' })).toBeInTheDocument();
-    await user.click(screen.getByRole('option', { name: 'All mail including Trash and Spam' }));
+    await user.click(screen.getByRole('option', { name: 'Mail, Spam and Trash' }));
     expect(onScopeChange).toHaveBeenCalledWith({ kind: 'all' });
   });
 });
