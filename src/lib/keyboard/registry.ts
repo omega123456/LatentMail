@@ -22,8 +22,8 @@ export type CommandName =
 export type CommandBindings = Record<CommandName, string[]>;
 
 export const DEFAULT_COMMAND_BINDINGS: CommandBindings = {
-  moveCursorDown: ['j', 'J', 'ArrowDown'],
-  moveCursorUp: ['k', 'K', 'ArrowUp'],
+  moveCursorDown: ['ArrowDown', 'j', 'J'],
+  moveCursorUp: ['ArrowUp', 'k', 'K'],
   pageCursorDown: ['PageDown'],
   pageCursorUp: ['PageUp'],
   openConversation: ['Enter', 'o', 'O'],

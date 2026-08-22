@@ -40,6 +40,8 @@ describe('platform reachability', () => {
   it('picks the platform-reachable binding as primary, ignoring the unreachable alias', () => {
     expect(primaryBinding(DEFAULT_COMMAND_BINDINGS.selectAll, true)).toBe('Meta+A');
     expect(primaryBinding(DEFAULT_COMMAND_BINDINGS.selectAll, false)).toBe('Control+A');
+    expect(primaryBinding(DEFAULT_COMMAND_BINDINGS.moveCursorDown)).toBe('ArrowDown');
+    expect(primaryBinding(DEFAULT_COMMAND_BINDINGS.moveCursorUp)).toBe('ArrowUp');
   });
 
   it('filters a binding list down to what the platform can produce', () => {

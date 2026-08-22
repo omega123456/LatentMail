@@ -75,13 +75,13 @@ describe('ConversationList', () => {
 
   it('opens and marks rows read with keyboard navigation, including clamps', () => {
     renderWithQueryClient(<ConversationList />);
-    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' })));
     expect(useSelectionStore.getState()).toMatchObject({
       keyboardCursor: 0,
       activeThreadId: 'thread-1',
     });
     expect(screen.getAllByText('Read')[0]).toBeInTheDocument();
-    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' })));
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' })));
     expect(useSelectionStore.getState().keyboardCursor).toBe(0);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
     expect(useSelectionStore.getState().activeThreadId).toBeNull();
