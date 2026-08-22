@@ -560,6 +560,7 @@ export interface MailArrival {
   threadId: string;
   sender: string;
   subject: string;
+  snippet: string;
 }
 
 export interface NewMailEvent {

@@ -122,12 +122,19 @@ pub fn content(arrivals: &[MailArrival]) -> Option<(String, String)> {
     } else {
         first.subject.clone()
     };
+    let preview = if first.snippet.is_empty() {
+        subject
+    } else {
+        format!("{subject} — {}", first.snippet)
+    };
+    let title = crate::storage::addresses::first_identity(&first.sender)
+        .map_or_else(|| "(No sender)".to_owned(), |identity| identity.display);
     Some((
-        first.sender.clone(),
+        title,
         if rest.is_empty() {
-            subject
+            preview
         } else {
-            format!("{subject} — and {} more", rest.len())
+            format!("{preview} — and {} more", rest.len())
         },
     ))
 }

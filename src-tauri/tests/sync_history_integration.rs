@@ -286,7 +286,7 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
     assert_eq!(
         new_mail.get("arrivals"),
         Some(&serde_json::json!([
-            {"threadId": "t2", "sender": "Carol <carol@example.com>", "subject": "New mail"}
+            {"threadId": "t2", "sender": "Carol <carol@example.com>", "subject": "New mail", "snippet": "s"}
         ]))
     );
 }

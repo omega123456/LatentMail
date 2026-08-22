@@ -14,26 +14,39 @@ use tauri::{Emitter, Listener, Manager};
 fn notification_content_names_one_arrival_or_summarizes_a_batch() {
     let first = MailArrival {
         thread_id: "thread-1".into(),
-        sender: "Alex".into(),
+        sender: "Alex <alex@example.com>".into(),
         subject: "Hello".into(),
+        snippet: "A short preview".into(),
     };
     assert_eq!(
         content(std::slice::from_ref(&first)),
-        Some(("Alex".into(), "Hello".into()))
+        Some(("Alex".into(), "Hello — A short preview".into()))
     );
     assert_eq!(
         content(&[
             MailArrival {
                 subject: String::new(),
-                ..first
+                ..first.clone()
             },
             MailArrival {
                 thread_id: "thread-2".into(),
-                sender: "Bea".into(),
+                sender: "Bea <bea@example.com>".into(),
                 subject: "Later".into(),
+                snippet: "Another preview".into(),
             },
         ]),
-        Some(("Alex".into(), "(No subject) — and 1 more".into()))
+        Some((
+            "Alex".into(),
+            "(No subject) — A short preview — and 1 more".into(),
+        ))
+    );
+    assert_eq!(
+        content(&[MailArrival {
+            sender: "alex@example.com".into(),
+            snippet: String::new(),
+            ..first.clone()
+        }]),
+        Some(("alex@example.com".into(), "Hello".into()))
     );
     assert_eq!(content(&[]), None);
 }
@@ -50,8 +63,9 @@ async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_cli
     initialize(app.handle()).unwrap();
     let arrival = MailArrival {
         thread_id: "thread-1".into(),
-        sender: "Alex".into(),
+        sender: "Alex <alex@example.com>".into(),
         subject: "Hello".into(),
+        snippet: "A short preview".into(),
     };
     for index in 0..5 {
         app.emit(
@@ -122,13 +136,15 @@ fn notification_click_destinations_are_thread_or_folder_scoped() {
     let arrivals = [
         MailArrival {
             thread_id: "thread-1".into(),
-            sender: "Alex".into(),
+            sender: "Alex <alex@example.com>".into(),
             subject: "Hello".into(),
+            snippet: "A short preview".into(),
         },
         MailArrival {
             thread_id: "thread-2".into(),
-            sender: "Bea".into(),
+            sender: "Bea <bea@example.com>".into(),
             subject: "Later".into(),
+            snippet: "Another preview".into(),
         },
     ];
     assert_eq!(arrivals.len(), 2);

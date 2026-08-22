@@ -332,6 +332,7 @@ pub struct MailArrival {
     pub thread_id: String,
     pub sender: String,
     pub subject: String,
+    pub snippet: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -995,6 +996,7 @@ fn compute_arrivals(
             thread_id: message.thread_id.clone(),
             sender: message.sender.clone(),
             subject: message.subject.clone(),
+            snippet: message.snippet.clone(),
         })
         .collect()
 }
