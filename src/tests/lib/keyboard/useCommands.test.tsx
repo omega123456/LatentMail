@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CommandProvider, useSetCommandOverride } from '@/providers/CommandProvider';
 import { hasFocusContext, useCommands } from '@/lib/keyboard/useCommands';
+import { useLayoutStore } from '@/stores/layout';
 
 function Probe({ onDismiss }: { onDismiss: () => void }) {
   useCommands({ dismiss: onDismiss });
@@ -40,6 +41,17 @@ describe('useCommands', () => {
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
 
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('does not fire while Settings is visible', () => {
+    const onDismiss = vi.fn();
+    render(<Probe onDismiss={onDismiss} />);
+    act(() => useLayoutStore.setState({ route: 'settings' }));
+
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => useLayoutStore.setState({ route: 'mail' }));
   });
 
   it('does not fire while a menu holds focus', () => {

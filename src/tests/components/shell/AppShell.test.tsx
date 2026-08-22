@@ -245,6 +245,8 @@ describe('AppShell wired to real data', () => {
     overrideAccount('account-1', [threadOne]);
     render(<App />);
     await screen.findByText('Q3 review');
+    const list = screen.getByTestId('conversation-list');
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 413 });
 
     act(() => {
       useSelectionStore.setState({ activeThreadId: 'thread-1', keyboardCursor: 0 });
@@ -264,9 +266,15 @@ describe('AppShell wired to real data', () => {
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     await screen.findByTestId('settings-shell');
+    const preservedMail = screen.getByTestId('mail-layout').parentElement!;
+    expect(preservedMail).not.toHaveAttribute('hidden');
+    expect(preservedMail).toHaveAttribute('inert');
+    expect(preservedMail).toHaveClass('invisible', 'pointer-events-none');
     await user.click(screen.getByRole('button', { name: 'Back to Mail' }));
     await screen.findByTestId('mail-layout');
 
+    expect(screen.getByTestId('conversation-list')).toBe(list);
+    expect(list.scrollTop).toBe(413);
     expect(useSelectionStore.getState()).toEqual(before.selection);
     expect(useSearchStore.getState()).toEqual(before.search);
   });

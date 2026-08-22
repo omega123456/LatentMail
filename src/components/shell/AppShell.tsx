@@ -27,10 +27,21 @@ export function AppShell() {
   const content =
     route === 'auth' ? (
       <SignInScreen />
-    ) : route === 'settings' ? (
-      <SettingsShell />
     ) : (
-      <MailLayout accounts={accounts ?? []} />
+      <div className="grid h-full">
+        <div
+          aria-hidden={route !== 'mail'}
+          inert={route !== 'mail'}
+          className={`col-start-1 row-start-1 min-h-0 ${route === 'mail' ? '' : 'invisible pointer-events-none'}`}
+        >
+          <MailLayout accounts={accounts ?? []} />
+        </div>
+        {route === 'settings' && (
+          <div className="col-start-1 row-start-1 min-h-0">
+            <SettingsShell />
+          </div>
+        )}
+      </div>
     );
   return (
     <CommandProvider>

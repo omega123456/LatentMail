@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useCommandBindings } from '@/providers/CommandProvider';
+import { useLayoutStore } from '@/stores/layout';
 import { commandForEvent, type CommandName } from './registry';
 
 type CommandHandlers = Partial<Record<CommandName, (event: KeyboardEvent) => void>>;
@@ -19,7 +20,7 @@ export function useCommands(handlers: CommandHandlers): void {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (hasFocusContext()) return;
+      if (useLayoutStore.getState().route !== 'mail' || hasFocusContext()) return;
       const command = commandForEvent(event, bindings);
       if (!command) return;
       const handler = handlers[command];
