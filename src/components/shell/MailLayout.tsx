@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { ReauthBanner } from '@/components/auth/ReauthBanner';
-import { ComposeOverlay } from '@/components/compose/ComposeOverlay';
+import { DelayedFallback, lazyWithDelayedFallback } from '@/components/states/DelayedFallback';
 import { ConversationListContainer } from '@/components/list/ConversationList';
 import { ListHeader } from '@/components/list/ListHeader';
 import {
@@ -10,6 +17,7 @@ import {
   useRecolorLabelMutation,
   useRenameLabelMutation,
   useConversationQuery,
+  useSearchTotalQuery,
   useSearchThreadsQuery,
 } from '@/lib/query/hooks';
 import { mapConversation, mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
@@ -35,6 +43,22 @@ import { SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
 import { navRow } from '@/components/sidebar/rowStyles';
 
 const navItem = navRow(false);
+const ComposeOverlay = lazyWithDelayedFallback(() =>
+  import('@/components/compose/ComposeOverlay').then(({ ComposeOverlay }) => ({
+    default: ComposeOverlay,
+  })),
+);
+
+function ComposeFallback() {
+  return (
+    <div
+      aria-hidden="true"
+      className="fixed inset-0 z-40 bg-on-background/20 dark:bg-dark-on-background/20"
+    >
+      <div className="fixed bottom-container-padding right-container-padding z-50 h-compose-h w-compose-w rounded-lg border border-outline-variant bg-surface-container-lowest shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest" />
+    </div>
+  );
+}
 export function MailLayout({ accounts }: { accounts: Account[] }) {
   const shell = useRef<HTMLDivElement>(null);
   const {
@@ -77,7 +101,8 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const searchScope = useSearchStore((state) => state.scope);
   const searchClear = useSearchStore((state) => state.clear);
   const searchResults = useSearchThreadsQuery(activeAccountId, searchSubmittedQuery, searchScope);
-  const searchTotal = searchResults.data?.pages.at(-1)?.total ?? 0;
+  const searchTotalQuery = useSearchTotalQuery(activeAccountId, searchSubmittedQuery, searchScope);
+  const searchTotal = searchTotalQuery.data ?? 0;
   const searchFieldRef = useRef<HTMLInputElement>(null);
   const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
   const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
@@ -90,6 +115,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const compose = useCallback(() => {
     if (activeAccount) openNewMessage(activeAccount.id, activeAccount.email);
   }, [activeAccount]);
+  const composeOpen = useComposeStore((state) => state.session !== null);
   const composeTarget = useCallback(
     (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => {
       if (!activeAccount || keyboardMultiSelect || !keyboardConversation.data) return;
@@ -344,7 +370,17 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
         </div>
       </div>
       <StatusBar accountId={activeAccountId} />
-      <ComposeOverlay />
+      {composeOpen && (
+        <Suspense
+          fallback={
+            <DelayedFallback>
+              <ComposeFallback />
+            </DelayedFallback>
+          }
+        >
+          <ComposeOverlay />
+        </Suspense>
+      )}
     </div>
   );
 }

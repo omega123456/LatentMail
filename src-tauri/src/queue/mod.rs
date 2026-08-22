@@ -4,7 +4,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Weak,
     },
     time::Duration,
 };
@@ -430,10 +430,13 @@ impl QueueEngine {
     }
 
     fn spawn_lane(self: &Arc<Self>, mut receiver: mpsc::Receiver<QueueOperation>, lane: Lane) {
-        let engine = Arc::clone(self);
+        let engine = Arc::downgrade(self);
         tokio::spawn(async move {
             let permits = Arc::new(Semaphore::new(lane.capacity()));
             while let Some(operation) = receiver.recv().await {
+                let Some(engine) = Weak::upgrade(&engine) else {
+                    break;
+                };
                 engine.wait_until_resumed().await;
                 let engine = Arc::clone(&engine);
                 let permits = Arc::clone(&permits);

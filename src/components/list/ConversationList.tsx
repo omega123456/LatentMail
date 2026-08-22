@@ -60,6 +60,7 @@ export function ConversationList({
   state = fixtureState(),
   onRetry,
   onLoadMore,
+  onLoadPrevious,
   errorMessage,
   allLabels = [],
   onTriage,
@@ -75,6 +76,7 @@ export function ConversationList({
   onRetry?: () => void;
   errorMessage?: string;
   onLoadMore?: () => void;
+  onLoadPrevious?: () => void;
   allLabels?: LabelMenuEntry[];
   onTriage?: (threadIds: string[], intent: ThreadTriageIntent) => void;
   syncProgress?: { persistedCount: number; discoveredCount: number };
@@ -409,6 +411,7 @@ export function ConversationList({
       data-testid="conversation-list"
       className="min-h-0 flex-1 overflow-auto p-stack-gap-sm"
       onScroll={() => {
+        if (parentRef.current && parentRef.current.scrollTop <= rowHeight) onLoadPrevious?.();
         if (
           parentRef.current &&
           parentRef.current.scrollTop + parentRef.current.clientHeight >=
@@ -483,6 +486,10 @@ export function ConversationListContainer() {
       onLoadMore={() => {
         if (activeQuery.hasNextPage && !activeQuery.isFetchingNextPage)
           void activeQuery.fetchNextPage();
+      }}
+      onLoadPrevious={() => {
+        if (activeQuery.hasPreviousPage && !activeQuery.isFetchingPreviousPage)
+          void activeQuery.fetchPreviousPage();
       }}
       allLabels={allLabels}
       onTriage={(threadIds, intent) => {

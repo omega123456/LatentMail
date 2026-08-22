@@ -59,16 +59,11 @@ fn accepts_the_exact_encoded_ceiling_and_rejects_one_byte_over() {
         content_id: None,
     }];
 
-    for suffix in 0..16 {
-        message.subject = "x".repeat(suffix);
-        let raw = assemble(&message).unwrap();
-        if raw.len() == MAX_RFC2822_BYTES {
-            assert!(validate_encoded_size(MAX_RFC2822_BYTES).is_ok());
-            assert!(validate_encoded_size(MAX_RFC2822_BYTES + 1).is_err());
-            return;
-        }
-    }
-    panic!("unable to construct exact encoded boundary");
+    message.subject = "xxx".into();
+    let raw = assemble(&message).unwrap();
+    assert_eq!(raw.len(), MAX_RFC2822_BYTES);
+    assert!(validate_encoded_size(MAX_RFC2822_BYTES).is_ok());
+    assert!(validate_encoded_size(MAX_RFC2822_BYTES + 1).is_err());
 }
 
 #[test]

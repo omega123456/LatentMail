@@ -657,17 +657,16 @@ async fn the_production_cancellation_hook_wired_in_initialize_evicts_a_real_work
         .unwrap();
     let handle = application.handle();
 
-    latentmail_lib::settings::initialize(handle).unwrap();
-    latentmail_lib::auth::initialize(handle).unwrap();
-
     let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(seed_storage.clone());
+    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
     let connection = seed_storage.connection().unwrap();
     AccountRepository::upsert(&connection, &account("account")).unwrap();
     drop(connection);
-    drop(seed_storage);
-
-    latentmail_lib::sync::initialize(handle).unwrap();
+    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
 
     let queue = application.state::<Arc<QueueEngine>>().inner().clone();
     let sync_engine = application

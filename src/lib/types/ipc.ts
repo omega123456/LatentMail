@@ -96,6 +96,7 @@ export interface IpcCommandMap {
       accountId: string;
       labelId?: string | null;
       cursor?: ThreadCursor | null;
+      direction?: ThreadPageDirection | null;
       limit?: number | null;
     };
     result: ThreadPage;
@@ -108,6 +109,15 @@ export interface IpcCommandMap {
       entryScope?: ConversationEntryScope;
     };
     result: Conversation;
+  };
+  load_message_body: {
+    args: {
+      accountId: string;
+      messageId: string;
+      imagePolicy: ImagePolicy;
+      entryScope?: ConversationEntryScope;
+    };
+    result: MessageBody;
   };
   fetch_message_body: { args: { accountId: string; messageId: string }; result: void };
   trigger_sync: { args: { accountId: string }; result: SyncStatus };
@@ -163,9 +173,14 @@ export interface IpcCommandMap {
       query: string;
       scope?: SearchScope | null;
       cursor?: ThreadCursor | null;
+      direction?: ThreadPageDirection | null;
       limit?: number | null;
     };
     result: ThreadSearchPage;
+  };
+  search_total: {
+    args: { accountId: string; query: string; scope?: SearchScope | null };
+    result: number;
   };
   parse_search_query: { args: { query: string }; result: ParsedSearchQuery };
   read_queue_operations: { args: Record<string, never>; result: AccountQueueSnapshot[] };
@@ -457,15 +472,24 @@ export interface ThreadCursor {
   id: string;
 }
 
+export type ThreadPageDirection = 'forward' | 'backward';
+
+export interface ThreadPageParam {
+  cursor: ThreadCursor;
+  direction: ThreadPageDirection;
+}
+
 export interface ThreadPage {
   items: MailThread[];
   nextCursor: ThreadCursor | null;
+  previousCursor?: ThreadCursor | null;
 }
 
 export interface ThreadSearchPage {
   items: MailThread[];
   nextCursor: ThreadCursor | null;
-  total: number;
+  previousCursor?: ThreadCursor | null;
+  total?: number;
 }
 
 export type SearchScope =
@@ -535,6 +559,16 @@ export interface Conversation {
   messages: ConversationMessage[];
 }
 
+export interface MessageBody {
+  htmlBody: string | null;
+  plainBody: string | null;
+  htmlPresence: 'neverFetched' | 'present' | 'absent' | 'tooLarge';
+  truncated: boolean;
+  remoteImagesBlocked: boolean;
+  remoteImagesAllowed: boolean;
+  inlineImagesPending: boolean;
+}
+
 export type SyncEngineState = 'idle' | 'syncing' | 'error';
 
 export interface SyncStatus {
@@ -586,6 +620,9 @@ export interface TraversalProgressEvent {
   discoveredCount: number;
   persistedCount: number;
   completed: boolean;
+  state: TraversalState;
+  lastAdvancedAt: number;
+  isResumed: boolean;
 }
 
 export interface AvatarResolvedEvent {
@@ -603,6 +640,7 @@ export interface IpcEventMap {
   'sync://progress': SyncProgressEvent;
   'sync://complete': SyncCompleteEvent;
   'mail://new': NewMailEvent;
+  'message://body-fetched': { accountId: string; messageId: string };
   'os://intent': OsIntent;
   'sync://traversal': TraversalProgressEvent;
   'send://uncertain': { accountId: string };

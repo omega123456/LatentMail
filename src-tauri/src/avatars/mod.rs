@@ -198,14 +198,12 @@ fn path_to_string(path: std::path::PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
 
-pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let storage =
-        Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?;
     let cache = AvatarCache::new(storage.clone(), directory.join("avatar-cache"))?;
     let settings = app.state::<SettingsService>().inner().clone();
     app.manage(AvatarService::new(cache, storage, settings));

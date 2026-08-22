@@ -36,8 +36,10 @@ export const playwrightSearchThreads: MailThread[] = [
 export const playwrightSearchThreadPage: IpcCommandMap['search_threads']['result'] = {
   items: playwrightSearchThreads,
   nextCursor: null,
-  total: 7,
+  previousCursor: null,
 };
+
+export const playwrightSearchTotal: IpcCommandMap['search_total']['result'] = 7;
 
 export const playwrightParsedSearchQuery: IpcCommandMap['parse_search_query']['result'] = {
   hasTextTerm: true,

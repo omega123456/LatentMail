@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { differenceInCalendarDays, format, isToday, isYesterday } from 'date-fns';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RefreshCw, Search } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  RefreshCw,
+  Search,
+} from 'lucide-react';
 import { Select } from '@/components/shared/Select';
 import { TextInput } from '@/components/shared/TextInput';
 import { SettingRow } from '@/components/settings/SettingRow';

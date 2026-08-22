@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ReadingPane, readerFixtures } from '@/components/reader/ReadingPane';
+import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
 describe('ReadingPane', () => {
@@ -31,6 +32,37 @@ describe('ReadingPane', () => {
     await user.click(screen.getByRole('button', { name: 'Expand message from Elena Rodriguez' }));
     expect(screen.getAllByLabelText('Message body')).toHaveLength(2);
     expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
+  });
+
+  it('holds cached-body space without showing Gmail loading text', async () => {
+    const conversation = {
+      ...readerFixtures['thread-1'],
+      messages: [
+        {
+          ...readerFixtures['thread-1'].messages[1],
+          html: null,
+          text: null,
+          htmlPresence: 'present' as const,
+        },
+      ],
+    };
+    const onFetchBody = vi.fn();
+    const readBody = vi.fn(() => new Promise<never>(() => undefined));
+    ipc.override('load_message_body', readBody);
+    renderWithQueryClient(
+      <ReadingPane
+        threadId="thread-1"
+        conversation={conversation}
+        accountId="account-1"
+        onFetchBody={onFetchBody}
+      />,
+    );
+    await waitFor(() => expect(readBody).toHaveBeenCalledOnce());
+    expect(screen.queryByText('Loading message…')).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('message-message-2').querySelector('.min-h-reader-body'),
+    ).toBeInTheDocument();
+    expect(onFetchBody).not.toHaveBeenCalled();
   });
 
   it('sanitizes HTML before it reaches the script-free iframe', async () => {

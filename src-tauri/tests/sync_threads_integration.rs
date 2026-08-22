@@ -1,16 +1,20 @@
 use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
+use latentmail_lib::search::search_total;
 use latentmail_lib::storage::{
     Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart, Label,
     LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::commands::{
-    fetch_message_body, list_labels, list_threads, load_conversation, read_sync_status,
-    trigger_sync,
+    fetch_message_body, list_labels, list_threads, load_conversation, load_message_body,
+    read_sync_status, trigger_sync,
 };
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, SyncState, ThreadCursor, WorkRegistry};
-use tauri::Manager;
+use latentmail_lib::sync::{
+    noop_event_sink, HtmlPresenceDto, SyncEngine, SyncState, ThreadCursor, ThreadPageDirection,
+    WorkRegistry,
+};
+use tauri::{Listener, Manager};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
@@ -158,6 +162,46 @@ async fn list_labels_drops_unread_count_when_the_thread_is_read() {
 }
 
 #[tokio::test]
+async fn list_threads_backward_returns_the_rows_adjacent_to_the_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    for at in 1..=6 {
+        ThreadRepository::upsert(&connection, &thread(&format!("t{at}"), at, false)).unwrap();
+    }
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+
+    let backward = list_threads(
+        application.state(),
+        "account".into(),
+        None,
+        Some(ThreadCursor {
+            latest_at: 3,
+            id: "t3".into(),
+        }),
+        Some(ThreadPageDirection::Backward),
+        Some(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        backward
+            .items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["t5", "t4"],
+    );
+    let previous = backward
+        .previous_cursor
+        .expect("rows remain above the returned page");
+    assert_eq!(previous.id, "t5");
+}
+
+#[tokio::test]
 async fn list_threads_paginates_newest_first_and_filters_by_label() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
@@ -218,9 +262,16 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     let application = app();
     application.manage(storage);
 
-    let first_page = list_threads(application.state(), "account".into(), None, None, Some(2))
-        .await
-        .unwrap();
+    let first_page = list_threads(
+        application.state(),
+        "account".into(),
+        None,
+        None,
+        None,
+        Some(2),
+    )
+    .await
+    .unwrap();
     assert_eq!(first_page.items.len(), 2);
     assert_eq!(first_page.items[0].id, "t3");
     assert_eq!(first_page.items[1].id, "t2");
@@ -235,6 +286,7 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
         "account".into(),
         None,
         Some(cursor),
+        None,
         Some(2),
     )
     .await
@@ -242,6 +294,38 @@ async fn list_threads_paginates_newest_first_and_filters_by_label() {
     assert_eq!(second_page.items.len(), 1);
     assert_eq!(second_page.items[0].id, "t1");
     assert!(second_page.next_cursor.is_none());
+    let previous = second_page
+        .previous_cursor
+        .expect("a prior page remains available");
+    let restored_page = list_threads(
+        application.state(),
+        "account".into(),
+        None,
+        Some(previous),
+        Some(ThreadPageDirection::Backward),
+        Some(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        restored_page
+            .items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["t3", "t2"],
+    );
+    assert_eq!(
+        search_total(
+            application.state(),
+            "account".into(),
+            "subject".into(),
+            None
+        )
+        .await
+        .unwrap(),
+        1,
+    );
 }
 
 #[tokio::test]
@@ -358,6 +442,69 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     );
     assert!(!html.contains("cid:img1"));
     assert!(!message.truncated);
+}
+
+#[tokio::test]
+async fn conversation_returns_only_the_newest_body_and_cached_reads_target_one_message() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    seed_account(&connection);
+    ThreadRepository::upsert(&connection, &thread("t1", 2, false)).unwrap();
+    for (id, sent_at, html) in [("m1", 1, "<p>Older</p>"), ("m2", 2, "<p>Newest</p>")] {
+        MessageRepository::write_full_state(
+            &connection,
+            &Message {
+                account_id: "account".into(),
+                id: id.into(),
+                thread_id: "t1".into(),
+                rfc_message_id: None,
+                sender: "alice@example.com".into(),
+                recipients: "me@example.com".into(),
+                subject: "Subject t1".into(),
+                sent_at,
+                snippet: html.into(),
+                html_body: Some(html.into()),
+                plain_body: None,
+                has_attachments: false,
+                is_unread: false,
+                is_starred: false,
+                history_id: sent_at,
+                truncated_body: None,
+                html_presence: HtmlPresence::Present,
+            },
+        )
+        .unwrap();
+    }
+    drop(connection);
+    let application = app();
+    application.manage(storage);
+    let conversation = load_conversation(
+        application.state(),
+        "account".into(),
+        "t1".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(conversation.messages.len(), 2);
+    assert!(conversation.messages[0].html_body.is_none());
+    assert_eq!(
+        conversation.messages[1].html_body.as_deref(),
+        Some("<p>Newest</p>")
+    );
+    let body = load_message_body(
+        application.state(),
+        "account".into(),
+        "m1".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(body.html_body.as_deref(), Some("<p>Older</p>"));
+    assert_eq!(body.html_presence, HtmlPresenceDto::Present);
 }
 
 #[tokio::test]
@@ -589,10 +736,13 @@ async fn initialize_manages_the_storage_the_read_commands_resolve() {
         .build()
         .unwrap();
     let handle = application.handle();
-    latentmail_lib::settings::initialize(handle).unwrap();
-    latentmail_lib::auth::initialize(handle).unwrap();
-
-    latentmail_lib::sync::initialize(handle).unwrap();
+    let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(storage.clone());
+    latentmail_lib::settings::initialize(handle, storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, storage.clone()).unwrap();
+    latentmail_lib::sync::initialize(handle, storage).unwrap();
 
     assert!(application.try_state::<Storage>().is_some());
 }
@@ -649,6 +799,7 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
         application.state(),
         "account".into(),
         Some("INBOX".into()),
+        None,
         None,
         None,
     )
@@ -737,6 +888,13 @@ async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_dir
     application.manage(AuthService::new(storage.clone()));
     application.manage(sync_engine);
     application.manage(storage.clone());
+    let received = Arc::new(std::sync::Mutex::new(None));
+    let received_for_listener = Arc::clone(&received);
+    application
+        .handle()
+        .listen("message://body-fetched", move |event| {
+            *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
+        });
 
     fetch_message_body(
         application.handle().clone(),
@@ -754,4 +912,8 @@ async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_dir
         .unwrap();
     assert_eq!(stored.html_body.as_deref(), Some("hello-world"));
     assert_eq!(stored.html_presence, HtmlPresence::Present);
+    assert_eq!(
+        received.lock().unwrap().as_deref(),
+        Some(r#"{"accountId":"account","messageId":"m1"}"#)
+    );
 }

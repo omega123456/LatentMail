@@ -935,8 +935,16 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
             serde_json::json!({ "accountId": "account", "labelId": null, "cursor": null, "limit": null }),
         ),
         (
+            "search_total",
+            serde_json::json!({ "accountId": "account", "query": "hi", "scope": null }),
+        ),
+        (
             "load_conversation",
             serde_json::json!({ "accountId": "account", "threadId": "thread", "imagePolicy": null }),
+        ),
+        (
+            "load_message_body",
+            serde_json::json!({ "accountId": "account", "messageId": "message", "imagePolicy": null }),
         ),
         (
             "fetch_message_body",
@@ -1209,7 +1217,8 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let sync_engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let sync_engine =
+        SyncEngine::new_with_unmetered_gmail(storage.clone(), queue, registry, noop_event_sink());
 
     let app = app();
     app.manage(storage);
@@ -1235,7 +1244,6 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     assert_eq!(search_results["items"][0]["id"], "thread-2");
     assert_eq!(search_results["items"][1]["id"], "thread-1");
-    assert_eq!(search_results["total"], 2);
     assert!(search_results["nextCursor"].is_null());
 
     let first_page = invoke(
@@ -1245,7 +1253,6 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .unwrap();
     assert_eq!(first_page["items"][0]["id"], "thread-2");
-    assert_eq!(first_page["total"], 2);
     let cursor = first_page["nextCursor"].clone();
     assert!(!cursor.is_null());
 
@@ -1268,7 +1275,16 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         }),
     )
     .unwrap();
-    assert_eq!(scoped_search["total"], 2);
+    assert_eq!(scoped_search["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        invoke(
+            &webview,
+            "search_total",
+            serde_json::json!({ "accountId": account_id, "query": "hi", "scope": { "kind": "all" } }),
+        )
+        .unwrap(),
+        2
+    );
 
     let label_scoped_search = invoke(
         &webview,
@@ -1280,7 +1296,16 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
         }),
     )
     .unwrap();
-    assert_eq!(label_scoped_search["total"], 2);
+    assert_eq!(label_scoped_search["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        invoke(
+            &webview,
+            "search_total",
+            serde_json::json!({ "accountId": account_id, "query": "hi", "scope": { "kind": "label", "labelId": "INBOX" } }),
+        )
+        .unwrap(),
+        2
+    );
 
     let blank_search = invoke(
         &webview,
@@ -1289,7 +1314,15 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .unwrap();
     assert_eq!(blank_search["items"].as_array().unwrap().len(), 0);
-    assert_eq!(blank_search["total"], 0);
+    assert_eq!(
+        invoke(
+            &webview,
+            "search_total",
+            serde_json::json!({ "accountId": account_id, "query": "   " }),
+        )
+        .unwrap(),
+        0
+    );
 
     let empty_search = invoke(
         &webview,
@@ -1298,7 +1331,15 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     )
     .unwrap();
     assert_eq!(empty_search["items"].as_array().unwrap().len(), 0);
-    assert_eq!(empty_search["total"], 0);
+    assert_eq!(
+        invoke(
+            &webview,
+            "search_total",
+            serde_json::json!({ "accountId": account_id, "query": "nonexistentterm" }),
+        )
+        .unwrap(),
+        0
+    );
 
     let parsed = invoke(
         &webview,
@@ -1605,7 +1646,8 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let sync_engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let sync_engine =
+        SyncEngine::new_with_unmetered_gmail(storage.clone(), queue, registry, noop_event_sink());
     let storage_for_cursor = storage.clone();
 
     let app = app();
@@ -1706,8 +1748,7 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
             discovered_count: 10,
             persisted_count: 4,
             completed: false,
-            last_advanced_at: 1_700_000_000,
-
+            last_advanced_at: (chrono::Utc::now() + chrono::Duration::days(1)).timestamp(),
             resumed: true,
         },
     )
@@ -1854,6 +1895,14 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
         .unwrap();
     assert_eq!(stored.html_body.as_deref(), Some("hello"));
     assert_eq!(stored.html_presence, HtmlPresence::Present);
+
+    let body = invoke(
+        &webview,
+        "load_message_body",
+        serde_json::json!({ "accountId": account_id, "messageId": "message-1", "imagePolicy": null }),
+    )
+    .unwrap();
+    assert_eq!(body["htmlBody"], "hello");
 
     assert!(invoke(
         &webview,
@@ -2020,7 +2069,8 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
 
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let engine = SyncEngine::new(storage.clone(), queue, registry, noop_event_sink());
+    let engine =
+        SyncEngine::new_with_unmetered_gmail(storage.clone(), queue, registry, noop_event_sink());
     let app = app();
     app.manage(storage);
     app.manage(auth_service);

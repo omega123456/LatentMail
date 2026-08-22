@@ -1,4 +1,5 @@
 pub mod addresses;
+pub mod reconcile_staging;
 mod repositories;
 
 pub use repositories::{

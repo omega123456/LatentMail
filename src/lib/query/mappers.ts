@@ -6,6 +6,7 @@ import type {
   LogEntryDto,
   MailLabel,
   MailThread,
+  MessageBody,
 } from '@/lib/types/ipc';
 import type { Conversation } from '@/lib/types/conversation';
 import type { ReaderConversation } from '@/components/reader/ReadingPane';
@@ -123,5 +124,28 @@ export function mapConversation(conversation: IpcConversation): ReaderConversati
       draftId: message.draftId,
       attachments: [...message.attachments].sort((a, b) => a.position - b.position),
     })),
+  };
+}
+
+export function mergeMessageBody<
+  T extends {
+    html: string | null;
+    text: string | null;
+    htmlPresence?: MessageBody['htmlPresence'];
+    truncated?: boolean;
+    remoteImagesBlocked?: boolean;
+    remoteImagesAllowed?: boolean;
+    inlineImagesPending?: boolean;
+  },
+>(message: T, body: MessageBody): T {
+  return {
+    ...message,
+    html: body.htmlBody,
+    text: body.plainBody,
+    htmlPresence: body.htmlPresence,
+    truncated: body.truncated,
+    remoteImagesBlocked: body.remoteImagesBlocked,
+    remoteImagesAllowed: body.remoteImagesAllowed,
+    inlineImagesPending: body.inlineImagesPending,
   };
 }

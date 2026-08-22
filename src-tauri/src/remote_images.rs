@@ -51,7 +51,9 @@ async fn fetch(client: &reqwest::Client, uri: &str) -> Result<(String, Vec<u8>),
         Ok(response) => read(response).await,
         Err(error) if error.is_connect() && !error.is_timeout() => {
             tokio::time::sleep(RETRY_DELAY).await;
-            let retried = send(client, target).await.map_err(|last| last.to_string())?;
+            let retried = send(client, target)
+                .await
+                .map_err(|last| last.to_string())?;
             read(retried).await
         }
         Err(error) => Err(error.to_string()),
@@ -66,7 +68,10 @@ async fn read(response: reqwest::Response) -> Result<(String, Vec<u8>), String> 
     if !response.status().is_success() {
         return Err(format!("status {}", response.status()));
     }
-    if response.content_length().is_some_and(|length| length > MAX_BYTES) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_BYTES)
+    {
         return Err("declared size over the ceiling".to_owned());
     }
     let content_type = response

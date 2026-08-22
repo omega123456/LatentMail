@@ -10,6 +10,7 @@ import {
   playwrightQueueOperationsSnapshot,
   playwrightReauthAccount,
   playwrightSearchThreadPage,
+  playwrightSearchTotal,
   playwrightSettings,
   playwrightSidebarAccounts,
   playwrightTrustedSenderSettings,
@@ -295,6 +296,7 @@ for (const theme of themes) {
     await installPlaywrightIpc(page, {
       list_accounts: [playwrightMailAccount],
       search_threads: playwrightSearchThreadPage,
+      search_total: playwrightSearchTotal,
     });
     await page.goto('/');
     await page.getByLabel('Search mail').fill('from:anna');
@@ -306,6 +308,7 @@ for (const theme of themes) {
     await installPlaywrightIpc(page, {
       list_accounts: [playwrightMailAccount],
       search_threads: playwrightSearchThreadPage,
+      search_total: playwrightSearchTotal,
       read_settings: { ...playwrightSettings, density: 'spacious' },
     });
     await page.goto('/');
@@ -318,7 +321,8 @@ for (const theme of themes) {
   test(`search zero results ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
       list_accounts: [playwrightMailAccount],
-      search_threads: { items: [], nextCursor: null, total: 0 },
+      search_threads: { items: [], nextCursor: null },
+      search_total: 0,
     });
     await page.goto('/');
     await page.getByLabel('Search mail').fill('from:anna quarterly');
@@ -330,6 +334,7 @@ for (const theme of themes) {
     await installPlaywrightIpc(page, {
       list_accounts: [playwrightMailAccount],
       search_threads: playwrightSearchThreadPage,
+      search_total: playwrightSearchTotal,
       read_traversal_status: {
         accountId: 'mail-account',
         state: 'backfilling',

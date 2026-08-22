@@ -26,8 +26,7 @@ const RESERVED_WINDOWS_NAMES = new Set([
 export function sanitizeFilename(filename: string): string {
   const base = filename.split(/[/\\]/).pop() ?? filename;
   const withoutTraversal = base.replace(/\.\.+/g, '_');
-  // eslint-disable-next-line no-control-regex
-  const withoutReservedCharacters = withoutTraversal.replace(/[<>:"|?*\x00-\x1f]/g, '_');
+  const withoutReservedCharacters = withoutTraversal.replace(/[<>:"|?*\p{Cc}]/gu, '_');
   const trimmed = withoutReservedCharacters.trim().replace(/[. ]+$/, '');
   if (trimmed.length === 0) return 'attachment';
   const [stem] = trimmed.split('.');

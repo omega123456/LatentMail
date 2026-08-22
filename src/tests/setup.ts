@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
+import { resetSettingsHydration } from '@/lib/settings/hydrate';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 Object.assign(window, {
@@ -98,6 +99,7 @@ if (!Element.prototype.releasePointerCapture) {
 
 beforeEach(() => {
   ipc.reset();
+  resetSettingsHydration();
   window.__resizeObserverInstances__ = [];
   silenceConsole();
 });

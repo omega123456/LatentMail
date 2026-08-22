@@ -62,4 +62,5 @@ export const playwrightThreads: MailThread[] = [
 export const playwrightThreadPage: IpcCommandMap['list_threads']['result'] = {
   items: playwrightThreads,
   nextCursor: null,
+  previousCursor: null,
 };

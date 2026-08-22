@@ -10,13 +10,23 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const documentRef = useRef<PDFDocumentProxy | null>(null);
+  const loadingRef = useRef<{
+    bytes: ArrayBuffer;
+    task: ReturnType<typeof pdfjsLib.getDocument>;
+  } | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [page, setPage] = useState(1);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    const loadingTask = pdfjsLib.getDocument({ data: bytes.slice(0), isEvalSupported: false });
+    if (loadingRef.current?.bytes !== bytes) {
+      loadingRef.current = {
+        bytes,
+        task: pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }),
+      };
+    }
+    const loadingTask = loadingRef.current.task;
     loadingTask.promise
       .then((doc) => {
         if (cancelled) return;

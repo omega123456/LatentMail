@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
     auth::AuthService,
@@ -17,9 +14,9 @@ use crate::{
 };
 
 use super::{
-    dto::{message_dto, ImagePolicy},
+    dto::{message_body_dto, message_dto, ImagePolicy, MessageBodyDto, MessageBodyFetchedDto},
     ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto, ThreadCursor,
-    ThreadDto, ThreadPage, TraversalStatusDto,
+    ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
 };
 
 const DEFAULT_PAGE_SIZE: i64 = 50;
@@ -523,32 +520,47 @@ pub async fn list_threads(
     account_id: String,
     label_id: Option<String>,
     cursor: Option<ThreadCursor>,
+    direction: Option<ThreadPageDirection>,
     limit: Option<u32>,
 ) -> Result<ThreadPage, String> {
     let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
+    let has_cursor = cursor_pair.is_some();
+    let direction = direction.unwrap_or_default();
     let mut rows = string_try!(
         storage
             .run(move |connection| {
-                ThreadRepository::list_paginated(
+                ThreadRepository::list_paginated_with_direction(
                     connection,
                     &account_id,
                     label_id.as_deref(),
                     cursor_pair,
                     limit + 1,
+                    direction,
                 )
             })
             .await
     );
-    let next_cursor = if rows.len() as i64 > limit {
-        rows.truncate(limit as usize);
-        rows.last().map(|row| ThreadCursor {
-            latest_at: row.thread.latest_at,
-            id: row.thread.id.clone(),
-        })
-    } else {
-        None
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        match direction {
+            ThreadPageDirection::Forward => rows.truncate(limit as usize),
+            ThreadPageDirection::Backward => {
+                rows.drain(..rows.len() - limit as usize);
+            }
+        }
+    }
+    let cursor_for = |row: &crate::storage::ThreadListRow| ThreadCursor {
+        latest_at: row.thread.latest_at,
+        id: row.thread.id.clone(),
     };
+    let next_cursor = (direction == ThreadPageDirection::Forward && has_more)
+        .then(|| rows.last().map(cursor_for))
+        .flatten();
+    let previous_cursor = ((direction == ThreadPageDirection::Backward && has_more)
+        || (direction == ThreadPageDirection::Forward && has_cursor))
+        .then(|| rows.first().map(cursor_for))
+        .flatten();
     let items = rows
         .into_iter()
         .map(|row| {
@@ -559,7 +571,11 @@ pub async fn list_threads(
             )
         })
         .collect();
-    Ok(ThreadPage { items, next_cursor })
+    Ok(ThreadPage {
+        items,
+        next_cursor,
+        previous_cursor,
+    })
 }
 
 #[tauri::command]
@@ -572,10 +588,10 @@ pub async fn load_conversation(
 ) -> Result<ConversationDto, String> {
     let image_policy = image_policy.unwrap_or_default();
     let (account_for_read, thread_for_read) = (account_id.clone(), thread_id.clone());
-    let (messages, thread_subject) = string_try!(
+    let (messages, thread_subject, newest_body) = string_try!(
         storage
             .run(move |connection| {
-                let messages = MessageRepository::list_conversation(
+                let messages = MessageRepository::list_conversation_metadata(
                     connection,
                     &account_for_read,
                     &thread_for_read,
@@ -585,7 +601,19 @@ pub async fn load_conversation(
                     ThreadRepository::get(connection, &account_for_read, &thread_for_read)?
                         .map(|thread| thread.subject)
                         .unwrap_or_default();
-                Ok((messages, subject))
+                let newest_body = messages
+                    .last()
+                    .map(|stored| {
+                        MessageRepository::conversation_body(
+                            connection,
+                            &account_for_read,
+                            &stored.message.id,
+                            entry_scope.as_ref(),
+                        )
+                        .map(|body| (stored.message.id.clone(), stored.label_ids.clone(), body))
+                    })
+                    .transpose()?;
+                Ok((messages, subject, newest_body))
             })
             .await
     );
@@ -597,33 +625,27 @@ pub async fn load_conversation(
             &stored.message.id,
             &stored.message.sender,
         );
-        let sanitized = match &stored.message.html_body {
-            Some(html) => {
-                let cid_sources: HashMap<String, String> = stored
-                    .inline_content_ids
-                    .into_iter()
-                    .map(|content_id| {
-                        let source = crate::inline_images::proxy_url(
-                            &account_id,
-                            &stored.message.id,
-                            &content_id,
-                        );
-                        (content_id, source)
-                    })
-                    .collect();
-                Some(sanitize::sanitize(html, &cid_sources, allow_remote))
-            }
-            None => None,
-        };
         message_dtos.push(message_dto(
             stored.message,
             stored.recipient_roles,
             stored.label_ids,
-            sanitized,
+            None,
             allow_remote,
             stored.draft_id,
             stored.attachments,
         ));
+    }
+    if let Some((message_id, label_ids, Some((message, content_ids)))) = newest_body {
+        let allow_remote = image_policy.allows(&label_ids, &message.id, &message.sender);
+        let body = message_body_dto(&message, &content_ids, allow_remote, &account_id);
+        if let Some(dto) = message_dtos.iter_mut().find(|dto| dto.id == message_id) {
+            dto.html_body = body.html_body;
+            dto.plain_body = body.plain_body;
+            dto.truncated = body.truncated;
+            dto.remote_images_blocked = body.remote_images_blocked;
+            dto.remote_images_allowed = body.remote_images_allowed;
+            dto.inline_images_pending = body.inline_images_pending;
+        }
     }
 
     Ok(ConversationDto {
@@ -631,6 +653,44 @@ pub async fn load_conversation(
         subject: thread_subject,
         messages: message_dtos,
     })
+}
+
+#[tauri::command]
+pub async fn load_message_body(
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    message_id: String,
+    image_policy: Option<ImagePolicy>,
+    entry_scope: Option<ConversationEntryScope>,
+) -> Result<MessageBodyDto, String> {
+    let image_policy = image_policy.unwrap_or_default();
+    let account_for_read = account_id.clone();
+    let id_for_read = message_id.clone();
+    let body = string_try!(
+        storage
+            .run(move |connection| {
+                let labels =
+                    MessageRepository::label_ids(connection, &account_for_read, &id_for_read)?;
+                let body = MessageRepository::conversation_body(
+                    connection,
+                    &account_for_read,
+                    &id_for_read,
+                    entry_scope.as_ref(),
+                )?;
+                Ok((labels, body))
+            })
+            .await
+    );
+    let (label_ids, Some((message, content_ids))) = body else {
+        return Err("Message is unavailable".to_owned());
+    };
+    let allow_remote = image_policy.allows(&label_ids, &message.id, &message.sender);
+    Ok(message_body_dto(
+        &message,
+        &content_ids,
+        allow_remote,
+        &account_id,
+    ))
 }
 
 async fn download_inline_images(
@@ -681,18 +741,14 @@ pub async fn fetch_message_body<R: Runtime>(
                 let Some(message) = MessageRepository::get(connection, &account, &id)? else {
                     return Ok(None);
                 };
-                let held = MessageRepository::inline_parts(connection, &account, &id)?;
+                let held = MessageRepository::inline_content_ids(connection, &account, &id)?;
                 let inline_images_pending = message
                     .html_body
                     .as_deref()
                     .map(sanitize::referenced_content_ids)
                     .unwrap_or_default()
                     .iter()
-                    .any(|referenced| {
-                        !held
-                            .iter()
-                            .any(|part| &part.content_id == referenced && !part.bytes.is_empty())
-                    });
+                    .any(|referenced| !held.iter().any(|content_id| content_id == referenced));
                 Ok(Some((
                     message.html_presence,
                     message.body_is_empty(),
@@ -741,34 +797,44 @@ pub async fn fetch_message_body<R: Runtime>(
     if let Some(cache) = engine.attachment_cache() {
         crate::attachments::seed_cache(cache, &account_id, &message_id, &message.attachment_parts);
     }
+    let account_for_persist = account_id.clone();
+    let message_for_persist = message_id.clone();
     string_try!(
         storage
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
                 MessageRepository::set_body(
                     &transaction,
-                    &account_id,
-                    &message_id,
+                    &account_for_persist,
+                    &message_for_persist,
                     html_body.as_deref(),
                     plain_body.as_deref(),
                     html_presence,
                 )?;
                 MessageRepository::replace_inline_parts(
                     &transaction,
-                    &account_id,
-                    &message_id,
+                    &account_for_persist,
+                    &message_for_persist,
                     &parts,
                 )?;
                 crate::storage::AttachmentRepository::replace_for_message(
                     &transaction,
-                    &account_id,
-                    &message_id,
+                    &account_for_persist,
+                    &message_for_persist,
                     &attachments,
                 )?;
                 transaction.commit()
             })
             .await
     );
+    app.emit(
+        "message://body-fetched",
+        MessageBodyFetchedDto {
+            account_id,
+            message_id,
+        },
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 

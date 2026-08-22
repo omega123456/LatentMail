@@ -56,9 +56,7 @@
   },
   "plugins": {
     "deep-link": {
-      "schemes": [
-        "mailto"
-      ]
+      "schemes": ["mailto"]
     },
     "updater": {
       "endpoints": [

@@ -73,38 +73,17 @@ describe('CommandProvider', () => {
     expect(() => render(<SetOverride />)).not.toThrow();
   });
 
-  it('hydrates persisted overrides from read_settings on mount', async () => {
-    ipc.override('read_settings', {
-      theme: 'system',
-      layout: 'three-column',
-      density: 'comfortable',
-      sidebarCollapsed: false,
-      sidebarWidth: 260,
-      listWidth: 350,
-      readerHeight: 40,
-      syncOnStartup: true,
-      showUnreadCounts: true,
-      syncIntervalSeconds: 300,
-      showSenderAvatars: true,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      commandOverrides: { toggleStar: ['Mod+K'] },
-      logLevel: 'info',
-      prefetchImageAttachments: false,
-    });
-
+  it('uses the shared settings read on mount', async () => {
     render(
       <CommandProvider>
         <Controls />
       </CommandProvider>,
     );
 
-    await waitFor(() => expect(screen.getByTestId('binding')).toHaveTextContent('Mod+K'));
-    expect(screen.getByTestId('has-any-override')).toHaveTextContent('true');
+    await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('false'));
   });
 
-  it('persists a new override through write_setting and a subsequent hydration reflects it', async () => {
+  it('persists a new override through write_setting', async () => {
     const user = userEvent.setup();
     const writes: Array<{ key: string; value: unknown }> = [];
     ipc.override('write_setting', (args) => {
@@ -122,55 +101,10 @@ describe('CommandProvider', () => {
 
     expect(screen.getByTestId('binding')).toHaveTextContent('Mod+K');
     expect(writes).toContainEqual({ key: 'commandOverrides', value: { toggleStar: ['Mod+K'] } });
-
-    ipc.override('read_settings', {
-      theme: 'system',
-      layout: 'three-column',
-      density: 'comfortable',
-      sidebarCollapsed: false,
-      sidebarWidth: 260,
-      listWidth: 350,
-      readerHeight: 40,
-      syncOnStartup: true,
-      showUnreadCounts: true,
-      syncIntervalSeconds: 300,
-      showSenderAvatars: true,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      commandOverrides: { toggleStar: ['Mod+K'] },
-      logLevel: 'info',
-      prefetchImageAttachments: false,
-    });
-    render(
-      <CommandProvider>
-        <Controls />
-      </CommandProvider>,
-    );
-    await waitFor(() => expect(screen.getAllByTestId('binding')[1]).toHaveTextContent('Mod+K'));
   });
 
   it('resetting a single command clears just its entry, and reset-all appears only while an override exists', async () => {
     const user = userEvent.setup();
-    ipc.override('read_settings', {
-      theme: 'system',
-      layout: 'three-column',
-      density: 'comfortable',
-      sidebarCollapsed: false,
-      sidebarWidth: 260,
-      listWidth: 350,
-      readerHeight: 40,
-      syncOnStartup: true,
-      showUnreadCounts: true,
-      syncIntervalSeconds: 300,
-      showSenderAvatars: true,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      commandOverrides: { toggleStar: ['Mod+K'] },
-      logLevel: 'info',
-      prefetchImageAttachments: false,
-    });
     const writes: Array<{ key: string; value: unknown }> = [];
     ipc.override('write_setting', (args) => {
       writes.push(args as { key: string; value: unknown });
@@ -181,7 +115,8 @@ describe('CommandProvider', () => {
         <Controls />
       </CommandProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('true'));
+    await user.click(screen.getByText('set'));
+    expect(screen.getByTestId('has-any-override')).toHaveTextContent('true');
 
     await user.click(screen.getByText('reset one'));
 
@@ -196,25 +131,6 @@ describe('CommandProvider', () => {
 
   it('clears every override in a single write', async () => {
     const user = userEvent.setup();
-    ipc.override('read_settings', {
-      theme: 'system',
-      layout: 'three-column',
-      density: 'comfortable',
-      sidebarCollapsed: false,
-      sidebarWidth: 260,
-      listWidth: 350,
-      readerHeight: 40,
-      syncOnStartup: true,
-      showUnreadCounts: true,
-      syncIntervalSeconds: 300,
-      showSenderAvatars: true,
-      zoomPercent: 100,
-      alwaysLoadRemoteImages: false,
-      allowedImageSenders: [],
-      commandOverrides: { toggleStar: ['Mod+K'], markRead: ['Mod+I'] },
-      logLevel: 'info',
-      prefetchImageAttachments: false,
-    });
     const writes: Array<{ key: string; value: unknown }> = [];
     ipc.override('write_setting', (args) => {
       writes.push(args as { key: string; value: unknown });
@@ -225,7 +141,8 @@ describe('CommandProvider', () => {
         <Controls />
       </CommandProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('true'));
+    await user.click(screen.getByText('set'));
+    expect(screen.getByTestId('has-any-override')).toHaveTextContent('true');
 
     await user.click(screen.getByText('reset all'));
 

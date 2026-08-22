@@ -496,7 +496,7 @@ async fn profile_maps_the_camel_case_email_address_field() {
 }
 
 #[test]
-fn initialize_creates_the_app_data_directory_and_manages_auth_service_state() {
+fn initialize_manages_auth_service_from_the_setup_storage() {
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -504,7 +504,11 @@ fn initialize_creates_the_app_data_directory_and_manages_auth_service_state() {
 
     let application = app();
 
-    initialize(application.handle()).unwrap();
+    let directory = application.handle().path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(storage.clone());
+    initialize(application.handle(), storage).unwrap();
 
     assert!(application.try_state::<AuthService>().is_some());
 }

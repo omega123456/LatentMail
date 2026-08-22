@@ -22,6 +22,7 @@ async function openUpdates() {
   render(<App />);
   await screen.findByTestId('mail-layout');
   await user.click(screen.getByRole('button', { name: 'Settings' }));
+  await screen.findByTestId('settings-shell');
   await user.click(screen.getByRole('button', { name: 'Updates' }));
   await screen.findByRole('heading', { name: 'Updates' });
   return user;

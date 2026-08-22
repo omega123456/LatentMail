@@ -43,7 +43,7 @@ describe('MessageCard', () => {
     expect(onFetchBody).toHaveBeenCalledTimes(2);
   });
 
-  it('refetches a message marked fetched that stored neither body part', () => {
+  it('does not fetch Gmail for a message marked fetched that stored neither body part', () => {
     const onFetchBody = vi.fn();
     renderWithQueryClient(
       <MessageCard
@@ -53,8 +53,35 @@ describe('MessageCard', () => {
         onFetchBody={onFetchBody}
       />,
     );
-    expect(onFetchBody).toHaveBeenCalledWith('message-1');
+    expect(onFetchBody).not.toHaveBeenCalled();
     expect(screen.getByText('This message has no content.')).toBeInTheDocument();
+  });
+
+  it('reads a cached body silently and keeps Gmail fetches for unresolved bodies', async () => {
+    const onFetchBody = vi.fn();
+    const readBody = vi.fn(() => ({
+      htmlBody: '<p>Cached body</p>',
+      plainBody: null,
+      htmlPresence: 'present' as const,
+      truncated: false,
+      remoteImagesBlocked: false,
+      remoteImagesAllowed: false,
+      inlineImagesPending: false,
+    }));
+    ipc.override('load_message_body', readBody);
+    renderWithQueryClient(
+      <MessageCard
+        accountId="account"
+        message={{ ...message, htmlPresence: 'present' }}
+        expanded
+        newest={false}
+        onFetchBody={onFetchBody}
+      />,
+    );
+    expect(screen.queryByText('Loading message…')).not.toBeInTheDocument();
+    await screen.findByLabelText('Message body');
+    expect(readBody).toHaveBeenCalledOnce();
+    expect(onFetchBody).not.toHaveBeenCalled();
   });
 
   it('refetches a rendered message whose inline images are still unresolved', () => {
@@ -180,9 +207,7 @@ describe('MessageCard', () => {
       />,
     );
     const blockedFrame = screen.getByLabelText('Message body') as HTMLIFrameElement;
-    expect(blockedFrame.srcdoc).toContain(
-      'img-src data: inlineimg: http://inlineimg.localhost;',
-    );
+    expect(blockedFrame.srcdoc).toContain('img-src data: inlineimg: http://inlineimg.localhost;');
     rerender(
       <MessageCard
         message={{

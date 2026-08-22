@@ -17,12 +17,34 @@ export function EventBridge() {
     const unlistens: Array<() => void | Promise<void>> = [];
     const traversalAccounts = new Set<string>();
     let traversalTimer: number | undefined;
+    const mailboxInvalidationAccounts = new Set<string>();
+    let mailboxInvalidationTimer: number | undefined;
     let queueSnapshotTimer: number | undefined;
     const scheduleQueueSnapshotInvalidation = () => {
       if (queueSnapshotTimer !== undefined) return;
       queueSnapshotTimer = window.setTimeout(() => {
         void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
         queueSnapshotTimer = undefined;
+      }, 250);
+    };
+    const scheduleMailboxInvalidation = (accountId: string) => {
+      mailboxInvalidationAccounts.add(accountId);
+      if (mailboxInvalidationTimer !== undefined) return;
+      mailboxInvalidationTimer = window.setTimeout(() => {
+        mailboxInvalidationAccounts.forEach((accountId) => {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.threadsForAccount(accountId),
+          });
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.searchForAccount(accountId),
+          });
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.searchTotalsForAccount(accountId),
+          });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+        });
+        mailboxInvalidationAccounts.clear();
+        mailboxInvalidationTimer = undefined;
       }, 250);
     };
     const subscribe = <E extends keyof IpcEventMap>(
@@ -49,50 +71,45 @@ export function EventBridge() {
     });
 
     subscribe('sync://traversal', (progress) => {
+      queryClient.setQueryData(queryKeys.traversalStatus(progress.accountId), {
+        accountId: progress.accountId,
+        state: progress.state,
+        kind: progress.kind,
+        discoveredCount: progress.discoveredCount,
+        persistedCount: progress.persistedCount,
+        lastAdvancedAt: progress.lastAdvancedAt,
+        isResumed: progress.isResumed,
+      });
       traversalAccounts.add(progress.accountId);
       if (traversalTimer !== undefined) return;
       traversalTimer = window.setTimeout(() => {
         traversalAccounts.forEach((accountId) => {
-          void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.threadsForAccount(accountId),
+            refetchType: 'none',
+          });
           void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.traversalStatus(accountId) });
         });
         traversalAccounts.clear();
         traversalTimer = undefined;
-      }, 250);
+      }, 1000);
     });
-
-    const logThreadCache = (accountId: string, when: string) => {
-      const entries = queryClient.getQueriesData<{ pages: Array<{ items: unknown[] }> }>({
-        queryKey: queryKeys.threadsForAccount(accountId),
-      });
-      const summary = entries
-        .map(
-          ([key, data]) =>
-            `${JSON.stringify(key)}=${(data?.pages ?? []).reduce((total, page) => total + page.items.length, 0)}`,
-        )
-        .join(' ');
-      appLog.info(`threads cache ${when}: ${summary || '(no query matched this key)'}`);
-    };
 
     subscribe('sync://complete', (event) => {
       useSyncStore.setState({ syncState: 'idle', lastSynced: new Date(), error: undefined });
-      if (!event.changed) return;
-      logThreadCache(event.accountId, 'before sync://complete invalidate');
-      void queryClient
-        .invalidateQueries({ queryKey: queryKeys.threadsForAccount(event.accountId) })
-        .then(() => logThreadCache(event.accountId, 'after sync://complete invalidate'));
-      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
+      if (!event.changed) return;
+      scheduleMailboxInvalidation(event.accountId);
     });
 
     subscribe('mail://new', (event) => {
+      scheduleMailboxInvalidation(event.accountId);
+    });
+
+    subscribe('message://body-fetched', (event) => {
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.threadsForAccount(event.accountId),
+        queryKey: queryKeys.messageBodiesForMessage(event.accountId, event.messageId),
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
     });
 
     subscribe('os://intent', (intent) => {
@@ -140,9 +157,7 @@ export function EventBridge() {
       if (!item.id.startsWith('mutation:')) return;
       const accountId = item.id.split(':')[1];
       if (accountId) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(accountId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+        scheduleMailboxInvalidation(accountId);
       }
     });
 
@@ -162,6 +177,7 @@ export function EventBridge() {
     return () => {
       disposed = true;
       if (traversalTimer !== undefined) window.clearTimeout(traversalTimer);
+      if (mailboxInvalidationTimer !== undefined) window.clearTimeout(mailboxInvalidationTimer);
       if (queueSnapshotTimer !== undefined) window.clearTimeout(queueSnapshotTimer);
       unlistens.forEach((remove) => void remove());
     };

@@ -4,7 +4,50 @@
 [test-groups.compose-app]
 max-threads = 1
 
+[test-groups.reconcile-network]
+max-threads = 1
+
+[test-groups.ipc-contract]
+max-threads = 1
+
 [[profile.default.overrides]]
 filter = 'binary(=compose_drafts_integration)'
 test-group = 'compose-app'
+threads-required = "num-cpus"
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_atomic_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_completed_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_equivalence_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_fetch_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_labels_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_malformed_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=reconcile_staging_universe_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=sync_concurrency_integration)'
+test-group = 'reconcile-network'
+
+[[profile.default.overrides]]
+filter = 'binary(=ipc_contract_integration)'
+test-group = 'ipc-contract'
 threads-required = "num-cpus"

@@ -12,6 +12,7 @@ import {
   useDeleteThreadsMutation,
   useFetchMessageBodyMutation,
   useLabelsQuery,
+  useMessageBodyQuery,
   useMessageTriageMutation,
   useMoveThreadsMutation,
   useParseSearchQueryQuery,
@@ -145,20 +146,45 @@ describe('query hooks', () => {
     expect(result.current.data).toEqual([{ address: 'a@example.com', displayName: 'A' }]);
   });
 
-  it('fetches a lazy body and invalidates its conversation', async () => {
+  it('loads cached message bodies by policy and leaves Gmail fetch refresh to events', async () => {
     const client = new QueryClient();
-    client.setQueryData(queryKeys.conversationThread('account', 'thread-1'), { messages: [] });
-    const { result } = renderHook(() => useFetchMessageBodyMutation('account', 'thread-1'), {
-      wrapper: wrapper(client),
+    const bodies: unknown[] = [];
+    ipc.override('load_message_body', (args) => {
+      bodies.push(args);
+      return {
+        htmlBody: '<p>Cached</p>',
+        plainBody: null,
+        htmlPresence: 'present' as const,
+        truncated: false,
+        remoteImagesBlocked: false,
+        remoteImagesAllowed: false,
+        inlineImagesPending: false,
+      };
     });
-    await act(async () => {
-      await result.current.mutateAsync('message-1');
-    });
-    await waitFor(() =>
-      expect(
-        client.getQueryState(queryKeys.conversationThread('account', 'thread-1'))?.isInvalidated,
-      ).toBe(true),
+    const { result } = renderHook(
+      () => ({
+        body: useMessageBodyQuery('account', 'message-1'),
+        fetch: useFetchMessageBodyMutation('account'),
+      }),
+      {
+        wrapper: wrapper(client),
+      },
     );
+    await waitFor(() => expect(result.current.body.isSuccess).toBe(true));
+    expect(bodies).toEqual([
+      {
+        accountId: 'account',
+        messageId: 'message-1',
+        imagePolicy: { alwaysLoad: false, allowedSenders: [], loadFor: [] },
+        entryScope: { kind: 'mailbox', mailboxId: 'INBOX' },
+      },
+    ]);
+    await act(async () => {
+      await result.current.fetch.mutateAsync('message-1');
+    });
+    expect(
+      client.getQueryState(queryKeys.conversationThread('account', 'thread-1'))?.isInvalidated,
+    ).not.toBe(true);
   });
 
   it('optimistically updates a thread and reports a failed update', async () => {
@@ -337,8 +363,101 @@ describe('avatar queries', () => {
 });
 
 describe('search query hooks', () => {
+  it('retains five mailbox and search pages and restores the previous page', async () => {
+    const calls: Array<{ command: string; args: unknown }> = [];
+    const page = (cursor: { latestAt: number; id: string } | null) => {
+      const index = cursor?.latestAt ?? 0;
+      return {
+        items: [{ ...thread, id: `thread-${index}` }],
+        nextCursor: index < 5 ? { latestAt: index + 1, id: String(index + 1) } : null,
+        previousCursor: index > 0 ? { latestAt: index - 1, id: String(index - 1) } : null,
+      };
+    };
+    ipc.override('list_threads', (args) => {
+      calls.push({ command: 'list_threads', args });
+      return page(args.cursor ?? null);
+    });
+    ipc.override('search_threads', (args) => {
+      calls.push({ command: 'search_threads', args });
+      return page(args.cursor ?? null);
+    });
+    const client = new QueryClient();
+    const { result } = renderHook(
+      () => ({
+        mailbox: useThreadsQuery('account', 'INBOX'),
+        search: useSearchThreadsQuery('account', 'from:anna', { kind: 'default' }),
+      }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() =>
+      expect(result.current.mailbox.isSuccess && result.current.search.isSuccess).toBe(true),
+    );
+    expect(result.current.mailbox.hasNextPage).toBe(true);
+    expect(result.current.search.hasNextPage).toBe(true);
+    for (let index = 0; index < 5; index += 1) {
+      await act(async () => {
+        await result.current.mailbox.fetchNextPage();
+      });
+      expect(
+        (client.getQueryData(queryKeys.threads('account', 'INBOX')) as { pages: unknown[] }).pages,
+      ).toHaveLength(Math.min(5, index + 2));
+      await act(async () => {
+        await result.current.search.fetchNextPage();
+      });
+      expect(
+        (
+          client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
+            pages: unknown[];
+          }
+        ).pages,
+      ).toHaveLength(Math.min(5, index + 2));
+    }
+    expect(
+      (client.getQueryData(queryKeys.threads('account', 'INBOX')) as { pages: unknown[] }).pages,
+    ).toHaveLength(5);
+    expect(
+      (
+        client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
+          pages: unknown[];
+        }
+      ).pages,
+    ).toHaveLength(5);
+    await act(async () => {
+      await result.current.mailbox.fetchPreviousPage();
+      await result.current.search.fetchPreviousPage();
+    });
+    expect(
+      (
+        client.getQueryData(queryKeys.threads('account', 'INBOX')) as {
+          pages: Array<{ items: (typeof thread)[] }>;
+        }
+      ).pages[0].items[0].id,
+    ).toBe('thread-0');
+    expect(
+      (
+        client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
+          pages: Array<{ items: (typeof thread)[] }>;
+        }
+      ).pages[0].items[0].id,
+    ).toBe('thread-0');
+    expect(calls).toContainEqual({
+      command: 'list_threads',
+      args: expect.objectContaining({
+        cursor: { latestAt: 0, id: '0' },
+        direction: 'backward',
+      }),
+    });
+    expect(calls).toContainEqual({
+      command: 'search_threads',
+      args: expect.objectContaining({
+        cursor: { latestAt: 0, id: '0' },
+        direction: 'backward',
+      }),
+    });
+  });
+
   it('stays idle without a non-blank query and fetches once one is supplied', async () => {
-    ipc.override('search_threads', { items: [], nextCursor: null, total: 0 });
+    ipc.override('search_threads', { items: [], nextCursor: null });
     const client = new QueryClient();
     const { result, rerender } = renderHook(
       ({ query }: { query: string }) =>
@@ -380,9 +499,10 @@ describe('search optimistic removal', () => {
 
   function seedSearchCache(client: QueryClient) {
     client.setQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' }), {
-      pages: [{ items: [sentThread], nextCursor: null, total: 1 }],
+      pages: [{ items: [sentThread], nextCursor: null }],
       pageParams: [null],
     });
+    client.setQueryData(queryKeys.searchTotal('account', 'from:anna', { kind: 'default' }), 1);
   }
 
   it('removes a row from the default-scoped search cache when it is deleted, mirroring the Sent-mailbox rule', async () => {
@@ -397,11 +517,13 @@ describe('search optimistic removal', () => {
     });
     const page = (
       client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-        pages: Array<{ items: (typeof sentThread)[]; total: number }>;
+        pages: Array<{ items: (typeof sentThread)[] }>;
       }
     ).pages[0];
     expect(page.items).toHaveLength(0);
-    expect(page.total).toBe(0);
+    expect(
+      client.getQueryData(queryKeys.searchTotal('account', 'from:anna', { kind: 'default' })),
+    ).toBe(0);
   });
 
   it('keeps a row in a Trash-scoped search when it is deleted', async () => {
@@ -409,7 +531,7 @@ describe('search optimistic removal', () => {
     client.setQueryData(
       queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
       {
-        pages: [{ items: [sentThread], nextCursor: null, total: 1 }],
+        pages: [{ items: [sentThread], nextCursor: null }],
         pageParams: [null],
       },
     );
@@ -423,7 +545,7 @@ describe('search optimistic removal', () => {
     const page = (
       client.getQueryData(
         queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
-      ) as { pages: Array<{ items: (typeof sentThread)[]; total: number }> }
+      ) as { pages: Array<{ items: (typeof sentThread)[] }> }
     ).pages[0];
     expect(page.items).toHaveLength(1);
   });

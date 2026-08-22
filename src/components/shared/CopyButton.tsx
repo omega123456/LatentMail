@@ -29,11 +29,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
         onClick={copy}
         className={`${baseClass} ${copied ? copiedClass : restingClass}`}
       >
-        {copied ? (
-          <Check aria-hidden="true" size={13} />
-        ) : (
-          <Copy aria-hidden="true" size={13} />
-        )}
+        {copied ? <Check aria-hidden="true" size={13} /> : <Copy aria-hidden="true" size={13} />}
       </button>
       <span role="status" aria-live="polite" className="sr-only">
         {copied ? `Copied ${value}` : ''}

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, types::Value, Connection, OptionalExtension, Result};
+use rusqlite::{params, types::Value, Connection, OptionalExtension, Result, Statement};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -10,6 +10,28 @@ const BIND_BATCH_SIZE: usize = 500;
 
 const INSERT_MESSAGE_LABEL: &str =
     "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)";
+const DELETE_MESSAGE_RETURNING_THREAD: &str =
+    "DELETE FROM messages WHERE account_id=?1 AND id=?2 RETURNING thread_id";
+const SELECT_MESSAGE_LABEL_IDS: &str =
+    "SELECT label_id FROM message_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id";
+const SELECT_RECONCILIATION_MESSAGE: &str =
+    "SELECT thread_id,sender,sent_at,to_recipients,cc_recipients FROM messages WHERE account_id=?1 AND id=?2";
+const DELETE_MESSAGE_MEMBERSHIP: &str =
+    "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2";
+const UPDATE_MESSAGE_LABEL_FLAGS: &str =
+    "UPDATE messages SET is_unread=?1,is_starred=?2 WHERE account_id=?3 AND id=?4";
+
+const THREAD_LIST_COLUMNS: &str = "t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
+                    COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'')";
+
+const THREAD_LIST_UNLABELLED_FORWARD: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM threads t WHERE t.account_id=?1 ORDER BY t.latest_at DESC,t.id DESC LIMIT ?5";
+const THREAD_LIST_UNLABELLED_FORWARD_CURSOR: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM threads t WHERE t.account_id=?1 AND (t.latest_at,t.id)<(?3,?4) ORDER BY t.latest_at DESC,t.id DESC LIMIT ?5";
+const THREAD_LIST_UNLABELLED_BACKWARD: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM threads t WHERE t.account_id=?1 ORDER BY t.latest_at ASC,t.id ASC LIMIT ?5";
+const THREAD_LIST_UNLABELLED_BACKWARD_CURSOR: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM threads t WHERE t.account_id=?1 AND (t.latest_at,t.id)>(?3,?4) ORDER BY t.latest_at ASC,t.id ASC LIMIT ?5";
+const THREAD_LIST_LABELLED_FORWARD: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id=?1 AND tl.label_id=?2 ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT ?5";
+const THREAD_LIST_LABELLED_FORWARD_CURSOR: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id=?1 AND tl.label_id=?2 AND (tl.latest_at,tl.thread_id)<(?3,?4) ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT ?5";
+const THREAD_LIST_LABELLED_BACKWARD: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id=?1 AND tl.label_id=?2 ORDER BY tl.latest_at ASC,tl.thread_id ASC LIMIT ?5";
+const THREAD_LIST_LABELLED_BACKWARD_CURSOR: &str = "SELECT t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id=?1 AND tl.label_id=?2 AND (tl.latest_at,tl.thread_id)>(?3,?4) ORDER BY tl.latest_at ASC,tl.thread_id ASC LIMIT ?5";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
@@ -629,17 +651,17 @@ impl MessageRepository {
         Ok(membership)
     }
 
-    pub fn list_conversation(
+    pub fn list_conversation_metadata(
         connection: &Connection,
         account_id: &str,
         thread_id: &str,
         entry_scope: Option<&ConversationEntryScope>,
     ) -> Result<Vec<ConversationMessage>> {
         let sql = if entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed) {
-            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
+            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,NULL,NULL,has_attachments,is_unread,is_starred,history_id,NULL,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
              FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at,id"
         } else {
-            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
+            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,NULL,NULL,has_attachments,is_unread,is_starred,history_id,NULL,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
              FROM messages m WHERE account_id=?1 AND thread_id=?2
                AND NOT EXISTS (
                  SELECT 1 FROM message_labels ml
@@ -688,23 +710,6 @@ impl MessageRepository {
         }
 
         let mut statement = connection.prepare(
-            "SELECT p.message_id,p.content_id
-             FROM messages m CROSS JOIN message_inline_parts p
-             WHERE m.account_id=?1 AND m.thread_id=?2 AND m.html_body IS NOT NULL
-               AND p.account_id=m.account_id AND p.message_id=m.id",
-        )?;
-        let parts = statement
-            .query_map(params![account_id, thread_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>>>()?;
-        for (message_id, content_id) in parts {
-            if let Some(index) = positions.get(&message_id) {
-                messages[*index].inline_content_ids.push(content_id);
-            }
-        }
-
-        let mut statement = connection.prepare(
             "SELECT a.message_id,a.attachment_id,a.filename,a.mime_type,a.size,a.position
              FROM messages m CROSS JOIN message_attachments a
              WHERE m.account_id=?1 AND m.thread_id=?2
@@ -733,6 +738,28 @@ impl MessageRepository {
             message.attachments.sort_by_key(|value| value.position);
         }
         Ok(messages)
+    }
+
+    pub fn conversation_body(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+        entry_scope: Option<&ConversationEntryScope>,
+    ) -> Result<Option<(Message, Vec<String>)>> {
+        let sql = if entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed) {
+            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND id=?2"
+        } else {
+            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages m WHERE account_id=?1 AND id=?2 AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ('TRASH','SPAM'))"
+        };
+        let message = connection
+            .prepare_cached(sql)?
+            .query_row(params![account_id, message_id], message)
+            .optional()?;
+        let Some(message) = message else {
+            return Ok(None);
+        };
+        let content_ids = Self::inline_content_ids(connection, account_id, message_id)?;
+        Ok(Some((message, content_ids)))
     }
 
     pub fn all_ids(connection: &Connection, account_id: &str) -> Result<Vec<String>> {
@@ -868,24 +895,36 @@ impl MessageRepository {
         message_id: &str,
         label_ids: &[String],
     ) -> Result<()> {
-        connection
-            .prepare_cached("DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2")?
-            .execute(params![account_id, message_id])?;
+        let mut delete_statement = connection.prepare_cached(DELETE_MESSAGE_MEMBERSHIP)?;
         let mut statement = connection.prepare_cached(INSERT_MESSAGE_LABEL)?;
+        let mut flags_statement = connection.prepare_cached(UPDATE_MESSAGE_LABEL_FLAGS)?;
+        Self::overwrite_membership_with(
+            &mut delete_statement,
+            &mut statement,
+            &mut flags_statement,
+            account_id,
+            message_id,
+            label_ids,
+        )
+    }
+    pub fn overwrite_membership_with(
+        delete_statement: &mut Statement<'_>,
+        insert_statement: &mut Statement<'_>,
+        flags_statement: &mut Statement<'_>,
+        account_id: &str,
+        message_id: &str,
+        label_ids: &[String],
+    ) -> Result<()> {
+        delete_statement.execute(params![account_id, message_id])?;
         for label_id in label_ids {
-            statement.execute(params![account_id, message_id, label_id])?;
+            insert_statement.execute(params![account_id, message_id, label_id])?;
         }
-        drop(statement);
-        connection
-            .prepare_cached(
-                "UPDATE messages SET is_unread=?1,is_starred=?2 WHERE account_id=?3 AND id=?4",
-            )?
-            .execute(params![
-                label_ids.iter().any(|id| id == "UNREAD"),
-                label_ids.iter().any(|id| id == "STARRED"),
-                account_id,
-                message_id
-            ])?;
+        flags_statement.execute(params![
+            label_ids.iter().any(|id| id == "UNREAD"),
+            label_ids.iter().any(|id| id == "STARRED"),
+            account_id,
+            message_id
+        ])?;
         Ok(())
     }
     pub fn write_mutation_history(
@@ -935,12 +974,16 @@ impl MessageRepository {
     }
 
     pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<Option<String>> {
-        connection
-            .query_row(
-                "DELETE FROM messages WHERE account_id=?1 AND id=?2 RETURNING thread_id",
-                params![account_id, id],
-                |row| row.get(0),
-            )
+        let mut statement = connection.prepare_cached(DELETE_MESSAGE_RETURNING_THREAD)?;
+        Self::delete_with(&mut statement, account_id, id)
+    }
+    pub fn delete_with(
+        statement: &mut Statement<'_>,
+        account_id: &str,
+        id: &str,
+    ) -> Result<Option<String>> {
+        statement
+            .query_row(params![account_id, id], |row| row.get(0))
             .optional()
     }
     pub fn delete_by_draft_id(
@@ -957,9 +1000,14 @@ impl MessageRepository {
             .optional()
     }
     pub fn label_ids(connection: &Connection, account_id: &str, id: &str) -> Result<Vec<String>> {
-        let mut statement = connection.prepare(
-            "SELECT label_id FROM message_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id",
-        )?;
+        let mut statement = connection.prepare_cached(SELECT_MESSAGE_LABEL_IDS)?;
+        Self::label_ids_with(&mut statement, account_id, id)
+    }
+    pub fn label_ids_with(
+        statement: &mut Statement<'_>,
+        account_id: &str,
+        id: &str,
+    ) -> Result<Vec<String>> {
         let labels = statement
             .query_map(params![account_id, id], |row| row.get(0))?
             .collect();
@@ -1009,6 +1057,20 @@ impl MessageRepository {
         parts
     }
 
+    pub fn inline_content_ids(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement = connection.prepare_cached(
+            "SELECT content_id FROM message_inline_parts WHERE account_id=?1 AND message_id=?2",
+        )?;
+        let content_ids = statement
+            .query_map(params![account_id, message_id], |row| row.get(0))?
+            .collect();
+        content_ids
+    }
+
     pub fn inline_part(
         connection: &Connection,
         account_id: &str,
@@ -1026,43 +1088,43 @@ impl MessageRepository {
             .optional()
     }
 
-    pub fn reconciliation_messages(
+    pub fn reconciliation_message(
         connection: &Connection,
         account_id: &str,
-    ) -> Result<HashMap<String, ReconciliationMessage>> {
-        let mut statement = connection.prepare(
-            "SELECT id,thread_id,sender,sent_at,to_recipients,cc_recipients
-             FROM messages WHERE account_id=?1",
-        )?;
-        let mut messages = statement
-            .query_map([account_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    ReconciliationMessage {
-                        thread_id: row.get(1)?,
-                        sender: row.get(2)?,
-                        sent_at: row.get(3)?,
-                        to_recipients: row.get(4)?,
-                        cc_recipients: row.get(5)?,
-                        label_ids: Vec::new(),
-                    },
-                ))
-            })?
-            .collect::<Result<HashMap<_, _>>>()?;
-        let mut statement = connection.prepare(
-            "SELECT message_id,label_id FROM message_labels WHERE account_id=?1 ORDER BY message_id,label_id",
-        )?;
-        let labels = statement
-            .query_map([account_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>>>()?;
-        for (message_id, label_id) in labels {
-            if let Some(message) = messages.get_mut(&message_id) {
-                message.label_ids.push(label_id);
-            }
-        }
-        Ok(messages)
+        id: &str,
+    ) -> Result<Option<ReconciliationMessage>> {
+        let mut message_statement = connection.prepare_cached(SELECT_RECONCILIATION_MESSAGE)?;
+        let mut labels_statement = connection.prepare_cached(SELECT_MESSAGE_LABEL_IDS)?;
+        Self::reconciliation_message_with(
+            &mut message_statement,
+            &mut labels_statement,
+            account_id,
+            id,
+        )
+    }
+    pub fn reconciliation_message_with(
+        message_statement: &mut Statement<'_>,
+        labels_statement: &mut Statement<'_>,
+        account_id: &str,
+        id: &str,
+    ) -> Result<Option<ReconciliationMessage>> {
+        let message = message_statement
+            .query_row(params![account_id, id], |row| {
+                Ok(ReconciliationMessage {
+                    thread_id: row.get(0)?,
+                    sender: row.get(1)?,
+                    sent_at: row.get(2)?,
+                    to_recipients: row.get(3)?,
+                    cc_recipients: row.get(4)?,
+                    label_ids: Vec::new(),
+                })
+            })
+            .optional()?;
+        let Some(mut message) = message else {
+            return Ok(None);
+        };
+        message.label_ids = Self::label_ids_with(labels_statement, account_id, id)?;
+        Ok(Some(message))
     }
 }
 
@@ -1345,30 +1407,52 @@ impl ThreadRepository {
         cursor: Option<(i64, String)>,
         limit: i64,
     ) -> Result<Vec<ThreadListRow>> {
-        let source = match label_id {
-            Some(_) => {
-                "thread_labels tl CROSS JOIN threads t
-                 ON t.account_id=tl.account_id AND t.id=tl.thread_id
-                 WHERE tl.account_id=?1 AND tl.label_id=?2"
-            }
-            None => "threads t WHERE t.account_id=?1",
-        };
-        let (order_at, order_id) = match label_id {
-            Some(_) => ("tl.latest_at", "tl.thread_id"),
-            None => ("t.latest_at", "t.id"),
-        };
-        let cursor_sql = cursor.as_ref().map_or_else(String::new, |_| {
-            format!("AND ({order_at},{order_id})<(?3,?4)")
-        });
+        Self::list_paginated_with_direction(
+            connection,
+            account_id,
+            label_id,
+            cursor,
+            limit,
+            crate::sync::ThreadPageDirection::Forward,
+        )
+    }
+
+    pub fn list_paginated_with_direction(
+        connection: &Connection,
+        account_id: &str,
+        label_id: Option<&str>,
+        cursor: Option<(i64, String)>,
+        limit: i64,
+        direction: crate::sync::ThreadPageDirection,
+    ) -> Result<Vec<ThreadListRow>> {
         let includes_trashed_and_spammed = matches!(label_id, None | Some("TRASH") | Some("SPAM"));
-        let sql = format!(
-            "SELECT {THREAD_LIST_COLUMNS}
-             FROM {source}
-               {cursor_sql}
-             ORDER BY {order_at} DESC, {order_id} DESC
-             LIMIT ?5"
-        );
-        let mut statement = connection.prepare_cached(&sql)?;
+        let sql = match (label_id.is_some(), cursor.is_some(), direction) {
+            (false, false, crate::sync::ThreadPageDirection::Forward) => {
+                THREAD_LIST_UNLABELLED_FORWARD
+            }
+            (false, true, crate::sync::ThreadPageDirection::Forward) => {
+                THREAD_LIST_UNLABELLED_FORWARD_CURSOR
+            }
+            (false, false, crate::sync::ThreadPageDirection::Backward) => {
+                THREAD_LIST_UNLABELLED_BACKWARD
+            }
+            (false, true, crate::sync::ThreadPageDirection::Backward) => {
+                THREAD_LIST_UNLABELLED_BACKWARD_CURSOR
+            }
+            (true, false, crate::sync::ThreadPageDirection::Forward) => {
+                THREAD_LIST_LABELLED_FORWARD
+            }
+            (true, true, crate::sync::ThreadPageDirection::Forward) => {
+                THREAD_LIST_LABELLED_FORWARD_CURSOR
+            }
+            (true, false, crate::sync::ThreadPageDirection::Backward) => {
+                THREAD_LIST_LABELLED_BACKWARD
+            }
+            (true, true, crate::sync::ThreadPageDirection::Backward) => {
+                THREAD_LIST_LABELLED_BACKWARD_CURSOR
+            }
+        };
+        let mut statement = connection.prepare_cached(sql)?;
         let (cursor_at, cursor_id) = match cursor {
             Some((at, id)) => (Some(at), Some(id)),
             None => (None, None),
@@ -1386,7 +1470,12 @@ impl ThreadRepository {
                 },
             )?
             .collect::<Result<Vec<_>>>()?;
-        enrich_thread_rows(connection, account_id, rows, includes_trashed_and_spammed)
+        let mut rows =
+            enrich_thread_rows(connection, account_id, rows, includes_trashed_and_spammed)?;
+        if direction == crate::sync::ThreadPageDirection::Backward {
+            rows.reverse();
+        }
+        Ok(rows)
     }
 }
 
@@ -1516,10 +1605,30 @@ impl SearchRepository {
         cursor: Option<(i64, String)>,
         limit: i64,
     ) -> Result<Vec<ThreadListRow>> {
+        Self::search_with_direction(
+            connection,
+            account_id,
+            parsed,
+            scope,
+            cursor,
+            limit,
+            crate::sync::ThreadPageDirection::Forward,
+        )
+    }
+
+    pub fn search_with_direction(
+        connection: &Connection,
+        account_id: &str,
+        parsed: &crate::search::query::ParsedQuery,
+        scope: &crate::search::scope::ScopeFilter,
+        cursor: Option<(i64, String)>,
+        limit: i64,
+        direction: crate::sync::ThreadPageDirection,
+    ) -> Result<Vec<ThreadListRow>> {
         let (sql, values) = if parsed.has_text_term {
-            search_text_sql(account_id, parsed, scope, cursor, limit)
+            search_text_sql(account_id, parsed, scope, cursor, limit, direction)
         } else {
-            search_thread_driven_sql(account_id, parsed, scope, cursor, limit)
+            search_thread_driven_sql(account_id, parsed, scope, cursor, limit, direction)
         };
         let mut statement = connection.prepare_cached(&sql)?;
         let rows = statement
@@ -1532,12 +1641,16 @@ impl SearchRepository {
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
-        enrich_thread_rows(
+        let mut rows = enrich_thread_rows(
             connection,
             account_id,
             rows,
             scope.includes_trashed_and_spammed(),
-        )
+        )?;
+        if direction == crate::sync::ThreadPageDirection::Backward {
+            rows.reverse();
+        }
+        Ok(rows)
     }
 
     pub fn count(
@@ -1558,33 +1671,37 @@ impl SearchRepository {
     }
 }
 
-const THREAD_LIST_COLUMNS: &str = "t.account_id,t.id,t.subject,t.participants,t.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,
-                    COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'')";
-
 fn search_text_sql(
     account_id: &str,
     parsed: &crate::search::query::ParsedQuery,
     scope: &crate::search::scope::ScopeFilter,
     cursor: Option<(i64, String)>,
     limit: i64,
+    direction: crate::sync::ThreadPageDirection,
 ) -> (String, Vec<Value>) {
     let (mut where_sql, mut values) = search_predicate_sql(account_id, parsed, scope);
+    let (cursor_sql, order_sql) = match direction {
+        crate::sync::ThreadPageDirection::Forward => (
+            " AND (t.latest_at,t.id)<(?,?)",
+            " ORDER BY t.latest_at DESC,t.id DESC LIMIT ?",
+        ),
+        crate::sync::ThreadPageDirection::Backward => (
+            " AND (t.latest_at,t.id)>(?,?)",
+            " ORDER BY t.latest_at ASC,t.id ASC LIMIT ?",
+        ),
+    };
     if let Some((at, id)) = cursor {
-        where_sql.push_str(" AND (t.latest_at,t.id)<(?,?)");
+        where_sql.push_str(cursor_sql);
         values.push(Value::Integer(at));
         values.push(Value::Text(id));
     }
     values.push(Value::Integer(limit));
-    let sql = format!(
-        "SELECT {THREAD_LIST_COLUMNS}
-             FROM message_search
-             JOIN messages m ON m.seq=message_search.rowid
-             JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id
-             WHERE {where_sql}
-             GROUP BY t.id
-             ORDER BY t.latest_at DESC, t.id DESC
-             LIMIT ?"
-    );
+    let mut sql = String::from("SELECT ");
+    sql.push_str(THREAD_LIST_COLUMNS);
+    sql.push_str(" FROM message_search JOIN messages m ON m.seq=message_search.rowid JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id WHERE ");
+    sql.push_str(&where_sql);
+    sql.push_str(" GROUP BY t.id");
+    sql.push_str(order_sql);
     (sql, values)
 }
 
@@ -1594,28 +1711,40 @@ fn search_thread_driven_sql(
     scope: &crate::search::scope::ScopeFilter,
     cursor: Option<(i64, String)>,
     limit: i64,
+    direction: crate::sync::ThreadPageDirection,
 ) -> (String, Vec<Value>) {
     let mut values = vec![Value::Text(account_id.to_owned())];
+    let (cursor_sql, order_sql) = match direction {
+        crate::sync::ThreadPageDirection::Forward => (
+            " AND (t.latest_at,t.id)<(?,?)",
+            " ORDER BY t.latest_at DESC,t.id DESC LIMIT ?",
+        ),
+        crate::sync::ThreadPageDirection::Backward => (
+            " AND (t.latest_at,t.id)>(?,?)",
+            " ORDER BY t.latest_at ASC,t.id ASC LIMIT ?",
+        ),
+    };
     let cursor_sql = match cursor {
         Some((at, id)) => {
             values.push(Value::Integer(at));
             values.push(Value::Text(id));
-            " AND (t.latest_at,t.id)<(?,?)"
+            cursor_sql
         }
         None => "",
     };
     let (conditions, condition_values) = search_message_conditions(parsed, scope);
     values.extend(condition_values);
     values.push(Value::Integer(limit));
-    let sql = format!(
-        "SELECT {THREAD_LIST_COLUMNS}
-             FROM threads t
-             WHERE t.account_id=?{cursor_sql}
-               AND EXISTS(SELECT 1 FROM messages m
-                          WHERE m.account_id=t.account_id AND m.thread_id=t.id{conditions})
-             ORDER BY t.latest_at DESC, t.id DESC
-             LIMIT ?"
+    let mut sql = String::from("SELECT ");
+    sql.push_str(THREAD_LIST_COLUMNS);
+    sql.push_str(" FROM threads t WHERE t.account_id=?");
+    sql.push_str(cursor_sql);
+    sql.push_str(
+        " AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id",
     );
+    sql.push_str(&conditions);
+    sql.push(')');
+    sql.push_str(order_sql);
     (sql, values)
 }
 

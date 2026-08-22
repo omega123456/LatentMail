@@ -28,6 +28,7 @@ use crate::{
 };
 
 pub mod commands;
+pub mod concurrency;
 mod dto;
 pub mod materialize;
 mod mutations;
@@ -36,10 +37,11 @@ pub mod traversal;
 pub mod triage;
 
 pub use dto::{
-    to_millis, AttachmentDto, ContactSuggestionDto, ConversationDto, ImagePolicy, LabelColorDto,
-    LabelDto, MessageDto, MutationOutcomeDto, MutationResultDto, ParsedSearchQueryDto,
-    SearchPredicateDto, StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage,
-    ThreadSearchPage, TraversalKind, TraversalState, TraversalStatusDto,
+    to_millis, AttachmentDto, ContactSuggestionDto, ConversationDto, HtmlPresenceDto, ImagePolicy,
+    LabelColorDto, LabelDto, MessageBodyDto, MessageBodyFetchedDto, MessageDto, MutationOutcomeDto,
+    MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto, StagedAttachmentDto,
+    SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, ThreadSearchPage,
+    TraversalKind, TraversalState, TraversalStatusDto,
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 
@@ -381,6 +383,24 @@ impl SyncEngine {
         events: EventSink,
         clock: fn() -> chrono::DateTime<chrono::Utc>,
     ) -> Arc<Self> {
+        Self::with_clock_and_limiters(
+            storage,
+            queue,
+            registry,
+            events,
+            clock,
+            GmailRateLimiters::default(),
+        )
+    }
+
+    fn with_clock_and_limiters(
+        storage: Storage,
+        queue: Arc<QueueEngine>,
+        registry: Arc<WorkRegistry>,
+        events: EventSink,
+        clock: fn() -> chrono::DateTime<chrono::Utc>,
+        gmail_limiters: GmailRateLimiters,
+    ) -> Arc<Self> {
         Arc::new(Self {
             storage,
             queue,
@@ -389,7 +409,7 @@ impl SyncEngine {
             status: AsyncMutex::new(std::collections::HashMap::new()),
             op_counter: Arc::new(AtomicU64::new(0)),
             pending: AsyncMutex::new(std::collections::HashMap::new()),
-            gmail_limiters: GmailRateLimiters::default(),
+            gmail_limiters,
             active_backfills: Arc::new(AsyncMutex::new(std::collections::HashSet::new())),
             attachment_cache: std::sync::OnceLock::new(),
             clock,
@@ -405,6 +425,23 @@ impl SyncEngine {
         clock: fn() -> chrono::DateTime<chrono::Utc>,
     ) -> Arc<Self> {
         Self::with_clock(storage, queue, registry, events, clock)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn new_with_unmetered_gmail(
+        storage: Storage,
+        queue: Arc<QueueEngine>,
+        registry: Arc<WorkRegistry>,
+        events: EventSink,
+    ) -> Arc<Self> {
+        Self::with_clock_and_limiters(
+            storage,
+            queue,
+            registry,
+            events,
+            chrono::Utc::now,
+            GmailRateLimiters::unmetered(),
+        )
     }
 
     pub fn set_attachment_cache(&self, cache: crate::attachments::AttachmentCache) {
@@ -853,10 +890,11 @@ async fn full_sync_body(
             crate::gmail::ListOptions::default(),
         )
         .await?;
-    let mut messages = Vec::with_capacity(refs.len());
-    for message_ref in &refs {
-        messages.extend(client.message_if_present(&message_ref.id).await?);
-    }
+    let messages = concurrency::fetch_messages(
+        client,
+        refs.into_iter().map(|message_ref| message_ref.id).collect(),
+    )
+    .await?;
     let added_count = messages.len() as u32;
     let thread_ids: HashSet<String> = messages
         .iter()
@@ -965,11 +1003,7 @@ async fn fetch_unknown(
         unknown.len(),
         unknown.join(", "),
     );
-    let mut messages = Vec::with_capacity(unknown.len());
-    for id in &unknown {
-        messages.extend(client.message_if_present(id).await?);
-    }
-    Ok(messages)
+    concurrency::fetch_messages(client, unknown).await
 }
 
 pub(crate) struct MaterializedBatch {
@@ -1104,12 +1138,19 @@ async fn incremental_body(
         .max()
         .unwrap_or(start_history_id);
 
-    let mut added_messages = Vec::new();
-    for record in &records {
-        for reference in &record.messages_added {
-            added_messages.extend(client.message_if_present(&reference.id).await?);
-        }
-    }
+    let mut added_messages = concurrency::fetch_messages(
+        client,
+        records
+            .iter()
+            .flat_map(|record| {
+                record
+                    .messages_added
+                    .iter()
+                    .map(|reference| reference.id.clone())
+            })
+            .collect(),
+    )
+    .await?;
     tracing::info!(
         target: "sync",
         "{account_id}: history {start_history_id} -> {final_history_id}: {} record(s), {} added, {} label change(s), {} deleted",
@@ -1355,14 +1396,12 @@ pub async fn run_periodic_cadence<R: Runtime>(
     }
 }
 
-pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let storage =
-        Storage::open(directory.join("latentmail.sqlite")).map_err(|error| error.to_string())?;
     let registry = WorkRegistry::new();
     let handle_for_events = app.clone();
 
@@ -1422,7 +1461,6 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         cancellation_hook,
     );
 
-    app.manage(storage.clone());
     let engine = SyncEngine::new(
         storage.clone(),
         Arc::clone(&queue),
@@ -1444,12 +1482,15 @@ fn spawn_startup_recovery<R: Runtime>(
     engine: Arc<SyncEngine>,
     events: EventSink,
 ) {
+    let Ok(connection) = storage.connection() else {
+        return;
+    };
+    let Ok((recovered, uncertain_accounts)) = crate::queue::recover_durable_operations(&connection)
+    else {
+        return;
+    };
+    drop(connection);
     tauri::async_runtime::spawn(async move {
-        let Ok((recovered, uncertain_accounts)) =
-            storage.run(crate::queue::recover_durable_operations).await
-        else {
-            return;
-        };
         for operation in &recovered {
             if let Some(queue_operation) = crate::queue::recovered_queue_operation(operation) {
                 let _ = queue.enqueue(queue_operation).await;

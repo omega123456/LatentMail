@@ -63,10 +63,14 @@ pub fn run() {
             let (guard, level_handle) = logging::init(directory)?;
             handle.manage(guard);
             handle.manage(level_handle);
-            settings::initialize(handle).map_err(std::io::Error::other)?;
-            auth::initialize(handle).map_err(std::io::Error::other)?;
-            avatars::initialize(handle).map_err(std::io::Error::other)?;
-            sync::initialize(handle).map_err(std::io::Error::other)?;
+            let directory = handle.path().app_data_dir()?;
+            std::fs::create_dir_all(&directory)?;
+            let storage = storage::Storage::open(directory.join("latentmail.sqlite"))?;
+            handle.manage(storage.clone());
+            settings::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
+            auth::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
+            avatars::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
+            sync::initialize(handle, storage).map_err(std::io::Error::other)?;
             cli::start(handle);
             Ok(os::initialize(handle).map_err(std::io::Error::other)?)
         })

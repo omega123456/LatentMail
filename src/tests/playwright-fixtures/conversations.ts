@@ -12,7 +12,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       subject: 'Q3 Marketing Strategy Review',
       sentAt: Date.parse('2026-08-10T09:00:00Z'),
       snippet: "I've attached the finalized slides for tomorrow's presentation.",
-      htmlBody: "<p>I've attached the finalized slides for tomorrow's presentation.</p>",
+      htmlBody: null,
       htmlPresence: 'present',
       plainBody: null,
       hasAttachments: false,

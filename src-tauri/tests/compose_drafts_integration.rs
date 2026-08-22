@@ -632,11 +632,12 @@ fn boot(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile:
         .build()
         .unwrap();
     let handle = application.handle();
-    latentmail_lib::settings::initialize(handle).unwrap();
-    latentmail_lib::auth::initialize(handle).unwrap();
-
     let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(seed_storage.clone());
+    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
     let connection = seed_storage.connection().unwrap();
     AccountRepository::upsert(
         &connection,
@@ -653,10 +654,9 @@ fn boot(server: &MockServer) -> (tauri::App<tauri::test::MockRuntime>, tempfile:
     )
     .unwrap();
     drop(connection);
-    drop(seed_storage);
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 
-    latentmail_lib::sync::initialize(handle).unwrap();
+    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
     (application, home)
 }
 
@@ -689,11 +689,12 @@ fn boot_with_dead_gmail_base(
         .build()
         .unwrap();
     let handle = application.handle();
-    latentmail_lib::settings::initialize(handle).unwrap();
-    latentmail_lib::auth::initialize(handle).unwrap();
-
     let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(seed_storage.clone());
+    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
     let connection = seed_storage.connection().unwrap();
     AccountRepository::upsert(
         &connection,
@@ -710,10 +711,9 @@ fn boot_with_dead_gmail_base(
     )
     .unwrap();
     drop(connection);
-    drop(seed_storage);
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 
-    latentmail_lib::sync::initialize(handle).unwrap();
+    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
     (application, home)
 }
 
@@ -987,6 +987,7 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     assert!(latentmail_lib::sync::commands::list_threads(
         app.state(),
         "account".into(),
+        None,
         None,
         None,
         None,

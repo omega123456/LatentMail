@@ -350,12 +350,8 @@ pub fn save_window<R: Runtime>(window: &tauri::Window<R>, service: &SettingsServ
     });
 }
 
-pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let directory = string_try!(app.path().app_data_dir());
-    string_try!(std::fs::create_dir_all(&directory));
-    let service = SettingsService::new(string_try!(Storage::open(
-        directory.join("latentmail.sqlite")
-    )));
+pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {
+    let service = SettingsService::new(storage);
     crate::logging::set_level(app, (&service.log_level()).into());
     let window = app
         .get_webview_window("main")

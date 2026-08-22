@@ -5,6 +5,8 @@ import {
   type MessageActionRibbonProps,
 } from '@/components/actions/MessageActionRibbon';
 import { invoke } from '@/lib/ipc/commands';
+import { useMessageBodyQuery } from '@/lib/query/hooks';
+import { mergeMessageBody } from '@/lib/query/mappers';
 import { AttachmentSection } from './AttachmentSection';
 import { BodyFrame } from './BodyFrame';
 import { MessageHeader, type MessageSender } from './MessageHeader';
@@ -77,19 +79,24 @@ export function MessageCard({
   const [isExpanded, setExpanded] = useState(expanded);
   const open = newest || isExpanded;
   const requested = useRef<string | null>(null);
-  const needsBody =
+  const needsCachedBody =
+    open &&
     message.htmlPresence !== 'tooLarge' &&
-    (message.htmlPresence === 'neverFetched' ||
-      message.inlineImagesPending === true ||
-      (!message.html && !message.text));
+    (message.inlineImagesPending === true || (!message.html && !message.text));
+  const cachedBody = useMessageBodyQuery(accountId, message.id, needsCachedBody);
+  const renderedMessage = cachedBody.data ? mergeMessageBody(message, cachedBody.data) : message;
+  const needsGmailBody =
+    renderedMessage.htmlPresence !== 'tooLarge' &&
+    (renderedMessage.htmlPresence === 'neverFetched' ||
+      renderedMessage.inlineImagesPending === true);
   const remoteImagesLocked = (message.labelIds ?? []).some(
     (label) => label === 'SPAM' || label === 'TRASH',
   );
   useEffect(() => {
-    if (!open || !needsBody || requested.current === message.id) return;
+    if (!open || !needsGmailBody || requested.current === message.id) return;
     requested.current = message.id;
     onFetchBody?.(message.id);
-  }, [message.id, needsBody, onFetchBody, open]);
+  }, [message.id, needsGmailBody, onFetchBody, open]);
   return (
     <article
       className={`relative rounded-md border border-outline-variant/30 dark:border-dark-outline-variant/50 ${newest ? '' : 'mb-4'}`}
@@ -133,7 +140,7 @@ export function MessageCard({
       </div>
       {open && (
         <div className="mx-auto w-full max-w-4xl px-4 pb-4 text-body-md">
-          {message.remoteImagesBlocked && (
+          {renderedMessage.remoteImagesBlocked && (
             <div className="mb-stack-gap-md flex flex-wrap items-center gap-2.5 rounded-control bg-surface-container px-3 py-2.5 text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
               <ImageOff className="shrink-0" size={16} />
               <span>Remote images are blocked.</span>
@@ -157,7 +164,7 @@ export function MessageCard({
               )}
             </div>
           )}
-          {message.htmlPresence === 'tooLarge' ? (
+          {renderedMessage.htmlPresence === 'tooLarge' ? (
             <div className="min-h-reader-body flex flex-wrap items-center gap-2.5 text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
               <span>This message is too large to display here.</span>
               {gmailThreadUrl && (
@@ -170,7 +177,7 @@ export function MessageCard({
                 </button>
               )}
             </div>
-          ) : message.htmlPresence === 'neverFetched' ? (
+          ) : renderedMessage.htmlPresence === 'neverFetched' ? (
             loadingBody ? (
               <p className="min-h-reader-body text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
                 Loading message…
@@ -190,14 +197,16 @@ export function MessageCard({
                 Loading message…
               </p>
             )
+          ) : needsCachedBody && accountId !== null && cachedBody.isPending ? (
+            <div className="min-h-reader-body" />
           ) : (
             <>
               <BodyFrame
-                html={message.html}
-                text={message.text}
-                allowRemoteImages={message.remoteImagesAllowed ?? false}
+                html={renderedMessage.html}
+                text={renderedMessage.text}
+                allowRemoteImages={renderedMessage.remoteImagesAllowed ?? false}
               />
-              {message.truncated && gmailThreadUrl && (
+              {renderedMessage.truncated && gmailThreadUrl && (
                 <div className="mt-stack-gap-md">
                   <button
                     type="button"

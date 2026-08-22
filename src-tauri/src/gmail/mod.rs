@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
@@ -39,6 +43,8 @@ const MAX_GMAIL_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ATTACHMENT_RESPONSE_BYTES: usize = 40 * 1024 * 1024;
 
 pub const RESERVED_ATTACHMENT_ID_PREFIX: &str = "latentmail-inline-";
+
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
 pub mod labels;
 
@@ -223,27 +229,48 @@ struct AccountBuckets {
 }
 impl AccountBuckets {
     fn new() -> Self {
+        Self::with_limits(ACCOUNT_RATE_PER_SECOND, ACCOUNT_RATE_PER_SECOND)
+    }
+
+    fn with_limits(rate: f64, capacity: f64) -> Self {
         Self {
-            shared: Bucket::new(ACCOUNT_RATE_PER_SECOND, ACCOUNT_RATE_PER_SECOND),
-            traversal: Bucket::new(
-                ACCOUNT_RATE_PER_SECOND * TRAVERSAL_SHARE,
-                ACCOUNT_RATE_PER_SECOND * TRAVERSAL_SHARE,
-            ),
+            shared: Bucket::new(rate, capacity),
+            traversal: Bucket::new(rate * TRAVERSAL_SHARE, capacity * TRAVERSAL_SHARE),
         }
     }
 }
 
-#[derive(Default)]
 pub struct GmailRateLimiters {
     accounts: Mutex<HashMap<String, Arc<AccountBuckets>>>,
+    rate: f64,
+    capacity: f64,
+}
+
+impl Default for GmailRateLimiters {
+    fn default() -> Self {
+        Self {
+            accounts: Mutex::new(HashMap::new()),
+            rate: ACCOUNT_RATE_PER_SECOND,
+            capacity: ACCOUNT_RATE_PER_SECOND,
+        }
+    }
 }
 impl GmailRateLimiters {
+    #[cfg(feature = "test-utils")]
+    pub fn unmetered() -> Self {
+        Self {
+            accounts: Mutex::new(HashMap::new()),
+            rate: f64::MAX,
+            capacity: f64::MAX,
+        }
+    }
+
     async fn for_account(&self, account_id: &str) -> Arc<AccountBuckets> {
         let mut accounts = self.accounts.lock().await;
         Arc::clone(
             accounts
                 .entry(account_id.to_owned())
-                .or_insert_with(|| Arc::new(AccountBuckets::new())),
+                .or_insert_with(|| Arc::new(AccountBuckets::with_limits(self.rate, self.capacity))),
         )
     }
 }
@@ -262,7 +289,7 @@ impl GmailClient {
     }
     pub fn with_base_url(access_token: impl Into<String>, base_url: impl Into<String>) -> Self {
         Self {
-            http: Client::new(),
+            http: HTTP_CLIENT.clone(),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             access_token: access_token.into(),
             buckets: Arc::new(AccountBuckets::new()),

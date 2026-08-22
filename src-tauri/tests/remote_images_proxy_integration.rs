@@ -137,7 +137,11 @@ async fn refuses_a_target_that_redirects_forever() {
 
 #[tokio::test]
 async fn retries_once_when_the_connection_fails_and_then_reports_not_found() {
-    let response = respond(&reqwest::Client::new(), &proxy_url("http://127.0.0.1:1/a.png")).await;
+    let response = respond(
+        &reqwest::Client::new(),
+        &proxy_url("http://127.0.0.1:1/a.png"),
+    )
+    .await;
 
     assert_eq!(response.status(), 404);
 }

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS reconcile_remote_labels_by_account_label_message;

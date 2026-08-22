@@ -2,7 +2,7 @@ use latentmail_lib::storage::{
     Account, AccountRepository, ConversationEntryScope, HtmlPresence, LabelRepository, Message,
     MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
-use latentmail_lib::sync::commands::load_conversation;
+use latentmail_lib::sync::commands::load_message_body;
 use latentmail_lib::sync::ImagePolicy;
 use tauri::Manager;
 
@@ -95,30 +95,31 @@ async fn conversation_under(
 ) -> Vec<(String, bool, bool, bool)> {
     let application = app();
     application.manage(storage);
-    load_conversation(
-        application.state(),
-        "account".into(),
-        "t1".into(),
-        policy,
-        Some(ConversationEntryScope::Mailbox {
-            mailbox_id: "SPAM".into(),
-        }),
-    )
-    .await
-    .unwrap()
-    .messages
-    .into_iter()
-    .map(|message| {
-        (
-            message.id,
-            message.remote_images_allowed,
-            message.remote_images_blocked,
-            message
-                .html_body
-                .is_some_and(|html| html.contains("tracker.example")),
+    let mut messages = Vec::new();
+    for message_id in ["m1", "m2", "m3"] {
+        let message = load_message_body(
+            application.state(),
+            "account".into(),
+            message_id.into(),
+            policy.clone(),
+            Some(ConversationEntryScope::Mailbox {
+                mailbox_id: "SPAM".into(),
+            }),
         )
-    })
-    .collect()
+        .await
+        .unwrap();
+        messages.push({
+            (
+                message_id.to_owned(),
+                message.remote_images_allowed,
+                message.remote_images_blocked,
+                message
+                    .html_body
+                    .is_some_and(|html| html.contains("tracker.example")),
+            )
+        });
+    }
+    messages
 }
 
 #[tokio::test]

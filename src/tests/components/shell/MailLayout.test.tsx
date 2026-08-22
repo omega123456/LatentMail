@@ -167,7 +167,8 @@ describe('MailLayout — search', () => {
   it('submits on Enter, shows the sidebar row with the true total, and clears selection without touching activeMailboxId', async () => {
     const user = userEvent.setup();
     ipc.override('list_accounts', [account]);
-    ipc.override('search_threads', { items: [searchResultThread], nextCursor: null, total: 7 });
+    ipc.override('search_threads', { items: [searchResultThread], nextCursor: null });
+    ipc.override('search_total', 7);
     render(<App />);
     await screen.findByRole('button', { name: 'Collapse sidebar' });
     const field = screen.getByLabelText('Search mail');
@@ -194,7 +195,8 @@ describe('MailLayout — search', () => {
   it('Escape with text clears search and thread selection; Escape when empty blurs', async () => {
     const user = userEvent.setup();
     ipc.override('list_accounts', [account]);
-    ipc.override('search_threads', { items: [searchResultThread], nextCursor: null, total: 1 });
+    ipc.override('search_threads', { items: [searchResultThread], nextCursor: null });
+    ipc.override('search_total', 1);
     render(<App />);
     await screen.findByRole('button', { name: 'Collapse sidebar' });
     const field = screen.getByLabelText('Search mail');
@@ -215,7 +217,8 @@ describe('MailLayout — search', () => {
   it('the sidebar row close control and selecting a real mailbox both clear search', async () => {
     const user = userEvent.setup();
     ipc.override('list_accounts', [account]);
-    ipc.override('search_threads', { items: [searchResultThread], nextCursor: null, total: 1 });
+    ipc.override('search_threads', { items: [searchResultThread], nextCursor: null });
+    ipc.override('search_total', 1);
     render(<App />);
     await screen.findByRole('button', { name: 'Collapse sidebar' });
     const field = screen.getByLabelText('Search mail');

@@ -25,9 +25,7 @@ describe('UpdateBanner', () => {
   });
 
   it('renders nothing when no update is available', async () => {
-    const checkForUpdate = vi
-      .fn()
-      .mockResolvedValue({ currentVersion: '0.1.0', available: null });
+    const checkForUpdate = vi.fn().mockResolvedValue({ currentVersion: '0.1.0', available: null });
     ipc.override('check_for_update', checkForUpdate);
     renderWithQueryClient(<UpdateBanner />);
     await waitFor(() => expect(checkForUpdate).toHaveBeenCalled());

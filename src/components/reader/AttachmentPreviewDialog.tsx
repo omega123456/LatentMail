@@ -6,39 +6,95 @@ import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc } from '@/lib/ipc/dispatch';
 import { parseCsv } from '@/lib/attachments/csv';
 import { resolvePreviewKind } from '@/lib/attachments/kind';
-import {
-  useAttachmentBytesQuery,
-  useAttachmentTextQuery,
-  useCachedAttachmentQuery,
-} from '@/lib/query/hooks';
+import { useAttachmentTextQuery, useCachedAttachmentQuery } from '@/lib/query/hooks';
 import { useToastStore } from '@/stores/toast';
 import type { MessageAttachment } from '@/lib/types/ipc';
 import { CsvPreview } from './previews/CsvPreview';
 import { DocxPreview } from './previews/DocxPreview';
 import { ImagePreview } from './previews/ImagePreview';
-import { PdfPreview } from './previews/PdfPreview';
 import { TextPreview } from './previews/TextPreview';
 import { UnsupportedPreview } from './previews/UnsupportedPreview';
 
+type PdfPreviewComponent = (typeof import('./previews/PdfPreview'))['PdfPreview'];
+
+function usePreviewBytes(
+  accountId: string | null,
+  messageId: string,
+  attachmentId: string,
+  enabled: boolean,
+) {
+  const key = enabled && accountId ? `${accountId}:${messageId}:${attachmentId}` : '';
+  const [state, setState] = useState<{ key: string; bytes: ArrayBuffer | null; failed: boolean }>({
+    key: '',
+    bytes: null,
+    failed: false,
+  });
+  useEffect(() => {
+    if (!key || !accountId) return;
+    let cancelled = false;
+    void invoke('read_attachment_bytes', { accountId, messageId, attachmentId })
+      .then((bytes) => {
+        if (!cancelled) setState({ key, bytes, failed: false });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ key, bytes: null, failed: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, attachmentId, key, messageId]);
+  return state.key === key ? state : { bytes: null, failed: false };
+}
+
+function usePdfPreview(enabled: boolean) {
+  const [state, setState] = useState<{
+    enabled: boolean;
+    component: PdfPreviewComponent | null;
+    failed: boolean;
+  }>({
+    enabled: false,
+    component: null,
+    failed: false,
+  });
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void import('./previews/PdfPreview')
+      .then(({ PdfPreview }) => {
+        if (!cancelled) setState({ enabled, component: PdfPreview, failed: false });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ enabled, component: null, failed: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return state.enabled === enabled ? state : { component: null, failed: false };
+}
+
 function useDocxHtml(bytes: ArrayBuffer | undefined) {
-  const [html, setHtml] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [state, setState] = useState<{
+    bytes: ArrayBuffer | undefined;
+    html: string | null;
+    failed: boolean;
+  }>({ bytes: undefined, html: null, failed: false });
   useEffect(() => {
     if (!bytes) return;
     let cancelled = false;
     void import('mammoth')
       .then((mammoth) => mammoth.convertToHtml({ arrayBuffer: bytes }))
       .then((result) => {
-        if (!cancelled) setHtml(result.value);
+        if (!cancelled) setState({ bytes, html: result.value, failed: false });
       })
       .catch(() => {
-        if (!cancelled) setFailed(true);
+        if (!cancelled) setState({ bytes, html: null, failed: true });
       });
     return () => {
       cancelled = true;
     };
   }, [bytes]);
-  return { html, failed };
+  return state.bytes === bytes ? state : { html: null, failed: false };
 }
 
 function portalTarget(): HTMLElement | undefined {
@@ -66,33 +122,40 @@ export function AttachmentPreviewDialog({
     attachment.id,
     kind === 'image',
   );
-  const bytesQuery = useAttachmentBytesQuery(
+  const previewBytes = usePreviewBytes(
     accountId,
     messageId,
     attachment.id,
     kind === 'pdf' || kind === 'docx',
   );
+  const pdf = usePdfPreview(kind === 'pdf');
   const textQuery = useAttachmentTextQuery(
     accountId,
     messageId,
     attachment.id,
     kind === 'text' || kind === 'json' || kind === 'javascript' || kind === 'csv',
   );
-  const docx = useDocxHtml(kind === 'docx' ? bytesQuery.data : undefined);
+  const docx = useDocxHtml(kind === 'docx' ? (previewBytes.bytes ?? undefined) : undefined);
+  const PdfPreview = pdf.component;
 
   const loading =
     (kind === 'image' && imageQuery.isPending) ||
-    (kind === 'pdf' && bytesQuery.isPending) ||
+    (kind === 'pdf' &&
+      (!previewBytes.bytes || !pdf.component) &&
+      !previewBytes.failed &&
+      !pdf.failed) ||
     ((kind === 'text' || kind === 'json' || kind === 'javascript' || kind === 'csv') &&
       textQuery.isPending) ||
-    (kind === 'docx' && (bytesQuery.isPending || (!docx.html && !docx.failed)));
+    (kind === 'docx' &&
+      (!previewBytes.bytes || (!docx.html && !docx.failed)) &&
+      !previewBytes.failed);
 
   const failedAcquisition =
     (kind === 'image' && imageQuery.isError) ||
-    (kind === 'pdf' && bytesQuery.isError) ||
+    (kind === 'pdf' && (previewBytes.failed || pdf.failed)) ||
     ((kind === 'text' || kind === 'json' || kind === 'javascript' || kind === 'csv') &&
       textQuery.isError) ||
-    (kind === 'docx' && (bytesQuery.isError || docx.failed));
+    (kind === 'docx' && (previewBytes.failed || docx.failed));
 
   const download = async () => {
     if (!accountId) return;
@@ -178,8 +241,8 @@ export function AttachmentPreviewDialog({
                   src={dispatchConvertFileSrc(imageQuery.data.displayPath)}
                   filename={attachment.filename}
                 />
-              ) : kind === 'pdf' && bytesQuery.data ? (
-                <PdfPreview bytes={bytesQuery.data} />
+              ) : kind === 'pdf' && previewBytes.bytes && PdfPreview ? (
+                <PdfPreview bytes={previewBytes.bytes} />
               ) : kind === 'csv' && textQuery.data !== undefined ? (
                 <CsvPreview rows={parseCsv(textQuery.data)} />
               ) : (kind === 'text' || kind === 'json' || kind === 'javascript') &&

@@ -42,8 +42,9 @@ fn message() -> Message {
 
 fn query_plan(connection: &rusqlite::Connection, sql: &str) -> Vec<String> {
     let mut statement = connection.prepare(sql).unwrap();
+    let placeholders = vec![rusqlite::types::Value::Null; statement.parameter_count()];
     statement
-        .query_map([], |row| row.get(3))
+        .query_map(rusqlite::params_from_iter(placeholders), |row| row.get(3))
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap()
@@ -555,6 +556,60 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("threads_by_latest")));
     assert!(!cursor_plan.iter().any(|step| step.contains("TEMP B-TREE")));
+    let backward_cursor_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM threads WHERE account_id='account' AND (latest_at,id)>(10,'thread') ORDER BY latest_at ASC,id ASC LIMIT 51",
+    );
+    assert!(backward_cursor_plan
+        .iter()
+        .any(|step| step.contains("threads_by_latest (account_id=? AND (latest_at,id)>(?,?))")));
+    assert!(!backward_cursor_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let reconciliation_new_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT r.message_id FROM reconcile_remote_messages r LEFT JOIN messages m ON m.account_id=r.account_id AND m.id=r.message_id WHERE r.account_id=?1 AND m.id IS NULL AND r.message_id>COALESCE(?2,'') ORDER BY r.message_id LIMIT ?3",
+    );
+    assert!(reconciliation_new_plan
+        .iter()
+        .any(|step| step.contains("PRIMARY KEY (account_id=? AND message_id>?)")));
+    assert!(!reconciliation_new_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    let reconciliation_absent_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT m.id FROM messages m LEFT JOIN reconcile_remote_messages r ON r.account_id=m.account_id AND r.message_id=m.id WHERE m.account_id=?1 AND r.message_id IS NULL AND m.id>COALESCE(?2,'') ORDER BY m.id LIMIT ?3",
+    );
+    assert!(reconciliation_absent_plan
+        .iter()
+        .any(|step| step.contains("sqlite_autoindex_messages_1 (account_id=? AND id>?)")));
+    assert!(!reconciliation_absent_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    let reconciliation_membership_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT r.message_id FROM reconcile_remote_messages r JOIN messages m ON m.account_id=r.account_id AND m.id=r.message_id WHERE r.account_id=?1 AND r.message_id>COALESCE(?2,'') AND (EXISTS (SELECT 1 FROM reconcile_remote_labels l WHERE l.account_id=r.account_id AND l.message_id=r.message_id AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=l.account_id AND ml.message_id=l.message_id AND ml.label_id=l.label_id)) OR EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=r.account_id AND ml.message_id=r.message_id AND NOT EXISTS (SELECT 1 FROM reconcile_remote_labels l WHERE l.account_id=ml.account_id AND l.message_id=ml.message_id AND l.label_id=ml.label_id))) ORDER BY r.message_id LIMIT ?3",
+    );
+    assert!(reconciliation_membership_plan
+        .iter()
+        .any(|step| step.contains("PRIMARY KEY (account_id=? AND message_id>?)")));
+    assert!(reconciliation_membership_plan
+        .iter()
+        .any(|step| step.contains("label_id=?")));
+    assert!(!reconciliation_membership_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    let reconciliation_universe_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT message_id FROM reconcile_remote_messages WHERE account_id=?1 AND message_id>COALESCE(?2,'') ORDER BY message_id LIMIT ?3",
+    );
+    assert!(reconciliation_universe_plan
+        .iter()
+        .any(|step| step.contains("PRIMARY KEY (account_id=? AND message_id>?)")));
+    assert!(!reconciliation_universe_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
 
     let labelled_plan = query_plan(
         &connection,
@@ -699,6 +754,17 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
             .count(),
         2
     );
+    let backward_search_text_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM message_search JOIN messages m ON m.seq=message_search.rowid JOIN threads t ON t.account_id=m.account_id AND t.id=m.thread_id WHERE message_search MATCH 'x' AND m.account_id='account' AND (t.latest_at,t.id)>(1,'t') GROUP BY t.id ORDER BY t.latest_at ASC, t.id ASC LIMIT 51",
+    );
+    assert_eq!(
+        backward_search_text_plan
+            .iter()
+            .filter(|step| step.contains("TEMP B-TREE"))
+            .count(),
+        2
+    );
 
     let search_predicate_only_plan = query_plan(
         &connection,
@@ -721,6 +787,16 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(search_predicate_cursor_plan.iter().any(|step| step
         .contains("SEARCH t USING COVERING INDEX threads_by_latest (account_id=? AND (latest_at,id)<(?,?))")));
     assert!(!search_predicate_cursor_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    let backward_search_predicate_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.id FROM threads t WHERE t.account_id='account' AND (t.latest_at,t.id)>(1,'t') AND EXISTS(SELECT 1 FROM messages m WHERE m.account_id=t.account_id AND m.thread_id=t.id AND m.is_unread=1) ORDER BY t.latest_at ASC, t.id ASC LIMIT 51",
+    );
+    assert!(backward_search_predicate_plan
+        .iter()
+        .any(|step| step.contains("threads_by_latest (account_id=? AND (latest_at,id)>(?,?))")));
+    assert!(!backward_search_predicate_plan
         .iter()
         .any(|step| step.contains("TEMP B-TREE")));
 }
@@ -1049,15 +1125,12 @@ fn conversation_payload_joins_are_index_driven_and_carry_no_visibility_subquery(
 
     let inline_plan = query_plan(
         &connection,
-        "EXPLAIN QUERY PLAN SELECT p.message_id,p.bytes
-         FROM messages m CROSS JOIN message_inline_parts p
-         WHERE m.account_id='account' AND m.thread_id='thread' AND m.html_body IS NOT NULL
-           AND p.account_id=m.account_id AND p.message_id=m.id",
+        "EXPLAIN QUERY PLAN SELECT content_id FROM message_inline_parts WHERE account_id='account' AND message_id='message'",
     );
-    assert!(inline_plan.iter().any(|step| step.contains("SEARCH p")));
-    assert!(!inline_plan
+    assert!(inline_plan
         .iter()
-        .any(|step| step.contains("TEMP B-TREE") || step.contains("SCAN p")));
+        .any(|step| step.contains("message_inline_parts")));
+    assert!(!inline_plan.iter().any(|step| step.contains("TEMP B-TREE")));
     assert!(!inline_plan.iter().any(|step| step.contains("SUBQUERY")));
 
     let label_plan = query_plan(

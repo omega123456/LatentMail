@@ -7,6 +7,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 import { invoke } from '@/lib/ipc/commands';
+import { hydrateSettings } from '@/lib/settings/hydrate';
 import {
   resolveCommandBindings,
   type CommandBindings,
@@ -44,7 +45,7 @@ export function CommandProvider({ children }: PropsWithChildren) {
   const [overrides, setOverrides] = useState<CommandOverrides>({});
 
   useEffect(() => {
-    invoke('read_settings', {})
+    hydrateSettings()
       .then((settings) => setOverrides(settings.commandOverrides ?? {}))
       .catch(() => undefined);
   }, []);

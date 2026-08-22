@@ -20,7 +20,10 @@ vi.mock('mammoth', () => ({
 
 function renderWithClient(ui: React.ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  return {
+    queryClient,
+    ...render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>),
+  };
 }
 
 const imageAttachment: MessageAttachment = {
@@ -61,6 +64,14 @@ const docxAttachment: MessageAttachment = {
   mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   size: 4096,
   position: 6,
+};
+
+const pdfAttachment: MessageAttachment = {
+  id: 'attachment-8',
+  filename: 'report.pdf',
+  mimeType: 'application/pdf',
+  size: 4096,
+  position: 7,
 };
 
 beforeAppRoot();
@@ -157,7 +168,7 @@ describe('AttachmentPreviewDialog', () => {
 
   it('renders a DOCX attachment as converted, sanitised HTML in a script-free frame', async () => {
     ipc.override('read_attachment_bytes', new ArrayBuffer(8));
-    renderWithClient(
+    const { queryClient, unmount } = renderWithClient(
       <AttachmentPreviewDialog
         accountId="account-1"
         messageId="message-1"
@@ -166,6 +177,59 @@ describe('AttachmentPreviewDialog', () => {
       />,
     );
     expect(await screen.findByTitle('Message body')).toBeInTheDocument();
+    expect(
+      queryClient
+        .getQueryCache()
+        .getAll()
+        .some(({ queryKey }) => queryKey[0] === 'attachmentBytes'),
+    ).toBe(false);
+    unmount();
+    expect(
+      queryClient
+        .getQueryCache()
+        .getAll()
+        .some(({ queryKey }) => queryKey[0] === 'attachmentBytes'),
+    ).toBe(false);
+  });
+
+  it('keeps PDF bytes outside the query cache across close and reopen', async () => {
+    let reads = 0;
+    ipc.override('read_attachment_bytes', () => {
+      reads += 1;
+      return new ArrayBuffer(8);
+    });
+    const first = renderWithClient(
+      <AttachmentPreviewDialog
+        accountId="account-1"
+        messageId="message-1"
+        attachment={pdfAttachment}
+        onClose={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(reads).toBe(1));
+    expect(
+      first.queryClient
+        .getQueryCache()
+        .getAll()
+        .some(({ queryKey }) => queryKey[0] === 'attachmentBytes'),
+    ).toBe(false);
+    first.unmount();
+
+    const second = renderWithClient(
+      <AttachmentPreviewDialog
+        accountId="account-1"
+        messageId="message-1"
+        attachment={pdfAttachment}
+        onClose={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(reads).toBe(2));
+    expect(
+      second.queryClient
+        .getQueryCache()
+        .getAll()
+        .some(({ queryKey }) => queryKey[0] === 'attachmentBytes'),
+    ).toBe(false);
   });
 
   it('is a role=dialog surface that takes focus, so the global shortcut listener treats it as a focus context', () => {

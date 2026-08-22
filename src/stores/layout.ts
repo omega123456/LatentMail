@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/ipc/commands';
+import { hydrateSettings } from '@/lib/settings/hydrate';
 import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } from '@/lib/types/ipc';
 
 export type Route = 'auth' | 'mail' | 'settings';
@@ -58,8 +59,6 @@ type LayoutState = Pick<
   untrustImageSender: (address: string) => void;
 };
 
-let hydration: Promise<void> | undefined;
-
 function clampSize(value: number, min: number, max: number) {
   return Math.round(Math.min(max, Math.max(min, value)));
 }
@@ -100,7 +99,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   route: 'mail',
   hydrated: false,
   hydrate: () => {
-    hydration ??= invoke('read_settings', {}).then((settings) => {
+    return hydrateSettings().then((settings) => {
       applyZoom(settings.zoomPercent);
       set({
         layout: settings.layout,
@@ -127,7 +126,6 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         hydrated: true,
       });
     });
-    return hydration;
   },
   setRoute: (route) => set({ route }),
   setLayout: (layout) => {

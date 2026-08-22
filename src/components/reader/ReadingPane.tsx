@@ -308,7 +308,7 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
   const clearSelection = useMultiSelectStore((value) => value.clear);
   const selectAll = useMultiSelectStore((value) => value.selectAll);
   const conversationQuery = useConversationQuery(accountId, multiSelectActive ? null : threadId);
-  const fetchBody = useFetchMessageBodyMutation(accountId, threadId);
+  const fetchBody = useFetchMessageBodyMutation(accountId);
   const triage = useThreadTriageIntentMutation(accountId);
   const messageTriage = useMessageTriageIntentMutation(accountId);
   const labelsQuery = useLabelsQuery(accountId);

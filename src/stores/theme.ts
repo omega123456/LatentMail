@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/ipc/commands';
+import { hydrateSettings } from '@/lib/settings/hydrate';
 import type { ThemePreference } from '@/lib/types/ipc';
 
 export type Theme = ThemePreference;
@@ -20,17 +21,14 @@ type ThemeState = {
   setTheme: (theme: Theme) => void;
 };
 
-let hydration: Promise<void> | undefined;
-
 export const useThemeStore = create<ThemeState>((set) => ({
   theme: 'system',
   hydrated: false,
   hydrate: () => {
-    hydration ??= invoke('read_settings', {}).then(({ theme }) => {
+    return hydrateSettings().then(({ theme }) => {
       applyTheme(theme);
       set({ theme, hydrated: true });
     });
-    return hydration;
   },
   setTheme: (theme) => {
     applyTheme(theme);

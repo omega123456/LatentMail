@@ -121,23 +121,50 @@ impl AttachmentCache {
         filename: &str,
         mime_type: &str,
     ) -> Result<CachedAttachment, String> {
-        if let Some(cached) =
-            self.lookup(account_id, message_id, attachment_id, filename, mime_type)
+        let cache = self.clone();
+        let account_id = account_id.to_owned();
+        let message_id = message_id.to_owned();
+        let attachment_id = attachment_id.to_owned();
+        let filename = filename.to_owned();
+        let mime_type = mime_type.to_owned();
+        if let Some(cached) = tokio::task::spawn_blocking({
+            let cache = cache.clone();
+            let account_id = account_id.clone();
+            let message_id = message_id.clone();
+            let attachment_id = attachment_id.clone();
+            let filename = filename.clone();
+            let mime_type = mime_type.clone();
+            move || {
+                cache.lookup(
+                    &account_id,
+                    &message_id,
+                    &attachment_id,
+                    &filename,
+                    &mime_type,
+                )
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())?
         {
             return Ok(cached);
         }
         let bytes = client
-            .attachment(message_id, attachment_id)
+            .attachment(&message_id, &attachment_id)
             .await
             .map_err(|error| error.to_string())?;
-        self.write_bytes(
-            account_id,
-            message_id,
-            attachment_id,
-            filename,
-            mime_type,
-            &bytes,
-        )
+        tokio::task::spawn_blocking(move || {
+            cache.write_bytes(
+                &account_id,
+                &message_id,
+                &attachment_id,
+                &filename,
+                &mime_type,
+                &bytes,
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
     }
 

@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use latentmail_lib::{
-    cli::{apply, parse, run_client, send, serve, usage, Command},
+    cli::{apply, parse, run_client, send, serve, socket_path, usage, Command},
     queue::QueueEngine,
 };
 
@@ -35,6 +35,18 @@ fn lists_the_sync_commands() {
         run_client(&["latentmail".into(), "list".into()]),
         Some((usage(), 0))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn socket_path_honors_the_process_override() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("control.sock");
+    std::env::set_var("LATENTMAIL_CLI_SOCKET", &path);
+
+    assert_eq!(socket_path(), path);
+
+    std::env::remove_var("LATENTMAIL_CLI_SOCKET");
 }
 
 #[tokio::test]

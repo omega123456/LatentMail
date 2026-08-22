@@ -73,7 +73,9 @@ export function UpdatesSection() {
                 className="size-1.75 rounded-full bg-success dark:bg-dark-success"
               />
             )}
-            {available ? `LatentMail ${available.version} is available` : `LatentMail ${currentVersion}`}
+            {available
+              ? `LatentMail ${available.version} is available`
+              : `LatentMail ${currentVersion}`}
           </span>
           <span className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
             {available

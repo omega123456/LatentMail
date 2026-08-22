@@ -2,6 +2,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBridge } from '@/lib/query/event-bridge';
+import { useThreadsQuery } from '@/lib/query/hooks';
 import { queryKeys } from '@/lib/query/keys';
 import { QueryProvider } from '@/providers/QueryProvider';
 import { useSyncStore } from '@/stores/sync';
@@ -16,18 +17,28 @@ function SpyClient({ onReady }: { onReady: (client: ReturnType<typeof useQueryCl
   return null;
 }
 
+function ThreadQuery({
+  onReady,
+}: {
+  onReady: (query: ReturnType<typeof useThreadsQuery>) => void;
+}) {
+  onReady(useThreadsQuery('account-1', 'INBOX'));
+  return null;
+}
+
 describe('EventBridge', () => {
   beforeEach(() => vi.spyOn(console, 'info').mockImplementation(() => undefined));
 
-  afterEach(() =>
+  afterEach(() => {
+    vi.useRealTimers();
     act(() =>
       useSyncStore.setState({
         queue: { pending: 0, active: 0, failed: 0, done: 0, paused: false, suspended: false },
         syncState: 'idle',
         lastSynced: null,
       }),
-    ),
-  );
+    );
+  });
 
   it('updates the queue store from queue summaries', async () => {
     render(
@@ -80,7 +91,7 @@ describe('EventBridge', () => {
     expect(useSyncStore.getState().lastSynced).toBeInstanceOf(Date);
   });
 
-  it('updates lastSynced on an unchanged tick without invalidating thread queries', async () => {
+  it('updates lastSynced on an unchanged tick and invalidates only sync status', async () => {
     let client: ReturnType<typeof useQueryClient> | undefined;
     render(
       <QueryProvider>
@@ -103,10 +114,12 @@ describe('EventBridge', () => {
     expect(useSyncStore.getState().syncState).toBe('idle');
     expect(useSyncStore.getState().lastSynced).toBeInstanceOf(Date);
     expect(useSyncStore.getState().error).toBeUndefined();
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+      queryKey: queryKeys.syncStatus('account-1'),
+    });
   });
 
-  it('invalidates threads, labels and sync status when a tick reports changes', async () => {
+  it('coalesces completion and new-mail invalidations for one account', async () => {
     let client: ReturnType<typeof useQueryClient> | undefined;
     render(
       <QueryProvider>
@@ -118,22 +131,31 @@ describe('EventBridge', () => {
       expect(ipc.tauriListen).toHaveBeenCalledWith('sync://complete', expect.any(Function)),
     );
     const invalidate = vi.spyOn(client!, 'invalidateQueries');
-    act(() =>
+    vi.useFakeTimers();
+    act(() => {
       ipc.emit('sync://complete', {
         accountId: 'account-1',
         historyId: 42,
         addedCount: 3,
         changed: true,
-      }),
-    );
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: queryKeys.threadsForAccount('account-1'),
+      });
+      ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-1'], arrivals: [] });
+      vi.advanceTimersByTime(250);
     });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: queryKeys.searchForAccount('account-1'),
-    });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.syncStatus('account-1') });
+    for (const queryKey of [
+      queryKeys.threadsForAccount('account-1'),
+      queryKeys.searchForAccount('account-1'),
+      queryKeys.searchTotalsForAccount('account-1'),
+      queryKeys.labels('account-1'),
+      queryKeys.syncStatus('account-1'),
+    ]) {
+      expect(
+        invalidate.mock.calls.filter(
+          ([argument]) => JSON.stringify(argument?.queryKey) === JSON.stringify(queryKey),
+        ),
+      ).toHaveLength(1);
+    }
+    vi.useRealTimers();
   });
 
   it('invalidates the accounts query on account state changes, so the reauth banner appears live', async () => {
@@ -158,6 +180,26 @@ describe('EventBridge', () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.accounts });
+  });
+
+  it('invalidates only the matching message-body family after a body fetch', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('message://body-fetched', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() =>
+      ipc.emit('message://body-fetched', { accountId: 'account-1', messageId: 'message-1' }),
+    );
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+      queryKey: queryKeys.messageBodiesForMessage('account-1', 'message-1'),
+    });
   });
 
   it('invalidates exactly the matching sender-avatar query on resolution, and only that one', async () => {
@@ -200,7 +242,7 @@ describe('EventBridge', () => {
     });
   });
 
-  it('invalidates threads and labels on mail://new so a new arrival refreshes the list', async () => {
+  it('invalidates mailbox data for new mail without a completion event', async () => {
     let client: ReturnType<typeof useQueryClient> | undefined;
     render(
       <QueryProvider>
@@ -212,9 +254,11 @@ describe('EventBridge', () => {
       expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
     );
     const invalidate = vi.spyOn(client!, 'invalidateQueries');
-    act(() =>
-      ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-1'], arrivals: [] }),
-    );
+    vi.useFakeTimers();
+    act(() => {
+      ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-1'], arrivals: [] });
+      vi.advanceTimersByTime(250);
+    });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.threadsForAccount('account-1'),
     });
@@ -222,6 +266,28 @@ describe('EventBridge', () => {
       queryKey: queryKeys.searchForAccount('account-1'),
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
+    vi.useRealTimers();
+  });
+
+  it('refetches the mounted mailbox list when new mail arrives', async () => {
+    let query: ReturnType<typeof useThreadsQuery> | undefined;
+    let calls = 0;
+    ipc.override('list_threads', () => {
+      calls += 1;
+      return { items: [], nextCursor: null, previousCursor: null };
+    });
+    render(
+      <QueryProvider>
+        <ThreadQuery onReady={(value) => (query = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() => expect(query?.isSuccess).toBe(true));
+    expect(calls).toBe(1);
+    act(() => {
+      ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-new'], arrivals: [] });
+    });
+    await waitFor(() => expect(calls).toBe(2));
   });
 
   it('handles an OS folder intent in the event bridge', async () => {
@@ -259,13 +325,67 @@ describe('EventBridge', () => {
           discoveredCount: count,
           persistedCount: count,
           completed: false,
+          state: 'backfilling',
+          lastAdvancedAt: 1,
+          isResumed: false,
         });
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(1000);
     });
-    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(invalidate).toHaveBeenCalledTimes(2);
     expect(invalidate).not.toHaveBeenCalledWith({
       queryKey: queryKeys.searchForAccount('account-1'),
     });
+    expect(client!.getQueryData(queryKeys.traversalStatus('account-1'))).toEqual({
+      accountId: 'account-1',
+      state: 'backfilling',
+      kind: 'backfill',
+      discoveredCount: 99,
+      persistedCount: 99,
+      lastAdvancedAt: 1,
+      isResumed: false,
+    });
+    vi.useRealTimers();
+  });
+
+  it('marks retained mailbox pages stale without refetching them after traversal events', async () => {
+    let query: ReturnType<typeof useThreadsQuery> | undefined;
+    let calls = 0;
+    ipc.override('list_threads', ({ cursor }) => {
+      calls += 1;
+      const page = cursor?.latestAt ?? 0;
+      return {
+        items: [],
+        nextCursor: page < 4 ? { latestAt: page + 1, id: String(page + 1) } : null,
+        previousCursor: page > 0 ? { latestAt: page - 1, id: String(page - 1) } : null,
+      };
+    });
+    render(
+      <QueryProvider>
+        <ThreadQuery onReady={(value) => (query = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() => expect(query?.isSuccess).toBe(true));
+    for (let page = 0; page < 4; page += 1)
+      await act(async () => {
+        await query?.fetchNextPage();
+      });
+    expect(calls).toBe(5);
+    vi.useFakeTimers();
+    act(() => {
+      ipc.emit('sync://traversal', {
+        accountId: 'account-1',
+        kind: 'backfill',
+        discoveredCount: 5,
+        persistedCount: 5,
+        completed: false,
+        state: 'backfilling',
+        lastAdvancedAt: 1,
+        isResumed: false,
+      });
+      vi.advanceTimersByTime(1000);
+    });
+    expect(calls).toBe(5);
     vi.useRealTimers();
   });
 
@@ -325,6 +445,9 @@ describe('EventBridge', () => {
         discoveredCount: 1,
         persistedCount: 1,
         completed: false,
+        state: 'backfilling',
+        lastAdvancedAt: 1,
+        isResumed: false,
       }),
     );
     const clearSpy = vi.spyOn(window, 'clearTimeout');
@@ -403,6 +526,7 @@ describe('EventBridge', () => {
 
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe('Couldn’t send your message.');
     const beforeUnrelatedItem = invalidate.mock.calls.length;
+    vi.useFakeTimers();
     act(() =>
       ipc.emit('queue://item', {
         id: 'queue:account-1:1',
@@ -438,10 +562,14 @@ describe('EventBridge', () => {
         lane: 'interactive',
       }),
     );
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.threadsForAccount('account-1') });
+    act(() => vi.advanceTimersByTime(250));
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.threadsForAccount('account-1'),
+    });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.searchForAccount('account-1'),
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
+    vi.useRealTimers();
   });
 });

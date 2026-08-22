@@ -314,6 +314,11 @@ async fn progress_counts_report_the_distinct_universe_size_not_a_sum_across_labe
         completed["persistedCount"], 1,
         "one distinct message across three labels must report 1, not 3"
     );
+    assert_eq!(completed["state"], "complete");
+    assert_eq!(completed["isResumed"], false);
+    assert!(completed["lastAdvancedAt"]
+        .as_i64()
+        .is_some_and(|value| value > 0));
 }
 
 #[tokio::test]

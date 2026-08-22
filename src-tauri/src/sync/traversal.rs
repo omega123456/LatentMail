@@ -13,7 +13,7 @@ use crate::{
 
 use super::materialize::attachment_records;
 
-use super::{EventSink, SyncError};
+use super::{concurrency, to_millis, EventSink, SyncError, TraversalState};
 
 pub fn traversal_entity_key(account_id: &str) -> String {
     format!("traversal:{account_id}")
@@ -27,6 +27,9 @@ pub struct TraversalProgressEvent {
     pub discovered_count: i64,
     pub persisted_count: i64,
     pub completed: bool,
+    pub state: TraversalState,
+    pub last_advanced_at: i64,
+    pub is_resumed: bool,
 }
 
 pub fn emit_traversal_progress(sink: &EventSink, event: TraversalProgressEvent) {
@@ -89,10 +92,7 @@ pub async fn run_backfill_step(
     let next_token = page.next_page_token.clone();
     let ids: Vec<String> = page.items.iter().map(|item| item.id.clone()).collect();
 
-    let mut messages = Vec::with_capacity(ids.len());
-    for id in &ids {
-        messages.extend(client.message_if_present(id).await?);
-    }
+    let messages = concurrency::fetch_messages(client, ids).await?;
 
     let persisted = persisted + messages.len() as i64;
     let account_owned = account_id.to_owned();
@@ -133,6 +133,13 @@ pub async fn run_backfill_step(
             discovered_count: discovered,
             persisted_count: persisted,
             completed: is_last_page,
+            state: if is_last_page {
+                TraversalState::Complete
+            } else {
+                TraversalState::Backfilling
+            },
+            last_advanced_at: to_millis(now),
+            is_resumed: resumed,
         },
     );
 
@@ -146,10 +153,7 @@ pub async fn fetch_and_persist(
     ids: &[String],
     cache: Option<AttachmentCache>,
 ) -> Result<Vec<String>, SyncError> {
-    let mut messages = Vec::with_capacity(ids.len());
-    for id in ids {
-        messages.extend(client.message_if_present(id).await?);
-    }
+    let messages = concurrency::fetch_messages(client, ids.to_vec()).await?;
     let account_owned = account_id.to_owned();
     let thread_ids = storage
         .run(move |connection| {

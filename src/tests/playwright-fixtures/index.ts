@@ -31,6 +31,7 @@ export {
 export {
   playwrightParsedSearchQuery,
   playwrightSearchThreadPage,
+  playwrightSearchTotal,
   playwrightSearchThreads,
 } from './search';
 export { playwrightUpdateAvailable } from './update';

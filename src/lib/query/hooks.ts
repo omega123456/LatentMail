@@ -8,7 +8,7 @@ import type {
   MoveDestination,
   PauseScope,
   SearchScope,
-  ThreadCursor,
+  ThreadPageParam,
 } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { toLogEntry } from './mappers';
@@ -153,11 +153,20 @@ export function useThreadsQuery(accountId: string | null, mailboxId: string | nu
       invoke('list_threads', {
         accountId: accountId as string,
         labelId: mailboxId,
-        cursor: pageParam,
+        cursor: pageParam?.cursor ?? null,
+        direction: pageParam?.direction ?? 'forward',
         limit: 50,
       }),
-    initialPageParam: null as ThreadCursor | null,
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    initialPageParam: null as ThreadPageParam | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.nextCursor
+        ? { cursor: lastPage.nextCursor, direction: 'forward' as const }
+        : undefined,
+    getPreviousPageParam: (firstPage) =>
+      firstPage.previousCursor
+        ? { cursor: firstPage.previousCursor, direction: 'backward' as const }
+        : undefined,
+    maxPages: 5,
     enabled: accountId !== null && mailboxId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
@@ -171,11 +180,29 @@ export function useSearchThreadsQuery(accountId: string | null, query: string, s
         accountId: accountId as string,
         query,
         scope,
-        cursor: pageParam,
+        cursor: pageParam?.cursor ?? null,
+        direction: pageParam?.direction ?? 'forward',
         limit: 50,
       }),
-    initialPageParam: null as ThreadCursor | null,
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    initialPageParam: null as ThreadPageParam | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.nextCursor
+        ? { cursor: lastPage.nextCursor, direction: 'forward' as const }
+        : undefined,
+    getPreviousPageParam: (firstPage) =>
+      firstPage.previousCursor
+        ? { cursor: firstPage.previousCursor, direction: 'backward' as const }
+        : undefined,
+    maxPages: 5,
+    enabled: accountId !== null && query.trim().length > 0,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+export function useSearchTotalQuery(accountId: string | null, query: string, scope: SearchScope) {
+  return useQuery({
+    queryKey: queryKeys.searchTotal(accountId ?? '', query, scope),
+    queryFn: () => invoke('search_total', { accountId: accountId as string, query, scope }),
     enabled: accountId !== null && query.trim().length > 0,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
@@ -190,7 +217,7 @@ export function useParseSearchQueryQuery(query: string) {
   });
 }
 
-export function useConversationQuery(accountId: string | null, threadId: string | null) {
+function useConversationRequest() {
   const alwaysLoad = useLayoutStore((state) => state.alwaysLoadRemoteImages);
   const allowedSenders = useLayoutStore((state) => state.allowedImageSenders);
   const loadFor = useSelectionStore((state) => state.imagesAllowedFor);
@@ -208,6 +235,11 @@ export function useConversationQuery(accountId: string | null, threadId: string 
   const entryScope: ConversationEntryScope = searchActive
     ? { kind: 'search', scope: searchScope }
     : { kind: 'mailbox', mailboxId };
+  return { imagePolicy, entryScope };
+}
+
+export function useConversationQuery(accountId: string | null, threadId: string | null) {
+  const { imagePolicy, entryScope } = useConversationRequest();
   return useQuery({
     queryKey: queryKeys.conversation(
       accountId ?? '',
@@ -227,6 +259,31 @@ export function useConversationQuery(accountId: string | null, threadId: string 
   });
 }
 
+export function useMessageBodyQuery(
+  accountId: string | null,
+  messageId: string | null,
+  enabled = true,
+) {
+  const { imagePolicy, entryScope } = useConversationRequest();
+  return useQuery({
+    queryKey: queryKeys.messageBody(
+      accountId ?? '',
+      messageId ?? '',
+      JSON.stringify(imagePolicy),
+      entryScope,
+    ),
+    queryFn: () =>
+      invoke('load_message_body', {
+        accountId: accountId as string,
+        messageId: messageId as string,
+        imagePolicy,
+        entryScope,
+      }),
+    enabled: enabled && accountId !== null && messageId !== null,
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
 export function useCachedAttachmentQuery(
   accountId: string | null,
   messageId: string | null,
@@ -237,25 +294,6 @@ export function useCachedAttachmentQuery(
     queryKey: queryKeys.cachedAttachment(accountId ?? '', messageId ?? '', attachmentId ?? ''),
     queryFn: () =>
       invoke('ensure_attachment_cached', {
-        accountId: accountId as string,
-        messageId: messageId as string,
-        attachmentId: attachmentId as string,
-      }),
-    enabled: enabled && accountId !== null && messageId !== null && attachmentId !== null,
-    staleTime: Infinity,
-  });
-}
-
-export function useAttachmentBytesQuery(
-  accountId: string | null,
-  messageId: string | null,
-  attachmentId: string | null,
-  enabled = true,
-) {
-  return useQuery({
-    queryKey: queryKeys.attachmentBytes(accountId ?? '', messageId ?? '', attachmentId ?? ''),
-    queryFn: () =>
-      invoke('read_attachment_bytes', {
         accountId: accountId as string,
         messageId: messageId as string,
         attachmentId: attachmentId as string,
@@ -281,6 +319,7 @@ export function useAttachmentTextQuery(
       }),
     enabled: enabled && accountId !== null && messageId !== null && attachmentId !== null,
     staleTime: Infinity,
+    gcTime: LOCAL_FIRST_STALE_TIME,
   });
 }
 
@@ -330,16 +369,11 @@ export function useAccountAvatarQuery(accountId: string | null) {
   });
 }
 
-export function useFetchMessageBodyMutation(accountId: string | null, threadId: string | null) {
-  const queryClient = useQueryClient();
+export function useFetchMessageBodyMutation(accountId: string | null) {
   const showError = useToastStore((state) => state.showError);
   return useMutation({
     mutationFn: (messageId: string) =>
       invoke('fetch_message_body', { accountId: accountId as string, messageId }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.conversationThread(accountId ?? '', threadId ?? ''),
-      }),
     onError: () => showError('Couldn’t load this message.'),
   });
 }
@@ -548,10 +582,14 @@ function optimisticallyUpdateSearchPages(
           items: page.items
             .filter((thread) => !(leavesSearch && threadIds.includes(thread.id)))
             .map((thread) => (threadIds.includes(thread.id) ? update(thread) : thread)),
-          total: leavesSearch ? Math.max(0, page.total - threadIds.length) : page.total,
         })),
       },
   );
+  if (leavesSearch)
+    queryClient.setQueriesData<number>(
+      { queryKey: queryKeys.searchTotalsForAccount(accountId ?? '') },
+      (total) => (total === undefined ? total : Math.max(0, total - threadIds.length)),
+    );
 }
 
 function virtualMailboxIdForScope(scope: SearchScope): string | null {

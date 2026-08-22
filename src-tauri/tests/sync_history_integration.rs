@@ -3,10 +3,11 @@ use std::time::Duration;
 
 use latentmail_lib::gmail::GmailClient;
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, Label, LabelRepository, Message, MessageRepository,
-    Operation, OperationRepository, Storage, ThreadRepository,
+    reconcile_staging::ReconcileStagingRepository, Account, AccountRepository, HtmlPresence, Label,
+    LabelRepository, Message, MessageRepository, Operation, OperationRepository, Storage,
+    StorageError, ThreadRepository, TraversalCursor, TraversalKind,
 };
-use latentmail_lib::sync::{EventSink, SyncEngine, SyncScheduler, WorkRegistry};
+use latentmail_lib::sync::{EventSink, SyncEngine, SyncError, SyncScheduler, WorkRegistry};
 use tauri::Manager;
 use wiremock::{
     matchers::{method, path},
@@ -17,6 +18,14 @@ type FiredEvents = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
 
 fn fixture_now() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(3, 0).unwrap()
+}
+
+#[test]
+fn storage_errors_convert_to_sync_errors_with_the_storage_context() {
+    let error = SyncError::from(StorageError::Database(rusqlite::Error::InvalidQuery));
+
+    assert!(matches!(error, SyncError::Storage(_)));
+    assert!(error.to_string().starts_with("storage error: "));
 }
 
 fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Message {
@@ -455,6 +464,92 @@ async fn a_history_record_carrying_only_messages_is_not_treated_as_a_no_op() {
 }
 
 #[tokio::test]
+async fn resumed_reconciliation_leaves_later_history_for_the_next_incremental_sync() {
+    let (engine, storage, _directory, _events) = engine_with_seed();
+    let cursor = TraversalCursor {
+        account_id: "account".into(),
+        kind: TraversalKind::Reconciliation,
+        position: Some("50|fetch|".into()),
+        discovered_count: 1,
+        persisted_count: 0,
+        completed: false,
+        last_advanced_at: 1,
+        resumed: false,
+    };
+    let connection = storage.connection().unwrap();
+    ReconcileStagingRepository::begin(&connection, &cursor).unwrap();
+    ReconcileStagingRepository::stage_universe_page(
+        &connection,
+        "account",
+        &["reconciled".into()],
+        &cursor,
+    )
+    .unwrap();
+    drop(connection);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(404))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "60",
+            "history": [{
+                "id": "60",
+                "messagesAdded": [{"message": {"id": "late", "threadId": "late-thread"}}]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(&server)
+        .await;
+    for (id, thread_id) in [("reconciled", "reconciled-thread"), ("late", "late-thread")] {
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id, "threadId": thread_id, "historyId": "60", "labelIds": [],
+                "internalDate": "1000", "payload": {"headers": []}
+            })))
+            .mount(&server)
+            .await;
+    }
+
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+    assert_eq!(
+        AccountRepository::get(&storage.connection().unwrap(), "account")
+            .unwrap()
+            .unwrap()
+            .history_id,
+        Some(50)
+    );
+    engine
+        .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+    let connection = storage.connection().unwrap();
+    assert!(MessageRepository::get(&connection, "account", "late")
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        AccountRepository::get(&connection, "account")
+            .unwrap()
+            .unwrap()
+            .history_id,
+        Some(60)
+    );
+}
+
+#[tokio::test]
 async fn incremental_sync_does_not_advance_the_checkpoint_on_failure() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -659,11 +754,12 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
         .unwrap();
     let handle = application.handle();
 
-    latentmail_lib::settings::initialize(handle).unwrap();
-    latentmail_lib::auth::initialize(handle).unwrap();
-
     let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(seed_storage.clone());
+    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
     let connection = seed_storage.connection().unwrap();
     AccountRepository::upsert(
         &connection,
@@ -680,10 +776,9 @@ async fn initialize_with_sync_on_startup_actually_runs_a_scheduler_tick() {
     )
     .unwrap();
     drop(connection);
-    drop(seed_storage);
     latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
 
-    latentmail_lib::sync::initialize(handle).unwrap();
+    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
 
     let poll_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -721,11 +816,12 @@ async fn startup_recovery_marks_an_interrupted_send_uncertain_and_requeues_an_in
         .unwrap();
     let handle = application.handle();
 
-    latentmail_lib::settings::initialize(handle).unwrap();
-    latentmail_lib::auth::initialize(handle).unwrap();
-
     let directory = application.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     let seed_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    application.manage(seed_storage.clone());
+    latentmail_lib::settings::initialize(handle, seed_storage.clone()).unwrap();
+    latentmail_lib::auth::initialize(handle, seed_storage.clone()).unwrap();
     let connection = seed_storage.connection().unwrap();
     AccountRepository::upsert(
         &connection,
@@ -778,9 +874,7 @@ async fn startup_recovery_marks_an_interrupted_send_uncertain_and_requeues_an_in
     )
     .unwrap();
     drop(connection);
-    drop(seed_storage);
-
-    latentmail_lib::sync::initialize(handle).unwrap();
+    latentmail_lib::sync::initialize(handle, seed_storage).unwrap();
 
     let poll_storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

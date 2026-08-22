@@ -4,6 +4,11 @@ description = "Enables local keyword search over the account's whole mailbox, sc
 commands.allow = ["search_threads"]
 
 [[permission]]
+identifier = "allow-search-total"
+description = "Returns the exact local result count for a scoped search."
+commands.allow = ["search_total"]
+
+[[permission]]
 identifier = "allow-parse-search-query"
 description = "Exposes the search operator parser so the advanced search panel can round-trip a query string into structured fields."
 commands.allow = ["parse_search_query"]

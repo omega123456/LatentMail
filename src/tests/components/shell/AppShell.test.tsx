@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '@/App';
+import { AppShell } from '@/components/shell/AppShell';
+import { queryKeys } from '@/lib/query/keys';
 import type { IpcCommandMap } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
@@ -118,6 +121,29 @@ function overrideAccount(id: string, threads: (typeof threadOne)[]) {
 }
 
 describe('AppShell wired to real data', () => {
+  it('paints the startup surface while accounts are pending', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppShell />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId('startup-surface')).toBeInTheDocument();
+  });
+
+  it('paints the startup surface during the configured-route correction', () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.accounts, [accountOne]);
+    const setRoute = useLayoutStore.getState().setRoute;
+    act(() => useLayoutStore.setState({ route: 'auth', setRoute: vi.fn() }));
+    render(
+      <QueryClientProvider client={client}>
+        <AppShell />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId('startup-surface')).toBeInTheDocument();
+    act(() => useLayoutStore.setState({ setRoute }));
+  });
+
   it('populates the sidebar and inbox from real accounts/labels/threads, and renders a real conversation', async () => {
     ipc.override('list_accounts', [accountOne]);
     overrideAccount('account-1', [threadOne]);

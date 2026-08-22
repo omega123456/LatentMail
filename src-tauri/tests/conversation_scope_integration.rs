@@ -61,7 +61,7 @@ fn seeded_connection() -> rusqlite::Connection {
 }
 
 fn ids(connection: &rusqlite::Connection, scope: Option<&ConversationEntryScope>) -> Vec<String> {
-    MessageRepository::list_conversation(connection, "account", "thread", scope)
+    MessageRepository::list_conversation_metadata(connection, "account", "thread", scope)
         .unwrap()
         .into_iter()
         .map(|message| message.message.id)
@@ -194,7 +194,8 @@ fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_m
     }
 
     let visible =
-        MessageRepository::list_conversation(&connection, "account", "thread", None).unwrap();
+        MessageRepository::list_conversation_metadata(&connection, "account", "thread", None)
+            .unwrap();
 
     assert_eq!(
         visible

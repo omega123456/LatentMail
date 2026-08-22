@@ -116,7 +116,10 @@ pub async fn read_attachment_bytes<R: Runtime>(
         &attachment_id,
     )
     .await?;
-    let bytes = std::fs::read(&cached.cache_path).map_err(|error| error.to_string())?;
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(cached.cache_path))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -143,7 +146,10 @@ pub async fn read_attachment_text<R: Runtime>(
         &attachment_id,
     )
     .await?;
-    let bytes = std::fs::read(&cached.cache_path).map_err(|error| error.to_string())?;
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(cached.cache_path))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
     Ok(super::decode_text(&bytes))
 }
 
@@ -171,7 +177,10 @@ pub async fn save_attachment_to_path<R: Runtime>(
         &attachment_id,
     )
     .await?;
-    std::fs::copy(&cached.cache_path, &destination).map_err(|error| error.to_string())?;
+    tokio::task::spawn_blocking(move || std::fs::copy(cached.cache_path, destination))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -200,7 +209,6 @@ pub async fn stage_attachment_into_draft<R: Runtime>(
         &attachment_id,
     )
     .await?;
-    let bytes = std::fs::read(&cached.cache_path).map_err(|error| error.to_string())?;
     let descriptor = crate::compose::staging::StagedPart {
         id: crate::compose::drafts::generate_id("staged"),
         filename: cached.filename.clone(),
@@ -209,8 +217,13 @@ pub async fn stage_attachment_into_draft<R: Runtime>(
         content_id: None,
         size: 0,
     };
-    let part = staging
-        .stage_bytes(&account_id, &owner, &descriptor, &bytes)
-        .map_err(|error| error.to_string())?;
+    let staging = Arc::clone(staging.inner());
+    let part = tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(cached.cache_path)?;
+        staging.stage_bytes(&account_id, &owner, &descriptor, &bytes)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
     Ok(part.into())
 }

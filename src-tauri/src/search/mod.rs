@@ -5,7 +5,8 @@ use chrono::Utc;
 
 use crate::storage::{SearchRepository, Storage};
 use crate::sync::{
-    ParsedSearchQueryDto, SearchPredicateDto, ThreadCursor, ThreadDto, ThreadSearchPage,
+    ParsedSearchQueryDto, SearchPredicateDto, ThreadCursor, ThreadDto, ThreadPageDirection,
+    ThreadSearchPage,
 };
 
 use query::{ParsedQuery, Predicate, PredicateKind};
@@ -60,6 +61,7 @@ pub async fn search_threads(
     query: String,
     scope: Option<SearchScope>,
     cursor: Option<ThreadCursor>,
+    direction: Option<ThreadPageDirection>,
     limit: Option<u32>,
 ) -> Result<ThreadSearchPage, String> {
     let parsed = query::parse(&query, Utc::now()).map_err(|error| error.to_string())?;
@@ -67,39 +69,52 @@ pub async fn search_threads(
         return Ok(ThreadSearchPage {
             items: Vec::new(),
             next_cursor: None,
-            total: 0,
+            previous_cursor: None,
         });
     }
 
     let scope_filter = scope::resolve(&scope.unwrap_or(SearchScope::Default));
     let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
+    let has_cursor = cursor_pair.is_some();
+    let direction = direction.unwrap_or_default();
 
-    let (mut rows, total) = storage
+    let mut rows = storage
         .run(move |connection| {
-            let rows = SearchRepository::search(
+            let rows = SearchRepository::search_with_direction(
                 connection,
                 &account_id,
                 &parsed,
                 &scope_filter,
                 cursor_pair,
                 limit + 1,
+                direction,
             )?;
-            let total = SearchRepository::count(connection, &account_id, &parsed, &scope_filter)?;
-            Ok((rows, total))
+            Ok(rows)
         })
         .await
         .map_err(|error| error.to_string())?;
 
-    let next_cursor = if rows.len() as i64 > limit {
-        rows.truncate(limit as usize);
-        rows.last().map(|row| ThreadCursor {
-            latest_at: row.thread.latest_at,
-            id: row.thread.id.clone(),
-        })
-    } else {
-        None
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        match direction {
+            ThreadPageDirection::Forward => rows.truncate(limit as usize),
+            ThreadPageDirection::Backward => {
+                rows.drain(..rows.len() - limit as usize);
+            }
+        }
+    }
+    let cursor_for = |row: &crate::storage::ThreadListRow| ThreadCursor {
+        latest_at: row.thread.latest_at,
+        id: row.thread.id.clone(),
     };
+    let next_cursor = (direction == ThreadPageDirection::Forward && has_more)
+        .then(|| rows.last().map(cursor_for))
+        .flatten();
+    let previous_cursor = ((direction == ThreadPageDirection::Backward && has_more)
+        || (direction == ThreadPageDirection::Forward && has_cursor))
+        .then(|| rows.first().map(cursor_for))
+        .flatten();
     let items = rows
         .into_iter()
         .map(|row| {
@@ -113,8 +128,28 @@ pub async fn search_threads(
     Ok(ThreadSearchPage {
         items,
         next_cursor,
-        total,
+        previous_cursor,
     })
+}
+
+#[tauri::command]
+pub async fn search_total(
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    query: String,
+    scope: Option<SearchScope>,
+) -> Result<i64, String> {
+    let parsed = query::parse(&query, Utc::now()).map_err(|error| error.to_string())?;
+    if parsed.is_empty() {
+        return Ok(0);
+    }
+    let scope_filter = scope::resolve(&scope.unwrap_or(SearchScope::Default));
+    storage
+        .run(move |connection| {
+            SearchRepository::count(connection, &account_id, &parsed, &scope_filter)
+        })
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

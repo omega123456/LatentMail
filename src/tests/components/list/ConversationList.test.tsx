@@ -190,6 +190,28 @@ describe('ConversationList', () => {
     expect(list.scrollTop).toBeGreaterThan(30);
   });
 
+  it('requests an older page at the retained window top and preserves its scroll anchor', () => {
+    const onLoadPrevious = vi.fn();
+    const { rerender } = renderWithQueryClient(
+      <ConversationList threads={nextPage} onLoadPrevious={onLoadPrevious} />,
+    );
+    const list = screen.getByTestId('conversation-list');
+    Object.defineProperties(list, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 100 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    });
+    act(() => list.dispatchEvent(new Event('scroll')));
+    expect(onLoadPrevious).toHaveBeenCalledOnce();
+    rerender(<ConversationList threads={[...nextPage]} onLoadPrevious={onLoadPrevious} />);
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 30 });
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 200 });
+    rerender(
+      <ConversationList threads={[...prepended, ...nextPage]} onLoadPrevious={onLoadPrevious} />,
+    );
+    expect(list.scrollTop).toBeGreaterThan(30);
+  });
+
   it('shows a label already on the row as checked in the row context menu and lets it be removed', async () => {
     const user = userEvent.setup();
     const onTriage = vi.fn();

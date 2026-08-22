@@ -10,6 +10,7 @@ use latentmail_lib::{
         Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository,
         SearchRepository, Storage, ThreadRepository,
     },
+    sync::ThreadPageDirection,
 };
 
 fn now() -> chrono::DateTime<Utc> {
@@ -325,6 +326,50 @@ fn matches_deduplicate_to_threads_order_newest_first_and_paginate_without_loss()
         assert!(index <= previous, "results must be ordered newest-first");
         previous = index;
     }
+}
+
+#[test]
+fn backward_search_page_restores_newer_rows_in_newest_first_order() {
+    let connection = setup();
+    for index in 0..5 {
+        insert_message(
+            &connection,
+            &format!("m{index}"),
+            &format!("thread-{index}"),
+            "team@example.com",
+            "Quarterly summary",
+            "quarterly numbers attached",
+            index,
+            false,
+            false,
+            &["INBOX"],
+        );
+    }
+    let parsed = parse("quarterly", now()).unwrap();
+    let scope = resolve(&SearchScope::Default);
+    let newest =
+        SearchRepository::search(&connection, "account", &parsed, &scope, None, 5).unwrap();
+    let cursor = &newest[3].thread;
+    let restored = SearchRepository::search_with_direction(
+        &connection,
+        "account",
+        &parsed,
+        &scope,
+        Some((cursor.latest_at, cursor.id.clone())),
+        3,
+        ThreadPageDirection::Backward,
+    )
+    .unwrap();
+    assert_eq!(
+        restored
+            .iter()
+            .map(|row| row.thread.id.as_str())
+            .collect::<Vec<_>>(),
+        newest[..3]
+            .iter()
+            .map(|row| row.thread.id.as_str())
+            .collect::<Vec<_>>(),
+    );
 }
 
 #[test]

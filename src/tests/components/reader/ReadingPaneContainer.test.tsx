@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
+import { EventBridge } from '@/lib/query/event-bridge';
+import type { MessageBody } from '@/lib/types/ipc';
 import { useSelectionStore } from '@/stores/selection';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSearchStore } from '@/stores/search';
@@ -14,6 +16,46 @@ function renderWithClient() {
     <QueryClientProvider client={client}>
       <ReadingPaneContainer threadId="thread-1" />
     </QueryClientProvider>,
+  );
+}
+
+function conversationFor(htmlPresence: 'neverFetched' | 'present' | 'tooLarge') {
+  return {
+    threadId: 'thread-1',
+    subject: 'Subject',
+    messages: [
+      {
+        id: 'message-1',
+        sender: 'Alex <alex@example.com>',
+        recipients: ['me@example.com'],
+        subject: 'Subject',
+        sentAt: Date.parse('2026-08-10T09:00:00Z'),
+        snippet: 'Preview',
+        htmlBody: null,
+        htmlPresence,
+        truncated: false,
+        plainBody: null,
+        hasAttachments: false,
+        isUnread: false,
+        isStarred: false,
+        labelIds: ['INBOX'],
+        remoteImagesBlocked: false,
+        remoteImagesAllowed: false,
+        inlineImagesPending: false,
+        attachments: [],
+      },
+    ],
+  };
+}
+
+function selectAccount() {
+  act(() =>
+    useSelectionStore.setState({
+      activeAccountId: 'account-1',
+      activeMailboxId: 'INBOX',
+      activeThreadId: 'thread-1',
+      keyboardCursor: null,
+    }),
   );
 }
 
@@ -29,6 +71,99 @@ describe('ReadingPaneContainer', () => {
       }),
     ),
   );
+
+  it('reads a cached body locally without requesting Gmail', async () => {
+    selectAccount();
+    const readBody = vi.fn(() => ({
+      htmlBody: '<p>Cached</p>',
+      plainBody: null,
+      htmlPresence: 'present' as const,
+      truncated: false,
+      remoteImagesBlocked: false,
+      remoteImagesAllowed: false,
+      inlineImagesPending: false,
+    }));
+    const fetchBody = vi.fn();
+    ipc.override('list_accounts', [
+      {
+        id: 'account-1',
+        email: 'me@example.com',
+        displayName: 'Me',
+        avatarUrl: null,
+        needsReauthentication: false,
+      },
+    ]);
+    ipc.override('load_conversation', conversationFor('present'));
+    ipc.override('load_message_body', readBody);
+    ipc.override('fetch_message_body', fetchBody);
+    renderWithClient();
+    await screen.findByLabelText('Message body');
+    expect(readBody).toHaveBeenCalledOnce();
+    expect(fetchBody).not.toHaveBeenCalled();
+  });
+
+  it('uses Gmail for a never-fetched body and skips too-large bodies entirely', async () => {
+    selectAccount();
+    const fetchBody = vi.fn();
+    const readBody = vi.fn(() => ({
+      htmlBody: null,
+      plainBody: null,
+      htmlPresence: 'neverFetched' as const,
+      truncated: false,
+      remoteImagesBlocked: false,
+      remoteImagesAllowed: false,
+      inlineImagesPending: false,
+    }));
+    ipc.override('load_conversation', conversationFor('neverFetched'));
+    ipc.override('load_message_body', readBody);
+    ipc.override('fetch_message_body', fetchBody);
+    const first = renderWithClient();
+    await waitFor(() =>
+      expect(fetchBody).toHaveBeenCalledWith({ accountId: 'account-1', messageId: 'message-1' }),
+    );
+    first.unmount();
+    readBody.mockClear();
+    fetchBody.mockClear();
+    ipc.override('load_conversation', conversationFor('tooLarge'));
+    renderWithClient();
+    await screen.findByText('This message is too large to display here.');
+    expect(readBody).not.toHaveBeenCalled();
+    expect(fetchBody).not.toHaveBeenCalled();
+  });
+
+  it('renders a never-fetched body once the fetch event refreshes the cached body', async () => {
+    selectAccount();
+    let stored: MessageBody = {
+      htmlBody: null,
+      plainBody: null,
+      htmlPresence: 'neverFetched',
+      truncated: false,
+      remoteImagesBlocked: false,
+      remoteImagesAllowed: false,
+      inlineImagesPending: false,
+    };
+    ipc.override('load_conversation', conversationFor('neverFetched'));
+    ipc.override('load_message_body', () => stored);
+    ipc.override('fetch_message_body', () => {
+      stored = { ...stored, htmlBody: '<p>Fetched body</p>', htmlPresence: 'present' };
+    });
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <EventBridge />
+        <ReadingPaneContainer threadId="thread-1" />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Loading message…');
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('message://body-fetched', expect.any(Function)),
+    );
+    act(() =>
+      ipc.emit('message://body-fetched', { accountId: 'account-1', messageId: 'message-1' }),
+    );
+    await screen.findByLabelText('Message body');
+    expect(screen.queryByText('Loading message…')).not.toBeInTheDocument();
+  });
 
   it('resolves bulk selection state from the search results list while search is active, not the mailbox listing', async () => {
     useSelectionStore.setState({

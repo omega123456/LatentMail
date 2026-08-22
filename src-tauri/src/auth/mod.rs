@@ -363,12 +363,8 @@ impl AuthService {
     }
 }
 
-pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let directory = string_try!(app.path().app_data_dir());
-    string_try!(std::fs::create_dir_all(&directory));
-    app.manage(AuthService::new(string_try!(Storage::open(
-        directory.join("latentmail.sqlite")
-    ))));
+pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {
+    app.manage(AuthService::new(storage));
     Ok(())
 }
 

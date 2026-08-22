@@ -50,6 +50,43 @@ async fn read_and_write_setting_commands_round_trip_through_the_service() {
 }
 
 #[tokio::test]
+async fn startup_preferences_persist_through_the_service_and_test_autostart() {
+    let (app, _directory) = app_with_service();
+    let service = app.state::<SettingsService>();
+
+    service.set_start_at_login(true).unwrap();
+    assert!(service.read().await.unwrap().start_at_login);
+
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "startAtLogin".into(),
+        serde_json::json!(false),
+    )
+    .await
+    .unwrap();
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "closeToTray".into(),
+        serde_json::json!(false),
+    )
+    .await
+    .unwrap();
+    write_setting(
+        app.handle().clone(),
+        app.state(),
+        "startMinimized".into(),
+        serde_json::json!(true),
+    )
+    .await
+    .unwrap();
+
+    assert!(!service.close_to_tray());
+    assert!(service.start_minimized());
+}
+
+#[tokio::test]
 async fn every_persisted_setting_accepts_its_wire_value() {
     let (app, _directory) = app_with_service();
 
@@ -66,7 +103,13 @@ async fn every_persisted_setting_accepts_its_wire_value() {
         ("syncIntervalSeconds", serde_json::json!(45)),
         ("showSenderAvatars", serde_json::json!(false)),
         ("zoomPercent", serde_json::json!(125)),
+        ("allowedImageSenders", serde_json::json!(["me@example.com"])),
+        (
+            "commandOverrides",
+            serde_json::json!({ "archive": ["a", "ctrl+a"] }),
+        ),
         ("prefetchImageAttachments", serde_json::json!(true)),
+        ("updateCheckInterval", serde_json::json!("7d")),
     ] {
         write_setting(app.handle().clone(), app.state(), key.into(), value)
             .await
@@ -95,7 +138,16 @@ async fn every_persisted_setting_accepts_its_wire_value() {
     assert_eq!(settings.sync_interval_seconds, 45);
     assert!(!settings.show_sender_avatars);
     assert_eq!(settings.zoom_percent, 125);
+    assert_eq!(settings.allowed_image_senders, ["me@example.com"]);
+    assert_eq!(
+        settings.command_overrides.get("archive"),
+        Some(&vec!["a".to_owned(), "ctrl+a".to_owned()])
+    );
     assert!(settings.prefetch_image_attachments);
+    assert_eq!(
+        settings.update_check_interval,
+        latentmail_lib::settings::UpdateCheckInterval::Weekly
+    );
 }
 
 #[tokio::test]
@@ -217,7 +269,7 @@ async fn write_surfaces_a_storage_error_when_the_settings_table_cannot_accept_an
 }
 
 #[test]
-fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window() {
+fn initialize_manages_settings_from_the_setup_storage() {
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -229,7 +281,11 @@ fn initialize_creates_the_app_data_directory_manages_state_and_shows_the_window(
         .build()
         .unwrap();
 
-    initialize(app.handle()).unwrap();
+    let directory = app.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    app.manage(storage.clone());
+    initialize(app.handle(), storage).unwrap();
 
     assert!(app.try_state::<SettingsService>().is_some());
 }

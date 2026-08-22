@@ -579,15 +579,15 @@ fn initialize_creates_the_avatar_cache_directory_and_manages_service_state() {
     let application = app();
     let storage_directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(storage_directory.path().join("mail.sqlite")).unwrap();
-    application.manage(SettingsService::new(storage));
+    application.manage(SettingsService::new(storage.clone()));
 
-    initialize(application.handle()).unwrap();
+    initialize(application.handle(), storage).unwrap();
 
     assert!(application.try_state::<AvatarService>().is_some());
 }
 
 #[test]
-fn initialize_surfaces_a_readable_error_when_the_database_path_is_unusable() {
+fn initialize_surfaces_a_readable_error_when_the_cache_path_is_unusable() {
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     std::env::set_var("APPDATA", home.path());
@@ -596,12 +596,13 @@ fn initialize_surfaces_a_readable_error_when_the_database_path_is_unusable() {
     let application = app();
     let storage_directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(storage_directory.path().join("mail.sqlite")).unwrap();
-    application.manage(SettingsService::new(storage));
+    application.manage(SettingsService::new(storage.clone()));
 
     let data_directory = application.handle().path().app_data_dir().unwrap();
-    std::fs::create_dir_all(data_directory.join("latentmail.sqlite")).unwrap();
+    std::fs::create_dir_all(&data_directory).unwrap();
+    std::fs::write(data_directory.join("avatar-cache"), []).unwrap();
 
-    assert!(initialize(application.handle()).is_err());
+    assert!(initialize(application.handle(), storage).is_err());
 }
 
 #[test]

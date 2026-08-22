@@ -9,6 +9,9 @@ export const queryKeys = {
   search: (accountId: string, query: string, scope: SearchScope) =>
     ['search', accountId, query, JSON.stringify(scope)] as const,
   searchForAccount: (accountId: string) => ['search', accountId] as const,
+  searchTotal: (accountId: string, query: string, scope: SearchScope) =>
+    ['searchTotal', accountId, query, JSON.stringify(scope)] as const,
+  searchTotalsForAccount: (accountId: string) => ['searchTotal', accountId] as const,
   parsedSearchQuery: (query: string) => ['parsedSearchQuery', query] as const,
   conversation: (
     accountId: string,
@@ -19,6 +22,14 @@ export const queryKeys = {
   conversationThread: (accountId: string, threadId: string) =>
     ['conversation', accountId, threadId] as const,
   conversationsForAccount: (accountId: string) => ['conversation', accountId] as const,
+  messageBodiesForMessage: (accountId: string, messageId: string) =>
+    ['messageBody', accountId, messageId] as const,
+  messageBody: (
+    accountId: string,
+    messageId: string,
+    policyKey: string,
+    entryScope: ConversationEntryScope,
+  ) => ['messageBody', accountId, messageId, policyKey, JSON.stringify(entryScope)] as const,
   syncStatus: (accountId: string) => ['syncStatus', accountId] as const,
   traversalStatus: (accountId: string) => ['traversalStatus', accountId] as const,
   senderAvatar: (domain: string) => ['senderAvatar', domain] as const,
@@ -28,8 +39,6 @@ export const queryKeys = {
   appUpdate: ['appUpdate'] as const,
   cachedAttachment: (accountId: string, messageId: string, attachmentId: string) =>
     ['cachedAttachment', accountId, messageId, attachmentId] as const,
-  attachmentBytes: (accountId: string, messageId: string, attachmentId: string) =>
-    ['attachmentBytes', accountId, messageId, attachmentId] as const,
   attachmentText: (accountId: string, messageId: string, attachmentId: string) =>
     ['attachmentText', accountId, messageId, attachmentId] as const,
 };

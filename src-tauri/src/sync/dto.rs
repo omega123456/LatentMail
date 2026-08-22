@@ -231,11 +231,20 @@ pub struct ThreadCursor {
     pub id: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadPageDirection {
+    #[default]
+    Forward,
+    Backward,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadPage {
     pub items: Vec<ThreadDto>,
     pub next_cursor: Option<ThreadCursor>,
+    pub previous_cursor: Option<ThreadCursor>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -243,7 +252,7 @@ pub struct ThreadPage {
 pub struct ThreadSearchPage {
     pub items: Vec<ThreadDto>,
     pub next_cursor: Option<ThreadCursor>,
-    pub total: i64,
+    pub previous_cursor: Option<ThreadCursor>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -299,6 +308,25 @@ pub struct MessageDto {
     pub draft_id: Option<String>,
     pub truncated: bool,
     pub attachments: Vec<AttachmentDto>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageBodyDto {
+    pub html_body: Option<String>,
+    pub plain_body: Option<String>,
+    pub html_presence: HtmlPresenceDto,
+    pub truncated: bool,
+    pub remote_images_blocked: bool,
+    pub remote_images_allowed: bool,
+    pub inline_images_pending: bool,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageBodyFetchedDto {
+    pub account_id: String,
+    pub message_id: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -389,6 +417,44 @@ pub fn message_dto(
         draft_id,
         truncated,
         attachments: attachments.into_iter().map(AttachmentDto::from).collect(),
+    }
+}
+
+pub fn message_body_dto(
+    message: &Message,
+    inline_content_ids: &[String],
+    allow_remote: bool,
+    account_id: &str,
+) -> MessageBodyDto {
+    let sanitized = message.html_body.as_deref().map(|html| {
+        let sources = inline_content_ids
+            .iter()
+            .map(|content_id| {
+                (
+                    content_id.clone(),
+                    crate::inline_images::proxy_url(account_id, &message.id, content_id),
+                )
+            })
+            .collect();
+        crate::sanitize::sanitize(html, &sources, allow_remote)
+    });
+    let (html_body, remote_images_blocked, truncated, inline_images_pending) = match sanitized {
+        Some(value) => (
+            Some(value.html),
+            value.remote_images_blocked,
+            value.truncated,
+            value.inline_images_missing,
+        ),
+        None => (None, false, false, false),
+    };
+    MessageBodyDto {
+        html_body,
+        plain_body: message.plain_body.clone(),
+        html_presence: message.html_presence.into(),
+        truncated,
+        remote_images_blocked,
+        remote_images_allowed: allow_remote,
+        inline_images_pending,
     }
 }
 
