@@ -158,7 +158,9 @@ describe('MessageCard', () => {
       />,
     );
     const allowedFrame = screen.getByLabelText('Message body') as HTMLIFrameElement;
-    expect(allowedFrame.srcdoc).toContain('img-src data: https: http:;');
+    expect(allowedFrame.srcdoc).toContain(
+      'img-src data: remoteimg: http://remoteimg.localhost https: http:;',
+    );
   });
 
   it('toggles the message from a click on its row without hijacking the sender button', async () => {

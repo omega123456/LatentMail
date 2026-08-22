@@ -52,7 +52,17 @@ pub fn sanitize(
             "nowrap",
             "role",
         ])
-        .url_schemes(["http", "https", "mailto", "data", "cid"].into())
+        .url_schemes(
+            [
+                "http",
+                "https",
+                "mailto",
+                "data",
+                "cid",
+                crate::remote_images::SCHEME,
+            ]
+            .into(),
+        )
         .attribute_filter(
             move |element, attribute, value| match (element, attribute) {
                 ("a", "href")
@@ -65,6 +75,10 @@ pub fn sanitize(
                 }
                 ("img", "src") => image_source(value, &cid_parts, &blocked_in_filter, allow_remote)
                     .map(Cow::Owned),
+                (_, "style") => Some(
+                    style_images(value, &cid_parts, &blocked_in_filter, allow_remote)
+                        .map_or(Cow::Borrowed(value), Cow::Owned),
+                ),
                 _ => Some(Cow::Borrowed(value)),
             },
         );
@@ -101,10 +115,42 @@ fn image_source(
         return None;
     }
     if allow_remote {
-        return Some(source.to_owned());
+        return Some(crate::remote_images::proxy_url(source));
     }
     blocked.store(true, std::sync::atomic::Ordering::Relaxed);
     Some(REMOTE_IMAGE_PLACEHOLDER.to_owned())
+}
+
+fn style_images(
+    value: &str,
+    cid_parts: &HashMap<String, CidPart>,
+    blocked: &std::sync::atomic::AtomicBool,
+    allow_remote: bool,
+) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    if !lower.contains("url(") {
+        return None;
+    }
+    let mut rewritten = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("url(") {
+        let open = cursor + offset + "url(".len();
+        let Some(length) = lower[open..].find(')') else {
+            break;
+        };
+        let close = open + length;
+        let target = value[open..close].trim().trim_matches(['"', '\'']);
+        rewritten.push_str(&value[cursor..open]);
+        rewritten.push('\'');
+        rewritten.push_str(
+            &image_source(target, cid_parts, blocked, allow_remote)
+                .unwrap_or_else(|| REMOTE_IMAGE_PLACEHOLDER.to_owned()),
+        );
+        rewritten.push('\'');
+        cursor = close;
+    }
+    rewritten.push_str(&value[cursor..]);
+    Some(rewritten)
 }
 
 fn cap(html: String) -> SanitizedHtml {

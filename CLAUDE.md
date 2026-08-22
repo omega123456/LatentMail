@@ -32,7 +32,7 @@ The database is a rebuildable cache of Gmail, but it is also the thing the UI re
 
 - OAuth uses PKCE (S256) with `access_type=offline` and `prompt=consent`; redirects go to `127.0.0.1`, never `localhost`. Refresh tokens live in the OS keychain only — never in the database or on disk in plaintext.
 - Email HTML is sanitized **twice**: `ammonia` in Rust before it crosses IPC, then DOMPurify in React before injection. Message bodies render inside a `srcdoc` iframe whose own CSP is `default-src 'none'; form-action 'none'` (plus `img-src`/`style-src`/`font-src` allowances) — nothing inside can execute regardless of what survives sanitization. The iframe carries **no `sandbox` attribute**: WebKit dispatches no DOM events at all inside a scripting-disabled sandbox, which broke link handling. See `.agent/adr/2026-08-21--drop-the-reader-iframe-sandbox-attribute-and-rely-on-its-content-security-policy--3f6b1a74.md`.
-- Remote images are always blocked/rewritten to placeholders in this slice; there is no bypass or allowlist yet.
+- Remote images are blocked by default and rewritten to a transparent placeholder. Rust decides per message (`ImagePolicy::allows`); Spam and Trash outrank every bypass. An **allowed** remote image is never fetched by the webview — the sanitizer rewrites it to the `remoteimg://` protocol (`src-tauri/src/remote_images.rs`), Rust fetches the bytes and serves them from the application origin. Hosts that send `cross-origin-resource-policy: same-origin` (claude.ai, for one) cannot be embedded any other way. The same rewrite applies to `url(...)` inside `style` attributes.
 
 ## Critical Rules for Agents
 

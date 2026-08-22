@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use latentmail_lib::remote_images::proxy_url;
 use latentmail_lib::sanitize::{sanitize, CidPart, MAX_SANITIZED_HTML_BYTES};
 
 #[test]
@@ -69,15 +70,82 @@ fn caps_html_at_an_element_boundary() {
 }
 
 #[test]
-fn allowing_remote_images_keeps_the_original_url_and_reports_nothing_blocked() {
+fn allowing_remote_images_routes_them_through_the_proxy_and_reports_nothing_blocked() {
     let result = sanitize(
         r#"<img src="https://tracker.example/pixel.png"><img src="data:text/html,boom">"#,
         &HashMap::new(),
         true,
     );
 
-    assert!(result.html.contains("https://tracker.example/pixel.png"));
+    assert!(
+        result
+            .html
+            .contains(&proxy_url("https://tracker.example/pixel.png")),
+        "{}",
+        result.html
+    );
     assert!(!result.html.contains("data:image/gif;base64"));
     assert!(!result.html.contains("data:text"));
+    assert!(!result.remote_images_blocked);
+}
+
+#[test]
+fn blocks_remote_images_referenced_from_a_style_attribute() {
+    let result = sanitize(
+        r#"<div style="background:url('https://tracker.example/hand.gif') center/contain no-repeat,url(https://tracker.example/poster.png);width:146px"></div>"#,
+        &HashMap::new(),
+        false,
+    );
+
+    assert!(!result.html.contains("tracker.example"), "{}", result.html);
+    assert!(result.html.contains("width:146px"), "{}", result.html);
+    assert!(result.html.contains("data:image/gif;base64"));
+    assert!(result.remote_images_blocked);
+}
+
+#[test]
+fn routes_style_attribute_images_through_the_proxy_when_remote_images_are_allowed() {
+    let result = sanitize(
+        r#"<div style="background:url('https://tracker.example/hand.gif') center/contain"></div>"#,
+        &HashMap::new(),
+        true,
+    );
+
+    assert!(
+        result
+            .html
+            .contains(&proxy_url("https://tracker.example/hand.gif")),
+        "{}",
+        result.html
+    );
+    assert!(result.html.contains("center/contain"), "{}", result.html);
+    assert!(!result.remote_images_blocked);
+}
+
+#[test]
+fn resolves_content_id_images_referenced_from_a_style_attribute() {
+    let parts = HashMap::from([(
+        "logo".to_owned(),
+        CidPart {
+            bytes: vec![1, 2, 3],
+            mime_type: "image/png".into(),
+        },
+    )]);
+
+    let result = sanitize(
+        r#"<div style="background-image:url(cid:logo)"></div>"#,
+        &parts,
+        false,
+    );
+
+    assert!(result.html.contains("data:image/png;base64,AQID"));
+    assert!(!result.remote_images_blocked);
+}
+
+#[test]
+fn leaves_a_style_attribute_without_images_untouched() {
+    let result = sanitize(r#"<div style="color:red"></div>"#, &HashMap::new(), false);
+
+    assert!(result.html.contains("color:red"));
     assert!(!result.remote_images_blocked);
 }

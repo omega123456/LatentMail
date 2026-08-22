@@ -4,6 +4,8 @@ import interUrl from '@/assets/inter-latin.woff2?url';
 import { invoke } from '@/lib/ipc/commands';
 
 const maxFrameHeight = 1600;
+const allowedUriSchemes =
+  /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|remoteimg):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i;
 
 export function BodyFrame({
   html,
@@ -30,9 +32,10 @@ export function BodyFrame({
       </pre>
     );
   const dark = document.documentElement.classList.contains('dark');
-  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src 'self'; form-action 'none'">`;
+  const remoteImageSources = ' remoteimg: http://remoteimg.localhost https: http:';
+  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:${allowRemoteImages ? remoteImageSources : ''}; style-src 'unsafe-inline'; font-src 'self'; form-action 'none'">`;
   const frameFont = `@font-face{font-family:Inter;src:url(${interUrl}) format('woff2');font-weight:100 900;font-display:swap}`;
-  const srcDoc = `${frameCsp}<style>${frameFont}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625;word-break:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true })}`;
+  const srcDoc = `${frameCsp}<style>${frameFont}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625;word-break:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true, ALLOWED_URI_REGEXP: allowedUriSchemes })}`;
   return (
     <iframe
       aria-label="Message body"

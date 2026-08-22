@@ -36,6 +36,21 @@ describe('BodyFrame', () => {
     expect(openExternal).toHaveBeenCalledWith({ url: 'https://example.com' });
   });
 
+  it('keeps proxied image sources and still drops executable ones', () => {
+    const proxied = 'remoteimg://localhost/?url=https%3A%2F%2Fclaude.ai%2Fa.gif';
+    render(
+      <BodyFrame
+        html={`<img src="${proxied}"><img src="javascript:bad()"><div style="background:url(${proxied})"></div>`}
+        text={null}
+        allowRemoteImages
+      />,
+    );
+    const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
+    expect(srcdoc).toContain(`<img src="${proxied}">`);
+    expect(srcdoc).toContain(`background:url(${proxied})`);
+    expect(srcdoc).not.toContain('javascript:');
+  });
+
   it('cancels the native right-click menu and forwards it to the reader menu', async () => {
     render(<BodyFrame html={'<p>Body</p>'} text={null} />);
     const frame = screen.getByTitle('Message body') as HTMLIFrameElement;

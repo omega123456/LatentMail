@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod logging;
 pub mod os;
 pub mod queue;
+pub mod remote_images;
 pub mod sanitize;
 pub mod search;
 pub mod settings;
@@ -27,7 +28,18 @@ pub fn run() {
         println!("{message}");
         std::process::exit(code);
     }
+    let image_client = reqwest::Client::new();
     shell::register_plugins(ipc::register(tauri::Builder::default()))
+        .register_asynchronous_uri_scheme_protocol(
+            remote_images::SCHEME,
+            move |_app, request, responder| {
+                let client = image_client.clone();
+                let uri = request.uri().to_string();
+                tauri::async_runtime::spawn(async move {
+                    responder.respond(remote_images::respond(&client, &uri).await);
+                });
+            },
+        )
         .setup(|app| {
             let handle = app.handle();
             let directory = handle.path().app_log_dir()?;
