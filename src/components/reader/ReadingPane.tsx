@@ -27,6 +27,7 @@ import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import type { MoveDestinationId } from '@/components/actions/MoveToMenu';
 import { MessageCard, type MessageRibbonProps, type ReaderMessage } from './MessageCard';
+import { ReaderContextMenu } from './ReaderContextMenu';
 
 const MOVE_DESTINATION_IDS: MoveDestinationId[] = ['INBOX', 'SPAM', 'TRASH'];
 
@@ -187,67 +188,69 @@ export function ReadingPane({
     onForward: () => undefined,
   };
   return (
-    <section
-      aria-label="Reading pane"
-      className="h-full overflow-auto bg-surface-bright p-stack-gap-md dark:bg-dark-surface-container-high"
-      data-testid="reading-pane"
-    >
-      <div className="min-h-full w-full rounded-md border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest">
-        <h1 className="mb-container-padding select-text text-display-sm leading-tight text-on-surface dark:text-dark-on-surface">
-          {conversation.subject}
-        </h1>
-        <div className="mb-container-padding">
-          <ActionRibbon
-            systemLabelIds={threadSystemLabelIds}
-            unread={threadUnread}
-            starred={threadStarred}
-            labels={labelMenuEntries}
-            {...threadHandlers}
-            onReply={() => composeThread('reply')}
-            onReplyAll={() => composeThread('reply-all')}
-            onForward={() => composeThread('forward')}
-            onEditDraft={lastMessage?.isDraft ? () => composeThread('edit-draft') : undefined}
-          />
+    <ReaderContextMenu>
+      <section
+        aria-label="Reading pane"
+        className="h-full overflow-auto bg-surface-bright p-stack-gap-md dark:bg-dark-surface-container-high"
+        data-testid="reading-pane"
+      >
+        <div className="min-h-full w-full rounded-md border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest">
+          <h1 className="mb-container-padding select-text text-display-sm leading-tight text-on-surface dark:text-dark-on-surface">
+            {conversation.subject}
+          </h1>
+          <div className="mb-container-padding">
+            <ActionRibbon
+              systemLabelIds={threadSystemLabelIds}
+              unread={threadUnread}
+              starred={threadStarred}
+              labels={labelMenuEntries}
+              {...threadHandlers}
+              onReply={() => composeThread('reply')}
+              onReplyAll={() => composeThread('reply-all')}
+              onForward={() => composeThread('forward')}
+              onEditDraft={lastMessage?.isDraft ? () => composeThread('edit-draft') : undefined}
+            />
+          </div>
+          {conversation.messages.map((message, index) => (
+            <MessageCard
+              key={message.id}
+              message={message}
+              expanded={index === conversation.messages.length - 1}
+              newest={index === conversation.messages.length - 1}
+              badges={messageBadges(message, labelMenuEntries)}
+              ribbon={{
+                ...messageRibbonBase,
+                systemLabelIds: message.labelIds ?? [],
+                onApplyLabels: (changes) =>
+                  onMessageTriage?.(message.id, { kind: 'label', ...changes }),
+                onMoveTo: (destination) =>
+                  onMessageTriage?.(message.id, { kind: 'move', destination }),
+                onToggleSpam: () =>
+                  onMessageTriage?.(message.id, {
+                    kind: 'move',
+                    destination: (message.labelIds ?? []).includes('SPAM') ? 'INBOX' : 'SPAM',
+                  }),
+                onDelete: () => onMessageTriage?.(message.id, { kind: 'delete' }),
+                onReply: () => onCompose?.('reply', message.id),
+                onReplyAll: () => onCompose?.('reply-all', message.id),
+                onForward: () => onCompose?.('forward', message.id),
+                onEditDraft: message.isDraft
+                  ? () => onCompose?.('edit-draft', message.id)
+                  : undefined,
+              }}
+              onFetchBody={onFetchBody}
+              onComposeTo={onComposeTo}
+              onLoadImages={onLoadImages}
+              onTrustSender={onTrustSender}
+              loadingBody={loadingMessageId === message.id}
+              bodyError={failedMessageId === message.id}
+              gmailThreadUrl={gmailThreadUrl}
+              accountId={accountId}
+            />
+          ))}
         </div>
-        {conversation.messages.map((message, index) => (
-          <MessageCard
-            key={message.id}
-            message={message}
-            expanded={index === conversation.messages.length - 1}
-            newest={index === conversation.messages.length - 1}
-            badges={messageBadges(message, labelMenuEntries)}
-            ribbon={{
-              ...messageRibbonBase,
-              systemLabelIds: message.labelIds ?? [],
-              onApplyLabels: (changes) =>
-                onMessageTriage?.(message.id, { kind: 'label', ...changes }),
-              onMoveTo: (destination) =>
-                onMessageTriage?.(message.id, { kind: 'move', destination }),
-              onToggleSpam: () =>
-                onMessageTriage?.(message.id, {
-                  kind: 'move',
-                  destination: (message.labelIds ?? []).includes('SPAM') ? 'INBOX' : 'SPAM',
-                }),
-              onDelete: () => onMessageTriage?.(message.id, { kind: 'delete' }),
-              onReply: () => onCompose?.('reply', message.id),
-              onReplyAll: () => onCompose?.('reply-all', message.id),
-              onForward: () => onCompose?.('forward', message.id),
-              onEditDraft: message.isDraft
-                ? () => onCompose?.('edit-draft', message.id)
-                : undefined,
-            }}
-            onFetchBody={onFetchBody}
-            onComposeTo={onComposeTo}
-            onLoadImages={onLoadImages}
-            onTrustSender={onTrustSender}
-            loadingBody={loadingMessageId === message.id}
-            bodyError={failedMessageId === message.id}
-            gmailThreadUrl={gmailThreadUrl}
-            accountId={accountId}
-          />
-        ))}
-      </div>
-    </section>
+      </section>
+    </ReaderContextMenu>
   );
 }
 

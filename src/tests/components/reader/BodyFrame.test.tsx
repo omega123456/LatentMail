@@ -36,18 +36,28 @@ describe('BodyFrame', () => {
     expect(openExternal).toHaveBeenCalledWith({ url: 'https://example.com' });
   });
 
-  it('cancels the native right-click menu inside the message frame', async () => {
+  it('cancels the native right-click menu and forwards it to the reader menu', async () => {
     render(<BodyFrame html={'<p>Body</p>'} text={null} />);
     const frame = screen.getByTitle('Message body') as HTMLIFrameElement;
-    frame.contentDocument?.write('<p>Body</p>');
+    frame.contentDocument?.write('<p>Body</p><a href="https://example.com">Safe link</a>');
     await act(async () => {
       fireEvent.load(frame);
       await Promise.resolve();
     });
+    const forwarded = vi.fn();
+    frame.addEventListener('contextmenu', forwarded);
     const paragraph = frame.contentDocument?.querySelector('p');
     const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     paragraph?.dispatchEvent(menu);
 
     expect(menu.defaultPrevented).toBe(true);
+    expect(forwarded).toHaveBeenCalled();
+    expect(frame.dataset.contextHref).toBe('');
+
+    frame.contentDocument
+      ?.querySelector('a')
+      ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    expect(frame.dataset.contextHref).toBe('https://example.com');
   });
 });

@@ -18,9 +18,9 @@ import { computeRibbonVisibility } from './ActionRibbon';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
 
-const menuContentClass =
+export const menuContentClass =
   'z-50 min-w-56 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-1 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest';
-const itemClass =
+export const itemClass =
   'flex cursor-pointer select-none items-center gap-2 rounded px-2 py-1.5 text-body-sm text-on-surface outline-none data-[highlighted]:bg-surface-container-low dark:text-dark-on-surface dark:data-[highlighted]:bg-dark-surface-container';
 const subTriggerClass = `${itemClass} justify-between`;
 

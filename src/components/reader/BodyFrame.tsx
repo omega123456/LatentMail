@@ -45,7 +45,8 @@ export function BodyFrame({
       height={heightConstrained ? undefined : height}
       srcDoc={srcDoc}
       onLoad={(event) => {
-        const document = event.currentTarget.contentDocument;
+        const frame = event.currentTarget;
+        const document = frame.contentDocument;
         if (!document) return;
         if (!heightConstrained) {
           const measure = () =>
@@ -53,7 +54,20 @@ export function BodyFrame({
           measure();
           new ResizeObserver(measure).observe(document.body);
         }
-        document.addEventListener('contextmenu', (menu) => menu.preventDefault());
+        document.addEventListener('contextmenu', (menu) => {
+          menu.preventDefault();
+          const link = (menu.target as Element | null)?.closest('a[href]');
+          frame.dataset.contextHref = link?.getAttribute('href') ?? '';
+          const bounds = frame.getBoundingClientRect();
+          frame.dispatchEvent(
+            new MouseEvent('contextmenu', {
+              bubbles: true,
+              cancelable: true,
+              clientX: bounds.left + menu.clientX,
+              clientY: bounds.top + menu.clientY,
+            }),
+          );
+        });
         document.addEventListener('click', (click) => {
           const link = (click.target as Element | null)?.closest('a[href]');
           if (!link) return;

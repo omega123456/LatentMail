@@ -35,12 +35,6 @@ export function CollapsedRail({
       data-testid="collapsed-rail"
       className="flex w-rail-width flex-col items-center gap-stack-gap-md bg-surface-container-low px-stack-gap-sm py-stack-gap-sm dark:bg-dark-surface-container-low"
     >
-      <AccountSwitcher
-        accounts={accounts}
-        activeAccountId={activeAccountId}
-        collapsed
-        onSelect={onSelectAccount}
-      />
       <button
         type="button"
         aria-label="Compose"
@@ -75,6 +69,14 @@ export function CollapsedRail({
       >
         <Settings aria-hidden="true" size={18} />
       </button>
+      <div className="mt-1 flex w-full justify-center border-t border-outline-variant pt-3 dark:border-dark-outline-variant">
+        <AccountSwitcher
+          accounts={accounts}
+          activeAccountId={activeAccountId}
+          collapsed
+          onSelect={onSelectAccount}
+        />
+      </div>
     </aside>
   );
 }
