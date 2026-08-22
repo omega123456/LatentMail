@@ -76,7 +76,9 @@ Element.prototype.getClientRects = () => emptyClientRects;
 Range.prototype.getClientRects = () => emptyClientRects;
 Range.prototype.getBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
 document.elementFromPoint = () => null;
-Object.assign(navigator, { clipboard: { readText: vi.fn(), writeText: vi.fn() } });
+Object.assign(navigator, {
+  clipboard: { readText: vi.fn(), writeText: vi.fn(() => Promise.resolve()) },
+});
 if (!URL.createObjectURL) {
   Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:mock-object-url') });
 }

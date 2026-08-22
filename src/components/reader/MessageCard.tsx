@@ -96,6 +96,7 @@ export function MessageCard({
         role="presentation"
         onClick={(event) => {
           if (newest || (event.target as HTMLElement).closest('button')) return;
+          if (!(window.getSelection()?.isCollapsed ?? true)) return;
           setExpanded((value) => !value);
         }}
         className={`flex items-start gap-2 rounded px-4 pt-4 ${open ? 'mb-2 border-b border-outline-variant/30 pb-6 dark:border-dark-outline-variant/50' : 'pb-4'} ${newest ? '' : 'cursor-pointer transition-colors hover:bg-surface-container-low dark:hover:bg-dark-surface-container-low'}`}

@@ -87,4 +87,74 @@ describe('MessageHeader', () => {
     expect(screen.queryByText('E')).not.toBeInTheDocument();
     act(() => useLayoutStore.setState({ showSenderAvatars: true }));
   });
+
+  it('opens the same sender compose from the display name and from the address', async () => {
+    const user = userEvent.setup();
+    const compose = vi.fn();
+    renderWithQueryClient(
+      <MessageHeader
+        sender={{ name: 'Elena', address: 'elena@example.com' }}
+        recipients={[{ name: 'Me', address: 'me@example.com' }]}
+        sentAt={parseISO('2026-08-13T12:00:00Z')}
+        onComposeTo={compose}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Elena' }));
+    await user.click(screen.getByRole('button', { name: '<elena@example.com>' }));
+    expect(compose).toHaveBeenNthCalledWith(1, { name: 'Elena', address: 'elena@example.com' });
+    expect(compose).toHaveBeenNthCalledWith(2, { name: 'Elena', address: 'elena@example.com' });
+  });
+
+  it('copies the sender address and announces it, then returns to the copy icon', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    renderWithQueryClient(
+      <MessageHeader
+        sender={{ name: 'Elena', address: 'elena@example.com' }}
+        recipients={[]}
+        sentAt={parseISO('2026-08-13T12:00:00Z')}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Copy elena@example.com' }));
+    expect(writeText).toHaveBeenCalledWith('elena@example.com');
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied elena@example.com');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('');
+    vi.useRealTimers();
+  });
+
+  it('copies every recipient address from the single control on the to line', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    renderWithQueryClient(
+      <MessageHeader
+        sender={{ name: 'Elena', address: 'elena@example.com' }}
+        recipients={[
+          { name: 'Me', address: 'me@example.com' },
+          { name: 'Team', address: 'team@example.com' },
+        ]}
+        sentAt={parseISO('2026-08-13T12:00:00Z')}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Copy all recipient addresses' }));
+    expect(writeText).toHaveBeenCalledWith('me@example.com, team@example.com');
+  });
+
+  it('offers no recipient copy control when the message lists no recipients', () => {
+    renderWithQueryClient(
+      <MessageHeader
+        sender={{ name: 'Elena', address: 'elena@example.com' }}
+        recipients={[]}
+        sentAt={parseISO('2026-08-13T12:00:00Z')}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Copy elena@example.com' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Copy all recipient addresses' }),
+    ).not.toBeInTheDocument();
+  });
 });

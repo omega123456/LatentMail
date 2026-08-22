@@ -319,6 +319,11 @@ describe('AppShell wired to real data', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize reader' }), { clientY: 10 });
     fireEvent.pointerMove(window, { clientY: 30 });
     fireEvent.pointerUp(window);
+    expect(useLayoutStore.getState().readerHeight).toBe(20);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize reader' }), { clientY: 30 });
+    fireEvent.pointerMove(window, { clientY: 10 });
+    fireEvent.pointerUp(window);
     expect(useLayoutStore.getState().readerHeight).toBe(80);
   });
 });

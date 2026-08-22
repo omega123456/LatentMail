@@ -278,7 +278,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const readerResize = (offset: number) =>
     setPane(
       '--reader-h',
-      readerHeight + (offset / (shell.current?.clientHeight || 1)) * 100,
+      readerHeight - (offset / (shell.current?.clientHeight || 1)) * 100,
       setReaderHeight,
     );
   const body: ReactNode =

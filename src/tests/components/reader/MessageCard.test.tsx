@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageCard } from '@/components/reader/MessageCard';
@@ -245,5 +245,27 @@ describe('MessageCard', () => {
     expect(openExternal).toHaveBeenCalledWith({
       url: 'https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1',
     });
+  });
+
+  it('leaves the card collapsed when the header click ended a text selection', () => {
+    const { container } = renderWithQueryClient(
+      <MessageCard
+        message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present' }}
+        expanded={false}
+        newest={false}
+      />,
+    );
+    const stamp = container.querySelector('time') as HTMLTimeElement;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(stamp);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    fireEvent.click(stamp);
+    expect(screen.getByText('Preview')).toBeInTheDocument();
+
+    selection?.removeAllRanges();
+    fireEvent.click(stamp);
+    expect(screen.queryByText('Preview')).not.toBeInTheDocument();
   });
 });
