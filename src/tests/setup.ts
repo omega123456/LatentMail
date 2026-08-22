@@ -52,6 +52,7 @@ vi.stubGlobal(
   },
 );
 HTMLElement.prototype.scrollIntoView = vi.fn();
+HTMLElement.prototype.scrollTo = vi.fn();
 Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
   configurable: true,
   value: () => ({
