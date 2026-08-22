@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check, Minus, Plus } from 'lucide-react';
+import { TextInput } from '@/components/shared/TextInput';
 import { LABEL_COLOR_BY_ID, type LabelColorId } from '@/lib/labels/palette';
 
 export type LabelMembership = 'checked' | 'unchecked' | 'indeterminate';
@@ -98,13 +99,12 @@ export function LabelsMenu(props: LabelsMenuProps) {
     <div className="flex w-full flex-col gap-1" data-testid="labels-menu">
       <h3 className="px-2 pb-1 text-label-md text-secondary dark:text-dark-secondary">LABELS</h3>
       {labels.length > FILTER_THRESHOLD && (
-        <input
-          type="text"
+        <TextInput
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Filter labels…"
           aria-label="Filter labels"
-          className="mb-1 select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface"
+          className="mb-1"
         />
       )}
       {labels.length === 0 ? (

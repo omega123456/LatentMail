@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ImageOff, Info, Mail, Search, Trash2 } from 'lucide-react';
 import { Select } from '@/components/shared/Select';
+import { TextInput } from '@/components/shared/TextInput';
 import { useLayoutStore } from '@/stores/layout';
 import { settingsDangerIconButton, settingsLinkPrimary, settingsTriggerClass } from './styles';
 
@@ -68,7 +69,7 @@ export function TrustedSendersList() {
           <div className="flex shrink-0 items-center gap-2">
             <label className="flex h-8.5 w-52.5 items-center gap-1.75 rounded-control border border-transparent bg-settings-container-low px-2.5 text-settings-ink-mute focus-within:border-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute dark:focus-within:border-dark-settings-primary">
               <Search aria-hidden="true" size={14} className="shrink-0" />
-              <input
+              <TextInput
                 type="search"
                 value={filter}
                 aria-label="Filter trusted senders"
@@ -77,7 +78,8 @@ export function TrustedSendersList() {
                   setFilter(event.target.value);
                   setRequestedPage(1);
                 }}
-                className="w-full select-text bg-transparent text-settings-desc text-settings-ink outline-none placeholder:text-settings-ink-mute dark:text-dark-settings-ink dark:placeholder:text-dark-settings-ink-mute"
+                variant="bare"
+                className="w-full text-settings-desc text-settings-ink placeholder:text-settings-ink-mute dark:text-dark-settings-ink dark:placeholder:text-dark-settings-ink-mute"
               />
             </label>
             <Select

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { differenceInCalendarDays, format, isToday, isYesterday } from 'date-fns';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RefreshCw, Search } from 'lucide-react';
 import { Select } from '@/components/shared/Select';
+import { TextInput } from '@/components/shared/TextInput';
 import { SettingRow } from '@/components/settings/SettingRow';
 import { SettingsSection } from '@/components/settings/SettingsSection';
 import { settingsQuietButton, settingsTriggerClass } from '@/components/settings/styles';
@@ -174,7 +175,7 @@ export function LogsSection() {
         <div className="flex flex-wrap items-center gap-2.5 border-b border-settings-card-line p-3.5 dark:border-dark-settings-card-line">
           <label className="flex h-8.5 min-w-45 flex-1 items-center gap-1.75 rounded-control border border-transparent bg-settings-container-low px-2.5 text-settings-ink-mute focus-within:border-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute dark:focus-within:border-dark-settings-primary">
             <Search aria-hidden="true" size={14} className="shrink-0" />
-            <input
+            <TextInput
               type="search"
               value={search}
               aria-label="Search log entries"
@@ -183,7 +184,8 @@ export function LogsSection() {
                 setSearch(event.target.value);
                 setRequestedPage(1);
               }}
-              className="w-full select-text bg-transparent text-settings-desc text-settings-ink outline-none placeholder:text-settings-ink-mute dark:text-dark-settings-ink dark:placeholder:text-dark-settings-ink-mute"
+              variant="bare"
+              className="w-full text-settings-desc text-settings-ink placeholder:text-settings-ink-mute dark:text-dark-settings-ink dark:placeholder:text-dark-settings-ink-mute"
             />
           </label>
           <Select

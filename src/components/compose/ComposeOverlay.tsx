@@ -10,6 +10,7 @@ import { LinkDialog } from './LinkDialog';
 import { QuoteDisclosure } from './QuoteDisclosure';
 import { DiscardConfirm } from './DiscardConfirm';
 import { RecipientField } from './RecipientField';
+import { TextInput } from '@/components/shared/TextInput';
 import { useAttachmentPipeline } from './useAttachmentPipeline';
 import {
   selectHasCommittedRecipient,
@@ -196,12 +197,13 @@ export function ComposeOverlay() {
               <span className="w-13 shrink-0 text-label-md text-secondary dark:text-dark-secondary">
                 Subject
               </span>
-              <input
+              <TextInput
                 value={session.subject}
                 onChange={(event) => setSubject(event.target.value)}
                 placeholder="Message subject"
                 aria-label="Subject"
-                className="min-w-0 flex-1 bg-transparent text-body-md text-on-surface outline-none placeholder:text-outline dark:text-dark-on-surface dark:placeholder:text-dark-outline"
+                variant="bare"
+                className="min-w-0 flex-1 text-body-md text-on-surface placeholder:text-outline dark:text-dark-on-surface dark:placeholder:text-dark-outline"
               />
             </div>
             <BodyEditor

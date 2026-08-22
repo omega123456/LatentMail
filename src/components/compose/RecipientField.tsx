@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Popover } from 'radix-ui';
 import { X } from 'lucide-react';
 import { ContactSuggestions } from './ContactSuggestions';
+import { TextInput } from '@/components/shared/TextInput';
 import { useContactSuggestionsQuery } from '@/lib/query/hooks';
 import { parseParticipant } from '@/lib/format/participants';
 import { type RecipientRole, useComposeStore } from '@/stores/compose';
@@ -181,9 +182,8 @@ export function RecipientField({
                   +{hiddenCount} more
                 </button>
               )}
-              <input
+              <TextInput
                 ref={inputRef}
-                type="text"
                 value={inputValue}
                 placeholder={chips.length === 0 ? placeholder : undefined}
                 role="combobox"
@@ -199,7 +199,8 @@ export function RecipientField({
                 }}
                 onKeyDown={handleKeyDown}
                 onBlur={commit}
-                className="min-w-24 flex-1 bg-transparent text-body-md text-on-surface outline-none placeholder:text-outline dark:text-dark-on-surface dark:placeholder:text-dark-outline"
+                variant="bare"
+                className="min-w-24 flex-1 text-body-md text-on-surface placeholder:text-outline dark:text-dark-on-surface dark:placeholder:text-dark-outline"
               />
             </div>
           </div>

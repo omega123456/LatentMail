@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useId, useMemo, useState } from 'react';
 import { Popover } from 'radix-ui';
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react';
+import { TextInput } from '@/components/shared/TextInput';
 import { MAX_SEARCH_QUERY_LENGTH, useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { AdvancedSearchPanel } from './AdvancedSearchPanel';
@@ -69,9 +70,8 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
           />
           <Popover.Root open={open}>
             <Popover.Anchor asChild>
-              <input
+              <TextInput
                 ref={ref}
-                type="text"
                 value={draft}
                 placeholder="Search mail…"
                 aria-label="Search mail"
@@ -118,7 +118,8 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
                     }
                   }
                 }}
-                className="min-w-0 flex-1 select-text bg-transparent text-body-sm text-on-surface outline-none placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
+                variant="bare"
+                className="min-w-0 flex-1 text-body-sm text-on-surface placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
               />
             </Popover.Anchor>
             <Popover.Portal>

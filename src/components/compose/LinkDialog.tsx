@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Editor } from '@tiptap/react';
+import { TextInput } from '@/components/shared/TextInput';
 
 export function LinkDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const [url, setUrl] = useState('');
@@ -25,7 +26,7 @@ export function LinkDialog({ editor, onClose }: { editor: Editor; onClose: () =>
     >
       <label>
         Link URL
-        <input value={url} onChange={(event) => setUrl(event.target.value)} />
+        <TextInput value={url} onChange={(event) => setUrl(event.target.value)} />
       </label>
       <button type="submit" className="cursor-pointer">
         Apply

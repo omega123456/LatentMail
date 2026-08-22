@@ -3,6 +3,7 @@ import { format, fromUnixTime } from 'date-fns';
 import type { MailLabel, ParsedSearchQuery, SearchPredicate, SearchScope } from '@/lib/types/ipc';
 import { useParseSearchQueryQuery } from '@/lib/query/hooks';
 import { Select, type SelectOption } from '@/components/shared/Select';
+import { TextInput } from '@/components/shared/TextInput';
 import {
   BLANK_DATE_FILTER,
   DateFilter,
@@ -101,9 +102,8 @@ export function serializeFields(fields: PanelFields): string {
   return parts.join(' ');
 }
 
-const inputClass =
-  'select-text rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface';
-const selectClass = `${inputClass} cursor-pointer`;
+const selectClass =
+  'select-text cursor-pointer rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface';
 const labelClass = 'text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant';
 const selectWrapperClass = 'flex flex-col gap-1';
 
@@ -167,58 +167,48 @@ export function AdvancedSearchPanel({
       >
         <label htmlFor="search-panel-from" className="flex flex-col gap-1">
           <span className={labelClass}>From</span>
-          <input
+          <TextInput
             id="search-panel-from"
-            type="text"
             value={fields.from}
             onChange={(event) => setFields((current) => ({ ...current, from: event.target.value }))}
-            className={inputClass}
           />
         </label>
         <label htmlFor="search-panel-to" className="flex flex-col gap-1">
           <span className={labelClass}>To</span>
-          <input
+          <TextInput
             id="search-panel-to"
-            type="text"
             value={fields.to}
             onChange={(event) => setFields((current) => ({ ...current, to: event.target.value }))}
-            className={inputClass}
           />
         </label>
         <label htmlFor="search-panel-subject" className="flex flex-col gap-1">
           <span className={labelClass}>Subject</span>
-          <input
+          <TextInput
             id="search-panel-subject"
-            type="text"
             value={fields.subject}
             onChange={(event) =>
               setFields((current) => ({ ...current, subject: event.target.value }))
             }
-            className={inputClass}
           />
         </label>
         <label htmlFor="search-panel-includes" className="flex flex-col gap-1">
           <span className={labelClass}>Includes the words</span>
-          <input
+          <TextInput
             id="search-panel-includes"
-            type="text"
             value={fields.includesText}
             onChange={(event) =>
               setFields((current) => ({ ...current, includesText: event.target.value }))
             }
-            className={inputClass}
           />
         </label>
         <label htmlFor="search-panel-excludes" className="flex flex-col gap-1">
           <span className={labelClass}>Doesn&rsquo;t have</span>
-          <input
+          <TextInput
             id="search-panel-excludes"
-            type="text"
             value={fields.excludesText}
             onChange={(event) =>
               setFields((current) => ({ ...current, excludesText: event.target.value }))
             }
-            className={inputClass}
           />
         </label>
         <DateFilter

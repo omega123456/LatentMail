@@ -8,6 +8,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const documentRef = useRef<PDFDocumentProxy | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -31,6 +32,10 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
       documentRef.current = null;
     };
   }, [bytes]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [page]);
 
   useEffect(() => {
     if (pageCount === 0) return;
@@ -71,7 +76,7 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto">
         <div className="flex min-h-full items-center justify-center p-stack-gap-md">
           <canvas
             ref={canvasRef}
