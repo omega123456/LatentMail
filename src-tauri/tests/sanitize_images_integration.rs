@@ -143,6 +143,19 @@ fn resolves_content_id_images_referenced_from_a_style_attribute() {
 }
 
 #[test]
+fn substitutes_the_placeholder_for_a_style_image_that_resolves_to_nothing() {
+    let result = sanitize(
+        r#"<div style="background:url(cid:missing)"></div><span style="background:url(data:text/html,boom)"></span>"#,
+        &HashMap::new(),
+        true,
+    );
+
+    assert!(!result.html.contains("boom"), "{}", result.html);
+    assert!(!result.html.contains("cid:"), "{}", result.html);
+    assert_eq!(result.html.matches("data:image/gif;base64").count(), 2);
+}
+
+#[test]
 fn leaves_a_style_attribute_without_images_untouched() {
     let result = sanitize(r#"<div style="color:red"></div>"#, &HashMap::new(), false);
 

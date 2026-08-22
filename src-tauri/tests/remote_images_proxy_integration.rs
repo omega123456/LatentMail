@@ -81,6 +81,68 @@ async fn reports_missing_images_as_not_found() {
 }
 
 #[tokio::test]
+async fn refuses_a_response_that_declares_no_content_type() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/nothing"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let response = respond(
+        &reqwest::Client::new(),
+        &proxy_url(&format!("{}/nothing", server.uri())),
+    )
+    .await;
+
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn refuses_a_body_that_ends_before_its_declared_length() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/truncated.png"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(vec![1, 2, 3], "image/png")
+                .insert_header("content-length", "4096"),
+        )
+        .mount(&server)
+        .await;
+
+    let response = respond(
+        &reqwest::Client::new(),
+        &proxy_url(&format!("{}/truncated.png", server.uri())),
+    )
+    .await;
+
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn refuses_a_target_that_redirects_forever() {
+    let server = MockServer::start().await;
+    let destination = format!("{}/loop.png", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/loop.png"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", destination.as_str()))
+        .mount(&server)
+        .await;
+
+    let response = respond(&reqwest::Client::new(), &proxy_url(&destination)).await;
+
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn retries_once_when_the_connection_fails_and_then_reports_not_found() {
+    let response = respond(&reqwest::Client::new(), &proxy_url("http://127.0.0.1:1/a.png")).await;
+
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
 async fn refuses_images_that_exceed_the_size_ceiling() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
