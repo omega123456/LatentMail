@@ -57,6 +57,42 @@ describe('MessageCard', () => {
     expect(screen.getByText('This message has no content.')).toBeInTheDocument();
   });
 
+  it('refetches a rendered message whose inline images are still unresolved', () => {
+    const onFetchBody = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{
+          ...message,
+          htmlPresence: 'present',
+          html: '<p>Signature</p>',
+          inlineImagesPending: true,
+        }}
+        expanded
+        newest
+        onFetchBody={onFetchBody}
+      />,
+    );
+    expect(onFetchBody).toHaveBeenCalledWith('message-1');
+  });
+
+  it('leaves a rendered message with resolved inline images alone', () => {
+    const onFetchBody = vi.fn();
+    renderWithQueryClient(
+      <MessageCard
+        message={{
+          ...message,
+          htmlPresence: 'present',
+          html: '<p>Signature</p>',
+          inlineImagesPending: false,
+        }}
+        expanded
+        newest
+        onFetchBody={onFetchBody}
+      />,
+    );
+    expect(onFetchBody).not.toHaveBeenCalled();
+  });
+
   it('leaves a message that already has a plain body alone', () => {
     const onFetchBody = vi.fn();
     renderWithQueryClient(
@@ -144,7 +180,9 @@ describe('MessageCard', () => {
       />,
     );
     const blockedFrame = screen.getByLabelText('Message body') as HTMLIFrameElement;
-    expect(blockedFrame.srcdoc).toContain('img-src data:;');
+    expect(blockedFrame.srcdoc).toContain(
+      'img-src data: inlineimg: http://inlineimg.localhost;',
+    );
     rerender(
       <MessageCard
         message={{
@@ -159,7 +197,7 @@ describe('MessageCard', () => {
     );
     const allowedFrame = screen.getByLabelText('Message body') as HTMLIFrameElement;
     expect(allowedFrame.srcdoc).toContain(
-      'img-src data: remoteimg: http://remoteimg.localhost https: http:;',
+      'img-src data: inlineimg: http://inlineimg.localhost remoteimg: http://remoteimg.localhost https: http:;',
     );
   });
 

@@ -51,6 +51,13 @@ describe('BodyFrame', () => {
     expect(srcdoc).not.toContain('javascript:');
   });
 
+  it('keeps inline image sources even when remote images stay blocked', () => {
+    const inline = 'inlineimg://localhost/?account=a&message=m&cid=logo';
+    render(<BodyFrame html={`<img src="${inline}">`} text={null} />);
+    const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
+    expect(srcdoc).toContain(`<img src="${inline.replaceAll('&', '&amp;')}">`);
+  });
+
   it('cancels the native right-click menu and forwards it to the reader menu', async () => {
     render(<BodyFrame html={'<p>Body</p>'} text={null} />);
     const frame = screen.getByTitle('Message body') as HTMLIFrameElement;

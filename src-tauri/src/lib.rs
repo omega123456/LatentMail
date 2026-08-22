@@ -5,6 +5,7 @@ pub mod cli;
 pub mod compose;
 pub mod contacts;
 pub mod gmail;
+pub mod inline_images;
 pub mod ipc;
 pub mod logging;
 pub mod os;
@@ -37,6 +38,22 @@ pub fn run() {
                 let uri = request.uri().to_string();
                 tauri::async_runtime::spawn(async move {
                     responder.respond(remote_images::respond(&client, &uri).await);
+                });
+            },
+        )
+        .register_asynchronous_uri_scheme_protocol(
+            inline_images::SCHEME,
+            |app, request, responder| {
+                let Some(storage) = app
+                    .app_handle()
+                    .try_state::<storage::Storage>()
+                    .map(|state| state.inner().clone())
+                else {
+                    return;
+                };
+                let uri = request.uri().to_string();
+                tauri::async_runtime::spawn(async move {
+                    responder.respond(inline_images::respond(&storage, &uri).await);
                 });
             },
         )

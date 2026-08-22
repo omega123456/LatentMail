@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::storage::{
-    Account, AccountRepository, HtmlPresence, Message, MessageRepository, Storage,
+    Account, AccountRepository, AttachmentRepository, HtmlPresence, Message, MessageRepository,
+    Storage,
 };
 use latentmail_lib::sync::commands::fetch_message_body;
 use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
@@ -240,4 +241,219 @@ async fn fetch_message_body_persists_too_large_and_never_redownloads_it() {
     .unwrap();
 
     server.verify().await;
+}
+
+#[tokio::test]
+async fn a_stored_body_with_an_unresolved_cid_downloads_the_inline_image() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-access-token",
+            "token_type": "Bearer",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "m1", "threadId": "t1", "historyId": "2", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "0",
+            "payload": {
+                "mimeType": "multipart/related",
+                "headers": [],
+                "parts": [
+                    {
+                        "mimeType": "text/html",
+                        "body": { "data": "PGltZyBzcmM9ImNpZDpsb2dvQGV4YW1wbGUuY29tIj4" }
+                    },
+                    {
+                        "mimeType": "image/png",
+                        "filename": "logo.png",
+                        "headers": [{ "name": "Content-ID", "value": "<logo@example.com>" }],
+                        "body": { "attachmentId": "att-1", "size": 9 }
+                    }
+                ]
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/att-1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "size": 9, "data": "cG5nLWJ5dGVz" })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    let mut stored = message(HtmlPresence::Present);
+    stored.id = "m1".into();
+    stored.thread_id = "t1".into();
+    stored.html_body = Some("<img src=\"cid:logo@example.com\">".into());
+    stored.truncated_body = None;
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
+    drop(connection);
+
+    let sync_engine = engine(&storage);
+    let application = app();
+    application.manage(AuthService::new(storage.clone()));
+    application.manage(sync_engine);
+    application.manage(storage.clone());
+
+    fetch_message_body(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        application.state(),
+        "account".into(),
+        "m1".into(),
+    )
+    .await
+    .unwrap();
+
+    let connection = storage.connection().unwrap();
+    let parts = MessageRepository::inline_parts(&connection, "account", "m1").unwrap();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].content_id, "logo@example.com");
+    assert_eq!(parts[0].bytes, b"png-bytes");
+    let attachments = AttachmentRepository::for_message(&connection, "account", "m1").unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].filename, "logo.png");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn an_inline_image_that_will_not_download_stores_no_inline_part() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "fresh-access-token",
+            "token_type": "Bearer",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "m1", "threadId": "t1", "historyId": "2", "labelIds": ["INBOX"],
+            "snippet": "hello", "internalDate": "0",
+            "payload": {
+                "mimeType": "multipart/related",
+                "headers": [],
+                "parts": [
+                    {
+                        "mimeType": "text/html",
+                        "body": { "data": "PGltZyBzcmM9ImNpZDpsb2dvQGV4YW1wbGUuY29tIj4" }
+                    },
+                    {
+                        "mimeType": "image/png",
+                        "filename": "logo.png",
+                        "headers": [{ "name": "Content-ID", "value": "<logo@example.com>" }],
+                        "body": { "attachmentId": "att-1", "size": 9 }
+                    },
+                    {
+                        "mimeType": "application/pdf",
+                        "filename": "invoice.pdf",
+                        "body": { "attachmentId": "att-2", "size": 4096 }
+                    }
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1/attachments/att-1"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    latentmail_lib::auth::save_refresh_token("account", "stored-refresh-token").unwrap();
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    let mut stored = message(HtmlPresence::Present);
+    stored.id = "m1".into();
+    stored.thread_id = "t1".into();
+    stored.html_body = Some("<img src=\"cid:logo@example.com\">".into());
+    stored.truncated_body = None;
+    MessageRepository::write_full_state(&connection, &stored).unwrap();
+    drop(connection);
+
+    let sync_engine = engine(&storage);
+    let application = app();
+    application.manage(AuthService::new(storage.clone()));
+    application.manage(sync_engine);
+    application.manage(storage.clone());
+
+    fetch_message_body(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        application.state(),
+        "account".into(),
+        "m1".into(),
+    )
+    .await
+    .unwrap();
+
+    let connection = storage.connection().unwrap();
+    assert!(
+        MessageRepository::inline_parts(&connection, "account", "m1")
+            .unwrap()
+            .is_empty()
+    );
+    let attachments = AttachmentRepository::for_message(&connection, "account", "m1").unwrap();
+    let names = attachments
+        .iter()
+        .map(|attachment| attachment.filename.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["logo.png", "invoice.pdf"]);
 }

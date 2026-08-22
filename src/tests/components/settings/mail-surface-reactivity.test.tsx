@@ -56,6 +56,7 @@ const conversationOne = {
       labelIds: [],
       remoteImagesBlocked: false,
       remoteImagesAllowed: false,
+      inlineImagesPending: false,
       attachments: [],
     },
   ],

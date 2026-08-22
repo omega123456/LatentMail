@@ -350,8 +350,11 @@ async fn load_conversation_sanitizes_html_and_resolves_inline_cid_images() {
     let html = message.html_body.as_deref().unwrap();
     assert!(!html.contains("<script>"), "sanitize must strip scripts");
     assert!(
-        html.contains("data:image/png;base64,"),
-        "cid: source must resolve to inline data"
+        html.contains(
+            &latentmail_lib::inline_images::proxy_url("account", "m1", "img1")
+                .replace('&', "&amp;")
+        ),
+        "cid: source must resolve to the inline image protocol: {html}"
     );
     assert!(!html.contains("cid:img1"));
     assert!(!message.truncated);

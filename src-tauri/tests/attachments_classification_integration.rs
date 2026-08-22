@@ -85,6 +85,10 @@ async fn a_cid_referenced_part_that_arrived_by_reference_produces_one_row() {
     assert_eq!(message.attachment_parts.len(), 1);
     assert!(message.has_attachments);
     assert_eq!(message.attachment_parts[0].attachment_id, "gmail-att-2");
+    assert_eq!(
+        message.attachment_parts[0].content_id.as_deref(),
+        Some("image@cid")
+    );
     assert!(message.inline_parts.is_empty());
 }
 

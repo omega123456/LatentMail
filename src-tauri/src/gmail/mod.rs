@@ -98,6 +98,7 @@ pub struct InlinePart {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttachmentPart {
     pub attachment_id: String,
+    pub content_id: Option<String>,
     pub filename: String,
     pub mime_type: String,
     pub size: u64,
@@ -1041,7 +1042,7 @@ fn collect_part(part: &RawPart, content: &mut Content) {
         headers
             .iter()
             .find(|header| header.name.eq_ignore_ascii_case("content-id"))
-            .map(|header| header.value.trim_matches(['<', '>']).to_owned())
+            .map(|header| header.value.trim().trim_matches(['<', '>']).to_owned())
     });
     let filename = part
         .filename
@@ -1151,6 +1152,7 @@ fn classify_attachments(
             .unwrap_or_else(|| format!("attachment-{position}"));
         result.push(AttachmentPart {
             attachment_id,
+            content_id: candidate.content_id,
             filename,
             mime_type: candidate.mime_type,
             size: candidate.size,

@@ -243,6 +243,7 @@ fn seed_cache_writes_inline_recovered_bytes_under_the_reserved_prefix() {
     let parts = vec![
         AttachmentPart {
             attachment_id: "latentmail-inline-pos-0".into(),
+            content_id: None,
             filename: "photo.jpg".into(),
             mime_type: "image/jpeg".into(),
             size: 5,
@@ -250,6 +251,7 @@ fn seed_cache_writes_inline_recovered_bytes_under_the_reserved_prefix() {
         },
         AttachmentPart {
             attachment_id: "gmail-att-1".into(),
+            content_id: None,
             filename: "doc.pdf".into(),
             mime_type: "application/pdf".into(),
             size: 0,

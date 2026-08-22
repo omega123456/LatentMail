@@ -40,6 +40,7 @@ fn base_message(id: &str, history_id: i64) -> GmailMessage {
         inline_parts: Vec::new(),
         attachment_parts: vec![AttachmentPart {
             attachment_id: "att-1".into(),
+            content_id: None,
             filename: "file.pdf".into(),
             mime_type: "application/pdf".into(),
             size: 1024,
@@ -57,6 +58,7 @@ fn materialize_persists_attachment_rows_in_sender_order() {
     let mut message = base_message("m1", 1);
     message.attachment_parts.push(AttachmentPart {
         attachment_id: "att-2".into(),
+        content_id: None,
         filename: "second.txt".into(),
         mime_type: "text/plain".into(),
         size: 12,
@@ -296,6 +298,7 @@ fn list_conversation_attributes_attachments_to_the_right_message_sorted_by_posit
     first.attachment_parts = vec![
         AttachmentPart {
             attachment_id: "att-b".into(),
+            content_id: None,
             filename: "b.txt".into(),
             mime_type: "text/plain".into(),
             size: 20,
@@ -303,6 +306,7 @@ fn list_conversation_attributes_attachments_to_the_right_message_sorted_by_posit
         },
         AttachmentPart {
             attachment_id: "att-a".into(),
+            content_id: None,
             filename: "a.txt".into(),
             mime_type: "text/plain".into(),
             size: 10,

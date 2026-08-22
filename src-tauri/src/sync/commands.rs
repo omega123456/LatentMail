@@ -9,7 +9,7 @@ use tauri::{AppHandle, Runtime};
 use crate::{
     auth::AuthService,
     gmail::labels::resolve_color,
-    sanitize::{self, CidPart},
+    sanitize,
     storage::{
         ConversationEntryScope, LabelColor, LabelRepository, MessageRepository, Storage,
         ThreadRepository, TraversalCursorRepository, TraversalKind,
@@ -599,20 +599,19 @@ pub async fn load_conversation(
         );
         let sanitized = match &stored.message.html_body {
             Some(html) => {
-                let cid_map: HashMap<String, CidPart> = stored
-                    .inline_parts
+                let cid_sources: HashMap<String, String> = stored
+                    .inline_content_ids
                     .into_iter()
-                    .map(|part| {
-                        (
-                            part.content_id,
-                            CidPart {
-                                bytes: part.bytes,
-                                mime_type: part.mime_type,
-                            },
-                        )
+                    .map(|content_id| {
+                        let source = crate::inline_images::proxy_url(
+                            &account_id,
+                            &stored.message.id,
+                            &content_id,
+                        );
+                        (content_id, source)
                     })
                     .collect();
-                Some(sanitize::sanitize(html, &cid_map, allow_remote))
+                Some(sanitize::sanitize(html, &cid_sources, allow_remote))
             }
             None => None,
         };
@@ -634,6 +633,37 @@ pub async fn load_conversation(
     })
 }
 
+async fn download_inline_images(
+    client: &crate::gmail::GmailClient,
+    message_id: &str,
+    html: Option<&str>,
+    attachment_parts: &[crate::gmail::AttachmentPart],
+    parts: &mut Vec<crate::storage::InlinePart>,
+) {
+    let referenced = html
+        .map(sanitize::referenced_content_ids)
+        .unwrap_or_default();
+    for part in attachment_parts {
+        let Some(content_id) = part
+            .content_id
+            .clone()
+            .filter(|id| referenced.iter().any(|value| value == id))
+        else {
+            continue;
+        };
+        match client.attachment(message_id, &part.attachment_id).await {
+            Ok(bytes) => parts.push(crate::storage::InlinePart {
+                content_id,
+                mime_type: part.mime_type.clone(),
+                bytes,
+            }),
+            Err(error) => {
+                tracing::debug!("inline image {content_id} of {message_id} failed: {error}");
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn fetch_message_body<R: Runtime>(
     app: AppHandle<R>,
@@ -648,16 +678,35 @@ pub async fn fetch_message_body<R: Runtime>(
     let stored = string_try!(
         storage
             .run(move |connection| {
-                MessageRepository::get(connection, &account, &id).map(|message| {
-                    message.map(|value| (value.html_presence, value.body_is_empty()))
-                })
+                let Some(message) = MessageRepository::get(connection, &account, &id)? else {
+                    return Ok(None);
+                };
+                let held = MessageRepository::inline_parts(connection, &account, &id)?;
+                let inline_images_pending = message
+                    .html_body
+                    .as_deref()
+                    .map(sanitize::referenced_content_ids)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|referenced| {
+                        !held
+                            .iter()
+                            .any(|part| &part.content_id == referenced && !part.bytes.is_empty())
+                    });
+                Ok(Some((
+                    message.html_presence,
+                    message.body_is_empty(),
+                    inline_images_pending,
+                )))
             })
             .await
     )
     .ok_or_else(|| "Message is unavailable".to_owned())?;
 
     if matches!(stored.0, crate::storage::HtmlPresence::TooLarge)
-        || (!matches!(stored.0, crate::storage::HtmlPresence::NeverFetched) && !stored.1)
+        || (!matches!(stored.0, crate::storage::HtmlPresence::NeverFetched)
+            && !stored.1
+            && !stored.2)
     {
         return Ok(());
     }
@@ -670,7 +719,7 @@ pub async fn fetch_message_body<R: Runtime>(
     };
     let html_body = message.html_body;
     let plain_body = message.plain_body;
-    let parts = message
+    let mut parts = message
         .inline_parts
         .into_iter()
         .map(|part| crate::storage::InlinePart {
@@ -679,6 +728,14 @@ pub async fn fetch_message_body<R: Runtime>(
             bytes: part.bytes,
         })
         .collect::<Vec<_>>();
+    download_inline_images(
+        &client,
+        &message_id,
+        html_body.as_deref(),
+        &message.attachment_parts,
+        &mut parts,
+    )
+    .await;
     let attachments =
         crate::sync::materialize::attachment_records_from_parts(&message.attachment_parts);
     if let Some(cache) = engine.attachment_cache() {

@@ -30,6 +30,7 @@ export type ReaderMessage = {
   starred?: boolean;
   remoteImagesBlocked?: boolean;
   remoteImagesAllowed?: boolean;
+  inlineImagesPending?: boolean;
   isDraft?: boolean;
   draftId?: string | null;
   attachments?: MessageAttachment[];
@@ -78,7 +79,9 @@ export function MessageCard({
   const requested = useRef<string | null>(null);
   const needsBody =
     message.htmlPresence !== 'tooLarge' &&
-    (message.htmlPresence === 'neverFetched' || (!message.html && !message.text));
+    (message.htmlPresence === 'neverFetched' ||
+      message.inlineImagesPending === true ||
+      (!message.html && !message.text));
   const remoteImagesLocked = (message.labelIds ?? []).some(
     (label) => label === 'SPAM' || label === 'TRASH',
   );

@@ -209,6 +209,6 @@ fn a_hidden_messages_labels_attachments_and_inline_parts_never_reach_a_visible_m
             .iter()
             .any(|label| label == "Label_hidden"));
         assert!(message.attachments.is_empty());
-        assert!(message.inline_parts.is_empty());
+        assert!(message.inline_content_ids.is_empty());
     }
 }

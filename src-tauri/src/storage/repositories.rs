@@ -302,7 +302,7 @@ pub struct ConversationMessage {
     pub message: Message,
     pub recipient_roles: (String, String, String),
     pub label_ids: Vec<String>,
-    pub inline_parts: Vec<InlinePart>,
+    pub inline_content_ids: Vec<String>,
     pub draft_id: Option<String>,
     pub attachments: Vec<Attachment>,
 }
@@ -655,7 +655,7 @@ impl MessageRepository {
                     message: message(row)?,
                     recipient_roles: (row.get(17)?, row.get(18)?, row.get(19)?),
                     label_ids: Vec::new(),
-                    inline_parts: Vec::new(),
+                    inline_content_ids: Vec::new(),
                     draft_id: row.get(20)?,
                     attachments: Vec::new(),
                 })
@@ -688,26 +688,19 @@ impl MessageRepository {
         }
 
         let mut statement = connection.prepare(
-            "SELECT p.message_id,p.content_id,p.mime_type,p.bytes
+            "SELECT p.message_id,p.content_id
              FROM messages m CROSS JOIN message_inline_parts p
              WHERE m.account_id=?1 AND m.thread_id=?2 AND m.html_body IS NOT NULL
                AND p.account_id=m.account_id AND p.message_id=m.id",
         )?;
         let parts = statement
             .query_map(params![account_id, thread_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    InlinePart {
-                        content_id: row.get(1)?,
-                        mime_type: row.get(2)?,
-                        bytes: row.get(3)?,
-                    },
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>>>()?;
-        for (message_id, part) in parts {
+        for (message_id, content_id) in parts {
             if let Some(index) = positions.get(&message_id) {
-                messages[*index].inline_parts.push(part);
+                messages[*index].inline_content_ids.push(content_id);
             }
         }
 
@@ -1014,6 +1007,23 @@ impl MessageRepository {
             })?
             .collect();
         parts
+    }
+
+    pub fn inline_part(
+        connection: &Connection,
+        account_id: &str,
+        message_id: &str,
+        content_id: &str,
+    ) -> Result<Option<(String, Vec<u8>)>> {
+        let mut statement = connection.prepare_cached(
+            "SELECT mime_type,bytes FROM message_inline_parts
+             WHERE account_id=?1 AND message_id=?2 AND content_id=?3",
+        )?;
+        statement
+            .query_row(params![account_id, message_id, content_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()
     }
 
     pub fn reconciliation_messages(

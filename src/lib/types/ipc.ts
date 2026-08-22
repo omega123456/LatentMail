@@ -517,6 +517,7 @@ export interface ConversationMessage {
   labelIds: string[];
   remoteImagesBlocked: boolean;
   remoteImagesAllowed: boolean;
+  inlineImagesPending: boolean;
   draftId?: string | null;
   truncated: boolean;
   attachments: MessageAttachment[];

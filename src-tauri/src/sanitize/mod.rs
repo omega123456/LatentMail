@@ -1,33 +1,63 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use ammonia::Builder;
-use base64::{engine::general_purpose::STANDARD, Engine};
 
 pub const MAX_SANITIZED_HTML_BYTES: usize = 512 * 1024;
 const REMOTE_IMAGE_PLACEHOLDER: &str =
     "data:image/gif;base64,R0lGODlhAQABAIAAAMLCwgAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CidPart {
-    pub bytes: Vec<u8>,
-    pub mime_type: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SanitizedHtml {
     pub html: String,
     pub truncated: bool,
     pub remote_images_blocked: bool,
+    pub inline_images_missing: bool,
+}
+
+#[derive(Default)]
+struct ImageOutcome {
+    remote_blocked: std::sync::atomic::AtomicBool,
+    inline_missing: std::sync::atomic::AtomicBool,
+}
+
+impl ImageOutcome {
+    fn mark(flag: &std::sync::atomic::AtomicBool) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn read(flag: &std::sync::atomic::AtomicBool) -> bool {
+        flag.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+pub fn referenced_content_ids(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut ids = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("cid:") {
+        let start = cursor + offset + "cid:".len();
+        let end = html[start..]
+            .find(|character: char| {
+                character.is_whitespace() || matches!(character, '"' | '\'' | ')' | '>')
+            })
+            .map_or(html.len(), |index| start + index);
+        let id = html[start..end].trim_matches(['<', '>']);
+        if !id.is_empty() {
+            ids.push(id.to_owned());
+        }
+        cursor = end.max(start + 1).min(html.len());
+    }
+    ids
 }
 
 pub fn sanitize(
     html: &str,
-    cid_parts: &HashMap<String, CidPart>,
+    cid_sources: &HashMap<String, String>,
     allow_remote: bool,
 ) -> SanitizedHtml {
-    let cid_parts = cid_parts.clone();
-    let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let blocked_in_filter = std::sync::Arc::clone(&blocked);
+    let cid_sources = cid_sources.clone();
+    let outcome = std::sync::Arc::new(ImageOutcome::default());
+    let outcome_in_filter = std::sync::Arc::clone(&outcome);
     let mut builder = Builder::default();
     builder
         .add_tags(&["style", "font"])
@@ -73,40 +103,42 @@ pub fn sanitize(
                 {
                     None
                 }
-                ("img", "src") => image_source(value, &cid_parts, &blocked_in_filter, allow_remote)
-                    .map(Cow::Owned),
+                ("img", "src") => {
+                    image_source(value, &cid_sources, &outcome_in_filter, allow_remote)
+                        .map(Cow::Owned)
+                }
                 (_, "style") => Some(
-                    style_images(value, &cid_parts, &blocked_in_filter, allow_remote)
+                    style_images(value, &cid_sources, &outcome_in_filter, allow_remote)
                         .map_or(Cow::Borrowed(value), Cow::Owned),
                 ),
                 _ => Some(Cow::Borrowed(value)),
             },
         );
     let mut sanitized = cap(builder.clean(html).to_string());
-    sanitized.remote_images_blocked = blocked.load(std::sync::atomic::Ordering::Relaxed);
+    sanitized.remote_images_blocked = ImageOutcome::read(&outcome.remote_blocked);
+    sanitized.inline_images_missing = ImageOutcome::read(&outcome.inline_missing);
     sanitized
 }
 
 fn image_source(
     value: &str,
-    cid_parts: &HashMap<String, CidPart>,
-    blocked: &std::sync::atomic::AtomicBool,
+    cid_sources: &HashMap<String, String>,
+    outcome: &ImageOutcome,
     allow_remote: bool,
 ) -> Option<String> {
     let source = value.trim();
     let lower = source.to_ascii_lowercase();
     if let Some(cid) = lower.strip_prefix("cid:") {
         let id = source[source.len() - cid.len()..].trim_matches(['<', '>']);
-        return cid_parts
+        let source = cid_sources
             .get(id)
-            .or_else(|| cid_parts.get(&format!("<{id}>")))
-            .map(|part| {
-                format!(
-                    "data:{};base64,{}",
-                    part.mime_type,
-                    STANDARD.encode(&part.bytes)
-                )
-            });
+            .or_else(|| cid_sources.get(&format!("<{id}>")))
+            .filter(|source| !source.is_empty());
+        let Some(source) = source else {
+            ImageOutcome::mark(&outcome.inline_missing);
+            return Some(REMOTE_IMAGE_PLACEHOLDER.to_owned());
+        };
+        return Some(source.clone());
     }
     if lower.starts_with("data:image/") {
         return Some(source.to_owned());
@@ -117,14 +149,14 @@ fn image_source(
     if allow_remote {
         return Some(crate::remote_images::proxy_url(source));
     }
-    blocked.store(true, std::sync::atomic::Ordering::Relaxed);
+    ImageOutcome::mark(&outcome.remote_blocked);
     Some(REMOTE_IMAGE_PLACEHOLDER.to_owned())
 }
 
 fn style_images(
     value: &str,
-    cid_parts: &HashMap<String, CidPart>,
-    blocked: &std::sync::atomic::AtomicBool,
+    cid_sources: &HashMap<String, String>,
+    outcome: &ImageOutcome,
     allow_remote: bool,
 ) -> Option<String> {
     let lower = value.to_ascii_lowercase();
@@ -143,7 +175,7 @@ fn style_images(
         rewritten.push_str(&value[cursor..open]);
         rewritten.push('\'');
         rewritten.push_str(
-            &image_source(target, cid_parts, blocked, allow_remote)
+            &image_source(target, cid_sources, outcome, allow_remote)
                 .unwrap_or_else(|| REMOTE_IMAGE_PLACEHOLDER.to_owned()),
         );
         rewritten.push('\'');
@@ -159,6 +191,7 @@ fn cap(html: String) -> SanitizedHtml {
             html,
             truncated: false,
             remote_images_blocked: false,
+            inline_images_missing: false,
         };
     }
     let boundary = html[..MAX_SANITIZED_HTML_BYTES]
@@ -168,5 +201,6 @@ fn cap(html: String) -> SanitizedHtml {
         html: html[..boundary].to_owned(),
         truncated: true,
         remote_images_blocked: false,
+        inline_images_missing: false,
     }
 }

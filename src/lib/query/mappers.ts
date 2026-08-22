@@ -118,6 +118,7 @@ export function mapConversation(conversation: IpcConversation): ReaderConversati
       starred: message.isStarred,
       remoteImagesBlocked: message.remoteImagesBlocked,
       remoteImagesAllowed: message.remoteImagesAllowed,
+      inlineImagesPending: message.inlineImagesPending,
       isDraft: message.labelIds.includes('DRAFT'),
       draftId: message.draftId,
       attachments: [...message.attachments].sort((a, b) => a.position - b.position),

@@ -295,6 +295,7 @@ pub struct MessageDto {
     pub label_ids: Vec<String>,
     pub remote_images_blocked: bool,
     pub remote_images_allowed: bool,
+    pub inline_images_pending: bool,
     pub draft_id: Option<String>,
     pub truncated: bool,
     pub attachments: Vec<AttachmentDto>,
@@ -356,13 +357,14 @@ pub fn message_dto(
     draft_id: Option<String>,
     attachments: Vec<Attachment>,
 ) -> MessageDto {
-    let (html_body, remote_images_blocked, truncated) = match sanitized {
+    let (html_body, remote_images_blocked, truncated, inline_images_pending) = match sanitized {
         Some(value) => (
             Some(value.html),
             value.remote_images_blocked,
             value.truncated,
+            value.inline_images_missing,
         ),
-        None => (None, false, false),
+        None => (None, false, false, false),
     };
     MessageDto {
         id: message.id,
@@ -383,6 +385,7 @@ pub fn message_dto(
         label_ids,
         remote_images_blocked,
         remote_images_allowed,
+        inline_images_pending,
         draft_id,
         truncated,
         attachments: attachments.into_iter().map(AttachmentDto::from).collect(),
