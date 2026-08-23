@@ -55,7 +55,7 @@ async fn ensure_cached<R: Runtime>(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Attachment metadata is unavailable".to_owned())?;
     let client = gmail_client_for(app, auth, engine, account_id).await?;
-    cache
+    match cache
         .ensure(
             &client,
             account_id,
@@ -65,6 +65,12 @@ async fn ensure_cached<R: Runtime>(
             &record.mime_type,
         )
         .await
+    {
+        Ok(cached) => Ok(cached),
+        Err(error) => super::refetch(cache, &client, account_id, message_id, &record)
+            .await
+            .map_err(|_| error),
+    }
 }
 
 #[tauri::command]

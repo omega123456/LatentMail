@@ -372,6 +372,7 @@ impl AttachmentRepository {
         message_id: &str,
         attachments: &[Attachment],
     ) -> Result<()> {
+        let existing = Self::for_message(connection, account_id, message_id)?;
         connection
             .prepare_cached(
                 "DELETE FROM message_attachments WHERE account_id=?1 AND message_id=?2",
@@ -381,10 +382,20 @@ impl AttachmentRepository {
             "INSERT INTO message_attachments (account_id,message_id,attachment_id,filename,mime_type,size,position) VALUES (?1,?2,?3,?4,?5,?6,?7)",
         )?;
         for attachment in attachments {
+            let attachment_id = existing
+                .iter()
+                .find(|previous| {
+                    previous.position == attachment.position
+                        && previous.filename == attachment.filename
+                        && previous.size == attachment.size
+                })
+                .map_or(attachment.attachment_id.as_str(), |previous| {
+                    previous.attachment_id.as_str()
+                });
             statement.execute(params![
                 account_id,
                 message_id,
-                attachment.attachment_id,
+                attachment_id,
                 attachment.filename,
                 attachment.mime_type,
                 attachment.size,
@@ -399,7 +410,7 @@ impl AttachmentRepository {
         account_id: &str,
         message_id: &str,
     ) -> Result<Vec<Attachment>> {
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare_cached(
             "SELECT attachment_id,filename,mime_type,size,position FROM message_attachments WHERE account_id=?1 AND message_id=?2 ORDER BY position",
         )?;
         let attachments = statement

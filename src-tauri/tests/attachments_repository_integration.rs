@@ -346,3 +346,42 @@ fn list_conversation_attributes_attachments_to_the_right_message_sorted_by_posit
         "a message with no attachments must not inherit another message's rows"
     );
 }
+
+#[test]
+fn a_rotated_gmail_attachment_id_does_not_change_the_stored_identifier_of_an_unchanged_part() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    materialize::persist(&connection, "account", &base_message("m1", 1)).unwrap();
+
+    let mut refetched = base_message("m1", 2);
+    refetched.attachment_parts[0].attachment_id = "att-1-rotated".into();
+    materialize::persist(&connection, "account", &refetched).unwrap();
+
+    let rows = AttachmentRepository::for_message(&connection, "account", "m1").unwrap();
+    assert_eq!(
+        rows[0].attachment_id, "att-1",
+        "an identifier already handed to the reader must stay resolvable"
+    );
+    assert!(
+        AttachmentRepository::get(&connection, "account", "m1", "att-1")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_replaced_part_at_the_same_position_takes_the_new_gmail_attachment_id() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    materialize::persist(&connection, "account", &base_message("m1", 1)).unwrap();
+
+    let mut replaced = base_message("m1", 2);
+    replaced.attachment_parts[0].attachment_id = "att-2".into();
+    replaced.attachment_parts[0].filename = "other.pdf".into();
+    materialize::persist(&connection, "account", &replaced).unwrap();
+
+    let rows = AttachmentRepository::for_message(&connection, "account", "m1").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].attachment_id, "att-2");
+    assert_eq!(rows[0].filename, "other.pdf");
+}

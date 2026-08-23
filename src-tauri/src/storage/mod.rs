@@ -23,7 +23,7 @@ use thiserror::Error;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-const STATEMENT_CACHE_CAPACITY: usize = 52;
+const STATEMENT_CACHE_CAPACITY: usize = 53;
 
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
