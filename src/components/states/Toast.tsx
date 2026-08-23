@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CircleAlert, CircleCheck, X } from 'lucide-react';
 import { Toast as ToastPrimitive } from 'radix-ui';
-import { milliseconds } from 'date-fns';
+import { addMilliseconds, isFuture, milliseconds } from 'date-fns';
 import { useToastStore, type Toast as ToastEntry, type ToastSeverity } from '@/stores/toast';
 
 const DURATION_MS: Record<ToastSeverity, number> = {
@@ -36,6 +36,15 @@ function ToastCard({ toast }: { toast: ToastEntry }) {
   const [paused, setPaused] = useState(false);
   const variant = VARIANT[toast.severity];
   const Icon = variant.icon;
+
+  useEffect(() => {
+    const expiry = addMilliseconds(new Date(), DURATION_MS[toast.severity]);
+    const dismissWhenExpired = () => {
+      if (!isFuture(expiry)) dismiss(toast.id);
+    };
+    window.addEventListener('focus', dismissWhenExpired);
+    return () => window.removeEventListener('focus', dismissWhenExpired);
+  }, [dismiss, toast.id, toast.severity]);
 
   return (
     <ToastPrimitive.Root

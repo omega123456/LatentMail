@@ -72,6 +72,22 @@ describe('Toast', () => {
     await waitFor(() => expect(rails()[0]).toHaveClass('animate-toast-error'));
   });
 
+  it('clears a toast that expired while the window was in the background', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<Toast />);
+    show(() => useToastStore.getState().showSuccess('Message sent.'));
+    await waitFor(() => expect(rails()).toHaveLength(1));
+
+    act(() => void fireEvent.blur(window));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(useToastStore.getState().toasts).toHaveLength(1);
+
+    act(() => void fireEvent.focus(window));
+    await waitFor(() => expect(useToastStore.getState().toasts).toEqual([]));
+  });
+
   it('clears a confirmation on its own well before an error', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<Toast />);

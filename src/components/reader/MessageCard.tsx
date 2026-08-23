@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, ImageOff } from 'lucide-react';
+import { AlignLeft, ChevronDown, ChevronRight, FileWarning, ImageOff } from 'lucide-react';
 import {
   MessageActionRibbon,
   type MessageActionRibbonProps,
@@ -44,6 +44,11 @@ const remoteImageChipClass =
 const remoteImageChipQuiet = `${remoteImageChipClass} bg-surface-container-lowest text-on-surface dark:bg-dark-surface-container-lowest dark:text-dark-on-surface`;
 
 const remoteImageChipPrimary = `${remoteImageChipClass} bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary`;
+
+const noticeBarClass =
+  'flex flex-wrap items-center gap-2.5 rounded-control bg-surface-container px-3 py-2.5 text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary';
+
+const openFullMessageLabel = 'View full message in Gmail';
 
 export type MessageRibbonProps = Omit<MessageActionRibbonProps, 'unread' | 'starred'>;
 
@@ -141,7 +146,7 @@ export function MessageCard({
       {open && (
         <div className="mx-auto w-full max-w-4xl px-4 pb-4 text-body-md">
           {renderedMessage.remoteImagesBlocked && (
-            <div className="mb-stack-gap-md flex flex-wrap items-center gap-2.5 rounded-control bg-surface-container px-3 py-2.5 text-label-sm text-secondary dark:bg-dark-surface-container dark:text-dark-secondary">
+            <div className={`${noticeBarClass} mb-stack-gap-md`}>
               <ImageOff className="shrink-0" size={16} />
               <span>Remote images are blocked.</span>
               {!remoteImagesLocked && (
@@ -165,15 +170,30 @@ export function MessageCard({
             </div>
           )}
           {renderedMessage.htmlPresence === 'tooLarge' ? (
-            <div className="min-h-reader-body flex flex-wrap items-center gap-2.5 text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
-              <span>This message is too large to display here.</span>
+            <div
+              data-testid="too-large-notice"
+              className="flex min-h-reader-body flex-col items-center justify-center gap-2.5 px-4 text-center"
+            >
+              <FileWarning
+                className="text-on-surface-variant dark:text-dark-on-surface-variant"
+                size={28}
+              />
+              <p
+                role="status"
+                className="text-body-md font-semibold text-on-surface dark:text-dark-on-surface"
+              >
+                This message is too big to open here.
+              </p>
+              <p className="text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
+                Gmail can show the full message in your browser.
+              </p>
               {gmailThreadUrl && (
                 <button
                   type="button"
                   onClick={() => void invoke('open_external_url', { url: gmailThreadUrl })}
                   className={remoteImageChipPrimary}
                 >
-                  View entire message in Gmail
+                  {openFullMessageLabel}
                 </button>
               )}
             </div>
@@ -207,13 +227,15 @@ export function MessageCard({
                 allowRemoteImages={renderedMessage.remoteImagesAllowed ?? false}
               />
               {renderedMessage.truncated && gmailThreadUrl && (
-                <div className="mt-stack-gap-md">
+                <div data-testid="clipped-notice" className={`${noticeBarClass} mt-stack-gap-md`}>
+                  <AlignLeft className="shrink-0" size={16} />
+                  <span role="status">This message is cut short.</span>
                   <button
                     type="button"
                     onClick={() => void invoke('open_external_url', { url: gmailThreadUrl })}
-                    className={remoteImageChipQuiet}
+                    className={`${remoteImageChipPrimary} ml-auto`}
                   >
-                    View entire message in Gmail
+                    {openFullMessageLabel}
                   </button>
                 </div>
               )}

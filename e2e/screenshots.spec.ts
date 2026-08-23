@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test';
 import { formatISO, getTime, parseISO } from 'date-fns';
 import { installPlaywrightIpc } from './helpers';
 import {
+  playwrightClippedConversation,
   playwrightContactSuggestionMatches,
   playwrightLogEntries,
   playwrightMailAccount,
@@ -13,6 +14,7 @@ import {
   playwrightSearchTotal,
   playwrightSettings,
   playwrightSidebarAccounts,
+  playwrightTooLargeConversation,
   playwrightTrustedSenderSettings,
   playwrightUpdateAvailable,
 } from '@/tests/playwright-fixtures';
@@ -141,6 +143,28 @@ for (const theme of themes) {
     await page.keyboard.press('j');
     await expect(page.getByRole('heading', { name: 'Q3 Marketing Strategy Review' })).toBeVisible();
     await screenshot(page, page.getByTestId('reading-pane'), 'reader-loaded', theme);
+  });
+
+  test(`clipped message notice ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      load_conversation: playwrightClippedConversation,
+    });
+    await page.goto('/');
+    await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
+    await page.keyboard.press('j');
+    await screenshot(page, page.getByTestId('clipped-notice'), 'reader-clipped-notice', theme);
+  });
+
+  test(`too-large message notice ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      load_conversation: playwrightTooLargeConversation,
+    });
+    await page.goto('/');
+    await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
+    await page.keyboard.press('j');
+    await screenshot(page, page.getByTestId('too-large-notice'), 'reader-too-large-notice', theme);
   });
 
   test(`attachment section ${theme}`, async ({ page }) => {

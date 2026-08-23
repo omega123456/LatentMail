@@ -20,7 +20,7 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
     };
     assert_eq!(
         content(std::slice::from_ref(&first)),
-        Some(("Alex".into(), "Hello — A short preview".into()))
+        Some(("Alex".into(), "Hello\nA short preview".into()))
     );
     assert_eq!(
         content(&[
@@ -37,7 +37,7 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
         ]),
         Some((
             "Alex".into(),
-            "(No subject) — A short preview — and 1 more".into(),
+            "(No subject)\nA short preview — and 1 more".into(),
         ))
     );
     assert_eq!(

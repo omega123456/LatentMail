@@ -126,7 +126,7 @@ describe('ReadingPaneContainer', () => {
     fetchBody.mockClear();
     ipc.override('load_conversation', conversationFor('tooLarge'));
     renderWithClient();
-    await screen.findByText('This message is too large to display here.');
+    await screen.findByText('This message is too big to open here.');
     expect(readBody).not.toHaveBeenCalled();
     expect(fetchBody).not.toHaveBeenCalled();
   });

@@ -258,10 +258,10 @@ describe('MessageCard', () => {
       />,
     );
     expect(onFetchBody).not.toHaveBeenCalled();
-    expect(screen.getByText('This message is too large to display here.')).toBeInTheDocument();
+    expect(screen.getByText('This message is too big to open here.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Message body')).not.toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'View entire message in Gmail' }),
+      screen.getByRole('button', { name: 'View full message in Gmail' }),
     ).toBeInTheDocument();
   });
 
@@ -277,13 +277,13 @@ describe('MessageCard', () => {
         gmailThreadUrl="https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1"
       />,
     );
-    await user.click(screen.getByRole('button', { name: 'View entire message in Gmail' }));
+    await user.click(screen.getByRole('button', { name: 'View full message in Gmail' }));
     expect(openExternal).toHaveBeenCalledWith({
       url: 'https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1',
     });
   });
 
-  it('renders the truncated footer link only when truncated, and opens it through centralized IPC', async () => {
+  it('renders the cut-short notice only when truncated, and opens it through centralized IPC', async () => {
     const openExternal = vi.fn();
     ipc.override('open_external_url', openExternal);
     const user = userEvent.setup();
@@ -296,8 +296,9 @@ describe('MessageCard', () => {
       />,
     );
     expect(
-      screen.queryByRole('button', { name: 'View entire message in Gmail' }),
+      screen.queryByRole('button', { name: 'View full message in Gmail' }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText('This message is cut short.')).not.toBeInTheDocument();
     rerender(
       <MessageCard
         message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present', truncated: true }}
@@ -306,7 +307,8 @@ describe('MessageCard', () => {
         gmailThreadUrl="https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1"
       />,
     );
-    await user.click(screen.getByRole('button', { name: 'View entire message in Gmail' }));
+    expect(screen.getByText('This message is cut short.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'View full message in Gmail' }));
     expect(openExternal).toHaveBeenCalledWith({
       url: 'https://mail.google.com/mail/u/0/?authuser=me%40example.com#all/t1',
     });

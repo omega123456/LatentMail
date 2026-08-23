@@ -125,7 +125,7 @@ pub fn content(arrivals: &[MailArrival]) -> Option<(String, String)> {
     let preview = if first.snippet.is_empty() {
         subject
     } else {
-        format!("{subject} — {}", first.snippet)
+        format!("{subject}\n{}", first.snippet)
     };
     let title = crate::storage::addresses::first_identity(&first.sender)
         .map_or_else(|| "(No sender)".to_owned(), |identity| identity.display);

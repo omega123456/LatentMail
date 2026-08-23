@@ -62,3 +62,21 @@ export const playwrightDeferredBodyConversation: IpcCommandMap['load_conversatio
       : message,
   ),
 };
+
+export const playwrightClippedConversation: IpcCommandMap['load_conversation']['result'] = {
+  ...playwrightConversation,
+  messages: playwrightConversation.messages.map((message, index) =>
+    index === playwrightConversation.messages.length - 1
+      ? { ...message, truncated: true }
+      : message,
+  ),
+};
+
+export const playwrightTooLargeConversation: IpcCommandMap['load_conversation']['result'] = {
+  ...playwrightConversation,
+  messages: playwrightConversation.messages.map((message, index) =>
+    index === playwrightConversation.messages.length - 1
+      ? { ...message, htmlBody: null, htmlPresence: 'tooLarge' as const }
+      : message,
+  ),
+};

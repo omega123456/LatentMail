@@ -3,7 +3,7 @@ import DOMPurify from 'dompurify';
 import interUrl from '@/assets/inter-latin.woff2?url';
 import { invoke } from '@/lib/ipc/commands';
 
-const maxFrameHeight = 1600;
+const maxFrameHeight = 32000;
 const allowedUriSchemes =
   /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|inlineimg|remoteimg):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i;
 const wiredDocuments = new WeakSet<Document>();
@@ -98,7 +98,7 @@ export function BodyFrame({
       className={
         heightConstrained
           ? 'h-full w-full overflow-auto border-0'
-          : 'max-h-body-frame-max w-full overflow-auto border-0'
+          : 'w-full border-0'
       }
       height={heightConstrained ? undefined : height}
       srcDoc={srcDoc}
