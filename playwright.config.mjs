@@ -3,6 +3,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   timeout: 2_000,
+  workers: 4,
+  fullyParallel: true,
   globalSetup: './e2e/global-setup.ts',
   use: {
     ...devices['Desktop Chrome'],
