@@ -24,6 +24,13 @@ use thiserror::Error;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const STATEMENT_CACHE_CAPACITY: usize = 53;
+const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+
+pub fn vacuum_interval() -> Duration {
+    chrono::Duration::hours(6)
+        .to_std()
+        .expect("six hours is a positive duration")
+}
 
 fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -34,6 +41,7 @@ fn configure(connection: &Connection) -> rusqlite::Result<()> {
 
 fn configure_database(connection: &Connection) -> rusqlite::Result<()> {
     configure(connection)?;
+    connection.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
     connection.pragma_update(None, "journal_mode", "WAL")
 }
 
@@ -96,5 +104,26 @@ impl Storage {
         })
         .await?
         .map_err(StorageError::from)
+    }
+
+    pub async fn vacuum(&self) -> Result<u64, StorageError> {
+        self.run(|connection| {
+            let mode: i64 = connection.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+            if mode != AUTO_VACUUM_INCREMENTAL {
+                tracing::warn!(
+                    target: "storage",
+                    mode,
+                    "database is not in incremental auto-vacuum mode, no pages can be reclaimed"
+                );
+                return Ok(0);
+            }
+            let reclaimed: u64 =
+                connection.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+            let mut statement = connection.prepare("PRAGMA incremental_vacuum(0)")?;
+            let mut rows = statement.query([])?;
+            while rows.next()?.is_some() {}
+            Ok(reclaimed)
+        })
+        .await
     }
 }

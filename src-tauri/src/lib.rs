@@ -70,6 +70,21 @@ pub fn run() {
             settings::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
             auth::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
             avatars::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
+            let vacuum_storage = storage.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker = tokio::time::interval(storage::vacuum_interval());
+                loop {
+                    ticker.tick().await;
+                    match vacuum_storage.vacuum().await {
+                        Ok(pages) => {
+                            tracing::info!(target: "storage", pages, "incremental vacuum complete")
+                        }
+                        Err(error) => {
+                            tracing::warn!(target: "storage", %error, "incremental vacuum failed")
+                        }
+                    }
+                }
+            });
             sync::initialize(handle, storage).map_err(std::io::Error::other)?;
             cli::start(handle);
             Ok(os::initialize(handle).map_err(std::io::Error::other)?)
