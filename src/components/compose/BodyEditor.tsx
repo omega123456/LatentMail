@@ -28,6 +28,12 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
           underline: false,
           bulletList: { HTMLAttributes: { class: 'list-disc ps-6' } },
           orderedList: { HTMLAttributes: { class: 'list-decimal ps-6' } },
+          codeBlock: {
+            HTMLAttributes: {
+              class:
+                'my-2.5 overflow-x-auto whitespace-pre rounded-md border border-code-block-line bg-code-block px-4 py-3.5 font-mono text-body-sm text-on-code-block',
+            },
+          },
         }),
         Underline,
         Link.configure({ openOnClick: false, autolink: true }),

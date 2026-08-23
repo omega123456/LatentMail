@@ -93,6 +93,9 @@
   --color-settings-tint-block: #f0ecfb;
   --color-settings-tint-quota: #fcf2e2;
   --color-settings-tint-pause: #eef0f5;
+  --color-code-block: #111827;
+  --color-on-code-block: #dbeafe;
+  --color-code-block-line: #2a4372;
   --color-row-flash: #dbeafe;
   --animate-row-flash: row-flash 900ms ease-out;
   --animate-row-flash-dark: row-flash-dark 900ms ease-out;

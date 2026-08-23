@@ -6,15 +6,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { BodyEditor, type BodyEditorHandle } from '@/components/compose/BodyEditor';
 import { EditorToolbar } from '@/components/compose/EditorToolbar';
 
-function ComposerHarness({ bodyRef }: { bodyRef: RefObject<BodyEditorHandle | null> }) {
+function ComposerHarness({
+  bodyRef,
+  value = '<p>Hello</p>',
+  editorRef,
+}: {
+  bodyRef: RefObject<BodyEditorHandle | null>;
+  value?: string;
+  editorRef?: RefObject<Editor | null>;
+}) {
   const [editor, setEditor] = useState<Editor | null>(null);
   return (
     <>
       <BodyEditor
         ref={bodyRef}
-        value="<p>Hello</p>"
+        value={value}
         onChange={() => {}}
-        onSelectionChange={(next) => setEditor(next ?? null)}
+        onSelectionChange={(next) => {
+          setEditor(next ?? null);
+          if (editorRef) {
+            editorRef.current = next ?? null;
+          }
+        }}
       />
       <EditorToolbar editor={editor} onLink={() => {}} />
     </>
@@ -70,6 +83,7 @@ describe('BodyEditor', () => {
   it.each([
     ['Bullet List', '<ul class="list-disc ps-6">'],
     ['Numbered List', '<ol class="list-decimal ps-6">'],
+    ['Code Block', '<pre class="my-2.5 overflow-x-auto whitespace-pre rounded-md'],
   ])(
     'renders %s markers on the list node, which preflight would otherwise strip',
     async (label, expectedTag) => {
@@ -81,6 +95,24 @@ describe('BodyEditor', () => {
       expect(ref.current?.html()).toContain(expectedTag);
     },
   );
+
+  it('wraps a multi-paragraph selection in one code block, not one per paragraph', async () => {
+    const user = userEvent.setup();
+    const ref = createRef<BodyEditorHandle>();
+    const editorRef = createRef<Editor>();
+    render(
+      <ComposerHarness bodyRef={ref} editorRef={editorRef} value="<p>first</p><p>second</p>" />,
+    );
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    act(() => {
+      editorRef.current?.commands.selectAll();
+    });
+    await user.click(screen.getByRole('button', { name: 'Code Block' }));
+
+    const html = ref.current?.html() ?? '';
+    expect(html.match(/<pre/g)).toHaveLength(1);
+    expect(html).toContain('first\nsecond');
+  });
 
   it('exposes an imperative focus method for focus-on-open behaviour', () => {
     const ref = createRef<BodyEditorHandle>();

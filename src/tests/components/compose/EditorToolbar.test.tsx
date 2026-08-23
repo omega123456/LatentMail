@@ -13,11 +13,15 @@ function fakeEditor(active: Set<string>) {
     toggleStrike: () => chain,
     toggleBulletList: () => chain,
     toggleOrderedList: () => chain,
+    toggleCodeBlock: () => chain,
+    deleteSelection: () => chain,
+    insertContent: () => chain,
     run,
   };
   return {
     isActive: (name: string) => active.has(name),
     chain: () => chain,
+    state: { selection: { from: 0, to: 0, empty: true }, doc: { textBetween: () => '' } },
   } as unknown as import('@tiptap/react').Editor;
 }
 
@@ -29,6 +33,7 @@ describe('EditorToolbar', () => {
     'Strikethrough',
     'Bullet List',
     'Numbered List',
+    'Code Block',
     'Link',
   ];
 
@@ -54,7 +59,15 @@ describe('EditorToolbar', () => {
     expect(screen.getByRole('button', { name: 'Italic' })).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it.each(['Bold', 'Italic', 'Underline', 'Strikethrough', 'Bullet List', 'Numbered List'])(
+  it.each([
+    'Bold',
+    'Italic',
+    'Underline',
+    'Strikethrough',
+    'Bullet List',
+    'Numbered List',
+    'Code Block',
+  ])(
     'runs the matching editor command for %s',
     async (label) => {
       const user = userEvent.setup();

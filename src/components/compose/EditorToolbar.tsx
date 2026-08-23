@@ -1,6 +1,7 @@
 import type { Editor } from '@tiptap/react';
 import {
   Bold,
+  Code,
   Italic,
   Link as LinkIcon,
   List,
@@ -18,6 +19,21 @@ type Control = {
   run: (editor: Editor) => void;
   isActive: string;
 };
+
+function toggleCodeBlock(editor: Editor) {
+  const { from, to, empty } = editor.state.selection;
+  const selectedText = empty ? '' : editor.state.doc.textBetween(from, to, '\n');
+  if (!selectedText || editor.isActive('codeBlock')) {
+    editor.chain().focus().toggleCodeBlock().run();
+    return;
+  }
+  editor
+    .chain()
+    .focus()
+    .deleteSelection()
+    .insertContent({ type: 'codeBlock', content: [{ type: 'text', text: selectedText }] })
+    .run();
+}
 
 const formatControls: Control[] = [
   {
@@ -58,6 +74,12 @@ const listControls: Control[] = [
     Icon: ListOrdered,
     run: (editor) => editor.chain().focus().toggleOrderedList().run(),
     isActive: 'orderedList',
+  },
+  {
+    label: 'Code Block',
+    Icon: Code,
+    run: toggleCodeBlock,
+    isActive: 'codeBlock',
   },
 ];
 
