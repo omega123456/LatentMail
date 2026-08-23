@@ -43,12 +43,12 @@ export function AppShell() {
         <div
           aria-hidden={route !== 'mail'}
           inert={route !== 'mail'}
-          className={`col-start-1 row-start-1 min-h-0 ${route === 'mail' ? '' : 'invisible pointer-events-none'}`}
+          className={`col-start-1 row-start-1 min-h-0 min-w-0 ${route === 'mail' ? '' : 'invisible pointer-events-none'}`}
         >
           <MailLayout accounts={accounts ?? []} />
         </div>
         {route === 'settings' && (
-          <div className="col-start-1 row-start-1 min-h-0">
+          <div className="col-start-1 row-start-1 min-h-0 min-w-0">
             <Suspense
               fallback={
                 <DelayedFallback>

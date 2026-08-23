@@ -268,10 +268,14 @@ impl QueueEngine {
     }
 
     pub fn pause(&self) {
-        self.paused.store(true, Ordering::Release);
+        if !self.paused.swap(true, Ordering::AcqRel) {
+            tracing::info!(target: "queue", "queue paused by the user");
+        }
     }
     pub fn resume(&self) {
-        self.paused.store(false, Ordering::Release);
+        if self.paused.swap(false, Ordering::AcqRel) {
+            tracing::info!(target: "queue", "queue resumed by the user");
+        }
         self.resumed.notify_waiters();
     }
 
