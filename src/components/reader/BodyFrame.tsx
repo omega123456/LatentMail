@@ -89,7 +89,7 @@ export function BodyFrame({
   const remoteImageSources = ' remoteimg: http://remoteimg.localhost https: http:';
   const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: inlineimg: http://inlineimg.localhost${allowRemoteImages ? remoteImageSources : ''}; style-src 'unsafe-inline'; font-src 'self'; form-action 'none'">`;
   const frameFont = `@font-face{font-family:Inter;src:url(${interUrl}) format('woff2');font-weight:100 900;font-display:swap}`;
-  const srcDoc = `${frameCsp}<style>${frameFont}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625;word-break:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true, ALLOWED_URI_REGEXP: allowedUriSchemes })}`;
+  const srcDoc = `${frameCsp}<style>${frameFont}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625;overflow-wrap:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true, ALLOWED_URI_REGEXP: allowedUriSchemes })}`;
   return (
     <iframe
       ref={frameRef}

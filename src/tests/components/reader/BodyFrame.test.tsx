@@ -25,6 +25,8 @@ describe('BodyFrame', () => {
     expect(frame.getAttribute('srcdoc')).toContain("default-src 'none'");
     expect(frame.getAttribute('srcdoc')).toContain("form-action 'none'");
     expect(frame.getAttribute('srcdoc')).not.toContain('<script>');
+    expect(frame.getAttribute('srcdoc')).toContain('overflow-wrap:break-word');
+    expect(frame.getAttribute('srcdoc')).not.toContain('word-break');
     frame.contentDocument?.write('<a href="https://example.com">Safe link</a>');
     await act(async () => {
       fireEvent.load(frame);
