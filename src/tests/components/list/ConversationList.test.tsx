@@ -136,6 +136,8 @@ describe('ConversationList', () => {
     renderWithQueryClient(<ConversationList />);
     expect(screen.getAllByTestId('conversation-row')).not.toHaveLength(0);
     expect(useSelectionStore.getState().flashThreadId).toBeNull();
+    expect(useSelectionStore.getState().keyboardCursor).toBe(0);
+    expect(screen.getAllByTestId('conversation-row')[0]).toHaveAttribute('data-active', 'true');
     expect(screen.getAllByTestId('conversation-row')[0]).not.toHaveClass(
       'motion-safe:animate-row-flash',
     );

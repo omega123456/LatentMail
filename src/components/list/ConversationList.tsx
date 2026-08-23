@@ -146,9 +146,10 @@ export function ConversationList({
     if (!flashThreadId) return;
     const index = rows.findIndex((row) => row.id === flashThreadId);
     if (index < 0) return;
+    setCursor(index);
     virtualizer.scrollToIndex(index, { align: 'auto' });
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) setFlashThreadId(null);
-  }, [flashThreadId, rows, setFlashThreadId, virtualizer]);
+  }, [flashThreadId, rows, setCursor, setFlashThreadId, virtualizer]);
   const open = useCallback(
     (index: number) => {
       const row = rows[index];
