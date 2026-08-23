@@ -88,6 +88,33 @@ describe('ShortcutCapture', () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
+  it('unsets the shortcut with Remove, and offers no Remove for a command that has none', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    const { unmount } = render(
+      <ShortcutCapture
+        command="toggleStar"
+        bindings={DEFAULT_COMMAND_BINDINGS}
+        onApply={onApply}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(onApply).toHaveBeenCalledWith('toggleStar', []);
+    unmount();
+
+    render(
+      <ShortcutCapture
+        command="editDraft"
+        bindings={DEFAULT_COMMAND_BINDINGS}
+        onApply={onApply}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+
   it('shows an inline conflict warning naming the other command and disables Apply', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

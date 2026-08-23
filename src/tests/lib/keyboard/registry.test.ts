@@ -73,6 +73,37 @@ describe('keyboard command registry', () => {
     ).toBe('selectAll');
   });
 
+  it('ignores a bare-key binding when a modifier the binding does not name is held', () => {
+    for (const init of [
+      { key: 'c', ctrlKey: true },
+      { key: 'c', metaKey: true },
+      { key: 'c', altKey: true },
+      { key: 'j', ctrlKey: true },
+      { key: 'r', metaKey: true },
+      { key: '/', ctrlKey: true },
+      { key: 'J', shiftKey: true, altKey: true },
+    ]) {
+      expect(
+        commandForEvent(new KeyboardEvent('keydown', init), DEFAULT_COMMAND_BINDINGS),
+      ).toBeNull();
+    }
+  });
+
+  it('still resolves the shifted uppercase bindings that carry no Shift prefix', () => {
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'I', shiftKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('markRead');
+    expect(
+      commandForEvent(
+        new KeyboardEvent('keydown', { key: 'U', shiftKey: true }),
+        DEFAULT_COMMAND_BINDINGS,
+      ),
+    ).toBe('markUnread');
+  });
+
   it('registers editDraft with no default binding, so it is reachable only programmatically until remapped', () => {
     expect(DEFAULT_COMMAND_BINDINGS.editDraft).toEqual([]);
   });

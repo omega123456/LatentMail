@@ -97,6 +97,7 @@ export function commandForEvent(
   event: KeyboardEvent,
   bindings: CommandBindings,
 ): CommandName | null {
+  if (event.altKey) return null;
   const modifier = event.metaKey ? 'Meta' : event.ctrlKey ? 'Control' : '';
   const key = modifier ? normalizeKey(event.key) : event.key;
   const binding = modifier
@@ -104,5 +105,7 @@ export function commandForEvent(
     : event.shiftKey
       ? `Shift+${key}`
       : key;
-  return commandForKey(binding, bindings) ?? commandForKey(event.key, bindings);
+  const match = commandForKey(binding, bindings);
+  if (match) return match;
+  return modifier ? null : commandForKey(event.key, bindings);
 }

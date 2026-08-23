@@ -69,6 +69,16 @@ export function ShortcutCapture({
         >
           Apply
         </button>
+        {bindings[command].length > 0 && (
+          <button
+            type="button"
+            onMouseDown={keepFocus}
+            onClick={() => onApply(command, [])}
+            className={settingsLinkMuted}
+          >
+            Remove
+          </button>
+        )}
         <button
           type="button"
           onMouseDown={keepFocus}
