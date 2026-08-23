@@ -762,3 +762,43 @@ fn deleting_a_draft_thread_through_the_delete_intent_never_batch_modifies_it() {
             .all(|request| request.url.path() != "/users/me/messages/batchModify"));
     });
 }
+
+fn listed_order(connection: &rusqlite::Connection, label_id: &str) -> Vec<(String, i64)> {
+    ThreadRepository::list_paginated(connection, "account", Some(label_id), None, 100)
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.thread.id, row.thread.latest_at))
+        .collect()
+}
+
+#[test]
+fn forwarding_an_old_message_does_not_bump_its_thread_up_the_inbox() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    seed_labels(&connection);
+    MessageRepository::write_full_state(&connection, &message("received", "thread-old", 10))
+        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "received", "INBOX", true)
+        .unwrap();
+    MessageRepository::write_full_state(&connection, &message("forward", "thread-old", 100))
+        .unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "forward", "SENT", true)
+        .unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread-old").unwrap();
+
+    MessageRepository::write_full_state(&connection, &message("newer", "thread-new", 50)).unwrap();
+    MessageRepository::set_label_membership(&connection, "account", "newer", "INBOX", true)
+        .unwrap();
+    ThreadRepository::recompute(&connection, "account", "thread-new").unwrap();
+
+    assert_eq!(
+        listed_order(&connection, "INBOX"),
+        vec![("thread-new".to_owned(), 50), ("thread-old".to_owned(), 10)],
+        "the inbox orders a thread by its newest inbox message, not by the forward"
+    );
+    assert_eq!(
+        listed_order(&connection, "SENT"),
+        vec![("thread-old".to_owned(), 100)],
+        "sent orders the same thread by the forward"
+    );
+}

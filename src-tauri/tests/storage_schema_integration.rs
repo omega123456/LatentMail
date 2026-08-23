@@ -652,6 +652,39 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("thread_labels_by_thread")));
 
+    let labelled_listing_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT t.account_id,t.id,t.subject,t.participants,tl.latest_at,t.message_count,t.is_unread,t.is_starred,t.has_attachments,t.has_draft,t.sender_identity,t.recipient_identity,COALESCE((SELECT m2.snippet FROM messages m2 WHERE m2.account_id=t.account_id AND m2.thread_id=t.id ORDER BY m2.sent_at DESC,m2.id DESC LIMIT 1),'') FROM thread_labels tl CROSS JOIN threads t ON t.account_id=tl.account_id AND t.id=tl.thread_id WHERE tl.account_id=?1 AND tl.label_id=?2 ORDER BY tl.latest_at DESC,tl.thread_id DESC LIMIT ?5",
+    );
+    assert!(labelled_listing_plan
+        .iter()
+        .any(|step| step.contains("SEARCH tl USING PRIMARY KEY (account_id=? AND label_id=?)")));
+    assert!(labelled_listing_plan
+        .iter()
+        .any(|step| step.contains("SEARCH m2 USING INDEX messages_by_thread")));
+    assert!(!labelled_listing_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+    assert!(!labelled_listing_plan
+        .iter()
+        .any(|step| step.contains("SCAN")));
+
+    let label_index_write_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN INSERT INTO thread_labels (account_id,label_id,thread_id,latest_at) SELECT ?1,CASE WHEN EXISTS (SELECT 1 FROM message_labels x WHERE x.account_id=?1 AND x.message_id=m.id AND x.label_id='TRASH') THEN 'TRASH' WHEN EXISTS (SELECT 1 FROM message_labels x WHERE x.account_id=?1 AND x.message_id=m.id AND x.label_id='SPAM') THEN 'SPAM' ELSE ml.label_id END,?2,MAX(m.sent_at) FROM messages m CROSS JOIN message_labels ml ON ml.account_id=m.account_id AND ml.message_id=m.id WHERE m.account_id=?1 AND m.thread_id=?2 GROUP BY 2",
+    );
+    assert!(label_index_write_plan.iter().any(|step| step
+        .contains("SEARCH m USING COVERING INDEX messages_by_thread (account_id=? AND thread_id=?)")));
+    assert!(label_index_write_plan.iter().any(|step| step.contains(
+        "SEARCH x USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=? AND message_id=? AND label_id=?)"
+    )));
+    assert!(
+        !label_index_write_plan
+            .iter()
+            .any(|step| step.contains("MATERIALIZE") || step.contains("SCAN")),
+        "the per-thread label index write must stay driven by messages_by_thread, never materialise a per-account aggregate"
+    );
+
     let message_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN SELECT snippet FROM messages WHERE account_id='account' AND thread_id='thread' ORDER BY sent_at DESC,id DESC LIMIT 1",
