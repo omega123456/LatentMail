@@ -1236,7 +1236,16 @@ pub async fn delete_label<R: Runtime>(
         .await
         .map_err(|error| error.to_string())?;
     storage
-        .run(move |connection| LabelRepository::delete(connection, &account_id, &label_id))
+        .run(move |connection| {
+            let transaction = connection.unchecked_transaction()?;
+            let touched: std::collections::HashSet<String> =
+                LabelRepository::threads_with_label(&transaction, &account_id, &label_id)?
+                    .into_iter()
+                    .collect();
+            LabelRepository::delete(&transaction, &account_id, &label_id)?;
+            ThreadRepository::recompute_many(&transaction, &account_id, &touched)?;
+            transaction.commit()
+        })
         .await
         .map_err(|error| error.to_string())
 }

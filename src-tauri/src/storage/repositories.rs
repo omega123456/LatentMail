@@ -222,11 +222,25 @@ impl LabelRepository {
     }
 
     pub fn delete(connection: &Connection, account_id: &str, id: &str) -> Result<()> {
-        connection.execute(
-            "DELETE FROM labels WHERE account_id=?1 AND id=?2",
-            params![account_id, id],
-        )?;
+        connection
+            .prepare_cached("DELETE FROM labels WHERE account_id=?1 AND id=?2")?
+            .execute(params![account_id, id])?;
         Ok(())
+    }
+
+    pub fn threads_with_label(
+        connection: &Connection,
+        account_id: &str,
+        label_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement = connection.prepare_cached(
+            "SELECT m.thread_id
+             FROM message_labels ml
+             CROSS JOIN messages m ON m.account_id=ml.account_id AND m.id=ml.message_id
+             WHERE ml.account_id=?1 AND ml.label_id=?2",
+        )?;
+        let threads = statement.query_map(params![account_id, label_id], |row| row.get(0))?;
+        threads.collect()
     }
 }
 
