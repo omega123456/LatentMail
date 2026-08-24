@@ -95,11 +95,7 @@ export function BodyFrame({
       ref={frameRef}
       aria-label="Message body"
       title="Message body"
-      className={
-        heightConstrained
-          ? 'h-full w-full overflow-auto border-0'
-          : 'w-full border-0'
-      }
+      className={heightConstrained ? 'h-full w-full overflow-auto border-0' : 'w-full border-0'}
       height={heightConstrained ? undefined : height}
       srcDoc={srcDoc}
       onLoad={(event) => {

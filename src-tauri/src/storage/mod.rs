@@ -1,7 +1,11 @@
 pub mod addresses;
+pub mod ai_config;
+pub mod embeddings;
 pub mod reconcile_staging;
 mod repositories;
 
+pub use ai_config::{AccountAiConfig, AccountAiConfigRepository};
+pub use embeddings::{EmbeddingBacklog, EmbeddingCounts, EmbeddingRepository, MessageEmbedding};
 pub use repositories::{
     truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
     AvatarCacheOutcome, AvatarCacheRecord, AvatarCacheRepository, ComposeDraftMetadata,
@@ -14,7 +18,7 @@ pub use repositories::{
 
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -23,7 +27,7 @@ use thiserror::Error;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-const STATEMENT_CACHE_CAPACITY: usize = 53;
+const STATEMENT_CACHE_CAPACITY: usize = 64;
 const AUTO_VACUUM_INCREMENTAL: i64 = 2;
 
 pub fn vacuum_interval() -> Duration {
@@ -37,6 +41,18 @@ fn configure(connection: &Connection) -> rusqlite::Result<()> {
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     Ok(())
+}
+
+fn register_vec() {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| unsafe {
+        let init: unsafe extern "C" fn(
+            *mut rusqlite::ffi::sqlite3,
+            *mut *mut i8,
+            *const rusqlite::ffi::sqlite3_api_routines,
+        ) -> i32 = std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
+        rusqlite::ffi::sqlite3_auto_extension(Some(init));
+    });
 }
 
 fn configure_database(connection: &Connection) -> rusqlite::Result<()> {
@@ -68,6 +84,7 @@ pub struct Storage {
 
 impl Storage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        register_vec();
         let storage = Self {
             path: Arc::new(path.as_ref().to_path_buf()),
         };
@@ -78,6 +95,7 @@ impl Storage {
     }
 
     pub fn in_memory() -> Result<Connection, StorageError> {
+        register_vec();
         let mut connection = Connection::open_in_memory()?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
@@ -86,6 +104,7 @@ impl Storage {
     }
 
     pub fn connection(&self) -> Result<Connection, StorageError> {
+        register_vec();
         let connection = Connection::open(self.path.as_ref())?;
         configure(&connection)?;
         Ok(connection)
@@ -97,6 +116,7 @@ impl Storage {
         F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
     {
         let path = Arc::clone(&self.path);
+        register_vec();
         tokio::task::spawn_blocking(move || {
             let connection = Connection::open(path.as_ref())?;
             configure(&connection)?;

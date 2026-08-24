@@ -68,6 +68,121 @@ describe('EventBridge', () => {
     });
   });
 
+  it('updates one index snapshot and removes only a deleted account snapshot', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('ai://index', expect.any(Function)),
+    );
+    client!.setQueryData(queryKeys.aiIndexStatuses, [
+      {
+        accountId: 'account-1',
+        state: 'building',
+        indexed: 2,
+        total: 10,
+        indexedMessages: 2,
+        totalEligibleMessages: 10,
+        indexedPassages: 6,
+        paused: false,
+        error: null,
+      },
+      {
+        accountId: 'account-2',
+        state: 'building',
+        indexed: 4,
+        total: 10,
+        indexedMessages: 4,
+        totalEligibleMessages: 10,
+        indexedPassages: 12,
+        paused: false,
+        error: null,
+      },
+    ]);
+    act(() =>
+      ipc.emit('ai://index', {
+        accountId: 'account-1',
+        indexed: 6,
+        total: 10,
+        indexedMessages: 6,
+        totalEligibleMessages: 10,
+        indexedPassages: 18,
+        state: 'complete',
+        paused: false,
+        error: null,
+      }),
+    );
+    expect(client!.getQueryData(queryKeys.aiIndexStatuses)).toEqual([
+      {
+        accountId: 'account-1',
+        state: 'complete',
+        indexed: 6,
+        total: 10,
+        indexedMessages: 6,
+        totalEligibleMessages: 10,
+        indexedPassages: 18,
+        paused: false,
+        error: null,
+      },
+      {
+        accountId: 'account-2',
+        state: 'building',
+        indexed: 4,
+        total: 10,
+        indexedMessages: 4,
+        totalEligibleMessages: 10,
+        indexedPassages: 12,
+        paused: false,
+        error: null,
+      },
+    ]);
+    act(() => ipc.emit('ai://config', { accountId: 'account-1', removed: true }));
+    expect(client!.getQueryData(queryKeys.aiIndexStatuses)).toEqual([
+      {
+        accountId: 'account-2',
+        state: 'building',
+        indexed: 4,
+        total: 10,
+        indexedMessages: 4,
+        totalEligibleMessages: 10,
+        indexedPassages: 12,
+        paused: false,
+        error: null,
+      },
+    ]);
+    client!.setQueryData(queryKeys.aiIndexStatuses, []);
+    act(() =>
+      ipc.emit('ai://index', {
+        accountId: 'account-3',
+        indexed: 1,
+        total: 2,
+        indexedMessages: 1,
+        totalEligibleMessages: 2,
+        indexedPassages: 3,
+        state: 'partial',
+        paused: false,
+        error: null,
+      }),
+    );
+    expect(client!.getQueryData(queryKeys.aiIndexStatuses)).toEqual([
+      {
+        accountId: 'account-3',
+        indexed: 1,
+        total: 2,
+        indexedMessages: 1,
+        totalEligibleMessages: 2,
+        indexedPassages: 3,
+        state: 'partial',
+        paused: false,
+        error: null,
+      },
+    ]);
+  });
+
   it('updates sync state live from sync progress and completion events', async () => {
     render(
       <QueryProvider>

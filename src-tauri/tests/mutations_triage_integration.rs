@@ -437,3 +437,103 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
         server.verify().await;
     });
 }
+
+async fn triage_harness(account_id: &str) -> (tauri::App<tauri::test::MockRuntime>, std::path::PathBuf, tempfile::TempDir, MockServer) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+        ))
+        .mount(&server)
+        .await;
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var(
+        "LATENTMAIL_GOOGLE_TOKEN_URL",
+        format!("{}/token", server.uri()),
+    );
+    std::env::set_var("LATENTMAIL_GMAIL_BASE_URL", server.uri());
+    save_refresh_token(account_id, "refresh").unwrap();
+
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("mail.sqlite");
+    let storage = Storage::open(&database).unwrap();
+    AccountRepository::upsert(
+        &storage.connection().unwrap(),
+        &Account {
+            id: account_id.into(),
+            email: format!("{account_id}@example.com"),
+            display_name: "A".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    let registry = WorkRegistry::new();
+    let engine = SyncEngine::new(
+        storage.clone(),
+        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {})),
+        registry,
+        noop_event_sink(),
+    );
+    let application = app();
+    application.manage(AuthService::new(storage.clone()));
+    application.manage(engine);
+    application.manage(storage);
+    (application, database, directory, server)
+}
+
+#[tokio::test]
+async fn triaging_threads_surfaces_an_unreadable_database() {
+    let (application, database, _directory, _server) = triage_harness("triage-threads").await;
+    std::fs::write(&database, b"not a database").unwrap();
+
+    assert!(latentmail_lib::sync::triage::delete_threads(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        "triage-threads".into(),
+        vec!["thread-1".into()],
+    )
+    .await
+    .is_err());
+    assert!(latentmail_lib::sync::triage::move_threads(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        "triage-threads".into(),
+        vec!["thread-1".into()],
+        "TRASH".into(),
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn triaging_messages_surfaces_an_unreadable_database() {
+    let (application, database, _directory, _server) = triage_harness("triage-messages").await;
+    std::fs::write(&database, b"not a database").unwrap();
+
+    assert!(latentmail_lib::sync::triage::delete_messages(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        "triage-messages".into(),
+        vec!["message-1".into()],
+    )
+    .await
+    .is_err());
+    assert!(latentmail_lib::sync::triage::move_messages(
+        application.handle().clone(),
+        application.state(),
+        application.state(),
+        "triage-messages".into(),
+        vec!["message-1".into()],
+        "SPAM".into(),
+    )
+    .await
+    .is_err());
+}

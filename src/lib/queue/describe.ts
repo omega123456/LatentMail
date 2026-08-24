@@ -1,10 +1,11 @@
-import { Compass, Layers, Zap, type LucideIcon } from 'lucide-react';
+import { Brain, Compass, Layers, Zap, type LucideIcon } from 'lucide-react';
 import type { AccountQueueSnapshot, Lane, LaneState, OperationStatus } from '@/lib/types/ipc';
 
 export const LANE_META: Record<Lane, { label: string; Icon: LucideIcon }> = {
   interactive: { label: 'Interactive', Icon: Zap },
   background: { label: 'Background', Icon: Layers },
   traversal: { label: 'Traversal', Icon: Compass },
+  embedding: { label: 'Embedding', Icon: Brain },
 };
 
 const PIP_SOLID = 'bg-settings-outline dark:bg-dark-settings-outline';

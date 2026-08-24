@@ -17,6 +17,9 @@ import {
   playwrightTooLargeConversation,
   playwrightTrustedSenderSettings,
   playwrightUpdateAvailable,
+  playwrightAiConfigs,
+  playwrightAiIndexStatuses,
+  playwrightAiModels,
 } from '@/tests/playwright-fixtures';
 
 const themes = ['light', 'dark'] as const;
@@ -198,6 +201,7 @@ for (const theme of themes) {
       page,
       {
         list_accounts: [playwrightMailAccount],
+        read_ai_index_status: [],
         read_queue_summary: {
           pending: 2,
           active: 0,
@@ -564,6 +568,21 @@ for (const theme of themes) {
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
     await screenshot(page, page.getByTestId('settings-nav'), 'settings-nav', theme);
+  });
+
+  test(`settings AI section ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount, playwrightReauthAccount],
+      read_ai_configs: playwrightAiConfigs,
+      read_ai_index_status: playwrightAiIndexStatuses,
+      list_ai_models: playwrightAiModels,
+    });
+    await page.goto('/');
+    await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'AI', exact: true }).click();
+    await page.getByRole('button', { name: /Personal/ }).click();
+    await page.setViewportSize({ width: 1280, height: 1400 });
+    await screenshot(page, page.getByTestId('settings-ai-section'), 'settings-ai-section', theme);
   });
 
   test(`settings general section ${theme}`, async ({ page }) => {

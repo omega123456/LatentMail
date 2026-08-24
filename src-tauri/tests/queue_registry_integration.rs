@@ -240,7 +240,12 @@ async fn snapshot_groups_records_by_account_then_lane() {
         let lanes: Vec<Lane> = account.lanes.iter().map(|lane| lane.lane).collect();
         assert_eq!(
             lanes,
-            [Lane::Interactive, Lane::Background, Lane::Traversal]
+            [
+                Lane::Interactive,
+                Lane::Background,
+                Lane::Traversal,
+                Lane::Embedding,
+            ]
         );
     }
 }

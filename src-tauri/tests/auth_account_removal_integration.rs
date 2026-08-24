@@ -567,3 +567,58 @@ async fn removing_an_account_evicts_a_registry_backed_operations_closure_so_its_
         "the caller awaiting an operation whose closure was evicted on removal resolves with an error"
     );
 }
+
+#[tokio::test]
+async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barrier() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    AccountRepository::upsert(
+        &storage.connection().unwrap(),
+        &Account {
+            id: "indexed".into(),
+            email: "indexed@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    latentmail_lib::auth::save_refresh_token("indexed", "token").unwrap();
+
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
+    let engine = SyncEngine::new(
+        storage.clone(),
+        Arc::clone(&queue),
+        registry,
+        noop_event_sink(),
+    );
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    tauri::Manager::manage(&app, AuthService::new(storage.clone()));
+    tauri::Manager::manage(&app, queue);
+    tauri::Manager::manage(&app, engine);
+    tauri::Manager::manage(&app, latentmail_lib::ai::AiService::new(storage.clone()));
+
+    timeout(
+        Duration::from_secs(2),
+        latentmail_lib::auth::remove_account(
+            tauri::Manager::app_handle(&app).clone(),
+            tauri::Manager::state(&app),
+            tauri::Manager::state(&app),
+            tauri::Manager::state(&app),
+            "indexed".into(),
+        ),
+    )
+    .await
+    .expect("the embedding barrier resolves rather than hanging")
+    .unwrap();
+
+    assert!(AccountRepository::list(&storage.connection().unwrap())
+        .unwrap()
+        .is_empty());
+}

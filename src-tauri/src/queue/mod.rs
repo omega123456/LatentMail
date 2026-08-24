@@ -34,16 +34,23 @@ pub enum Lane {
     Background,
 
     Traversal,
+    Embedding,
 }
 
 impl Lane {
-    pub const ALL: [Lane; 3] = [Lane::Interactive, Lane::Background, Lane::Traversal];
+    pub const ALL: [Lane; 4] = [
+        Lane::Interactive,
+        Lane::Background,
+        Lane::Traversal,
+        Lane::Embedding,
+    ];
 
     pub fn capacity(self) -> usize {
         match self {
             Self::Interactive => 4,
             Self::Background => 1,
             Self::Traversal => 1,
+            Self::Embedding => 1,
         }
     }
 }
@@ -67,6 +74,7 @@ pub enum OperationKind {
     NotSpam,
 
     Traversal,
+    Embed,
 }
 
 impl OperationKind {
@@ -75,7 +83,10 @@ impl OperationKind {
     }
 
     fn retries(self) -> bool {
-        !matches!(self, Self::Send | Self::Sync | Self::Traversal)
+        !matches!(
+            self,
+            Self::Send | Self::Sync | Self::Traversal | Self::Embed
+        )
     }
 }
 
@@ -107,7 +118,7 @@ impl QueueError {
 pub type OperationFuture = Pin<Box<dyn Future<Output = Result<(), QueueError>> + Send>>;
 pub type Executor = Arc<dyn Fn(QueueOperation) -> OperationFuture + Send + Sync>;
 pub type QueueEventSink = Arc<dyn Fn(&'static str, serde_json::Value) + Send + Sync>;
-pub type CancellationHook = Arc<dyn Fn(&str) + Send + Sync>;
+pub type CancellationHook = Arc<dyn Fn(&OperationRecord) + Send + Sync>;
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +143,7 @@ struct AccountQueue {
     interactive: mpsc::Sender<QueueOperation>,
     background: mpsc::Sender<QueueOperation>,
     traversal: mpsc::Sender<QueueOperation>,
+    embedding: mpsc::Sender<QueueOperation>,
 }
 
 struct TokenBucket {
@@ -254,6 +266,7 @@ impl QueueEngine {
             Lane::Interactive => queue.interactive,
             Lane::Background => queue.background,
             Lane::Traversal => queue.traversal,
+            Lane::Embedding => queue.embedding,
         };
         if sender.send(operation).await.is_err() {
             if lane == Lane::Interactive {
@@ -337,7 +350,7 @@ impl QueueEngine {
         if cancelled.lane == Lane::Interactive {
             self.finish_interactive(&cancelled.account_id).await;
         }
-        (self.cancellation_hook)(id);
+        (self.cancellation_hook)(&cancelled);
         self.emit(id, &cancelled.account_id, cancelled.lane, "cancelled");
         Some(cancelled)
     }
@@ -359,6 +372,47 @@ impl QueueEngine {
                     self.cancel(&operation.id).await;
                 }
             }
+        }
+    }
+
+    pub async fn cancel_account_lane_operations(self: &Arc<Self>, account_id: &str, lane: Lane) {
+        let snapshot = self.snapshot().await;
+        let Some(account) = snapshot
+            .into_iter()
+            .find(|account| account.account_id == account_id)
+        else {
+            return;
+        };
+        let Some(lane) = account
+            .lanes
+            .into_iter()
+            .find(|candidate| candidate.lane == lane)
+        else {
+            return;
+        };
+        for operation in lane.operations {
+            self.cancel(&operation.id).await;
+        }
+    }
+
+    pub async fn wait_for_account_lane(self: &Arc<Self>, account_id: &str, lane: Lane) {
+        loop {
+            let active = self
+                .snapshot()
+                .await
+                .into_iter()
+                .find(|account| account.account_id == account_id)
+                .and_then(|account| {
+                    account
+                        .lanes
+                        .into_iter()
+                        .find(|snapshot| snapshot.lane == lane)
+                })
+                .is_some_and(|snapshot| snapshot.active > 0 || snapshot.backlog > 0);
+            if !active {
+                return;
+            }
+            tokio::task::yield_now().await;
         }
     }
 
@@ -412,16 +466,19 @@ impl QueueEngine {
             let (interactive, interactive_rx) = mpsc::channel(LANE_CAPACITY);
             let (background, background_rx) = mpsc::channel(LANE_CAPACITY);
             let (traversal, traversal_rx) = mpsc::channel(LANE_CAPACITY);
+            let (embedding, embedding_rx) = mpsc::channel(LANE_CAPACITY);
             self.spawn_lane(interactive_rx, Lane::Interactive);
             self.spawn_lane(background_rx, Lane::Background);
 
             self.spawn_lane(traversal_rx, Lane::Traversal);
+            self.spawn_lane(embedding_rx, Lane::Embedding);
             accounts.insert(
                 account_id.to_owned(),
                 AccountQueue {
                     interactive,
                     background,
                     traversal,
+                    embedding,
                 },
             );
         }
@@ -430,6 +487,7 @@ impl QueueEngine {
             interactive: queue.interactive.clone(),
             background: queue.background.clone(),
             traversal: queue.traversal.clone(),
+            embedding: queue.embedding.clone(),
         }
     }
 
@@ -560,7 +618,10 @@ impl QueueEngine {
     }
 
     async fn wait_for_interactive(&self, operation: &QueueOperation) {
-        if matches!(operation.lane, Lane::Background | Lane::Traversal) {
+        if matches!(
+            operation.lane,
+            Lane::Background | Lane::Traversal | Lane::Embedding
+        ) {
             loop {
                 let notified = self.interactive_drained.notified();
                 if self
@@ -638,6 +699,7 @@ pub async fn admit_durable(
             Lane::Interactive => "interactive".to_owned(),
             Lane::Background => "background".to_owned(),
             Lane::Traversal => "traversal".to_owned(),
+            Lane::Embedding => "embedding".to_owned(),
         },
         kind: match operation.kind {
             OperationKind::Draft => "draft".to_owned(),

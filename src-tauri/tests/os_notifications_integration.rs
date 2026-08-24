@@ -49,6 +49,13 @@ fn notification_content_names_one_arrival_or_summarizes_a_batch() {
         Some(("alex@example.com".into(), "Hello".into()))
     );
     assert_eq!(content(&[]), None);
+    assert_eq!(
+        content(&[MailArrival {
+            sender: String::new(),
+            ..first.clone()
+        }]),
+        Some(("(No sender)".into(), "Hello\nA short preview".into()))
+    );
 }
 
 #[tokio::test]

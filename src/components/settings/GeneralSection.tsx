@@ -34,7 +34,7 @@ const densityOptions: { value: Density; label: string }[] = [
   { value: 'spacious', label: 'Spacious' },
 ];
 
-function SettingSwitch({
+export function SettingSwitch({
   checked,
   onChange,
   label,
@@ -58,7 +58,7 @@ function SettingSwitch({
   );
 }
 
-function SubsectionHeading({ children }: { children: string }) {
+export function SubsectionHeading({ children }: { children: string }) {
   return (
     <h3 className="mb-1.5 text-label-md uppercase text-settings-ink-mute dark:text-dark-settings-ink-mute">
       {children}

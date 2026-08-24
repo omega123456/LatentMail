@@ -107,7 +107,7 @@ async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counter
         250,
         executor,
         events,
-        Arc::new(move |_id: &str| {
+        Arc::new(move |_| {
             evicted_for_hook.lock().unwrap().take();
         }),
     );

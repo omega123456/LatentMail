@@ -15,6 +15,19 @@ export interface IpcCommandMap {
   begin_sign_in: { args: Record<string, never>; result: void };
   begin_reauthentication: { args: { accountId: string }; result: void };
   remove_account: { args: { accountId: string }; result: void };
+  read_ai_configs: { args: Record<string, never>; result: AiConfig[] };
+  set_ai_enabled: { args: { accountId: string; enabled: boolean }; result: void };
+  set_ai_base_url: { args: { accountId: string; baseUrl: string }; result: void };
+  set_ai_api_key: { args: { accountId: string; apiKey: string }; result: void };
+  clear_ai_api_key: { args: { accountId: string }; result: void };
+  test_ai_connection: { args: { accountId: string }; result: number };
+  list_ai_models: { args: { accountId: string }; result: AiModel[] };
+  select_ai_chat_model: { args: { accountId: string; model: string | null }; result: void };
+  select_ai_embedding_model: { args: { accountId: string; model: string }; result: void };
+  read_ai_index_status: { args: Record<string, never>; result: AiIndexStatus[] };
+  start_ai_index: { args: { accountId: string }; result: void };
+  cancel_ai_index: { args: { accountId: string }; result: void };
+  rebuild_ai_index: { args: { accountId: string }; result: void };
   list_labels: { args: { accountId: string }; result: MailLabel[] };
   lookup_contacts: { args: { accountId: string; query: string }; result: ContactSuggestion[] };
   reply_context: {
@@ -201,7 +214,7 @@ export interface QueueSummary {
   paused: boolean;
   suspended: boolean;
 }
-export type Lane = 'interactive' | 'background' | 'traversal';
+export type Lane = 'interactive' | 'background' | 'traversal' | 'embedding';
 
 export type OperationKind =
   | 'noop'
@@ -217,7 +230,8 @@ export type OperationKind =
   | 'move'
   | 'spam'
   | 'notSpam'
-  | 'traversal';
+  | 'traversal'
+  | 'embed';
 
 export type OperationStatus = 'queued' | 'active' | 'retrying' | 'done' | 'failed' | 'cancelled';
 
@@ -269,6 +283,41 @@ export interface Account {
   displayName: string;
   avatarUrl: string | null;
   needsReauthentication: boolean;
+}
+export interface AiConfig {
+  accountId: string;
+  email: string;
+  displayName: string;
+  enabled: boolean;
+  baseUrl: string | null;
+  chatModel: string | null;
+  embeddingModel: string | null;
+  embeddingDimensions: number | null;
+  hasApiKey: boolean;
+  indexPaused: boolean;
+}
+export interface AiIndexStatus {
+  accountId: string;
+  state:
+    | 'notStarted'
+    | 'preparing'
+    | 'building'
+    | 'complete'
+    | 'partial'
+    | 'paused'
+    | 'interrupted'
+    | 'unavailable';
+  indexed: number;
+  total: number;
+  indexedMessages: number;
+  totalEligibleMessages: number;
+  indexedPassages: number;
+  paused: boolean;
+  error: string | null;
+}
+export interface AiModel {
+  id: string;
+  ownedBy: string | null;
 }
 
 export type ThemePreference = 'light' | 'dark' | 'system';
@@ -635,8 +684,20 @@ export interface IpcEventMap {
   'system://health': { status: 'ok' };
   'avatar://resolved': AvatarResolvedEvent;
   'queue://item': { id: string; status: string; accountId: string; lane: Lane };
+  'ai://index': {
+    accountId: string;
+    indexed: number;
+    total: number;
+    indexedMessages: number;
+    totalEligibleMessages: number;
+    indexedPassages: number;
+    state: AiIndexStatus['state'];
+    paused: boolean;
+    error: string | null;
+  };
   'queue://summary': QueueSummary;
   'account://state': Account;
+  'ai://config': { accountId: string; removed?: boolean };
   'sync://progress': SyncProgressEvent;
   'sync://complete': SyncCompleteEvent;
   'mail://new': NewMailEvent;

@@ -18,3 +18,6 @@ export const settingsLinkMuted = `${settingsLinkButton} text-settings-ink-mute d
 
 export const settingsTriggerClass =
   'w-select-menu cursor-pointer rounded-control bg-settings-container-low px-3.25 py-2 text-settings-desc font-medium text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink';
+
+export const aiFieldSaveButton =
+  'cursor-pointer rounded-control bg-settings-primary px-3 py-1.5 text-settings-meta font-semibold text-on-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-primary dark:text-dark-on-primary';

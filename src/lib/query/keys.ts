@@ -2,6 +2,9 @@ import type { ConversationEntryScope, SearchScope } from '@/lib/types/ipc';
 
 export const queryKeys = {
   accounts: ['accounts'] as const,
+  aiConfigs: ['aiConfigs'] as const,
+  aiIndexStatuses: ['aiIndexStatuses'] as const,
+  aiModels: (accountId: string, revision: number) => ['aiModels', accountId, revision] as const,
   labels: (accountId: string) => ['labels', accountId] as const,
   contacts: (accountId: string, query: string) => ['contacts', accountId, query] as const,
   threads: (accountId: string, mailboxId: string) => ['threads', accountId, mailboxId] as const,

@@ -11,15 +11,10 @@ use crate::{
     storage::{MessageRepository, Storage},
 };
 
-use super::{dto::MutationResultDto, MutationOutcome, SyncEngine};
+use super::{dto::MutationResultDto, gmail_base_url, MutationOutcome, SyncEngine};
 
 pub const REMOVABLE_SYSTEM_FOLDER_LABELS: [&str; 3] = ["INBOX", "SPAM", "TRASH"];
 pub const MOVE_DESTINATIONS: [&str; 3] = ["INBOX", "SPAM", "TRASH"];
-
-fn gmail_base_url() -> String {
-    std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into())
-}
 
 fn validate_destination(destination: &str) -> Result<(), String> {
     if MOVE_DESTINATIONS.contains(&destination) {

@@ -523,3 +523,29 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
     );
     assert_eq!(cc_contacts[0].address, "second@example.com");
 }
+
+#[test]
+fn reconciliation_message_reads_a_stored_message_and_its_labels() {
+    let (storage, _directory) = temp_storage(None);
+    let connection = storage.connection().unwrap();
+    MessageRepository::write_full_state(&connection, &row("message-1", "thread-1", "Hello"))
+        .unwrap();
+    for label in ["INBOX", "STARRED"] {
+        LabelRepository::ensure_placeholder(&connection, "account", label).unwrap();
+        MessageRepository::set_label_membership(&connection, "account", "message-1", label, true)
+            .unwrap();
+    }
+
+    let found = MessageRepository::reconciliation_message(&connection, "account", "message-1")
+        .unwrap()
+        .expect("the stored message resolves");
+
+    assert_eq!(found.thread_id, "thread-1");
+    assert_eq!(found.sender, "sender@example.com");
+    assert_eq!(found.label_ids.len(), 2);
+    assert!(
+        MessageRepository::reconciliation_message(&connection, "account", "absent")
+            .unwrap()
+            .is_none()
+    );
+}

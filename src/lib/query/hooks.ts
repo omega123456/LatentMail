@@ -36,6 +36,46 @@ export function useAccountsQuery() {
   });
 }
 
+export function useAiConfigsQuery() {
+  return useQuery({
+    queryKey: queryKeys.aiConfigs,
+    queryFn: () => invoke('read_ai_configs', {}),
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+export function useAiModelsQuery(accountId: string, revision: number, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.aiModels(accountId, revision),
+    queryFn: () => invoke('list_ai_models', { accountId }),
+    enabled,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+export function useAiIndexStatusesQuery() {
+  return useQuery({
+    queryKey: queryKeys.aiIndexStatuses,
+    queryFn: () => invoke('read_ai_index_status', {}),
+    staleTime: LOCAL_FIRST_STALE_TIME,
+  });
+}
+
+function useAiIndexMutation(command: 'start_ai_index' | 'cancel_ai_index' | 'rebuild_ai_index') {
+  return useMutation({ mutationFn: (accountId: string) => invoke(command, { accountId }) });
+}
+
+export function useStartAiIndexMutation() {
+  return useAiIndexMutation('start_ai_index');
+}
+export function useCancelAiIndexMutation() {
+  return useAiIndexMutation('cancel_ai_index');
+}
+export function useRebuildAiIndexMutation() {
+  return useAiIndexMutation('rebuild_ai_index');
+}
+
 export function useRemoveAccountMutation() {
   const queryClient = useQueryClient();
   const showError = useToastStore((state) => state.showError);

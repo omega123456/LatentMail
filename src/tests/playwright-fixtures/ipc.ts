@@ -15,6 +15,7 @@ import {
   playwrightQueueSummary,
   playwrightResumedQueueSummary,
 } from './queue';
+import { playwrightAiConfigs, playwrightAiIndexStatuses, playwrightAiModels } from './ai';
 
 export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result'] } = {
   health_check: { status: 'ok' },
@@ -30,6 +31,19 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   begin_sign_in: undefined,
   begin_reauthentication: undefined,
   remove_account: undefined,
+  read_ai_configs: playwrightAiConfigs,
+  set_ai_enabled: undefined,
+  set_ai_base_url: undefined,
+  set_ai_api_key: undefined,
+  clear_ai_api_key: undefined,
+  test_ai_connection: 0,
+  list_ai_models: playwrightAiModels,
+  select_ai_chat_model: undefined,
+  select_ai_embedding_model: undefined,
+  read_ai_index_status: playwrightAiIndexStatuses,
+  start_ai_index: undefined,
+  cancel_ai_index: undefined,
+  rebuild_ai_index: undefined,
   list_labels: playwrightLabels,
   lookup_contacts: playwrightContactSuggestions,
   reply_context: {
