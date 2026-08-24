@@ -22,10 +22,23 @@ pub mod updater;
 #[cfg(not(coverage))]
 use tauri::Manager;
 
+#[cfg(all(windows, not(coverage)))]
+fn attach_parent_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(all(not(windows), not(coverage)))]
+fn attach_parent_console() {}
+
 #[cfg(not(coverage))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Some((message, code)) = cli::run_client(&std::env::args().collect::<Vec<_>>()) {
+        attach_parent_console();
         println!("{message}");
         std::process::exit(code);
     }

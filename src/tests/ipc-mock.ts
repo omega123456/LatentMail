@@ -41,8 +41,9 @@ const tauriOnDragDropEvent = vi.fn(async (handler: (event: { payload: unknown })
   listeners.set(key, eventListeners);
   return () => eventListeners.delete(wrapped);
 });
+const tauriSetZoom = vi.fn(async () => undefined);
 vi.mock('@tauri-apps/api/webview', () => ({
-  getCurrentWebview: () => ({ onDragDropEvent: tauriOnDragDropEvent }),
+  getCurrentWebview: () => ({ onDragDropEvent: tauriOnDragDropEvent, setZoom: tauriSetZoom }),
 }));
 
 function invoke(command: string, args: unknown): Promise<unknown> {
@@ -76,6 +77,7 @@ export const ipc = {
     tauriListen.mockClear();
     tauriEmit.mockClear();
     tauriOnDragDropEvent.mockClear();
+    tauriSetZoom.mockClear();
     tauriConvertFileSrc.mockClear();
     delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
     delete window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__;
@@ -94,5 +96,6 @@ export const ipc = {
   tauriListen,
   tauriEmit,
   tauriOnDragDropEvent,
+  tauriSetZoom,
   tauriConvertFileSrc,
 };

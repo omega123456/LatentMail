@@ -146,7 +146,7 @@ describe('GeneralSection', () => {
     expect(writes).toContainEqual({ key: 'syncIntervalSeconds', value: 600 });
   });
 
-  it('offers zoom levels, applies them to the document and persists the choice', async () => {
+  it('offers zoom levels, applies them to the webview and persists the choice', async () => {
     const writes: Array<{ key: string; value: unknown }> = [];
     ipc.override('write_setting', (args) => {
       writes.push(args as { key: string; value: unknown });
@@ -168,7 +168,7 @@ describe('GeneralSection', () => {
     await user.click(screen.getByRole('option', { name: '125%' }));
 
     expect(writes).toContainEqual({ key: 'zoomPercent', value: 125 });
-    expect(document.body.style.zoom).toBe('1.25');
+    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(1.25);
   });
 
   it('writes through write_setting for every control on change', async () => {
