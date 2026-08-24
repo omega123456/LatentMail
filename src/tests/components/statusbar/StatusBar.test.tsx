@@ -344,6 +344,39 @@ describe('StatusBar', () => {
     expect(useSettingsUiStore.getState().activeSection).toBe('queue');
   });
 
+  it('shows the configured chat model and opens AI settings when activated', async () => {
+    const user = userEvent.setup();
+    useSettingsUiStore.setState({ activeSection: 'general' });
+    ipc.override('read_ai_configs', [
+      {
+        accountId: 'account-1',
+        email: 'a@example.com',
+        displayName: 'A',
+        enabled: true,
+        baseUrl: null,
+        chatModel: 'gpt-4o-mini',
+        embeddingModel: null,
+        embeddingDimensions: null,
+        hasApiKey: true,
+        indexPaused: false,
+      },
+    ]);
+    setStatus('idle');
+    renderStatusBar(<StatusBar accountId="account-1" />);
+    const aiButton = await screen.findByRole('button', { name: 'Open AI settings' });
+    expect(aiButton).toHaveTextContent('gpt-4o-mini');
+    await user.click(aiButton);
+    expect(useSettingsUiStore.getState().activeSection).toBe('ai');
+  });
+
+  it('reports AI as off when no config is enabled for the account', async () => {
+    setStatus('idle');
+    renderStatusBar(<StatusBar accountId="account-1" />);
+    expect(await screen.findByRole('button', { name: 'Open AI settings' })).toHaveTextContent(
+      'AI off',
+    );
+  });
+
   it('does not announce a background tick; a manual refresh does', async () => {
     const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const user = userEvent.setup();

@@ -1,9 +1,16 @@
-import { screen, within } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { AiModelsSection } from '@/components/settings/AiModelsSection';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
+
+async function pickEmbeddingModel(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+  await user.click(
+    await screen.findByRole('combobox', { name: 'Embedding model for ada@example.com' }),
+  );
+  await user.click(screen.getByRole('option', { name }));
+}
 
 it('renders an account model catalogue', async () => {
   ipc.override('list_ai_models', [{ id: 'model', ownedBy: 'owner' }]);
@@ -17,7 +24,7 @@ it('renders an account model catalogue', async () => {
       onChanged={() => undefined}
     />,
   );
-  expect(await screen.findAllByRole('radio')).toHaveLength(2);
+  expect(await screen.findAllByRole('combobox')).toHaveLength(2);
 });
 
 it('warns before changing an indexed embedding model', async () => {
@@ -51,13 +58,7 @@ it('warns before changing an indexed embedding model', async () => {
       onChanged={() => undefined}
     />,
   );
-  await user.click(
-    within(
-      await screen.findByRole('radiogroup', { name: 'Embedding model for ada@example.com' }),
-    ).getByRole('radio', {
-      name: 'newowner',
-    }),
-  );
+  await pickEmbeddingModel(user, /new/i);
   expect(screen.getByRole('alert')).toHaveTextContent('Rebuild AI index for ada@example.com?');
   expect(screen.getByRole('alert')).toHaveTextContent('The build now running will be cancelled.');
   expect(select).not.toHaveBeenCalled();
@@ -99,13 +100,7 @@ it('changes an embedding model without confirmation when only eligible mail exis
       onChanged={() => undefined}
     />,
   );
-  await user.click(
-    within(
-      await screen.findByRole('radiogroup', { name: 'Embedding model for ada@example.com' }),
-    ).getByRole('radio', {
-      name: 'newowner',
-    }),
-  );
+  await pickEmbeddingModel(user, /new/i);
   expect(screen.queryByRole('alert')).toBeNull();
   expect(select).toHaveBeenCalledWith({
     accountId: 'account',
@@ -140,11 +135,7 @@ it('does not claim a partial index has a running build to cancel', async () => {
       onChanged={() => undefined}
     />,
   );
-  await user.click(
-    within(
-      await screen.findByRole('radiogroup', { name: 'Embedding model for ada@example.com' }),
-    ).getByRole('radio', { name: 'newowner' }),
-  );
+  await pickEmbeddingModel(user, /new/i);
   expect(screen.getByRole('alert')).not.toHaveTextContent(
     'The build now running will be cancelled.',
   );

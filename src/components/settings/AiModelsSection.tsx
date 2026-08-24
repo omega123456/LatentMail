@@ -90,7 +90,6 @@ export function AiModelsSection({
               models={modelsOfKind(models.data, 'embedding', embeddingModel)}
               selectedId={embeddingModel}
               selectedDimension={embeddingDimensions}
-              confirmAfterId={pendingModel}
               confirm={
                 pendingModel && (
                   <InlineConfirm

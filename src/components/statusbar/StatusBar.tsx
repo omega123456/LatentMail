@@ -1,14 +1,14 @@
 import { useEffect } from 'react';
 import { differenceInMinutes, format } from 'date-fns';
-import { ListChecks, Loader2, Pause, Play, RefreshCw } from 'lucide-react';
+import { ListChecks, Loader2, Pause, Play, RefreshCw, Sparkles } from 'lucide-react';
 import { exactTime } from '@/lib/format/relative-time';
 import { useNow } from '@/lib/format/use-now';
 import { invoke } from '@/lib/ipc/commands';
-import { useAiIndexStatusesQuery, useTraversalStatusQuery } from '@/lib/query/hooks';
+import { useAiConfigsQuery, useAiIndexStatusesQuery, useTraversalStatusQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
-import type { TraversalStatus } from '@/lib/types/ipc';
+import type { AiConfig, TraversalStatus } from '@/lib/types/ipc';
 
 const MINUTES_PER_HOUR = 60;
 
@@ -21,6 +21,11 @@ const controlClass =
   'inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50';
 const restingControlClass = `${controlClass} hover:bg-surface-container-high focus-visible:bg-surface-container-high dark:hover:bg-dark-surface-container-high dark:focus-visible:bg-dark-surface-container-high`;
 const pausedControlClass = `${controlClass} hover:bg-on-warning-container/10 focus-visible:bg-on-warning-container/10 dark:hover:bg-dark-on-warning-container/10 dark:focus-visible:bg-dark-on-warning-container/10`;
+
+function aiModelLabel(config: AiConfig | undefined) {
+  if (!config || !config.enabled) return 'AI off';
+  return config.chatModel ?? 'No model selected';
+}
 
 const queueClass =
   'inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-primary';
@@ -84,6 +89,8 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   const setActiveSection = useSettingsUiStore((state) => state.setActiveSection);
   const now = useNow(30_000);
   const traversal = activeTraversal(useTraversalStatusQuery(accountId).data);
+  const { data: aiConfigs = [] } = useAiConfigsQuery();
+  const aiConfig = aiConfigs.find((config) => config.accountId === accountId);
   const { data: indexStatuses = [] } = useAiIndexStatusesQuery();
   const activeIndexes = indexStatuses.filter(
     (status) => status.state === 'preparing' || status.state === 'building',
@@ -201,8 +208,23 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
           {paused ? <Play aria-hidden="true" size={14} /> : <Pause aria-hidden="true" size={14} />}
         </button>
       </div>
-      {showQueue && (
-        <div className="flex items-center">
+      <div className="flex items-center gap-stack-gap-sm">
+        {accountId && (
+          <button
+            type="button"
+            aria-label="Open AI settings"
+            title={aiModelLabel(aiConfig)}
+            onClick={() => {
+              setActiveSection('ai');
+              setRoute('settings');
+            }}
+            className={paused ? pausedQueueClass : restingQueueClass}
+          >
+            <Sparkles aria-hidden="true" size={14} />
+            <span className="max-w-40 truncate">{aiModelLabel(aiConfig)}</span>
+          </button>
+        )}
+        {showQueue && (
           <button
             type="button"
             aria-label="Open queue settings"
@@ -219,8 +241,8 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
               {queue.failed > 0 ? `${queue.failed} failed` : `${queue.pending} queued`}
             </span>
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </footer>
   );
 }
