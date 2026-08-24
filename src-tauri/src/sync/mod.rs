@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
     sync::{
@@ -915,9 +915,12 @@ async fn full_sync_body(
 
             transaction.execute("DELETE FROM messages WHERE account_id=?1", [&account_owned])?;
             transaction.execute("DELETE FROM threads WHERE account_id=?1", [&account_owned])?;
-            for label in &gmail_labels {
-                LabelRepository::upsert(&transaction, &to_label(&account_owned, label))?;
-            }
+            sync_labels(
+                &transaction,
+                &account_owned,
+                &gmail_labels,
+                &mut HashSet::new(),
+            )?;
             for message in &messages {
                 write_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
@@ -1181,7 +1184,7 @@ async fn incremental_body(
         }
     }
     let added_count = added_messages.len() as u32;
-    let changed = !records.is_empty() || !added_messages.is_empty();
+    let history_changed = !records.is_empty() || added_count > 0;
 
     let arrivals = compute_arrivals(&added_messages, now);
     let added_thread_ids: HashSet<String> = added_messages
@@ -1190,12 +1193,9 @@ async fn incremental_body(
         .collect();
 
     let account_owned = account_id.to_owned();
-    storage
+    let labels_changed = storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            for label in &gmail_labels {
-                LabelRepository::upsert(&transaction, &to_label(&account_owned, label))?;
-            }
             let mut touched = HashSet::new();
             for message in &added_messages {
                 touched.insert(message.thread_id.clone());
@@ -1242,10 +1242,14 @@ async fn incremental_body(
                     }
                 }
             }
+            let labels_changed =
+                sync_labels(&transaction, &account_owned, &gmail_labels, &mut touched)?;
             ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
-            transaction.commit()
+            transaction.commit()?;
+            Ok(labels_changed)
         })
         .await?;
+    let changed = history_changed || labels_changed;
 
     Ok(IncrementalOutcome::Updated {
         history_id: final_history_id,
@@ -1254,6 +1258,55 @@ async fn incremental_body(
         changed,
         arrivals,
     })
+}
+
+const USER_LABEL_ID_PREFIX: &str = "Label_";
+
+pub(crate) fn sync_labels(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    gmail_labels: &[GmailLabel],
+    touched_threads: &mut HashSet<String>,
+) -> rusqlite::Result<bool> {
+    let desired: Vec<Label> = gmail_labels
+        .iter()
+        .map(|label| to_label(account_id, label))
+        .collect();
+    let remote_ids: HashSet<&str> = desired.iter().map(|label| label.id.as_str()).collect();
+    let existing = LabelRepository::list(connection, account_id)?;
+    let stale: Vec<&str> = existing
+        .iter()
+        .filter(|label| {
+            (label.kind == "user" || label.id.starts_with(USER_LABEL_ID_PREFIX))
+                && !remote_ids.contains(label.id.as_str())
+        })
+        .map(|label| label.id.as_str())
+        .collect();
+    let existing_by_id: HashMap<&str, &Label> = existing
+        .iter()
+        .map(|label| (label.id.as_str(), label))
+        .collect();
+    let changed = !stale.is_empty()
+        || desired
+            .iter()
+            .any(|label| existing_by_id.get(label.id.as_str()) != Some(&label));
+    tracing::info!(
+        target: "sync",
+        "{account_id}: labels — {} remote, {} local, pruning {:?}",
+        desired.len(),
+        existing.len(),
+        stale,
+    );
+    for label_id in &stale {
+        touched_threads.extend(LabelRepository::threads_with_label(
+            connection, account_id, label_id,
+        )?);
+        LabelRepository::delete(connection, account_id, label_id)?;
+    }
+    for label in &desired {
+        LabelRepository::upsert(connection, label)?;
+    }
+    Ok(changed)
 }
 
 pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {

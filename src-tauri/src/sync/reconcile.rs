@@ -4,14 +4,12 @@ use crate::{
     gmail::{GmailClient, GmailLabel, ListOptions, MAX_PAGE_SIZE},
     queue::QueueEngine,
     storage::{
-        reconcile_staging::ReconcileStagingRepository, Label, LabelRepository, MessageRepository,
-        Storage, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+        reconcile_staging::ReconcileStagingRepository, MessageRepository, Storage,
+        ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
     },
 };
 
-use super::{
-    to_label, to_millis, traversal, EventSink, FullSyncOutcome, SyncError, TraversalState,
-};
+use super::{to_millis, traversal, EventSink, FullSyncOutcome, SyncError, TraversalState};
 
 enum Phase {
     Universe(Option<String>),
@@ -325,16 +323,14 @@ async fn apply_labels(
     account_id: &str,
     labels: &[GmailLabel],
 ) -> Result<(), SyncError> {
-    let labels = labels
-        .iter()
-        .map(|label| to_label(account_id, label))
-        .collect::<Vec<Label>>();
+    let labels = labels.to_vec();
+    let account_id = account_id.to_owned();
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            for label in &labels {
-                LabelRepository::upsert(&transaction, label)?;
-            }
+            let mut touched = std::collections::HashSet::new();
+            super::sync_labels(&transaction, &account_id, &labels, &mut touched)?;
+            ThreadRepository::recompute_many(&transaction, &account_id, &touched)?;
             transaction.commit()
         })
         .await?;

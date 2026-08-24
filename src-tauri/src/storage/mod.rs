@@ -23,7 +23,7 @@ use thiserror::Error;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-const STATEMENT_CACHE_CAPACITY: usize = 53;
+const STATEMENT_CACHE_CAPACITY: usize = 55;
 const AUTO_VACUUM_INCREMENTAL: i64 = 2;
 
 pub fn vacuum_interval() -> Duration {
