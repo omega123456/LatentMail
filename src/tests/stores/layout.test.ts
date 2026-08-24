@@ -153,14 +153,11 @@ describe('layout store', () => {
     });
   });
 
-  it('resizes the zoomed surface to the window on resize', async () => {
+  it('zooms the webview itself instead of the document', async () => {
     const useLayoutStore = await loadStore();
     useLayoutStore.getState().setZoomPercent(125);
 
-    window.dispatchEvent(new Event('resize'));
-
-    expect(document.body.style.zoom).toBe('1.25');
-    expect(document.body.style.width).toBe(`${window.innerWidth / 1.25}px`);
-    expect(document.body.style.height).toBe(`${window.innerHeight / 1.25}px`);
+    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(1.25);
+    expect(document.body.style.zoom).toBe('');
   });
 });

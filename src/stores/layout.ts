@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { dispatchSetZoom } from '@/lib/ipc/dispatch';
 import { invoke } from '@/lib/ipc/commands';
 import { hydrateSettings } from '@/lib/settings/hydrate';
 import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } from '@/lib/types/ipc';
@@ -64,10 +65,7 @@ function clampSize(value: number, min: number, max: number) {
 }
 
 export function applyZoom(zoomPercent: number) {
-  const scale = zoomPercent / 100;
-  document.body.style.zoom = String(scale);
-  document.body.style.width = `${window.innerWidth / scale}px`;
-  document.body.style.height = `${window.innerHeight / scale}px`;
+  void dispatchSetZoom(zoomPercent / 100).catch(() => undefined);
 }
 
 function persist<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -241,9 +239,5 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     persist('allowedImageSenders', allowedImageSenders);
   },
 }));
-
-window.addEventListener('resize', () => {
-  applyZoom(useLayoutStore.getState().zoomPercent);
-});
 
 applyZoom(100);

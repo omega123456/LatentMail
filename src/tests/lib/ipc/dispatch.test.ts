@@ -55,6 +55,14 @@ describe('IPC dispatch', () => {
     expect(ipc.tauriEmit).toHaveBeenCalledWith('frontend://ready', {});
   });
 
+  it('skips the webview zoom call when there is no Tauri runtime', async () => {
+    ipc.useTauriApi();
+    const { dispatchSetZoom } = await import('@/lib/ipc/dispatch');
+
+    await expect(dispatchSetZoom(1.5)).resolves.toBeUndefined();
+    expect(ipc.tauriSetZoom).not.toHaveBeenCalled();
+  });
+
   it('supports overrides and Tauri event subscriptions through the shared harness', async () => {
     ipc.override('health_check', () => ({ status: 'ok' }));
     ipc.useTauriApi();

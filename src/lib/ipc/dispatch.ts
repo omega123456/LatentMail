@@ -1,5 +1,6 @@
 import { convertFileSrc as tauriConvertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { emit as tauriEmit, listen as tauriListen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { playwrightIpcMock, type Unlisten } from './playwright-ipc-mock';
 import { playwrightAvatarFixtureMark } from '@/tests/playwright-fixtures/avatars';
 import { playwrightAttachmentImageSrc } from '@/tests/playwright-fixtures/attachments';
@@ -42,6 +43,10 @@ export function dispatchListen<Payload>(
 
 export function dispatchEmit(event: string, payload: unknown): Promise<void> {
   return tauriGlobal() ? tauriEmit(event, payload) : Promise.resolve();
+}
+
+export function dispatchSetZoom(scale: number): Promise<void> {
+  return tauriGlobal() ? getCurrentWebview().setZoom(scale) : Promise.resolve();
 }
 
 export function dispatchConvertFileSrc(path: string): string {
