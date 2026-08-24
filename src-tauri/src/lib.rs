@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod attachments;
 pub mod auth;
 pub mod avatars;
@@ -82,6 +83,7 @@ pub fn run() {
             handle.manage(storage.clone());
             settings::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
             auth::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
+            ai::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
             avatars::initialize(handle, storage.clone()).map_err(std::io::Error::other)?;
             let vacuum_storage = storage.clone();
             tauri::async_runtime::spawn(async move {

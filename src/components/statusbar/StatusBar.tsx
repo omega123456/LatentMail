@@ -4,7 +4,7 @@ import { ListChecks, Loader2, Pause, Play, RefreshCw } from 'lucide-react';
 import { exactTime } from '@/lib/format/relative-time';
 import { useNow } from '@/lib/format/use-now';
 import { invoke } from '@/lib/ipc/commands';
-import { useTraversalStatusQuery } from '@/lib/query/hooks';
+import { useAiIndexStatusesQuery, useTraversalStatusQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
@@ -45,21 +45,29 @@ function activeTraversal(traversal: TraversalStatus | undefined) {
   return traversal.state === 'backfilling' || traversal.state === 'reconciling' ? traversal : null;
 }
 
-function ProgressTrack({ traversal }: { traversal: TraversalStatus }) {
-  const { persistedCount, discoveredCount } = traversal;
-  const percent =
-    discoveredCount === 0 ? 0 : Math.min(100, (persistedCount / discoveredCount) * 100);
+function ProgressTrack({
+  completed,
+  total,
+  name,
+  unit,
+}: {
+  completed: number;
+  total: number;
+  name: string;
+  unit: string;
+}) {
+  const percent = total === 0 ? 0 : Math.min(100, (completed / total) * 100);
   return (
     <div
       role="progressbar"
-      aria-label="Sync progress"
+      aria-label={name}
       aria-valuemin={0}
-      aria-valuemax={discoveredCount}
-      aria-valuenow={persistedCount}
-      aria-valuetext={`${persistedCount.toLocaleString()} of ${discoveredCount.toLocaleString()} messages`}
+      aria-valuemax={total}
+      aria-valuenow={completed}
+      aria-valuetext={`${completed.toLocaleString()} of ${total.toLocaleString()} ${unit}`}
       className="flex items-center gap-stack-gap-sm"
     >
-      <span className="tabular-nums">{`${persistedCount.toLocaleString()} / ${discoveredCount.toLocaleString()}`}</span>
+      <span className="tabular-nums">{`${completed.toLocaleString()} / ${total.toLocaleString()}`}</span>
       <span className="h-0.5 w-progress-track overflow-hidden rounded-full bg-outline-variant dark:bg-dark-outline-variant">
         <span
           className="block h-full rounded-full bg-primary dark:bg-dark-primary"
@@ -76,6 +84,18 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   const setActiveSection = useSettingsUiStore((state) => state.setActiveSection);
   const now = useNow(30_000);
   const traversal = activeTraversal(useTraversalStatusQuery(accountId).data);
+  const { data: indexStatuses = [] } = useAiIndexStatusesQuery();
+  const activeIndexes = indexStatuses.filter(
+    (status) => status.state === 'preparing' || status.state === 'building',
+  );
+  const index = activeIndexes.reduce(
+    (total, status) => ({
+      indexed: total.indexed + status.indexed,
+      total: total.total + status.total,
+    }),
+    { indexed: 0, total: 0 },
+  );
+  const indexing = activeIndexes.length > 0;
 
   useEffect(() => {
     void useSyncStore.getState().hydrate();
@@ -85,7 +105,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   const paused = queue.paused;
   const reconnecting = queue.suspended && !paused;
   const failed = syncState === 'error' && !paused && !reconnecting;
-  const working = !paused && !reconnecting && (traversal !== null || refreshing);
+  const working = !paused && !reconnecting && (traversal !== null || indexing || refreshing);
   const refresh = () => {
     if (accountId) void useSyncStore.getState().triggerSync(accountId);
   };
@@ -100,11 +120,13 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
       ? 'Sync resumes shortly'
       : traversal
         ? traversalLabel(traversal)
-        : refreshing
-          ? 'Checking for new mail…'
-          : failed
-            ? "Couldn't sync"
-            : freshness(lastSynced, now);
+        : indexing
+          ? 'Indexing mail'
+          : refreshing
+            ? 'Checking for new mail…'
+            : failed
+              ? "Couldn't sync"
+              : freshness(lastSynced, now);
 
   const dotClass = failed
     ? 'bg-error dark:bg-dark-error'
@@ -132,7 +154,22 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
         >
           {label}
         </span>
-        {traversal && !reconnecting && <ProgressTrack traversal={traversal} />}
+        {traversal && !reconnecting && (
+          <ProgressTrack
+            completed={traversal.persistedCount}
+            total={traversal.discoveredCount}
+            name="Sync progress"
+            unit="messages"
+          />
+        )}
+        {!traversal && indexing && !reconnecting && (
+          <ProgressTrack
+            completed={index.indexed}
+            total={index.total}
+            name="Index progress"
+            unit="messages"
+          />
+        )}
         {failed && (
           <button
             type="button"

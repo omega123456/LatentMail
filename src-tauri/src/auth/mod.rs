@@ -117,6 +117,15 @@ impl AuthService {
             .map(|accounts| accounts.into_iter().map(account_dto).collect())
     }
 
+    pub async fn has_account(&self, account_id: &str) -> Result<bool, String> {
+        let account_id = account_id.to_owned();
+        self.storage
+            .run(move |connection| AccountRepository::get(connection, &account_id))
+            .await
+            .map(|account| account.is_some())
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn start<R: Runtime>(
         &self,
         app: AppHandle<R>,
@@ -631,12 +640,35 @@ pub async fn begin_reauthentication<R: Runtime>(
     service.start(app, Some(account_id)).await
 }
 #[tauri::command]
-pub async fn remove_account(
+pub async fn remove_account<R: Runtime>(
+    app: AppHandle<R>,
     service: tauri::State<'_, AuthService>,
     queue: tauri::State<'_, Arc<QueueEngine>>,
+    sync: tauri::State<'_, Arc<crate::sync::SyncEngine>>,
     account_id: String,
 ) -> Result<(), String> {
-    service.remove_account(queue.inner(), &account_id).await
+    if !service.has_account(&account_id).await? {
+        return Err("Unknown account".to_owned());
+    }
+    if let Some(ai) = app.try_state::<crate::ai::AiService>() {
+        ai.begin_removal(&account_id)?;
+        queue.cancel_account_operations(&account_id).await;
+        let ai = ai.inner().clone();
+        let cleanup_account = account_id.clone();
+        sync.enqueue_embedding_barrier(
+            &account_id,
+            "Remove semantic index".to_owned(),
+            async move { crate::ai::index::cleanup(&ai, cleanup_account).await },
+        )
+        .await?;
+    }
+    service.remove_account(queue.inner(), &account_id).await?;
+    tauri::Emitter::emit(
+        &app,
+        "ai://config",
+        serde_json::json!({"accountId":account_id,"removed":true}),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn local_part(email: &str) -> String {

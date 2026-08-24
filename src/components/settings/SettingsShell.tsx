@@ -2,6 +2,7 @@ import { useLayoutStore } from '@/stores/layout';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { QueueSection } from '@/components/queue/QueueSection';
 import { AccountsSection } from './AccountsSection';
+import { AiSection } from './AiSection';
 import { GeneralSection } from './GeneralSection';
 import { KeyboardSection } from './KeyboardSection';
 import { LogsSection } from './LogsSection';
@@ -38,6 +39,14 @@ export function SettingsShell() {
             className="mx-auto flex w-full max-w-settings-content-max flex-col gap-5.5"
           >
             <AccountsSection />
+          </div>
+        )}
+        {activeSection === 'ai' && (
+          <div
+            data-testid="settings-ai-section"
+            className="mx-auto flex w-full max-w-settings-content-max flex-col gap-5.5"
+          >
+            <AiSection />
           </div>
         )}
         {activeSection === 'keyboard' && (

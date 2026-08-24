@@ -15,6 +15,13 @@ fn app() -> tauri::App<tauri::test::MockRuntime> {
         .unwrap()
 }
 
+fn avatar_dispatch_builder() -> tauri::Builder<tauri::test::MockRuntime> {
+    tauri::test::mock_builder().invoke_handler(tauri::generate_handler![
+        latentmail_lib::avatars::read_sender_avatar,
+        latentmail_lib::avatars::read_account_avatar,
+    ])
+}
+
 fn service() -> (
     AvatarService,
     AvatarCache,
@@ -32,6 +39,18 @@ fn service() -> (
 
 fn emitter(application: &tauri::App<tauri::test::MockRuntime>) -> Arc<dyn AvatarEmitter> {
     Arc::new(application.handle().clone())
+}
+
+#[tokio::test]
+async fn reading_a_sender_avatar_surfaces_an_unreadable_settings_database() {
+    let application = app();
+    let (avatar_service, _cache, _settings, _storage, directory) = service();
+    std::fs::write(directory.path().join("mail.sqlite"), b"not a database").unwrap();
+
+    assert!(avatar_service
+        .read_sender_avatar(emitter(&application), "example.com".into())
+        .await
+        .is_err());
 }
 
 fn tiny_svg() -> Vec<u8> {
@@ -610,7 +629,7 @@ fn avatar_commands_are_reachable_through_real_ipc_dispatch() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let cache = AvatarCache::new(storage.clone(), directory.path().join("avatar-cache")).unwrap();
-    let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
+    let app = avatar_dispatch_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AvatarService::new(

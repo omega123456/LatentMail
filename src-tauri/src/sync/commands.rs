@@ -15,8 +15,8 @@ use crate::{
 
 use super::{
     dto::{message_body_dto, message_dto, ImagePolicy, MessageBodyDto, MessageBodyFetchedDto},
-    ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto, ThreadCursor,
-    ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
+    gmail_base_url, ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
+    ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
 };
 
 const DEFAULT_PAGE_SIZE: i64 = 50;
@@ -848,8 +848,7 @@ async fn mutate_thread<R: Runtime>(
     present: bool,
 ) -> Result<(), String> {
     let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let base_url = gmail_base_url();
     let client = engine.gmail_client(&account_id, token, base_url).await;
 
     let (add, remove) = if present {
@@ -914,8 +913,7 @@ pub async fn trigger_sync<R: Runtime>(
 ) -> Result<SyncStatusDto, String> {
     let token = auth.refresh_access_token(&app, &account_id).await?;
 
-    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let base_url = gmail_base_url();
     let client = engine.gmail_client(&account_id, token, base_url).await;
     let engine = Arc::clone(&engine);
     tracing::info!(target: "sync", "{account_id}: manual sync requested");
@@ -948,8 +946,7 @@ pub async fn mutate_threads<R: Runtime>(
 ) -> Result<Vec<MutationResultDto>, String> {
     reject_protected_label_mutation(&add, &remove)?;
     let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let base_url = gmail_base_url();
     let client = engine.gmail_client(&account_id, token, base_url).await;
     let add: HashSet<String> = add.into_iter().collect();
     let remove: HashSet<String> = remove.into_iter().collect();
@@ -1011,8 +1008,7 @@ pub async fn mutate_messages<R: Runtime>(
 ) -> Result<(), String> {
     reject_protected_label_mutation(&add, &remove)?;
     let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let base_url = gmail_base_url();
     let client = engine.gmail_client(&account_id, token, base_url).await;
     let (add, remove): (HashSet<_>, HashSet<_>) =
         (add.into_iter().collect(), remove.into_iter().collect());
@@ -1055,8 +1051,7 @@ pub async fn delete_draft<R: Runtime>(
     message_id: String,
 ) -> Result<(), String> {
     let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let base_url = gmail_base_url();
     let client = engine.gmail_client(&account_id, token, base_url).await;
     super::mutations::delete_draft(&storage, &client, &account_id, &message_id).await
 }
@@ -1068,8 +1063,7 @@ pub(crate) async fn gmail_client_for<R: Runtime>(
     account_id: &str,
 ) -> Result<crate::gmail::GmailClient, String> {
     let token = auth.refresh_access_token(app, account_id).await?;
-    let base_url = std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into());
+    let base_url = gmail_base_url();
     Ok(engine.gmail_client(account_id, token, base_url).await)
 }
 
@@ -1198,7 +1192,11 @@ pub async fn recolor_label<R: Runtime>(
     label_id: String,
     color_id: String,
 ) -> Result<LabelDto, String> {
-    let color = resolve_color_or_error(Some(&color_id))?
+    let color = resolve_color(&color_id)
+        .map(|pair| LabelColor {
+            text: pair.text_color,
+            background: pair.background_color,
+        })
         .ok_or_else(|| format!("'{color_id}' is not a recognised label colour"))?;
 
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;

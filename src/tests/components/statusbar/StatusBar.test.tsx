@@ -175,6 +175,43 @@ describe('StatusBar', () => {
     expect(progress).toHaveTextContent('12,400 / 50,000');
   });
 
+  it('shows aggregate indexing progress unless downloading mail takes precedence', async () => {
+    ipc.override('read_ai_index_status', [
+      {
+        accountId: 'account-1',
+        state: 'building',
+        indexed: 1200,
+        total: 5000,
+        indexedMessages: 1200,
+        totalEligibleMessages: 5000,
+        indexedPassages: 3600,
+        paused: false,
+        error: null,
+      },
+      {
+        accountId: 'account-2',
+        state: 'building',
+        indexed: 400,
+        total: 1000,
+        indexedMessages: 400,
+        totalEligibleMessages: 1000,
+        indexedPassages: 1200,
+        paused: false,
+        error: null,
+      },
+    ]);
+    const { unmount } = renderStatusBar(<StatusBar accountId="account-1" />);
+    expect(await screen.findByText('Indexing mail')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-label', 'Index progress');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1600');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '6000');
+    overrideTraversal('backfilling');
+    unmount();
+    renderStatusBar(<StatusBar accountId="account-1" />);
+    expect(await screen.findByText('Downloading mail')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-label', 'Sync progress');
+  });
+
   it('names a resumed backfill and a reconciliation differently', async () => {
     overrideTraversal('backfilling', true);
     const { unmount } = renderStatusBar(<StatusBar accountId="account-1" />);

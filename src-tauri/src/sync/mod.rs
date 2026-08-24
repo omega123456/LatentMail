@@ -93,8 +93,8 @@ pub fn create_queue_engine_with_events(
     events: QueueEventSink,
 ) -> Arc<QueueEngine> {
     let hook_registry = Arc::clone(&registry);
-    let cancellation_hook: crate::queue::CancellationHook = Arc::new(move |id: &str| {
-        hook_registry.take(id);
+    let cancellation_hook: crate::queue::CancellationHook = Arc::new(move |operation| {
+        hook_registry.take(&operation.id);
     });
     QueueEngine::new_with_events_and_hook(
         rate_per_second,
@@ -363,6 +363,7 @@ pub struct SyncEngine {
     gmail_limiters: GmailRateLimiters,
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
     attachment_cache: std::sync::OnceLock<crate::attachments::AttachmentCache>,
+    ai_catch_up: std::sync::OnceLock<Arc<dyn Fn(String) + Send + Sync>>,
     clock: fn() -> chrono::DateTime<chrono::Utc>,
 }
 
@@ -412,6 +413,7 @@ impl SyncEngine {
             gmail_limiters,
             active_backfills: Arc::new(AsyncMutex::new(std::collections::HashSet::new())),
             attachment_cache: std::sync::OnceLock::new(),
+            ai_catch_up: std::sync::OnceLock::new(),
             clock,
         })
     }
@@ -448,6 +450,10 @@ impl SyncEngine {
         let _ = self.attachment_cache.set(cache);
     }
 
+    pub fn set_ai_catch_up(&self, catch_up: Arc<dyn Fn(String) + Send + Sync>) {
+        let _ = self.ai_catch_up.set(catch_up);
+    }
+
     pub fn attachment_cache(&self) -> Option<&crate::attachments::AttachmentCache> {
         self.attachment_cache.get()
     }
@@ -464,6 +470,65 @@ impl SyncEngine {
     fn next_op_id(&self, account_id: &str) -> String {
         let n = self.op_counter.fetch_add(1, Ordering::Relaxed);
         format!("sync:{account_id}:{n}")
+    }
+
+    pub async fn enqueue_embedding<F>(
+        &self,
+        account_id: &str,
+        description: String,
+        future: F,
+    ) -> Result<(), SyncError>
+    where
+        F: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let id = self.next_op_id(account_id);
+        self.registry.register(
+            id.clone(),
+            Box::new(move || {
+                Box::pin(async move { future.await.map_err(|_| QueueError::Permanent) })
+            }),
+        );
+        self.queue
+            .enqueue(QueueOperation {
+                id,
+                account_id: account_id.to_owned(),
+                lane: Lane::Embedding,
+                kind: OperationKind::Embed,
+                entity_key: format!("embedding:{account_id}"),
+                cost: 0,
+                attempts: 0,
+                description,
+            })
+            .await
+            .map_err(|_| SyncError::QueueStopped)
+    }
+
+    pub async fn cancel_embedding(&self, account_id: &str) {
+        self.queue
+            .cancel_account_lane_operations(account_id, Lane::Embedding)
+            .await;
+    }
+
+    pub async fn enqueue_embedding_barrier<F>(
+        &self,
+        account_id: &str,
+        description: String,
+        future: F,
+    ) -> Result<(), String>
+    where
+        F: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let (sent, received) = oneshot::channel();
+        self.enqueue_embedding(account_id, description, async move {
+            let result = future.await;
+            let _ = sent.send(result.as_ref().map(|_| ()).map_err(Clone::clone));
+            result
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        received
+            .await
+            .map_err(|_| "Embedding barrier was cancelled".to_owned())?
     }
 
     pub async fn status(&self, account_id: &str) -> SyncStatusDto {
@@ -726,6 +791,9 @@ impl SyncEngine {
         self.set_idle(account_id, history_id, added_count, now, changed)
             .await;
         emit_new_mail_if_present(&self.events, account_id, thread_ids, arrivals, added_count);
+        if let Some(catch_up) = self.ai_catch_up.get() {
+            catch_up(account_id.to_owned());
+        }
         Ok(())
     }
 
@@ -1503,8 +1571,30 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<()
         }
     });
     let hook_registry = Arc::clone(&registry);
-    let cancellation_hook: crate::queue::CancellationHook = Arc::new(move |id: &str| {
-        hook_registry.take(id);
+    let cancelled_ai = app
+        .try_state::<crate::ai::AiService>()
+        .map(|state| state.inner().clone());
+    let cancellation_app = app.clone();
+    let cancellation_hook: crate::queue::CancellationHook = Arc::new(move |operation| {
+        hook_registry.take(&operation.id);
+        if operation.kind != OperationKind::Embed {
+            return;
+        }
+        let Some(ai) = &cancelled_ai else {
+            return;
+        };
+        if ai.is_removing(&operation.account_id).unwrap_or(true)
+            || ai.is_reconfiguring(&operation.account_id).unwrap_or(true)
+        {
+            return;
+        }
+        let _ = ai.set_index_state(&operation.account_id, crate::ai::IndexState::Interrupted);
+        let app = cancellation_app.clone();
+        let ai = ai.clone();
+        let account_id = operation.account_id.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::ai::index::emit_status(&app, &ai, account_id).await;
+        });
     });
     let queue = QueueEngine::new_with_events_and_hook(
         250,
@@ -1523,6 +1613,40 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<()
     engine.set_attachment_cache(attachment_cache);
     app.manage(Arc::clone(&queue));
     app.manage(Arc::clone(&engine));
+    if let Some(ai) = app.try_state::<crate::ai::AiService>() {
+        let ai = ai.inner().clone();
+        let catch_up_app = app.clone();
+        let catch_up_ai = ai.clone();
+        let catch_up_engine = Arc::clone(&engine);
+        engine.set_ai_catch_up(Arc::new(move |account_id| {
+            let app = catch_up_app.clone();
+            let ai = catch_up_ai.clone();
+            let engine = Arc::clone(&catch_up_engine);
+            tauri::async_runtime::spawn(async move {
+                if ai.index_ready(&account_id).await.unwrap_or(false) {
+                    let _ = crate::ai::index::enqueue(app, ai, engine, account_id).await;
+                }
+            });
+        }));
+        let startup_app = app.clone();
+        let startup_engine = Arc::clone(&engine);
+        tauri::async_runtime::spawn(async move {
+            if let Ok(configs) = ai.configs().await {
+                for config in configs {
+                    if !ai.index_ready(&config.account_id).await.unwrap_or(false) {
+                        continue;
+                    }
+                    let _ = crate::ai::index::enqueue(
+                        startup_app.clone(),
+                        ai.clone(),
+                        Arc::clone(&startup_engine),
+                        config.account_id,
+                    )
+                    .await;
+                }
+            }
+        });
+    }
     start_scheduler(app.clone(), Arc::clone(&engine));
     spawn_startup_recovery(app.clone(), storage, queue, engine, events);
     Ok(())

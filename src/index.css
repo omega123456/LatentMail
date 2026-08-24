@@ -80,6 +80,8 @@
   --color-settings-primary-container: #dbe3ff;
   --color-settings-on-primary-container: #12327f;
   --color-settings-error: #c0271f;
+  --color-settings-error-container: #ffdad6;
+  --color-settings-on-error-container: #7a1810;
   --color-settings-amber: #9a6100;
   --color-settings-blocked: #6a5cb0;
   --color-settings-bar: #2050d8;
@@ -196,6 +198,8 @@
   --color-dark-settings-primary-container: #14306e;
   --color-dark-settings-on-primary-container: #dbe3ff;
   --color-dark-settings-error: #ff9d92;
+  --color-dark-settings-error-container: #601410;
+  --color-dark-settings-on-error-container: #ffdad6;
   --color-dark-settings-amber: #f0ad4b;
   --color-dark-settings-blocked: #a99ae8;
   --color-dark-settings-bar: #2a4fa8;
@@ -321,6 +325,8 @@
   --spacing-settings-nav: 224px;
   --spacing-settings-content-max: 800px;
   --spacing-select-menu: 160px;
+  --spacing-ai-field: 240px;
+  --spacing-ai-action: 104px;
   --spacing-preview-modal-w: 1440px;
   --spacing-preview-modal-h: 1100px;
   --spacing-pdf-page-max: 1100px;

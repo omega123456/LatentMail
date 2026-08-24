@@ -260,9 +260,7 @@ describe('MessageCard', () => {
     expect(onFetchBody).not.toHaveBeenCalled();
     expect(screen.getByText('This message is too big to open here.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Message body')).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'View full message in Gmail' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View full message in Gmail' })).toBeInTheDocument();
   });
 
   it('opens the Gmail thread URL through centralized IPC from the too-large notice', async () => {

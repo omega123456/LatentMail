@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  BrainCircuit,
   Download,
   Keyboard,
   ListChecks,
@@ -13,6 +14,7 @@ import type { SettingsSectionId } from '@/stores/settings-ui';
 const sections: { id: SettingsSectionId; label: string; Icon: LucideIcon }[] = [
   { id: 'general', label: 'General', Icon: SlidersHorizontal },
   { id: 'accounts', label: 'Accounts', Icon: UserCircle },
+  { id: 'ai', label: 'AI', Icon: BrainCircuit },
   { id: 'keyboard', label: 'Keyboard', Icon: Keyboard },
   { id: 'queue', label: 'Queue', Icon: ListChecks },
   { id: 'logs', label: 'Logs', Icon: ScrollText },

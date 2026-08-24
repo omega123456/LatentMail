@@ -167,3 +167,15 @@ async fn refuses_images_that_exceed_the_size_ceiling() {
 
     assert_eq!(response.status(), 404);
 }
+
+#[tokio::test]
+async fn respond_refuses_a_target_that_is_not_http() {
+    let response = respond(
+        &reqwest::Client::new(),
+        &format!("{SCHEME}://proxy/?url=ftp%3A%2F%2Fexample.com%2Fa.png"),
+    )
+    .await;
+
+    assert_eq!(response.status(), 404);
+    assert!(response.body().is_empty());
+}

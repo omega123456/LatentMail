@@ -19,6 +19,7 @@ describe('SettingsNav', () => {
       'Mail',
       'General',
       'Accounts',
+      'AI',
       'Keyboard',
       'Queue',
       'Logs',

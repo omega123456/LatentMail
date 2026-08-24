@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use latentmail_lib::ai::credentials;
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::ipc::{
     health_check, health_response, open_external_url, pause_queue, read_queue_summary, register,
@@ -10,7 +11,7 @@ use latentmail_lib::storage::{
     Account, AccountRepository, Attachment, AttachmentRepository, HtmlPresence, InlinePart,
     LabelRepository, Message, MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
+use latentmail_lib::sync::{create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry};
 use tauri::{ipc::CallbackFn, ipc::InvokeBody, test::INVOKE_KEY, webview::InvokeRequest, Manager};
 use wiremock::{
     matchers::{method, path},
@@ -90,6 +91,9 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     app.manage(AuthService::new(
         Storage::open(directory.path().join("mail.sqlite")).unwrap(),
     ));
+    app.manage(latentmail_lib::ai::AiService::new(
+        Storage::open(directory.path().join("mail.sqlite")).unwrap(),
+    ));
     app.manage(SettingsService::new(
         Storage::open(directory.path().join("mail.sqlite")).unwrap(),
     ));
@@ -165,6 +169,77 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         invoke(&webview, "list_accounts", serde_json::json!({})).unwrap(),
         serde_json::json!([])
     );
+    assert_eq!(
+        invoke(&webview, "read_ai_configs", serde_json::json!({})).unwrap(),
+        serde_json::json!([])
+    );
+    assert!(invoke(
+        &webview,
+        "set_ai_enabled",
+        serde_json::json!({ "accountId": "missing", "enabled": true })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "set_ai_base_url",
+        serde_json::json!({ "accountId": "missing", "baseUrl": "http://127.0.0.1/v1" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "set_ai_api_key",
+        serde_json::json!({ "accountId": "missing", "apiKey": "secret" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "clear_ai_api_key",
+        serde_json::json!({ "accountId": "missing" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "test_ai_connection",
+        serde_json::json!({ "accountId": "missing" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "list_ai_models",
+        serde_json::json!({ "accountId": "missing" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "select_ai_chat_model",
+        serde_json::json!({ "accountId": "missing", "model": "chat" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "select_ai_embedding_model",
+        serde_json::json!({ "accountId": "missing", "model": "embedding" })
+    )
+    .is_err());
+    assert!(invoke(&webview, "read_ai_index_status", serde_json::json!({})).is_ok());
+    assert!(invoke(
+        &webview,
+        "start_ai_index",
+        serde_json::json!({ "accountId": "missing" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "cancel_ai_index",
+        serde_json::json!({ "accountId": "missing" })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "rebuild_ai_index",
+        serde_json::json!({ "accountId": "missing" })
+    )
+    .is_err());
 
     assert!(invoke(&webview, "begin_sign_in", serde_json::json!({})).is_err());
     assert!(invoke(
@@ -290,6 +365,110 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
     let mut stage_args = missing_attachment_args;
     stage_args["owner"] = serde_json::json!("owner");
     assert!(invoke(&webview, "stage_attachment_into_draft", stage_args).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ai_commands_complete_their_success_paths_through_real_ipc_dispatch() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"id": "chat"}, {"id": "embedding"}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"embedding": [1.0, 2.0]}]
+        })))
+        .mount(&server)
+        .await;
+    let app = app();
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    AccountRepository::upsert(
+        &storage.connection().unwrap(),
+        &Account {
+            id: "ai-ipc".into(),
+            email: "ai-ipc@example.com".into(),
+            display_name: "AI IPC".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine(250, 250, registry.clone());
+    app.manage(latentmail_lib::ai::AiService::new(storage.clone()));
+    app.manage(SyncEngine::new(
+        storage,
+        queue.clone(),
+        registry,
+        noop_event_sink(),
+    ));
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    credentials::clear("ai-ipc").unwrap();
+    assert!(invoke(
+        &webview,
+        "set_ai_enabled",
+        serde_json::json!({ "accountId": "ai-ipc", "enabled": true })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "set_ai_base_url",
+        serde_json::json!({ "accountId": "ai-ipc", "baseUrl": format!("{}/v1", server.uri()) })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "set_ai_api_key",
+        serde_json::json!({ "accountId": "ai-ipc", "apiKey": "test-key" })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "select_ai_chat_model",
+        serde_json::json!({ "accountId": "ai-ipc", "model": "chat" })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "select_ai_embedding_model",
+        serde_json::json!({ "accountId": "ai-ipc", "model": "embedding" })
+    )
+    .is_ok());
+    queue.wait_for_account_lane("ai-ipc", Lane::Embedding).await;
+    assert!(invoke(
+        &webview,
+        "start_ai_index",
+        serde_json::json!({ "accountId": "ai-ipc" })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "cancel_ai_index",
+        serde_json::json!({ "accountId": "ai-ipc" })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "rebuild_ai_index",
+        serde_json::json!({ "accountId": "ai-ipc" })
+    )
+    .is_ok());
+    assert!(invoke(
+        &webview,
+        "clear_ai_api_key",
+        serde_json::json!({ "accountId": "ai-ipc" })
+    )
+    .is_ok());
 }
 
 #[tokio::test]

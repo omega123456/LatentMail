@@ -669,12 +669,52 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("SCAN")));
 
+    let embedding_backlog_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT m.seq,m.sender,m.recipients,m.subject,m.plain_body,m.html_body,m.truncated_body FROM messages m WHERE m.seq IN (SELECT k.seq FROM messages k WHERE k.account_id=?1 AND NOT EXISTS (SELECT 1 FROM message_embeddings e WHERE e.account_id=k.account_id AND e.message_seq=k.seq) AND NOT EXISTS (SELECT 1 FROM message_labels l WHERE l.account_id=k.account_id AND l.message_id=k.id AND l.label_id IN ('TRASH','SPAM','DRAFT')) LIMIT ?2)",
+    );
+    assert!(
+        embedding_backlog_plan.iter().any(|step| step.contains(
+            "SEARCH k USING COVERING INDEX sqlite_autoindex_messages_1 (account_id=?)"
+        )),
+        "the embedding backlog must pick candidate rows from a covering index, never by scanning the message bodies"
+    );
+    assert!(embedding_backlog_plan.iter().any(|step| step.contains(
+        "SEARCH e USING COVERING INDEX message_embeddings_by_account_message (account_id=? AND message_seq=?)"
+    )));
+    assert!(embedding_backlog_plan
+        .iter()
+        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(!embedding_backlog_plan
+        .iter()
+        .any(|step| step.contains("SCAN m") || step.contains("SCAN k")));
+    assert!(!embedding_backlog_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let embedding_total_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT (SELECT COUNT(*) FROM messages WHERE account_id=?1)-(SELECT COUNT(DISTINCT message_id) FROM message_labels WHERE account_id=?1 AND label_id IN ('TRASH','SPAM','DRAFT'))",
+    );
+    assert!(embedding_total_plan.iter().any(|step| step
+        .contains("SEARCH messages USING COVERING INDEX sqlite_autoindex_messages_1 (account_id=?)")));
+    assert!(embedding_total_plan.iter().any(|step| step.contains(
+        "SEARCH message_labels USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=?)"
+    )));
+    assert!(
+        !embedding_total_plan
+            .iter()
+            .any(|step| step.contains("TEMP B-TREE")),
+        "the eligible-message count must read message_id in index order so DISTINCT needs no sort"
+    );
+
     let label_index_write_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN INSERT INTO thread_labels (account_id,label_id,thread_id,latest_at) SELECT ?1,CASE WHEN EXISTS (SELECT 1 FROM message_labels x WHERE x.account_id=?1 AND x.message_id=m.id AND x.label_id='TRASH') THEN 'TRASH' WHEN EXISTS (SELECT 1 FROM message_labels x WHERE x.account_id=?1 AND x.message_id=m.id AND x.label_id='SPAM') THEN 'SPAM' ELSE ml.label_id END,?2,MAX(m.sent_at) FROM messages m CROSS JOIN message_labels ml ON ml.account_id=m.account_id AND ml.message_id=m.id WHERE m.account_id=?1 AND m.thread_id=?2 GROUP BY 2",
     );
-    assert!(label_index_write_plan.iter().any(|step| step
-        .contains("SEARCH m USING COVERING INDEX messages_by_thread (account_id=? AND thread_id=?)")));
+    assert!(label_index_write_plan.iter().any(|step| step.contains(
+        "SEARCH m USING COVERING INDEX messages_by_thread (account_id=? AND thread_id=?)"
+    )));
     assert!(label_index_write_plan.iter().any(|step| step.contains(
         "SEARCH x USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=? AND message_id=? AND label_id=?)"
     )));
@@ -708,6 +748,39 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("SCAN m") || step.contains("SCAN ml")));
     assert!(!visible_count_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let embedding_backlog_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT m.seq FROM messages m WHERE m.account_id='account' AND NOT EXISTS (SELECT 1 FROM message_embeddings e WHERE e.account_id=m.account_id AND e.message_seq=m.seq) AND NOT EXISTS (SELECT 1 FROM message_labels l WHERE l.account_id=m.account_id AND l.message_id=m.id AND l.label_id IN ('TRASH','SPAM','DRAFT')) LIMIT 64",
+    );
+    assert!(embedding_backlog_plan
+        .iter()
+        .any(|step| step.contains("message_embeddings_by_account_message")));
+    assert!(!embedding_backlog_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let embedding_count_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT COUNT(DISTINCT message_seq) FROM message_embeddings WHERE account_id='account'",
+    );
+    assert!(embedding_count_plan
+        .iter()
+        .any(|step| step.contains("message_embeddings_by_account_message")));
+    assert!(!embedding_count_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let embedding_passage_count_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM message_embeddings WHERE account_id='account'",
+    );
+    assert!(embedding_passage_count_plan
+        .iter()
+        .any(|step| step.contains("message_embeddings_by_account_message")));
+    assert!(!embedding_passage_count_plan
         .iter()
         .any(|step| step.contains("TEMP B-TREE")));
 
@@ -907,6 +980,78 @@ fn every_rowid_table_carries_a_leading_autoincrement_seq_and_its_former_key_as_a
             "{table} must retain {former_key:?} as a UNIQUE constraint"
         );
     }
+
+    let columns = table_columns(&connection, "message_embeddings");
+    assert_eq!(columns[0].0, "seq");
+    assert_eq!(columns[0].2, 1);
+    assert!(columns
+        .iter()
+        .find(|(name, _, _)| name == "account_id")
+        .is_some_and(|(_, not_null, pk)| *not_null && *pk == 0));
+    assert!(
+        unique_indexed_column_sets(&connection, "message_embeddings")
+            .iter()
+            .any(|columns| columns == &["message_seq".to_owned(), "chunk_index".to_owned()])
+    );
+    let foreign_keys = connection
+        .prepare("PRAGMA foreign_key_list(message_embeddings)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(2))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(foreign_keys, vec!["messages"]);
+}
+
+#[test]
+fn embedding_migrations_preserve_populated_v8_data_and_foreign_keys() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    for migration in [
+        include_str!("../migrations/V1__initial_schema.sql"),
+        include_str!("../migrations/V2__derive_label_unread_counts.sql"),
+        include_str!("../migrations/V3__failed_durable_operations_index.sql"),
+        include_str!("../migrations/V4__message_attachments.sql"),
+        include_str!("../migrations/V5__reconcile_staging.sql"),
+        include_str!("../migrations/V6__drop_reconcile_remote_labels_index.sql"),
+        include_str!("../migrations/V7__per_label_thread_latest_at.sql"),
+        include_str!("../migrations/V8__account_ai_config.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO accounts(id,email,display_name,created_at,updated_at) VALUES ('account','mail@example.com','Mail',1,1)",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO messages(account_id,id,thread_id,sender,recipients,subject,sent_at,history_id) VALUES ('account','message','thread','sender','recipient','Subject',1,1)",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/V9__message_embeddings.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../migrations/V10__repair_embedding_invalidation_triggers.sql"
+        ))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO message_embeddings(account_id,message_seq,chunk_index) VALUES ('account',1,0)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

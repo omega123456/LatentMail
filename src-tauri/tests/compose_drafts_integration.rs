@@ -28,6 +28,38 @@ use wiremock::{
 
 static APP_ENV: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+fn compose_dispatch_builder() -> tauri::Builder<tauri::test::MockRuntime> {
+    tauri::test::mock_builder().invoke_handler(tauri::generate_handler![
+        latentmail_lib::sync::commands::list_labels,
+        latentmail_lib::sync::commands::lookup_contacts,
+        latentmail_lib::sync::commands::reply_context,
+        latentmail_lib::sync::commands::stage_attachment_from_path,
+        latentmail_lib::sync::commands::stage_attachment_from_bytes,
+        latentmail_lib::sync::commands::release_staged_attachment,
+        latentmail_lib::sync::commands::save_compose_draft,
+        latentmail_lib::sync::commands::send_compose_draft,
+        latentmail_lib::sync::commands::discard_compose_draft,
+        latentmail_lib::sync::commands::hydrate_compose_draft,
+        latentmail_lib::sync::commands::list_threads,
+        latentmail_lib::sync::commands::load_conversation,
+        latentmail_lib::sync::commands::fetch_message_body,
+        latentmail_lib::sync::commands::trigger_sync,
+        latentmail_lib::sync::commands::read_sync_status,
+        latentmail_lib::sync::commands::star_thread,
+        latentmail_lib::sync::commands::unstar_thread,
+        latentmail_lib::sync::commands::mark_thread_read,
+        latentmail_lib::sync::commands::mark_thread_unread,
+        latentmail_lib::sync::commands::mutate_threads,
+        latentmail_lib::sync::commands::mutate_messages,
+        latentmail_lib::sync::commands::delete_draft,
+        latentmail_lib::sync::commands::create_label,
+        latentmail_lib::sync::commands::rename_label,
+        latentmail_lib::sync::commands::recolor_label,
+        latentmail_lib::sync::commands::delete_label,
+        latentmail_lib::sync::commands::read_traversal_status,
+    ])
+}
+
 fn draft_response(id: &str, message_id: &str, thread_id: &str) -> serde_json::Value {
     serde_json::json!({
         "id": id,
@@ -238,7 +270,7 @@ async fn compose_save_and_send_commands_persist_their_respective_durable_modes()
     .unwrap();
     let queue = QueueEngine::no_op();
     queue.pause();
-    let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
+    let app = compose_dispatch_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(storage.clone());
@@ -348,7 +380,7 @@ async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
     let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
+    let app = compose_dispatch_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
@@ -952,7 +984,7 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     latentmail_lib::auth::save_refresh_token("account", "refresh-token").unwrap();
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
+    let app = compose_dispatch_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
@@ -1158,7 +1190,7 @@ async fn hydrate_stages_a_draft_attachment_that_carries_its_bytes_inline() {
     latentmail_lib::auth::save_refresh_token("account", "refresh-token").unwrap();
     let registry = WorkRegistry::new();
     let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    let app = latentmail_lib::ipc::register(tauri::test::mock_builder())
+    let app = compose_dispatch_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
     app.manage(AuthService::new(storage.clone()));
@@ -1751,6 +1783,50 @@ async fn delete_reuses_the_existing_endpoint_and_removes_local_state() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn delete_surfaces_a_failing_gmail_endpoint() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/gmail/v1/users/me/drafts/d1"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+    let client = latentmail_lib::gmail::GmailClient::with_base_url(
+        "token",
+        format!("{}/gmail/v1", server.uri()),
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+
+    assert!(drafts::delete(&client, &storage, "account", "d1")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn delete_surfaces_an_unreadable_database_after_gmail_accepts_the_removal() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/gmail/v1/users/me/drafts/d1"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let client = latentmail_lib::gmail::GmailClient::with_base_url(
+        "token",
+        format!("{}/gmail/v1", server.uri()),
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("mail.sqlite");
+    let storage = Storage::open(&database).unwrap();
+    std::fs::write(&database, b"not a database").unwrap();
+
+    assert!(drafts::delete(&client, &storage, "account", "d1")
+        .await
+        .is_err());
 }
 
 #[tokio::test]

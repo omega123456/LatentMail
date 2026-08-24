@@ -30,3 +30,32 @@ export function SettingsSection({
     </section>
   );
 }
+
+export function SettingsSubsection({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-label={title} className="flex flex-col gap-3.5">
+      <div className="flex items-start justify-between gap-4.5">
+        <div className="min-w-0">
+          <h3 className="text-title-lg font-semibold text-settings-ink dark:text-dark-settings-ink">
+            {title}
+          </h3>
+          <p className="mt-1 text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
+            {description}
+          </p>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}

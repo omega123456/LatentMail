@@ -67,16 +67,13 @@ describe('EditorToolbar', () => {
     'Bullet List',
     'Numbered List',
     'Code Block',
-  ])(
-    'runs the matching editor command for %s',
-    async (label) => {
-      const user = userEvent.setup();
-      const editor = fakeEditor(new Set());
-      render(<EditorToolbar editor={editor} onLink={() => {}} />);
-      await user.click(screen.getByRole('button', { name: label }));
-      expect(editor.chain().run).toHaveBeenCalled();
-    },
-  );
+  ])('runs the matching editor command for %s', async (label) => {
+    const user = userEvent.setup();
+    const editor = fakeEditor(new Set());
+    render(<EditorToolbar editor={editor} onLink={() => {}} />);
+    await user.click(screen.getByRole('button', { name: label }));
+    expect(editor.chain().run).toHaveBeenCalled();
+  });
 
   it('invokes onLink for the Link control and is a no-op with no editor', async () => {
     const user = userEvent.setup();

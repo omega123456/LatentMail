@@ -290,6 +290,24 @@ fn initialize_manages_settings_from_the_setup_storage() {
     assert!(app.try_state::<SettingsService>().is_some());
 }
 
+#[test]
+fn initialize_reports_a_missing_main_window() {
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    std::env::set_var("APPDATA", home.path());
+    std::env::set_var("XDG_DATA_HOME", home.path());
+
+    let app = tauri::test::mock_app();
+    let directory = app.path().app_data_dir().unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+
+    assert_eq!(
+        initialize(app.handle(), storage).unwrap_err(),
+        "Main window is missing"
+    );
+}
+
 #[tokio::test]
 async fn writing_the_sync_interval_reaches_a_running_scheduler() {
     let (app, _directory) = app_with_service();

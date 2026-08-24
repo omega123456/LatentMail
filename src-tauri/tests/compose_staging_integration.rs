@@ -325,3 +325,35 @@ fn staging_reports_missing_sources_and_unknown_parts() {
         )
         .is_err());
 }
+
+#[tokio::test]
+async fn staging_a_gmail_attachment_surfaces_a_refused_download() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/gmail/v1/users/me/messages/m1/attachments/a1"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+    let client = GmailClient::with_base_url("token", format!("{}/gmail/v1", server.uri()));
+    let directory = tempfile::tempdir().unwrap();
+    let staging = Staging::new(directory.path().join("staged"));
+
+    assert!(staging
+        .stage_attachment(
+            &client,
+            "account",
+            "draft",
+            latentmail_lib::compose::staging::GmailAttachmentSource {
+                message_id: "m1",
+                attachment_id: "a1",
+            },
+            latentmail_lib::compose::staging::NewStagedPart {
+                id: "hydrated-1".into(),
+                filename: "photo.png".into(),
+                mime_type: "image/png".into(),
+                content_id: None,
+            },
+        )
+        .await
+        .is_err());
+}

@@ -1385,11 +1385,7 @@ impl ThreadRepository {
         Self::write_label_index(connection, account_id, thread_id)
     }
 
-    fn write_label_index(
-        connection: &Connection,
-        account_id: &str,
-        thread_id: &str,
-    ) -> Result<()> {
+    fn write_label_index(connection: &Connection, account_id: &str, thread_id: &str) -> Result<()> {
         connection
             .prepare_cached("DELETE FROM thread_labels WHERE account_id=?1 AND thread_id=?2")?
             .execute(params![account_id, thread_id])?;

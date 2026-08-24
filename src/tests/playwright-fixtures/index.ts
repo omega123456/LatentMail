@@ -40,3 +40,4 @@ export {
   playwrightSearchThreads,
 } from './search';
 export { playwrightUpdateAvailable } from './update';
+export { playwrightAiConfigs, playwrightAiIndexStatuses, playwrightAiModels } from './ai';

@@ -1,0 +1,64 @@
+[[permission]]
+identifier = "allow-read-ai-configs"
+description = "Enables reading account AI configuration."
+commands.allow = ["read_ai_configs"]
+
+[[permission]]
+identifier = "allow-set-ai-enabled"
+description = "Enables changing account AI availability."
+commands.allow = ["set_ai_enabled"]
+
+[[permission]]
+identifier = "allow-set-ai-base-url"
+description = "Enables setting an account AI API root."
+commands.allow = ["set_ai_base_url"]
+
+[[permission]]
+identifier = "allow-set-ai-api-key"
+description = "Enables storing an account AI API key."
+commands.allow = ["set_ai_api_key"]
+
+[[permission]]
+identifier = "allow-clear-ai-api-key"
+description = "Enables removing an account AI API key."
+commands.allow = ["clear_ai_api_key"]
+
+[[permission]]
+identifier = "allow-test-ai-connection"
+description = "Enables testing an account AI provider."
+commands.allow = ["test_ai_connection"]
+
+[[permission]]
+identifier = "allow-list-ai-models"
+description = "Enables listing account AI models."
+commands.allow = ["list_ai_models"]
+
+[[permission]]
+identifier = "allow-select-ai-chat-model"
+description = "Enables selecting an account chat model."
+commands.allow = ["select_ai_chat_model"]
+
+[[permission]]
+identifier = "allow-select-ai-embedding-model"
+description = "Enables selecting an account embedding model."
+commands.allow = ["select_ai_embedding_model"]
+
+[[permission]]
+identifier = "allow-read-ai-index-status"
+description = "Enables reading account AI index status."
+commands.allow = ["read_ai_index_status"]
+
+[[permission]]
+identifier = "allow-start-ai-index"
+description = "Enables starting an account AI index."
+commands.allow = ["start_ai_index"]
+
+[[permission]]
+identifier = "allow-cancel-ai-index"
+description = "Enables pausing an account AI index."
+commands.allow = ["cancel_ai_index"]
+
+[[permission]]
+identifier = "allow-rebuild-ai-index"
+description = "Enables rebuilding an account AI index."
+commands.allow = ["rebuild_ai_index"]

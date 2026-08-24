@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 
 use latentmail_lib::gmail::GmailClient;
@@ -155,6 +158,12 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     let server = MockServer::start().await;
     mount_history_fixture(&server).await;
     let (engine, storage, _directory, events) = engine_with_seed();
+    let catch_ups = Arc::new(AtomicUsize::new(0));
+    let recorded_catch_ups = Arc::clone(&catch_ups);
+    engine.set_ai_catch_up(Arc::new(move |account_id| {
+        assert_eq!(account_id, "account");
+        recorded_catch_ups.fetch_add(1, Ordering::SeqCst);
+    }));
     let client = GmailClient::with_base_url("token", server.uri());
 
     engine.run_sync("account", client).await.unwrap();
@@ -194,6 +203,7 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
         .unwrap()
         .unwrap();
     assert_eq!(account.history_id, Some(50));
+    assert_eq!(catch_ups.load(Ordering::SeqCst), 1);
 
     let fired = events.lock().unwrap().clone();
     assert!(fired.iter().any(|(name, _)| name == "sync://complete"));

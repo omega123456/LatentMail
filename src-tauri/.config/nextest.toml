@@ -10,6 +10,9 @@ max-threads = 1
 [test-groups.ipc-contract]
 max-threads = 1
 
+[test-groups.ai-loopback]
+max-threads = 1
+
 [[profile.default.overrides]]
 filter = 'binary(=compose_drafts_integration)'
 test-group = 'compose-app'
@@ -51,3 +54,15 @@ test-group = 'reconcile-network'
 filter = 'binary(=ipc_contract_integration)'
 test-group = 'ipc-contract'
 threads-required = "num-cpus"
+
+[[profile.default.overrides]]
+filter = 'binary(=ai_provider_client_integration)'
+test-group = 'ai-loopback'
+
+[[profile.default.overrides]]
+filter = 'binary(=ai_index_build_integration)'
+test-group = 'ai-loopback'
+
+[[profile.default.overrides]]
+filter = 'binary(=ai_command_failures_integration)'
+test-group = 'ai-loopback'

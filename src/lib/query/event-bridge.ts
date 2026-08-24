@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { emitFrontendReady, listen } from '@/lib/ipc/events';
 import { useSyncStore } from '@/stores/sync';
-import type { IpcEventMap } from '@/lib/types/ipc';
+import type { AiIndexStatus, IpcEventMap } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
 import { useToastStore } from '@/stores/toast';
 import { useComposeStore } from '@/stores/compose';
@@ -64,6 +64,43 @@ export function EventBridge() {
     subscribe('queue://summary', (summary) => {
       useSyncStore.getState().setQueue(summary);
       scheduleQueueSnapshotInvalidation();
+    });
+    subscribe('ai://config', (event) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.aiConfigs });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.aiIndexStatuses });
+      if (event.removed) {
+        queryClient.setQueryData(
+          queryKeys.aiIndexStatuses,
+          (statuses: Array<{ accountId: string }> | undefined) =>
+            statuses?.filter((status) => status.accountId !== event.accountId),
+        );
+      }
+    });
+    subscribe('ai://index', (event) => {
+      queryClient.setQueryData(
+        queryKeys.aiIndexStatuses,
+        (statuses: AiIndexStatus[] | undefined) => {
+          const current = statuses ?? [];
+          const next = {
+            accountId: event.accountId,
+            indexed: event.indexed,
+            total: event.total,
+            indexedMessages: event.indexedMessages,
+            totalEligibleMessages: event.totalEligibleMessages,
+            indexedPassages: event.indexedPassages,
+            state: event.state,
+            paused: event.paused,
+            error: event.error,
+          };
+          const found = current.some((status) => status.accountId === event.accountId);
+          return found
+            ? current.map((status) =>
+                status.accountId === event.accountId ? { ...status, ...next } : status,
+              )
+            : [...current, next];
+        },
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.aiIndexStatuses });
     });
 
     subscribe('sync://progress', (progress) => {

@@ -426,6 +426,22 @@ async fn receive_code_validates_state_and_extracts_the_code_from_a_raw_http_call
 }
 
 #[tokio::test]
+async fn receive_code_rejects_a_request_without_a_target() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let writer = tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET\r\n\r\n").await.unwrap();
+    });
+
+    let error = receive_code(listener, "expected").await.unwrap_err();
+    writer.await.unwrap();
+
+    assert_eq!(error, "Invalid OAuth callback");
+}
+
+#[tokio::test]
 async fn receive_code_rejects_a_mismatched_state_and_reports_it_to_the_browser() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
