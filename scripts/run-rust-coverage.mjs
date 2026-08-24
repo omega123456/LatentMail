@@ -8,6 +8,7 @@ const result = spawnSync(
     'cargo',
     'llvm-cov',
     'nextest',
+    '--no-clean',
     '--manifest-path',
     'src-tauri/Cargo.toml',
     '--features',
