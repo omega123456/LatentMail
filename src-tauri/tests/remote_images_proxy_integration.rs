@@ -179,3 +179,33 @@ async fn respond_refuses_a_target_that_is_not_http() {
     assert_eq!(response.status(), 404);
     assert!(response.body().is_empty());
 }
+
+#[tokio::test]
+async fn sniffs_images_that_arrive_as_a_generic_binary_stream() {
+    let png = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/icons/tray-icon.png"
+    ))
+    .expect("tray icon reads");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/qrcode.png"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(png.clone(), "application/octet-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let response = respond(
+        &reqwest::Client::new(),
+        &proxy_url(&format!("{}/qrcode.png", server.uri())),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        &"image/png"
+    );
+    assert_eq!(response.body(), &png);
+}

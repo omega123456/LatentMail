@@ -74,18 +74,22 @@ async fn read(response: reqwest::Response) -> Result<(String, Vec<u8>), String> 
     {
         return Err("declared size over the ceiling".to_owned());
     }
-    let content_type = response
+    let declared = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| "no content type".to_owned())?
-        .to_owned();
-    if !content_type.starts_with("image/") {
-        return Err(format!("content type {content_type}"));
-    }
+        .map(str::to_owned);
     let bytes = response.bytes().await.map_err(|error| error.to_string())?;
     if bytes.len() as u64 > MAX_BYTES {
         return Err("body over the ceiling".to_owned());
     }
+    let content_type = declared
+        .filter(|value| value.starts_with("image/"))
+        .or_else(|| {
+            image::guess_format(&bytes)
+                .ok()
+                .map(|format| format.to_mime_type().to_owned())
+        })
+        .ok_or_else(|| "not an image".to_owned())?;
     Ok((content_type, bytes.to_vec()))
 }
