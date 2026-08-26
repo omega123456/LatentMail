@@ -158,3 +158,60 @@ async fn cancelling_mid_stream_keeps_what_arrived_and_stops_reading_the_rest() {
         .unwrap();
     assert_eq!(deltas, vec!["kept"]);
 }
+
+#[tokio::test]
+async fn inline_think_blocks_are_dropped_even_when_their_tags_split_across_frames() {
+    let server = streaming_server(format!(
+        "{}{}{}{}{}data: [DONE]\n\n",
+        frame("<thin"),
+        frame("k>the user wants the date"),
+        frame("</thi"),
+        frame("nk>The deadline "),
+        frame("is Friday.")
+    ))
+    .await;
+    let mut deltas: Vec<String> = Vec::new();
+    provider(&server)
+        .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |delta| {
+            deltas.push(delta.to_owned())
+        })
+        .await
+        .unwrap();
+    assert_eq!(deltas.concat(), "The deadline is Friday.");
+}
+
+#[tokio::test]
+async fn an_unterminated_think_block_yields_no_visible_text() {
+    let server = streaming_server(format!(
+        "{}{}data: [DONE]\n\n",
+        frame("<think>still reasoning"),
+        frame(" and never stopping")
+    ))
+    .await;
+    let mut deltas: Vec<String> = Vec::new();
+    provider(&server)
+        .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |delta| {
+            deltas.push(delta.to_owned())
+        })
+        .await
+        .unwrap();
+    assert!(deltas.is_empty());
+}
+
+#[tokio::test]
+async fn a_trailing_angle_bracket_that_never_becomes_a_tag_is_still_delivered() {
+    let server = streaming_server(format!(
+        "{}{}data: [DONE]\n\n",
+        frame("compare 3 <"),
+        frame(" 5")
+    ))
+    .await;
+    let mut deltas: Vec<String> = Vec::new();
+    provider(&server)
+        .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |delta| {
+            deltas.push(delta.to_owned())
+        })
+        .await
+        .unwrap();
+    assert_eq!(deltas.concat(), "compare 3 < 5");
+}

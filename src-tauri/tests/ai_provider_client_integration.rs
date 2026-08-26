@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use latentmail_lib::ai::{
     index::embed_with_retry,
-    provider::{api_root, Provider, ProviderError},
+    provider::{api_root, reasoning_off_fields, strip_think_blocks, Provider, ProviderError},
 };
 use wiremock::{
-    matchers::{method, path},
+    matchers::{body_partial_json, method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -159,4 +159,91 @@ async fn retries_transient_server_and_transport_failures_with_injected_bounds() 
         .unwrap_err(),
         ProviderError::Transport.to_string()
     );
+}
+
+#[tokio::test]
+async fn chat_requests_carry_every_reasoning_off_key_and_step_down_when_the_provider_rejects_them() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_partial_json(
+            serde_json::json!({"reasoning_effort":"low"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"choices":[{"message":{"content":"answer"}}]})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+    let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
+    assert_eq!(
+        provider
+            .chat_completion("chat", serde_json::json!([]))
+            .await
+            .unwrap(),
+        "answer"
+    );
+    assert_eq!(
+        provider
+            .chat_completion("chat", serde_json::json!([]))
+            .await
+            .unwrap(),
+        "answer"
+    );
+    let bodies = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 4);
+    for key in [
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking",
+        "think",
+        "thinking_budget",
+        "reasoning_budget",
+        "thinking_budget_tokens",
+        "chat_template_kwargs",
+        "google",
+    ] {
+        assert!(bodies[0].get(key).is_some(), "{key} missing from first body");
+    }
+    assert_eq!(bodies[1]["reasoning_effort"], "none");
+    assert!(bodies[1].get("thinking").is_none());
+    assert_eq!(bodies[3]["reasoning_effort"], "low");
+}
+
+#[tokio::test]
+async fn reasoning_off_tiers_end_in_an_empty_field_set() {
+    assert_eq!(
+        reasoning_off_fields(1)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .len(),
+        1
+    );
+    assert!(reasoning_off_fields(3).is_empty());
+}
+
+#[test]
+fn think_blocks_are_stripped_from_whole_responses_without_touching_ordinary_text() {
+    assert_eq!(
+        strip_think_blocks("<think>weighing it up</think>\n{\"relevant\":true}"),
+        "{\"relevant\":true}"
+    );
+    assert_eq!(
+        strip_think_blocks("<reasoning>a</reasoning>keep<thinking>b</thinking>this"),
+        "keepthis"
+    );
+    assert_eq!(strip_think_blocks("3 < 5 and 7 > 2"), "3 < 5 and 7 > 2");
+    assert_eq!(strip_think_blocks("plain answer"), "plain answer");
 }

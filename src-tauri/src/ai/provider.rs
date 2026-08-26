@@ -1,7 +1,11 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 use thiserror::Error;
 use url::Url;
 
@@ -36,11 +40,100 @@ pub struct ProviderModel {
     pub owned_by: Option<String>,
 }
 
+pub fn reasoning_off_fields(tier: usize) -> Map<String, Value> {
+    let fields = match tier {
+        0 => json!({
+            "reasoning_effort": "none",
+            "reasoning": {"enabled": false, "exclude": true},
+            "thinking": {"type": "disabled", "budget_tokens": 0},
+            "enable_thinking": false,
+            "think": false,
+            "thinking_budget": 0,
+            "reasoning_budget": 0,
+            "thinking_budget_tokens": 0,
+            "chat_template_kwargs": {"enable_thinking": false, "thinking": false, "reasoning": false},
+            "google": {"thinking_config": {"thinking_budget": 0, "include_thoughts": false}},
+        }),
+        1 => json!({"reasoning_effort": "none"}),
+        2 => json!({"reasoning_effort": "low"}),
+        _ => json!({}),
+    };
+    match fields {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
+const LAST_REASONING_TIER: usize = 3;
+const THINK_OPEN: [&str; 3] = ["<think>", "<thinking>", "<reasoning>"];
+const THINK_CLOSE: [&str; 3] = ["</think>", "</thinking>", "</reasoning>"];
+
+#[derive(Default)]
+pub struct ThinkFilter {
+    pending: String,
+    inside: bool,
+}
+
+impl ThinkFilter {
+    pub fn push(&mut self, delta: &str) -> String {
+        self.pending.push_str(delta);
+        let mut visible = String::new();
+        loop {
+            let tags = if self.inside { THINK_CLOSE } else { THINK_OPEN };
+            match first_tag(&self.pending, &tags) {
+                Some((at, len)) => {
+                    if !self.inside {
+                        visible.push_str(&self.pending[..at]);
+                    }
+                    self.pending.replace_range(..at + len, "");
+                    self.inside = !self.inside;
+                }
+                None => {
+                    let held = self.pending.len() - partial_tag_len(&self.pending, &tags);
+                    if !self.inside {
+                        visible.push_str(&self.pending[..held]);
+                    }
+                    self.pending.replace_range(..held, "");
+                    return visible;
+                }
+            }
+        }
+    }
+    pub fn flush(&mut self) -> String {
+        if self.inside {
+            self.pending.clear();
+            return String::new();
+        }
+        std::mem::take(&mut self.pending)
+    }
+}
+
+pub fn strip_think_blocks(text: &str) -> String {
+    let mut filter = ThinkFilter::default();
+    let mut stripped = filter.push(text);
+    stripped.push_str(&filter.flush());
+    stripped.trim().to_owned()
+}
+
+fn first_tag(text: &str, tags: &[&str]) -> Option<(usize, usize)> {
+    tags.iter()
+        .filter_map(|tag| text.find(tag).map(|at| (at, tag.len())))
+        .min_by_key(|(at, _)| *at)
+}
+
+fn partial_tag_len(text: &str, tags: &[&str]) -> usize {
+    tags.iter()
+        .flat_map(|tag| (1..tag.len()).filter(|end| text.ends_with(&tag[..*end])))
+        .max()
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct Provider {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
+    reasoning_tier: Arc<AtomicUsize>,
 }
 
 impl Provider {
@@ -49,6 +142,7 @@ impl Provider {
             client: Client::new(),
             base_url: api_root(base_url)?,
             api_key,
+            reasoning_tier: Arc::new(AtomicUsize::new(0)),
         })
     }
     pub async fn models(&self) -> Result<Vec<ProviderModel>, ProviderError> {
@@ -99,13 +193,8 @@ impl Provider {
         messages: serde_json::Value,
     ) -> Result<String, ProviderError> {
         let response: ChatResponse = self
-            .post("chat/completions")
-            .json(&serde_json::json!({"model":model,"messages":messages}))
-            .send()
-            .await
-            .map_err(provider_error)?
-            .error_for_status()
-            .map_err(provider_error)?
+            .chat_request(model, &messages, false)
+            .await?
             .json()
             .await
             .map_err(provider_error)?;
@@ -113,6 +202,7 @@ impl Provider {
             .choices
             .into_iter()
             .find_map(|choice| choice.message.and_then(|message| message.content))
+            .map(|content| strip_think_blocks(&content))
             .ok_or(ProviderError::Response)
     }
     pub async fn chat_completion_stream(
@@ -122,15 +212,9 @@ impl Provider {
         cancel: &AtomicBool,
         on_delta: &mut (dyn FnMut(&str) + Send),
     ) -> Result<(), ProviderError> {
-        let mut response = self
-            .post("chat/completions")
-            .json(&serde_json::json!({"model":model,"messages":messages,"stream":true}))
-            .send()
-            .await
-            .map_err(provider_error)?
-            .error_for_status()
-            .map_err(provider_error)?;
+        let mut response = self.chat_request(model, &messages, true).await?;
         let mut buffer = String::new();
+        let mut think = ThinkFilter::default();
         let mut completed = false;
         while let Some(chunk) = response.chunk().await.map_err(provider_error)? {
             if cancel.load(Ordering::SeqCst) {
@@ -144,16 +228,53 @@ impl Provider {
                 let frame = buffer[..offset].to_owned();
                 buffer.replace_range(..offset + FRAME_SEPARATOR.len(), "");
                 match read_frame(&frame)? {
-                    Frame::Delta(text) => on_delta(&text),
+                    Frame::Delta(text) => {
+                        let visible = think.push(&text);
+                        if !visible.is_empty() {
+                            on_delta(&visible);
+                        }
+                    }
                     Frame::Done => completed = true,
                     Frame::Ignored => {}
                 }
             }
         }
+        let tail = think.flush();
+        if !tail.is_empty() {
+            on_delta(&tail);
+        }
         if completed {
             Ok(())
         } else {
             Err(ProviderError::Response)
+        }
+    }
+    async fn chat_request(
+        &self,
+        model: &str,
+        messages: &Value,
+        stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        loop {
+            let tier = self.reasoning_tier.load(Ordering::SeqCst);
+            let mut body = Map::new();
+            body.insert("model".to_owned(), Value::String(model.to_owned()));
+            body.insert("messages".to_owned(), messages.clone());
+            if stream {
+                body.insert("stream".to_owned(), Value::Bool(true));
+            }
+            body.extend(reasoning_off_fields(tier));
+            let response = self
+                .post("chat/completions")
+                .json(&Value::Object(body))
+                .send()
+                .await
+                .map_err(provider_error)?;
+            if response.status() == StatusCode::BAD_REQUEST && tier < LAST_REASONING_TIER {
+                self.reasoning_tier.store(tier + 1, Ordering::SeqCst);
+                continue;
+            }
+            return response.error_for_status().map_err(provider_error);
         }
     }
     fn get(&self, path: &str) -> reqwest::RequestBuilder {

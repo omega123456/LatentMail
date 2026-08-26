@@ -12,3 +12,4 @@ src-tauri/secrets.json
 .codex
 .agent
 .pnpm-store
+.pi
