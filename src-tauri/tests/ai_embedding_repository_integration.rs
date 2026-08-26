@@ -65,7 +65,7 @@ fn account_vector_tables_accept_different_dimensions() {
             MessageEmbedding {
                 message_seq: 1,
                 chunk_index: 0,
-                vector: vec![0.0, 0.0],
+                vector: vec![1.0, 0.0],
             },
             MessageEmbedding {
                 message_seq: 1,
@@ -81,11 +81,11 @@ fn account_vector_tables_accept_different_dimensions() {
         &[MessageEmbedding {
             message_seq: 2,
             chunk_index: 0,
-            vector: vec![0.0, 0.0, 0.0],
+            vector: vec![1.0, 0.0, 0.0],
         }],
     )
     .unwrap();
-    let nearest = EmbeddingRepository::nearest(&connection, "one", &[0.0, 0.0], 2).unwrap();
+    let nearest = EmbeddingRepository::nearest(&connection, "one", &[1.0, 0.0], 2).unwrap();
     assert_ne!(
         EmbeddingRepository::table_name(1),
         EmbeddingRepository::table_name(2)
@@ -152,7 +152,7 @@ fn triggers_remove_vectors_for_text_exclusion_and_message_deletion() {
     let entry = MessageEmbedding {
         message_seq: 1,
         chunk_index: 0,
-        vector: vec![0.0, 0.0],
+        vector: vec![1.0, 0.0],
     };
     EmbeddingRepository::write(&connection, "one", std::slice::from_ref(&entry)).unwrap();
     let mut changed = message("one", "message", 2);
@@ -205,7 +205,7 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
         &[MessageEmbedding {
             message_seq: 1,
             chunk_index: 0,
-            vector: vec![0.0, 0.0],
+            vector: vec![1.0, 0.0],
         }],
     )
     .unwrap();
@@ -223,7 +223,7 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
         .unwrap()
         .is_empty());
     assert_eq!(
-        EmbeddingRepository::nearest(&connection, "one", &[0.0, 0.0], 1)
+        EmbeddingRepository::nearest(&connection, "one", &[1.0, 0.0], 1)
             .unwrap()
             .len(),
         1
@@ -254,7 +254,7 @@ fn startup_reconciliation_keeps_backfilled_body_hydration_indexed() {
         &[MessageEmbedding {
             message_seq: mutable_seq,
             chunk_index: 0,
-            vector: vec![0.0, 0.0],
+            vector: vec![1.0, 0.0],
         }],
     )
     .unwrap();
@@ -295,7 +295,7 @@ fn rolled_back_model_lifecycle_keeps_the_prior_vector_objects_consistent() {
         &[MessageEmbedding {
             message_seq: 1,
             chunk_index: 0,
-            vector: vec![0.0, 0.0],
+            vector: vec![1.0, 0.0],
         }],
     )
     .unwrap();
@@ -306,7 +306,7 @@ fn rolled_back_model_lifecycle_keeps_the_prior_vector_objects_consistent() {
     }
     assert_eq!(metadata_count(&connection, "one"), 1);
     assert_eq!(
-        EmbeddingRepository::nearest(&connection, "one", &[0.0, 0.0], 1)
+        EmbeddingRepository::nearest(&connection, "one", &[1.0, 0.0], 1)
             .unwrap()
             .len(),
         1

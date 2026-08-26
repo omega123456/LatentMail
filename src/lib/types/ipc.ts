@@ -28,6 +28,11 @@ export interface IpcCommandMap {
   start_ai_index: { args: { accountId: string }; result: void };
   cancel_ai_index: { args: { accountId: string }; result: void };
   rebuild_ai_index: { args: { accountId: string }; result: void };
+  start_ai_chat: {
+    args: { accountId: string; sessionId: string; question: string };
+    result: string;
+  };
+  cancel_ai_chat: { args: { requestId: string }; result: boolean };
   list_labels: { args: { accountId: string }; result: MailLabel[] };
   lookup_contacts: { args: { accountId: string; query: string }; result: ContactSuggestion[] };
   reply_context: {
@@ -306,7 +311,8 @@ export interface AiIndexStatus {
     | 'partial'
     | 'paused'
     | 'interrupted'
-    | 'unavailable';
+    | 'unavailable'
+    | 'needsRebuild';
   indexed: number;
   total: number;
   indexedMessages: number;
@@ -319,6 +325,27 @@ export interface AiModel {
   id: string;
   ownedBy: string | null;
 }
+export interface AiChatSource {
+  number: number;
+  senderName: string;
+  senderAddress: string;
+  subject: string;
+  sentAtMillis: number;
+  messageId: string;
+  threadId: string;
+}
+export interface AiChatEventIdentity {
+  requestId: string;
+  sessionId: string;
+  accountId: string;
+}
+export type AiChatEvent = AiChatEventIdentity &
+  (
+    | { kind: 'started' }
+    | { kind: 'delta'; text: string }
+    | { kind: 'sources'; sources: AiChatSource[]; answer: string }
+    | { kind: 'done'; cancelled: boolean; error: string | null }
+  );
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type LayoutMode = 'three-column' | 'bottom-preview' | 'list-only';
@@ -345,6 +372,7 @@ export interface Settings {
   sidebarWidth: number;
   listWidth: number;
   readerHeight: number;
+  assistantWidth: number;
   syncOnStartup: boolean;
   showUnreadCounts: boolean;
   syncIntervalSeconds: number;
@@ -698,6 +726,7 @@ export interface IpcEventMap {
   'queue://summary': QueueSummary;
   'account://state': Account;
   'ai://config': { accountId: string; removed?: boolean };
+  'ai-chat://event': AiChatEvent;
   'sync://progress': SyncProgressEvent;
   'sync://complete': SyncCompleteEvent;
   'mail://new': NewMailEvent;

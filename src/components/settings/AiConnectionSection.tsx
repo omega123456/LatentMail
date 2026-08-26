@@ -1,17 +1,12 @@
 import { useState } from 'react';
 import { TextInput } from '@/components/shared/TextInput';
 import { invoke } from '@/lib/ipc/commands';
+import { useAiConnectionQuery } from '@/lib/query/hooks';
 import { SettingRow } from './SettingRow';
 import { SettingsSubsection } from './SettingsSection';
 import { AiStatusCard } from './AiStatusCard';
 import { ApiKeyField } from './ApiKeyField';
 import { aiFieldSaveButton, settingsButton, settingsQuietButton } from './styles';
-
-type Probe =
-  | { phase: 'idle' }
-  | { phase: 'testing' }
-  | { phase: 'connected'; models: number }
-  | { phase: 'failed'; reason: string };
 
 export function AiConnectionSection({
   accountId,
@@ -26,7 +21,7 @@ export function AiConnectionSection({
 }) {
   const [draft, setDraft] = useState(baseUrl ?? '');
   const [error, setError] = useState<string | null>(null);
-  const [probe, setProbe] = useState<Probe>({ phase: 'idle' });
+  const connection = useAiConnectionQuery(accountId);
 
   const save = async () => {
     try {
@@ -39,10 +34,7 @@ export function AiConnectionSection({
   };
 
   const test = () => {
-    setProbe({ phase: 'testing' });
-    void invoke('test_ai_connection', { accountId })
-      .then((models) => setProbe({ phase: 'connected', models }))
-      .catch((reason: unknown) => setProbe({ phase: 'failed', reason: String(reason) }));
+    void connection.refetch();
   };
 
   return (
@@ -53,31 +45,29 @@ export function AiConnectionSection({
         <button
           type="button"
           onClick={test}
-          disabled={probe.phase === 'testing'}
+          disabled={connection.isFetching}
           className={`shrink-0 ${settingsButton} disabled:cursor-not-allowed disabled:opacity-60`}
         >
-          {probe.phase === 'testing' ? 'Testing…' : 'Test connection'}
+          {connection.isFetching ? 'Testing…' : 'Test connection'}
         </button>
       }
     >
       <div aria-live="polite">
-        {probe.phase === 'testing' && (
-          <AiStatusCard pip="busy" spinner title="Testing connection" />
-        )}
-        {probe.phase === 'connected' && (
+        {connection.isFetching && <AiStatusCard pip="busy" spinner title="Testing connection" />}
+        {!connection.isFetching && connection.isSuccess && (
           <AiStatusCard
             tone="success"
             pip="success"
             title="Connected"
-            detail={`${probe.models.toLocaleString()} models available`}
+            detail={`${connection.data.toLocaleString()} models available`}
           />
         )}
-        {probe.phase === 'failed' && (
+        {!connection.isFetching && connection.isError && (
           <AiStatusCard
             tone="error"
             pip="error"
             title="Could not reach the endpoint"
-            detail={probe.reason}
+            detail={String(connection.error)}
             action={
               <button type="button" onClick={test} className={`shrink-0 ${settingsQuietButton}`}>
                 Retry

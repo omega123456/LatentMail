@@ -149,9 +149,11 @@ async fn queue_commands_surface_an_unreadable_database() {
     let app = &harness.app;
     harness.corrupt();
 
-    assert!(retry_queue_operation(app.state(), app.state(), "operation".into())
-        .await
-        .is_err());
+    assert!(
+        retry_queue_operation(app.state(), app.state(), "operation".into())
+            .await
+            .is_err()
+    );
     assert!(retry_failed_operations(app.state(), app.state(), None)
         .await
         .is_err());

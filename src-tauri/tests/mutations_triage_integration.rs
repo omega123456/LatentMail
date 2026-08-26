@@ -438,13 +438,22 @@ fn a_cached_draft_id_is_reused_without_re_listing_drafts() {
     });
 }
 
-async fn triage_harness(account_id: &str) -> (tauri::App<tauri::test::MockRuntime>, std::path::PathBuf, tempfile::TempDir, MockServer) {
+async fn triage_harness(
+    account_id: &str,
+) -> (
+    tauri::App<tauri::test::MockRuntime>,
+    std::path::PathBuf,
+    tempfile::TempDir,
+    MockServer,
+) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+            ),
+        )
         .mount(&server)
         .await;
     std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");

@@ -36,6 +36,7 @@
     "dompurify": "^3.3.3",
     "lucide-react": "^1.21.0",
     "mammoth": "1.12.1",
+    "markdown-to-jsx": "^9.10.2",
     "pdfjs-dist": "4.10.38",
     "radix-ui": "^1.6.7",
     "react": "^19.2.7",

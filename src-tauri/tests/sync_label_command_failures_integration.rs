@@ -23,9 +23,11 @@ async fn harness(account_id: &str) -> Harness {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "access_token": "fresh", "token_type": "Bearer" }),
+            ),
+        )
         .mount(&server)
         .await;
     Mock::given(path_regex(r"^/users/me/labels.*$"))

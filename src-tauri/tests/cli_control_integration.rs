@@ -79,7 +79,10 @@ async fn applies_idempotent_global_pause_state() {
 async fn serves_one_json_command_and_rejects_invalid_json() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let directory = tempfile::Builder::new().prefix("lm").tempdir_in("/tmp").unwrap();
+    let directory = tempfile::Builder::new()
+        .prefix("lm")
+        .tempdir_in("/tmp")
+        .unwrap();
     let path = directory.path().join("control.sock");
     let queue = QueueEngine::no_op();
     let mut server = tokio::spawn(serve(path.clone(), Arc::clone(&queue)));

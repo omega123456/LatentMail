@@ -1,9 +1,9 @@
 use latentmail_lib::storage::{
     truncate_body, Account, AccountRepository, Attachment, AttachmentRepository,
-    ComposeDraftMetadata, ComposeDraftMetadataRepository, HtmlPresence, Label, LabelColor,
-    LabelNameError, LabelRepository, Message, MessageRepository, Operation, OperationRepository,
-    SettingRepository, Storage, Thread, ThreadIdentity, ThreadRepository, TraversalCursor,
-    TraversalCursorRepository, TraversalKind,
+    ComposeDraftMetadata, ComposeDraftMetadataRepository, EmbeddingRepository, HtmlPresence, Label,
+    LabelColor, LabelNameError, LabelRepository, Message, MessageRepository, Operation,
+    OperationRepository, RetrievalRepository, SettingRepository, Storage, Thread, ThreadIdentity,
+    ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
 
 fn account() -> Account {
@@ -696,8 +696,9 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         &connection,
         "EXPLAIN QUERY PLAN SELECT (SELECT COUNT(*) FROM messages WHERE account_id=?1)-(SELECT COUNT(DISTINCT message_id) FROM message_labels WHERE account_id=?1 AND label_id IN ('TRASH','SPAM','DRAFT'))",
     );
-    assert!(embedding_total_plan.iter().any(|step| step
-        .contains("SEARCH messages USING COVERING INDEX sqlite_autoindex_messages_1 (account_id=?)")));
+    assert!(embedding_total_plan.iter().any(|step| step.contains(
+        "SEARCH messages USING COVERING INDEX sqlite_autoindex_messages_1 (account_id=?)"
+    )));
     assert!(embedding_total_plan.iter().any(|step| step.contains(
         "SEARCH message_labels USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=?)"
     )));
@@ -905,6 +906,81 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(!backward_search_predicate_plan
         .iter()
         .any(|step| step.contains("TEMP B-TREE")));
+
+    AccountRepository::upsert(&connection, &account()).unwrap();
+    EmbeddingRepository::create(&connection, "account", 2).unwrap();
+    let table = EmbeddingRepository::table_name(1);
+    let candidate_plan = query_plan(
+        &connection,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            RetrievalRepository::candidate_sql(&table, false)
+        ),
+    );
+    assert!(
+        candidate_plan
+            .iter()
+            .any(|step| step.contains("SCAN v VIRTUAL TABLE")),
+        "the assistant's candidate read must drive from the vector table's nearest-neighbour search"
+    );
+    assert!(candidate_plan
+        .iter()
+        .any(|step| step.contains("SEARCH e USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(candidate_plan
+        .iter()
+        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(!candidate_plan
+        .iter()
+        .any(|step| step.contains("SCAN e") || step.contains("SCAN m")));
+    assert!(!candidate_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let filtered_plan = query_plan(
+        &connection,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            RetrievalRepository::candidate_sql(&table, true)
+        ),
+    );
+    assert!(
+        filtered_plan
+            .iter()
+            .any(|step| step.contains("SCAN v VIRTUAL TABLE")),
+        "the filtered candidate read must still drive from the vector search"
+    );
+    assert!(
+        filtered_plan
+            .iter()
+            .any(|step| step.contains("LIST SUBQUERY")),
+        "the filters must reach the vector search as a rowid list, not run after it"
+    );
+    assert!(filtered_plan
+        .iter()
+        .any(|step| step.contains("SEARCH f USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(filtered_plan.iter().any(|step| step.contains(
+        "SEARCH ml USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=? AND message_id=?)"
+    )));
+    assert!(!filtered_plan
+        .iter()
+        .any(|step| step.contains("SCAN f") || step.contains("SCAN ml")));
+    assert!(!filtered_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
+    let sources_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT m.seq,m.id,m.thread_id,m.sender,m.recipients,m.subject,m.sent_at,m.plain_body,m.html_body,m.truncated_body FROM json_each(?2) r CROSS JOIN messages m ON m.seq=r.value WHERE m.account_id=?1",
+    );
+    assert!(
+        sources_plan
+            .iter()
+            .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")),
+        "citation sources must be one batched rowid lookup, not a query per passage"
+    );
+    assert!(!sources_plan
+        .iter()
+        .any(|step| step.contains("SCAN m ") || step.contains("TEMP B-TREE")));
 }
 
 #[test]

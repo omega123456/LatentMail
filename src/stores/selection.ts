@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useAssistantStore } from './assistant';
 import { useComposeStore } from './compose';
 import { useMultiSelectStore } from './multi-select';
 import { useSearchStore } from './search';
@@ -35,6 +36,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     ),
   setActiveAccountId: (activeAccountId) => {
     useMultiSelectStore.getState().clear();
+    if (activeAccountId !== null) useAssistantStore.getState().selectAccount(activeAccountId);
     set({ activeAccountId, flashThreadId: null });
   },
   setActiveMailboxId: (activeMailboxId) => {
@@ -64,6 +66,10 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     useSearchStore.getState().clear();
     const composeSession = useComposeStore.getState().session;
     if (composeSession?.accountId === accountId) useComposeStore.getState().close();
+    if (useAssistantStore.getState().accountId === accountId) {
+      useAssistantStore.setState({ accountId: null });
+      useAssistantStore.getState().newChat();
+    }
     if (get().activeAccountId === accountId) {
       set({
         activeAccountId: null,

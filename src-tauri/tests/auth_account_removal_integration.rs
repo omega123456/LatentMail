@@ -589,7 +589,8 @@ async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barr
     latentmail_lib::auth::save_refresh_token("indexed", "token").unwrap();
 
     let registry = WorkRegistry::new();
-    let queue = create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
+    let queue =
+        create_queue_engine_with_events(250, 250, Arc::clone(&registry), Arc::new(|_, _| {}));
     let engine = SyncEngine::new(
         storage.clone(),
         Arc::clone(&queue),

@@ -240,6 +240,31 @@ fn every_registered_command_is_reachable_through_real_ipc_dispatch() {
         serde_json::json!({ "accountId": "missing" })
     )
     .is_err());
+    assert!(invoke(
+        &webview,
+        "start_ai_chat",
+        serde_json::json!({ "accountId": "missing", "sessionId": "session", "question": "   " })
+    )
+    .is_err());
+    assert!(invoke(
+        &webview,
+        "start_ai_chat",
+        serde_json::json!({
+            "accountId": "missing",
+            "sessionId": "session",
+            "question": "what is the deadline"
+        })
+    )
+    .is_err());
+    assert_eq!(
+        invoke(
+            &webview,
+            "cancel_ai_chat",
+            serde_json::json!({ "requestId": "chat-missing" })
+        )
+        .unwrap(),
+        serde_json::json!(false)
+    );
 
     assert!(invoke(&webview, "begin_sign_in", serde_json::json!({})).is_err());
     assert!(invoke(

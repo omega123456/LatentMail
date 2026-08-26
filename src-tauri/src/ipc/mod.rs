@@ -121,6 +121,8 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::ai::commands::start_ai_index,
         crate::ai::commands::cancel_ai_index,
         crate::ai::commands::rebuild_ai_index,
+        crate::ai::commands::start_ai_chat,
+        crate::ai::commands::cancel_ai_chat,
         crate::settings::read_settings,
         crate::settings::write_setting,
         crate::logging::read_log_entries,

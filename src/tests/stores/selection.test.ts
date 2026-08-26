@@ -3,6 +3,8 @@ import { useComposeStore } from '@/stores/compose';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSearchStore } from '@/stores/search';
 import { useSelectionStore } from '@/stores/selection';
+import { useAssistantStore } from '@/stores/assistant';
+import { ipc } from '@/tests/ipc-mock';
 
 beforeEach(() => {
   useSelectionStore.setState({
@@ -134,5 +136,88 @@ describe('clearStateForRemovedAccount', () => {
 
     expect(useSelectionStore.getState().activeAccountId).toBe('account-1');
     expect(useSelectionStore.getState().activeThreadId).toBeNull();
+  });
+});
+
+describe('selection store — the assistant session follows the active account', () => {
+  const streamingMessages = () => [
+    {
+      id: 'user-1',
+      role: 'user' as const,
+      text: 'Which invoices are unpaid?',
+      error: null,
+      sources: [],
+      streaming: false,
+      createdAt: 0,
+    },
+    {
+      id: 'assistant-1',
+      role: 'assistant' as const,
+      text: 'One is',
+      error: null,
+      sources: [],
+      streaming: true,
+      createdAt: 0,
+    },
+  ];
+
+  beforeEach(() => {
+    useAssistantStore.setState({
+      sessionId: 'session-1',
+      accountId: 'account-1',
+      messages: streamingMessages(),
+      activeRequestId: 'request-1',
+      cancelPending: false,
+      draft: 'half typed',
+      historyCursor: null,
+      displacedDraft: null,
+    });
+  });
+
+  it('cancels the active request and clears the transcript when the account changes', () => {
+    const cancelled: unknown[] = [];
+    ipc.override('cancel_ai_chat', (args) => {
+      cancelled.push(args);
+      return true;
+    });
+
+    useSelectionStore.getState().setActiveAccountId('account-2');
+
+    expect(cancelled).toEqual([{ requestId: 'request-1' }]);
+    expect(useAssistantStore.getState()).toMatchObject({
+      accountId: 'account-2',
+      messages: [],
+      activeRequestId: null,
+      draft: '',
+    });
+  });
+
+  it('keeps the session when the same account is selected again', () => {
+    useSelectionStore.getState().setActiveAccountId('account-1');
+    expect(useAssistantStore.getState().messages).toHaveLength(2);
+  });
+
+  it('cancels and clears when the active account is removed', () => {
+    const cancelled: unknown[] = [];
+    ipc.override('cancel_ai_chat', (args) => {
+      cancelled.push(args);
+      return true;
+    });
+    useSelectionStore.setState({ activeAccountId: 'account-1' });
+
+    useSelectionStore.getState().clearStateForRemovedAccount('account-1');
+
+    expect(cancelled).toEqual([{ requestId: 'request-1' }]);
+    expect(useAssistantStore.getState()).toMatchObject({
+      accountId: null,
+      messages: [],
+      activeRequestId: null,
+    });
+  });
+
+  it('leaves the session alone when another account is removed', () => {
+    useSelectionStore.setState({ activeAccountId: 'account-1' });
+    useSelectionStore.getState().clearStateForRemovedAccount('account-2');
+    expect(useAssistantStore.getState().messages).toHaveLength(2);
   });
 });

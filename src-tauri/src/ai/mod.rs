@@ -1,8 +1,11 @@
+pub mod chat;
 pub mod chunker;
 pub mod commands;
 pub mod credentials;
 pub mod index;
+pub mod prompts;
 pub mod provider;
+pub mod retrieval;
 
 use crate::storage::{AccountAiConfigRepository, AccountRepository, Storage};
 use serde::Serialize;
@@ -19,6 +22,7 @@ pub struct AiService {
     reconfiguring: Arc<Mutex<HashSet<String>>>,
     index_errors: Arc<Mutex<HashMap<String, String>>>,
     index_states: Arc<Mutex<HashMap<String, IndexState>>>,
+    chat: chat::ChatRegistry,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +35,7 @@ pub enum IndexState {
     Paused,
     Interrupted,
     Unavailable,
+    NeedsRebuild,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,7 +60,31 @@ impl AiService {
             reconfiguring: Arc::default(),
             index_errors: Arc::default(),
             index_states: Arc::default(),
+            chat: chat::ChatRegistry::default(),
         }
+    }
+    pub fn chat(&self) -> &chat::ChatRegistry {
+        &self.chat
+    }
+    pub async fn chat_ready(&self, account_id: &str) -> Result<(), String> {
+        let config = self.config_for(account_id).await?;
+        if !config.enabled {
+            return Err("AI is turned off for this account".to_owned());
+        }
+        if config.base_url.is_none() {
+            return Err("Save an API root first".to_owned());
+        }
+        if config.chat_model.is_none() {
+            return Err("Select a chat model first".to_owned());
+        }
+        if self.needs_rebuild(account_id).await? {
+            return Err("The index must be rebuilt".to_owned());
+        }
+        let state = index::status(self, account_id.to_owned()).await?.state;
+        if !matches!(state, IndexState::Complete | IndexState::Partial) {
+            return Err("The index is not ready yet".to_owned());
+        }
+        Ok(())
     }
     pub async fn configs(&self) -> Result<Vec<AiConfigDto>, String> {
         let rows = self
@@ -281,11 +310,23 @@ impl AiService {
             return Ok(false);
         }
         let config = self.config_for(account_id).await?;
+        if self.needs_rebuild(account_id).await? {
+            return Ok(false);
+        }
         Ok(config.enabled
             && !config.index_paused
             && config.base_url.is_some()
             && config.embedding_model.is_some()
             && config.embedding_dimensions.is_some())
+    }
+    pub async fn needs_rebuild(&self, account_id: &str) -> Result<bool, String> {
+        let id = account_id.to_owned();
+        self.storage
+            .run(move |connection| {
+                crate::storage::EmbeddingRepository::needs_rebuild(connection, &id)
+            })
+            .await
+            .map_err(|error| error.to_string())
     }
 }
 pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {

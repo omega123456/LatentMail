@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc, dispatchInvoke } from '@/lib/ipc/dispatch';
@@ -17,6 +17,7 @@ import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useLayoutStore } from '@/stores/layout';
 import { UPDATE_INTERVAL_MS } from '@/lib/update-intervals';
+import { minutesToMilliseconds } from 'date-fns';
 import type {
   MailLabel,
   MailLabelColor,
@@ -50,6 +51,34 @@ export function useAiModelsQuery(accountId: string, revision: number, enabled: b
     queryFn: () => invoke('list_ai_models', { accountId }),
     enabled,
     staleTime: 0,
+    retry: false,
+  });
+}
+
+export const AI_CONNECTION_INTERVAL_MS = minutesToMilliseconds(5);
+
+function subscribeToVisibility(onChange: () => void) {
+  document.addEventListener('visibilitychange', onChange);
+  return () => document.removeEventListener('visibilitychange', onChange);
+}
+
+export function useWindowVisible() {
+  return useSyncExternalStore(
+    subscribeToVisibility,
+    () => document.visibilityState === 'visible',
+    () => true,
+  );
+}
+
+export function useAiConnectionQuery(accountId: string, enabled = true) {
+  const visible = useWindowVisible();
+  return useQuery({
+    queryKey: queryKeys.aiConnection(accountId),
+    queryFn: () => invoke('test_ai_connection', { accountId }),
+    enabled: enabled && visible,
+    refetchInterval: AI_CONNECTION_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    staleTime: AI_CONNECTION_INTERVAL_MS,
     retry: false,
   });
 }

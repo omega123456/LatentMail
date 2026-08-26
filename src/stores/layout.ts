@@ -6,6 +6,10 @@ import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } fro
 
 export type Route = 'auth' | 'mail' | 'settings';
 
+export const ASSISTANT_WIDTH_MIN = 280;
+export const ASSISTANT_WIDTH_MAX = 700;
+export const ASSISTANT_DOCK_MIN_SHELL_WIDTH = 1200;
+
 type LayoutState = Pick<
   Settings,
   | 'layout'
@@ -14,6 +18,7 @@ type LayoutState = Pick<
   | 'sidebarWidth'
   | 'listWidth'
   | 'readerHeight'
+  | 'assistantWidth'
   | 'showUnreadCounts'
   | 'showSenderAvatars'
   | 'zoomPercent'
@@ -32,6 +37,9 @@ type LayoutState = Pick<
 > & {
   route: Route;
   hydrated: boolean;
+  assistantOpen: boolean;
+  setAssistantOpen: (assistantOpen: boolean) => void;
+  setAssistantWidth: (assistantWidth: number) => void;
   hydrate: () => Promise<void>;
   setRoute: (route: Route) => void;
   setLayout: (layout: LayoutMode) => void;
@@ -79,6 +87,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   sidebarWidth: 260,
   listWidth: 350,
   readerHeight: 40,
+  assistantWidth: 360,
+  assistantOpen: false,
   showUnreadCounts: true,
   showSenderAvatars: true,
   zoomPercent: 100,
@@ -106,6 +116,11 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         sidebarWidth: settings.sidebarWidth,
         listWidth: settings.listWidth,
         readerHeight: settings.readerHeight,
+        assistantWidth: clampSize(
+          settings.assistantWidth,
+          ASSISTANT_WIDTH_MIN,
+          ASSISTANT_WIDTH_MAX,
+        ),
         showUnreadCounts: settings.showUnreadCounts,
         showSenderAvatars: settings.showSenderAvatars,
         zoomPercent: settings.zoomPercent,
@@ -164,6 +179,12 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     readerHeight = clampSize(readerHeight, 20, 80);
     set({ readerHeight });
     persist('readerHeight', readerHeight);
+  },
+  setAssistantOpen: (assistantOpen) => set({ assistantOpen }),
+  setAssistantWidth: (assistantWidth) => {
+    assistantWidth = clampSize(assistantWidth, ASSISTANT_WIDTH_MIN, ASSISTANT_WIDTH_MAX);
+    set({ assistantWidth });
+    persist('assistantWidth', assistantWidth);
   },
   setShowUnreadCounts: (showUnreadCounts) => {
     set({ showUnreadCounts });

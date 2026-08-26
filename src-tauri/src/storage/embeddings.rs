@@ -32,7 +32,7 @@ impl EmbeddingRepository {
         format!("message_vectors_{account_seq}")
     }
 
-    fn account_seq(connection: &Connection, account_id: &str) -> Result<i64> {
+    pub(crate) fn account_seq(connection: &Connection, account_id: &str) -> Result<i64> {
         connection
             .prepare_cached("SELECT seq FROM accounts WHERE id=?1")?
             .query_row([account_id], |row| row.get(0))
@@ -42,7 +42,7 @@ impl EmbeddingRepository {
         let table = Self::table_name(sequence);
         let mut definitions = vec![
             format!("CREATE TRIGGER message_vectors_{sequence}_delete BEFORE DELETE ON messages WHEN old.account_id=(SELECT id FROM accounts WHERE seq={sequence}) BEGIN DELETE FROM {table} WHERE rowid IN (SELECT seq FROM message_embeddings WHERE account_id=old.account_id AND message_seq=old.seq); END"),
-            format!("CREATE TRIGGER message_vectors_{sequence}_update BEFORE UPDATE OF subject,sender,to_recipients,cc_recipients,bcc_recipients,plain_body,truncated_body ON messages WHEN old.account_id=(SELECT id FROM accounts WHERE seq={sequence}) AND (new.subject IS NOT old.subject OR new.sender IS NOT old.sender OR new.to_recipients IS NOT old.to_recipients OR new.cc_recipients IS NOT old.cc_recipients OR new.bcc_recipients IS NOT old.bcc_recipients OR new.truncated_body IS NOT old.truncated_body OR (old.truncated_body IS NULL AND new.plain_body IS NOT old.plain_body)) BEGIN DELETE FROM {table} WHERE rowid IN (SELECT seq FROM message_embeddings WHERE account_id=old.account_id AND message_seq=old.seq); DELETE FROM message_embeddings WHERE account_id=old.account_id AND message_seq=old.seq; END"),
+            format!("CREATE TRIGGER message_vectors_{sequence}_update BEFORE UPDATE OF subject,sender,recipients,plain_body,html_body,truncated_body ON messages WHEN old.account_id=(SELECT id FROM accounts WHERE seq={sequence}) AND (new.subject IS NOT old.subject OR new.sender IS NOT old.sender OR new.recipients IS NOT old.recipients OR new.truncated_body IS NOT old.truncated_body OR (old.truncated_body IS NULL AND (new.plain_body IS NOT old.plain_body OR new.html_body IS NOT old.html_body))) BEGIN DELETE FROM {table} WHERE rowid IN (SELECT seq FROM message_embeddings WHERE account_id=old.account_id AND message_seq=old.seq); DELETE FROM message_embeddings WHERE account_id=old.account_id AND message_seq=old.seq; END"),
             format!("CREATE TRIGGER message_vectors_{sequence}_excluded AFTER INSERT ON message_labels WHEN new.account_id=(SELECT id FROM accounts WHERE seq={sequence}) AND new.label_id IN ('TRASH','SPAM','DRAFT') BEGIN DELETE FROM {table} WHERE rowid IN (SELECT seq FROM message_embeddings WHERE account_id=new.account_id AND message_seq=(SELECT seq FROM messages WHERE account_id=new.account_id AND id=new.message_id)); DELETE FROM message_embeddings WHERE account_id=new.account_id AND message_seq=(SELECT seq FROM messages WHERE account_id=new.account_id AND id=new.message_id); END"),
         ];
         definitions.sort();
@@ -71,9 +71,19 @@ impl EmbeddingRepository {
             return Ok(());
         }
         connection.execute_batch(&format!(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(embedding float[{dimensions}]); DROP TRIGGER IF EXISTS message_vectors_{sequence}_delete; DROP TRIGGER IF EXISTS message_vectors_{sequence}_update; DROP TRIGGER IF EXISTS message_vectors_{sequence}_excluded; {};",
+            "CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(embedding float[{dimensions}] distance_metric=cosine); DROP TRIGGER IF EXISTS message_vectors_{sequence}_delete; DROP TRIGGER IF EXISTS message_vectors_{sequence}_update; DROP TRIGGER IF EXISTS message_vectors_{sequence}_excluded; {};",
             Self::trigger_definitions(sequence).join("; ")
         ))
+    }
+
+    pub fn needs_rebuild(connection: &Connection, account_id: &str) -> Result<bool> {
+        let table = Self::table_name(Self::account_seq(connection, account_id)?);
+        let declaration: Option<String> = connection
+            .prepare_cached("SELECT sql FROM sqlite_master WHERE name=?1")?
+            .query_map([&table], |row| row.get(0))?
+            .next()
+            .transpose()?;
+        Ok(declaration.is_some_and(|sql| !sql.contains("distance_metric=cosine")))
     }
 
     pub fn drop(connection: &Connection, account_id: &str) -> Result<()> {

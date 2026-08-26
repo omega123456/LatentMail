@@ -39,6 +39,7 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
     sidebarWidth: 260,
     listWidth: 350,
     readerHeight: 40,
+    assistantWidth: 360,
     syncOnStartup: true,
     showUnreadCounts: true,
     syncIntervalSeconds: 300,
@@ -102,6 +103,8 @@ export const ipcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[C]['result
   start_ai_index: undefined,
   cancel_ai_index: undefined,
   rebuild_ai_index: undefined,
+  start_ai_chat: '',
+  cancel_ai_chat: false,
   list_labels: [],
   lookup_contacts: [],
   reply_context: {

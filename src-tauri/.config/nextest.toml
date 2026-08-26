@@ -66,3 +66,15 @@ test-group = 'ai-loopback'
 [[profile.default.overrides]]
 filter = 'binary(=ai_command_failures_integration)'
 test-group = 'ai-loopback'
+
+[[profile.default.overrides]]
+filter = 'binary(=ai_retrieval_variants_integration)'
+test-group = 'ai-loopback'
+
+[[profile.default.overrides]]
+filter = 'binary(=ai_chat_session_integration)'
+test-group = 'ai-loopback'
+
+[[profile.default.overrides]]
+filter = 'binary(=ai_chat_streaming_integration)'
+test-group = 'ai-loopback'

@@ -398,7 +398,7 @@ fn initialization_restores_vectors_for_persisted_model_dimensions() {
     assert!(EmbeddingRepository::nearest(
         &storage.connection().unwrap(),
         "account",
-        &[0.0, 0.0],
+        &[1.0, 0.0],
         1
     )
     .unwrap()

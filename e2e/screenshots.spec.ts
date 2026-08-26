@@ -20,6 +20,11 @@ import {
   playwrightAiConfigs,
   playwrightAiIndexStatuses,
   playwrightAiModels,
+  playwrightAiChatQuestion,
+  playwrightAiChatReadyConfigs,
+  playwrightAiChatReadyIndexStatuses,
+  playwrightAiChatRequestId,
+  playwrightAiChatStream,
 } from '@/tests/playwright-fixtures';
 
 const themes = ['light', 'dark'] as const;
@@ -263,6 +268,43 @@ for (const theme of themes) {
     await page.keyboard.press('j');
     await expect(page.getByRole('heading', { name: 'Q3 Marketing Strategy Review' })).toBeVisible();
     await screenshot(page, page.getByTestId('mail-layout'), 'full-shell-three-column', theme);
+  });
+
+  test(`ai assistant panel ${theme}`, async ({ page }) => {
+    await page.clock.setFixedTime(parseISO('2026-08-17T12:00:00'));
+    await installPlaywrightIpc(page, {
+      list_accounts: [playwrightMailAccount],
+      read_ai_configs: playwrightAiChatReadyConfigs,
+      read_ai_index_status: playwrightAiChatReadyIndexStatuses,
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'AI assistant' }).click();
+    await page.getByLabel('Ask a question').fill(playwrightAiChatQuestion);
+    await page.getByRole('button', { name: 'Send question' }).click();
+    const identity = await page.evaluate(() => {
+      const call = (window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ ?? []).find(
+        (entry) => entry.command === 'start_ai_chat',
+      );
+      return call?.args as { accountId: string; sessionId: string };
+    });
+    await page.evaluate(
+      (events) =>
+        events.forEach((event) =>
+          window.__LATENTMAIL_PLAYWRIGHT_EMIT__?.('ai-chat://event', event),
+        ),
+      playwrightAiChatStream({
+        requestId: playwrightAiChatRequestId,
+        sessionId: identity.sessionId,
+        accountId: identity.accountId,
+      }),
+    );
+    await expect(page.getByRole('button', { name: /Harbor Insurance/ })).toBeVisible();
+    await screenshot(
+      page,
+      page.getByRole('region', { name: 'AI assistant' }),
+      'ai-assistant-panel',
+      theme,
+    );
   });
 
   test(`search field focused ${theme}`, async ({ page }) => {

@@ -35,6 +35,7 @@ pub struct Settings {
     pub sidebar_width: u32,
     pub list_width: u32,
     pub reader_height: u8,
+    pub assistant_width: u32,
     pub sync_on_startup: bool,
     pub show_unread_counts: bool,
     pub sync_interval_seconds: u32,
@@ -131,6 +132,7 @@ impl Default for Settings {
             sidebar_width: 260,
             list_width: 350,
             reader_height: 40,
+            assistant_width: 360,
             sync_on_startup: true,
             show_unread_counts: true,
             sync_interval_seconds: u32::try_from(chrono::Duration::minutes(5).num_seconds())
@@ -248,6 +250,7 @@ impl Settings {
             "sidebarWidth" => set_value(&mut self.sidebar_width, value),
             "listWidth" => set_value(&mut self.list_width, value),
             "readerHeight" => set_value(&mut self.reader_height, value),
+            "assistantWidth" => set_value(&mut self.assistant_width, value),
             "syncOnStartup" => set_value(&mut self.sync_on_startup, value),
             "showUnreadCounts" => set_value(&mut self.show_unread_counts, value),
             "syncIntervalSeconds" => set_value(&mut self.sync_interval_seconds, value),

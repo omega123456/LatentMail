@@ -41,3 +41,12 @@ export {
 } from './search';
 export { playwrightUpdateAvailable } from './update';
 export { playwrightAiConfigs, playwrightAiIndexStatuses, playwrightAiModels } from './ai';
+export {
+  playwrightAiChatAnswer,
+  playwrightAiChatQuestion,
+  playwrightAiChatReadyConfigs,
+  playwrightAiChatReadyIndexStatuses,
+  playwrightAiChatRequestId,
+  playwrightAiChatSources,
+  playwrightAiChatStream,
+} from './ai-chat';

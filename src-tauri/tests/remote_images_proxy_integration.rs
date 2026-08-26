@@ -182,11 +182,8 @@ async fn respond_refuses_a_target_that_is_not_http() {
 
 #[tokio::test]
 async fn sniffs_images_that_arrive_as_a_generic_binary_stream() {
-    let png = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/icons/tray-icon.png"
-    ))
-    .expect("tray icon reads");
+    let png = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/tray-icon.png"))
+        .expect("tray icon reads");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/qrcode.png"))

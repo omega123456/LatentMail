@@ -3,7 +3,9 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type CSSProperties,
+  type FocusEvent,
   type ReactNode,
 } from 'react';
 import { ReauthBanner } from '@/components/auth/ReauthBanner';
@@ -11,6 +13,8 @@ import { DelayedFallback, lazyWithDelayedFallback } from '@/components/states/De
 import { ConversationListContainer } from '@/components/list/ConversationList';
 import { ListHeader } from '@/components/list/ListHeader';
 import {
+  useAiConfigsQuery,
+  useAiConnectionQuery,
   useCreateLabelMutation,
   useDeleteLabelMutation,
   useLabelsQuery,
@@ -21,14 +25,14 @@ import {
   useSearchThreadsQuery,
 } from '@/lib/query/hooks';
 import { mapConversation, mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
-import { useLayoutStore } from '@/stores/layout';
+import { ASSISTANT_DOCK_MIN_SHELL_WIDTH, useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
 import type { Account } from '@/lib/types/ipc';
 import { AccountSwitcher } from '@/components/sidebar/AccountSwitcher';
 import { CollapsedRail } from '@/components/sidebar/CollapsedRail';
 import { FolderList } from '@/components/sidebar/FolderList';
 import { LabelList } from '@/components/sidebar/LabelList';
-import { PanelLeftClose, Pencil, Settings } from 'lucide-react';
+import { PanelLeftClose, Pencil, Settings, Sparkles } from 'lucide-react';
 import brandMark from '@/assets/brand-mark.png';
 import { ResizeHandle } from './ResizeHandle';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
@@ -41,8 +45,15 @@ import { useSearchStore } from '@/stores/search';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
 import { navRow } from '@/components/sidebar/rowStyles';
+import { AssistantPanel } from '@/components/ai-chat/AssistantPanel';
+import { useSettingsUiStore } from '@/stores/settings-ui';
 
 const navItem = navRow(false);
+
+function AccountConnectionPoll({ accountId }: { accountId: string }) {
+  useAiConnectionQuery(accountId);
+  return null;
+}
 const ComposeOverlay = lazyWithDelayedFallback(() =>
   import('@/components/compose/ComposeOverlay').then(({ ComposeOverlay }) => ({
     default: ComposeOverlay,
@@ -68,11 +79,15 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     sidebarWidth,
     listWidth,
     readerHeight,
+    assistantWidth,
+    assistantOpen,
     showUnreadCounts,
     setSidebarCollapsed,
     setSidebarWidth,
     setListWidth,
     setReaderHeight,
+    setAssistantOpen,
+    setAssistantWidth,
   } = useLayoutStore();
   const {
     activeThreadId,
@@ -86,7 +101,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const hasReader =
     layout === 'three-column' || (layout === 'bottom-preview' && activeThreadId !== null);
   const setPane = (
-    key: '--sidebar-w' | '--list-w' | '--reader-h',
+    key: '--sidebar-w' | '--list-w' | '--reader-h' | '--assistant-w',
     value: number,
     update: (value: number) => void,
   ) => {
@@ -104,6 +119,35 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const searchTotalQuery = useSearchTotalQuery(activeAccountId, searchSubmittedQuery, searchScope);
   const searchTotal = searchTotalQuery.data ?? 0;
   const searchFieldRef = useRef<HTMLInputElement>(null);
+  const assistantTrigger = useRef<HTMLButtonElement>(null);
+  const assistantRegion = useRef<HTMLDivElement>(null);
+  const [shellWidth, setShellWidth] = useState(Number.POSITIVE_INFINITY);
+  const aiConfigs = useAiConfigsQuery();
+  const assistantDocked = layout === 'three-column' && shellWidth >= ASSISTANT_DOCK_MIN_SHELL_WIDTH;
+  const closeAssistant = useCallback(() => {
+    setAssistantOpen(false);
+    assistantTrigger.current?.focus();
+  }, [setAssistantOpen]);
+  const toggleAssistant = useCallback(() => {
+    if (useLayoutStore.getState().assistantOpen) closeAssistant();
+    else setAssistantOpen(true);
+  }, [closeAssistant, setAssistantOpen]);
+  const openAiSettings = useCallback(() => {
+    useSettingsUiStore.getState().setActiveSection('ai');
+    useLayoutStore.getState().setRoute('settings');
+  }, []);
+  useEffect(() => {
+    const node = shell.current;
+    if (node === null) return;
+    const observer = new ResizeObserver((entries) =>
+      setShellWidth(entries[0]?.contentRect.width ?? Number.POSITIVE_INFINITY),
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (assistantOpen) assistantRegion.current?.querySelector('textarea')?.focus();
+  }, [assistantOpen]);
   const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
   const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
   const createLabelMutation = useCreateLabelMutation(activeAccountId);
@@ -161,6 +205,10 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     focusSearch: (event) => {
       event.preventDefault();
       searchFieldRef.current?.focus();
+    },
+    toggleAssistant: (event) => {
+      event.preventDefault();
+      toggleAssistant();
     },
   });
   const mailboxName =
@@ -281,7 +329,73 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const topBar = (
     <header className="flex h-16 shrink-0 items-center border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface">
       <SearchField ref={searchFieldRef} labels={labelsQuery.data ?? []} />
+      <button
+        ref={assistantTrigger}
+        type="button"
+        aria-label="AI assistant"
+        aria-expanded={assistantOpen}
+        title="AI assistant"
+        onClick={toggleAssistant}
+        className={`ml-2 grid size-9 shrink-0 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary ${
+          assistantOpen
+            ? 'bg-primary-fixed text-primary dark:bg-dark-primary-fixed dark:text-dark-primary'
+            : 'text-on-surface-variant hover:bg-surface-container dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'
+        }`}
+      >
+        <Sparkles aria-hidden="true" size={18} />
+      </button>
     </header>
+  );
+  const assistant = activeAccountId !== null && (
+    <AssistantPanel
+      accountId={activeAccountId}
+      onClose={closeAssistant}
+      onOpenAiSettings={openAiSettings}
+    />
+  );
+  const keepFocusOutWhileClosed = (event: FocusEvent<HTMLDivElement>) => {
+    if (!assistantOpen) event.target.blur();
+  };
+  const dockedAssistant = (
+    <div
+      ref={assistantRegion}
+      data-testid="assistant-docked"
+      hidden={!assistantOpen}
+      inert={!assistantOpen}
+      onFocusCapture={keepFocusOutWhileClosed}
+      className={
+        assistantOpen
+          ? 'grid min-h-0 min-w-0 border-l border-outline-variant dark:border-dark-outline-variant'
+          : 'hidden'
+      }
+    >
+      {assistant}
+    </div>
+  );
+  const drawerAssistant = (
+    <>
+      {assistantOpen && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 bg-on-surface/20 dark:bg-dark-on-surface/20"
+        />
+      )}
+      <div
+        ref={assistantRegion}
+        data-testid="assistant-drawer"
+        hidden={!assistantOpen}
+        inert={!assistantOpen}
+        onFocusCapture={keepFocusOutWhileClosed}
+        style={{ width: 'var(--assistant-w)' }}
+        className={
+          assistantOpen
+            ? 'absolute inset-y-0 right-0 z-20 grid min-h-0 border-l border-outline-variant shadow-lg dark:border-dark-outline-variant'
+            : 'hidden'
+        }
+      >
+        {assistant}
+      </div>
+    </>
   );
   const list = (
     <section
@@ -311,7 +425,12 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     layout === 'three-column' ? (
       <main
         className="grid min-h-0 flex-1"
-        style={{ gridTemplateColumns: 'var(--list-w) auto 1fr' }}
+        style={{
+          gridTemplateColumns:
+            assistantDocked && assistantOpen
+              ? 'var(--list-w) auto 1fr auto var(--assistant-w)'
+              : 'var(--list-w) auto 1fr',
+        }}
       >
         {list}
         <ResizeHandle
@@ -320,6 +439,16 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           onResize={(offset) => setPane('--list-w', listWidth + offset, setListWidth)}
         />
         {reader}
+        {assistantDocked && assistantOpen && (
+          <ResizeHandle
+            ariaLabel="Resize AI assistant"
+            orientation="vertical"
+            onResize={(offset) =>
+              setPane('--assistant-w', assistantWidth - offset, setAssistantWidth)
+            }
+          />
+        )}
+        {assistantDocked && dockedAssistant}
       </main>
     ) : layout === 'bottom-preview' && hasReader ? (
       <main
@@ -344,6 +473,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           '--sidebar-w': sidebarCollapsed ? '56px' : `${sidebarWidth}px`,
           '--list-w': `${listWidth}px`,
           '--reader-h': `${readerHeight}%`,
+          '--assistant-w': `${assistantWidth}px`,
         } as CSSProperties
       }
       className="grid h-full grid-rows-app-shell overflow-hidden bg-surface dark:bg-dark-surface"
@@ -366,10 +496,18 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
         )}
         <div className="flex min-h-0 min-w-0 flex-col">
           {topBar}
-          {body}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {body}
+            {!assistantDocked && drawerAssistant}
+          </div>
         </div>
       </div>
       <StatusBar accountId={activeAccountId} />
+      {(aiConfigs.data ?? [])
+        .filter((config) => config.enabled)
+        .map((config) => (
+          <AccountConnectionPoll key={config.accountId} accountId={config.accountId} />
+        ))}
       {composeOpen && (
         <Suspense
           fallback={

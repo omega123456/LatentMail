@@ -34,8 +34,15 @@ export async function installPlaywrightIpc(
       platform,
     }) => {
       const responses = { ...fixtures, ...supplied } as Record<string, unknown>;
+      const calls: { command: string; args: unknown }[] = [];
+      const listeners = new Map<string, ((payload: unknown) => void)[]>();
+      window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ = calls;
+      window.__LATENTMAIL_PLAYWRIGHT_EMIT__ = (event, payload) => {
+        for (const listener of listeners.get(event) ?? []) listener(payload);
+      };
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
-        invoke: async (command) => {
+        invoke: async (command, args) => {
+          calls.push({ command, args });
           if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (pendingCommands.includes(command)) return new Promise(() => undefined);
           if (command in responses) return responses[command];
@@ -43,7 +50,16 @@ export async function installPlaywrightIpc(
           if (voidCommands.includes(command)) return undefined;
           throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
         },
-        listen: async () => () => undefined,
+        listen: async (event, listener) => {
+          const subscription = (payload: unknown) => listener(payload);
+          listeners.set(event, [...(listeners.get(event) ?? []), subscription]);
+          return () => {
+            listeners.set(
+              event,
+              (listeners.get(event) ?? []).filter((entry) => entry !== subscription),
+            );
+          };
+        },
       };
       window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__ = state;
       window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__ = session;

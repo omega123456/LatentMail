@@ -22,6 +22,7 @@ const labels: Record<State, string> = {
   paused: 'Paused',
   interrupted: 'Interrupted',
   unavailable: 'Unavailable',
+  needsRebuild: 'Rebuild required',
 };
 
 const pips: Record<State, AiStatusPip> = {
@@ -33,7 +34,11 @@ const pips: Record<State, AiStatusPip> = {
   paused: 'warn',
   interrupted: 'warn',
   unavailable: 'warn',
+  needsRebuild: 'warn',
 };
+
+const REBUILD_MESSAGE =
+  'This index was built with the previous distance measure. Rebuild it before asking questions about this account.';
 
 const RESUMABLE: State[] = ['notStarted', 'partial', 'paused', 'interrupted', 'unavailable'];
 const TRACKED: State[] = ['preparing', 'building', 'partial'];
@@ -163,9 +168,22 @@ export function AiIndexSection({
             pip={pips[current]}
             title={labels[current]}
             detail={
-              started
-                ? `${count(indexedMessages)} messages · ${count(indexedPassages)} passages`
-                : 'No indexed messages yet'
+              current === 'needsRebuild'
+                ? REBUILD_MESSAGE
+                : started
+                  ? `${count(indexedMessages)} messages · ${count(indexedPassages)} passages`
+                  : 'No indexed messages yet'
+            }
+            action={
+              current === 'needsRebuild' && !confirming ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirming(true)}
+                  className={`shrink-0 ${settingsQuietButton}`}
+                >
+                  Rebuild
+                </button>
+              ) : undefined
             }
           />
         )}

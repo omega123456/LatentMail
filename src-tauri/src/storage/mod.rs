@@ -3,6 +3,7 @@ pub mod ai_config;
 pub mod embeddings;
 pub mod reconcile_staging;
 mod repositories;
+pub mod retrieval;
 
 pub use ai_config::{AccountAiConfig, AccountAiConfigRepository};
 pub use embeddings::{EmbeddingBacklog, EmbeddingCounts, EmbeddingRepository, MessageEmbedding};
@@ -15,6 +16,7 @@ pub use repositories::{
     ReconciliationMessage, SearchRepository, SettingRepository, Thread, ThreadIdentity,
     ThreadListRow, ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
 };
+pub use retrieval::{CandidatePassage, PassageSource, RetrievalFilters, RetrievalRepository};
 
 use std::{
     path::{Path, PathBuf},

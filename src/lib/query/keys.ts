@@ -4,6 +4,7 @@ export const queryKeys = {
   accounts: ['accounts'] as const,
   aiConfigs: ['aiConfigs'] as const,
   aiIndexStatuses: ['aiIndexStatuses'] as const,
+  aiConnection: (accountId: string) => ['aiConnection', accountId] as const,
   aiModels: (accountId: string, revision: number) => ['aiModels', accountId, revision] as const,
   labels: (accountId: string) => ['labels', accountId] as const,
   contacts: (accountId: string, query: string) => ['contacts', accountId, query] as const,

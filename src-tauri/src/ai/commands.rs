@@ -1,5 +1,5 @@
 use super::{
-    credentials,
+    chat, credentials,
     provider::{Provider, ProviderModel},
     AiConfigDto, AiService,
 };
@@ -196,4 +196,27 @@ pub async fn rebuild_ai_index<R: Runtime>(
     )
     .await
     .map_err(|error| error.to_string())
+}
+#[tauri::command]
+pub async fn start_ai_chat<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, AiService>,
+    account_id: String,
+    session_id: String,
+    question: String,
+) -> Result<String, String> {
+    let question = chat::validate_question(&question)?;
+    service.chat_ready(&account_id).await?;
+    let request = service.chat().begin(&account_id, &session_id, &question)?;
+    let request_id = request.request_id.clone();
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn(async move { chat::run(&app, &service, request).await });
+    Ok(request_id)
+}
+#[tauri::command]
+pub async fn cancel_ai_chat(
+    service: State<'_, AiService>,
+    request_id: String,
+) -> Result<bool, String> {
+    service.chat().cancel(&request_id)
 }

@@ -129,3 +129,34 @@ it('keeps an interrupted error visible and resumes a paused index', async () => 
   expect(screen.getByText('Paused')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
 });
+
+it('explains a needsRebuild index, offers no Resume, and reaches the Rebuild control', async () => {
+  const user = userEvent.setup();
+  const rebuild = vi.fn();
+  ipc.override('rebuild_ai_index', (args) => {
+    rebuild(args.accountId);
+  });
+  renderWithQueryClient(
+    <AiIndexSection
+      accountId="account-a"
+      status={{
+        accountId: 'account-a',
+        state: 'needsRebuild',
+        indexed: 99,
+        total: 100,
+        indexedMessages: 5000,
+        totalEligibleMessages: 5000,
+        indexedPassages: 15000,
+        paused: false,
+        error: null,
+      }}
+    />,
+  );
+  expect(screen.getByText('Rebuild required')).toBeInTheDocument();
+  expect(screen.getByText(/built with the previous distance measure/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  await user.click(screen.getAllByRole('button', { name: 'Rebuild' })[0]);
+  expect(screen.getByRole('alert')).toHaveTextContent('Rebuild the whole index?');
+  await user.click(screen.getByRole('button', { name: 'Rebuild' }));
+  expect(rebuild).toHaveBeenCalledWith('account-a');
+});

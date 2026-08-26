@@ -148,9 +148,7 @@ async fn selecting_an_embedding_model_rejects_a_missing_vector_from_the_provider
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})))
         .mount(&server)
         .await;
     let harness = harness();
@@ -215,9 +213,11 @@ async fn ai_commands_surface_an_unreadable_database_instead_of_panicking() {
     )
     .await
     .is_err());
-    assert!(commands::cancel_ai_index(app.handle().clone(), app.state(), "account".into())
-        .await
-        .is_err());
+    assert!(
+        commands::cancel_ai_index(app.handle().clone(), app.state(), "account".into())
+            .await
+            .is_err()
+    );
     assert!(commands::rebuild_ai_index(
         app.handle().clone(),
         app.state(),

@@ -8,6 +8,7 @@ export const playwrightSettings: IpcCommandMap['read_settings']['result'] = {
   sidebarWidth: 260,
   listWidth: 350,
   readerHeight: 40,
+  assistantWidth: 360,
   syncOnStartup: true,
   showUnreadCounts: true,
   syncIntervalSeconds: 300,

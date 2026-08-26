@@ -35,6 +35,7 @@ pub async fn status(service: &AiService, account_id: String) -> Result<IndexStat
             let config = AccountAiConfigRepository::get(connection, &account_id)?
                 .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             let counts = EmbeddingRepository::counts(connection, &account_id)?;
+            let needs_rebuild = EmbeddingRepository::needs_rebuild(connection, &account_id)?;
             Ok(IndexStatus {
                 account_id: account_id.clone(),
                 indexed: counts.indexed_messages,
@@ -46,6 +47,8 @@ pub async fn status(service: &AiService, account_id: String) -> Result<IndexStat
                 error,
                 state: if has_error {
                     IndexState::Interrupted
+                } else if needs_rebuild {
+                    IndexState::NeedsRebuild
                 } else if !config.enabled || config.embedding_model.is_none() {
                     IndexState::Unavailable
                 } else if config.index_paused {

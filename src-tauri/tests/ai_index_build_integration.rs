@@ -378,7 +378,9 @@ async fn a_running_index_stalled_by_removal_reports_partial_then_complete_progre
     );
 
     service.begin_removal("stall").unwrap();
-    service.set_index_state("stall", IndexState::Building).unwrap();
+    service
+        .set_index_state("stall", IndexState::Building)
+        .unwrap();
     enqueue(
         app.handle().clone(),
         service.clone(),
@@ -405,7 +407,9 @@ async fn a_running_index_stalled_by_removal_reports_partial_then_complete_progre
     )
     .unwrap();
     drop(connection);
-    service.set_index_state("stall", IndexState::Building).unwrap();
+    service
+        .set_index_state("stall", IndexState::Building)
+        .unwrap();
     enqueue(app.handle().clone(), service.clone(), sync, "stall".into())
         .await
         .unwrap();
@@ -474,7 +478,9 @@ async fn build_skips_a_message_whose_chunks_alone_exceed_the_batch_budget() {
     let app = tauri::test::mock_builder()
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .unwrap();
-    build(app.handle(), &service, "chunky".into()).await.unwrap();
+    build(app.handle(), &service, "chunky".into())
+        .await
+        .unwrap();
     assert_eq!(
         EmbeddingRepository::count_passages(&storage.connection().unwrap(), "chunky").unwrap(),
         0
@@ -502,13 +508,9 @@ async fn embed_with_retry_recovers_after_a_transient_server_error() {
         .mount(&server)
         .await;
     let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
-    let vectors = embed_with_retry(
-        &provider,
-        "embed",
-        vec!["hello".into()],
-        2,
-        |_| Duration::from_millis(1),
-    )
+    let vectors = embed_with_retry(&provider, "embed", vec!["hello".into()], 2, |_| {
+        Duration::from_millis(1)
+    })
     .await
     .unwrap();
     assert_eq!(vectors, vec![vec![1.0, 2.0]]);
@@ -537,7 +539,11 @@ async fn a_persistently_failing_provider_interrupts_the_index_and_records_the_er
         .await
         .unwrap();
     service
-        .set_base_url(app.handle(), "failing".into(), format!("{}/v1", server.uri()))
+        .set_base_url(
+            app.handle(),
+            "failing".into(),
+            format!("{}/v1", server.uri()),
+        )
         .await
         .unwrap();
     service
@@ -548,14 +554,20 @@ async fn a_persistently_failing_provider_interrupts_the_index_and_records_the_er
     let registry = WorkRegistry::new();
     let queue = create_queue_engine(250, 250, registry.clone());
     let sync = SyncEngine::new(storage.clone(), queue.clone(), registry, noop_event_sink());
-    enqueue(app.handle().clone(), service.clone(), sync, "failing".into())
-        .await
-        .unwrap();
-    queue.wait_for_account_lane("failing", Lane::Embedding).await;
+    enqueue(
+        app.handle().clone(),
+        service.clone(),
+        sync,
+        "failing".into(),
+    )
+    .await
+    .unwrap();
+    queue
+        .wait_for_account_lane("failing", Lane::Embedding)
+        .await;
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if status(&service, "failing".into()).await.unwrap().state == IndexState::Interrupted
-            {
+            if status(&service, "failing".into()).await.unwrap().state == IndexState::Interrupted {
                 return;
             }
             tokio::task::yield_now().await;

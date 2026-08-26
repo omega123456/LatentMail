@@ -10,6 +10,8 @@ type PlaywrightIpc = {
 declare global {
   interface Window {
     __LATENTMAIL_PLAYWRIGHT_IPC__?: PlaywrightIpc;
+    __LATENTMAIL_PLAYWRIGHT_IPC_CALLS__?: { command: string; args: unknown }[];
+    __LATENTMAIL_PLAYWRIGHT_EMIT__?: (event: string, payload: unknown) => void;
     __LATENTMAIL_PLAYWRIGHT_READER_STATE__?: 'loading' | 'error';
     __LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__?: OpenComposeArgs;
   }

@@ -10,7 +10,15 @@ const restingClass = 'opacity-0 text-secondary dark:text-dark-secondary';
 
 const copiedClass = 'opacity-100 text-primary dark:text-dark-primary';
 
-export function CopyButton({ value, label }: { value: string; label: string }) {
+export function CopyButton({
+  value,
+  label,
+  confirmation,
+}: {
+  value: string;
+  label: string;
+  confirmation?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -32,7 +40,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
         {copied ? <Check aria-hidden="true" size={13} /> : <Copy aria-hidden="true" size={13} />}
       </button>
       <span role="status" aria-live="polite" className="sr-only">
-        {copied ? `Copied ${value}` : ''}
+        {copied ? (confirmation ?? `Copied ${value}`) : ''}
       </span>
     </>
   );

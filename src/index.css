@@ -327,6 +327,12 @@
   --spacing-select-menu: 160px;
   --spacing-ai-field: 240px;
   --spacing-ai-action: 104px;
+  --spacing-ai-panel: 360px;
+  --spacing-ai-panel-min: 280px;
+  --spacing-ai-panel-max: 700px;
+  --spacing-ai-prompt-min: 56px;
+  --spacing-ai-prompt-max: 178px;
+  --spacing-ai-cite: 20px;
   --spacing-preview-modal-w: 1440px;
   --spacing-preview-modal-h: 1100px;
   --spacing-pdf-page-max: 1100px;

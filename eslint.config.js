@@ -13,7 +13,7 @@ export default tseslint.config(
   {
     files: ['src/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
-    settings: { 'jsx-a11y': { components: { TextInput: 'input' } } },
+    settings: { 'jsx-a11y': { components: { TextInput: 'input', TextArea: 'textarea' } } },
     rules: { 'no-console': 'error' },
   },
   {

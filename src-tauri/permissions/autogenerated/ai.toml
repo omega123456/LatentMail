@@ -62,3 +62,13 @@ commands.allow = ["cancel_ai_index"]
 identifier = "allow-rebuild-ai-index"
 description = "Enables rebuilding an account AI index."
 commands.allow = ["rebuild_ai_index"]
+
+[[permission]]
+identifier = "allow-start-ai-chat"
+description = "Enables starting an account AI chat request."
+commands.allow = ["start_ai_chat"]
+
+[[permission]]
+identifier = "allow-cancel-ai-chat"
+description = "Enables cancelling the active AI chat request."
+commands.allow = ["cancel_ai_chat"]

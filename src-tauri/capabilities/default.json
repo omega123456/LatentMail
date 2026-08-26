@@ -32,6 +32,8 @@
     "allow-start-ai-index",
     "allow-cancel-ai-index",
     "allow-rebuild-ai-index",
+    "allow-start-ai-chat",
+    "allow-cancel-ai-chat",
     "allow-list-labels",
     "allow-lookup-contacts",
     "allow-reply-context",

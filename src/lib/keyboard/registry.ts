@@ -17,7 +17,8 @@ export type CommandName =
   | 'replyAllToMessage'
   | 'forwardMessage'
   | 'editDraft'
-  | 'focusSearch';
+  | 'focusSearch'
+  | 'toggleAssistant';
 
 export type CommandBindings = Record<CommandName, string[]>;
 
@@ -41,6 +42,7 @@ export const DEFAULT_COMMAND_BINDINGS: CommandBindings = {
   forwardMessage: ['f', 'F'],
   editDraft: [],
   focusSearch: ['Meta+F', 'Control+F', '/'],
+  toggleAssistant: ['Meta+Shift+A', 'Control+Shift+A'],
 };
 
 export type CommandOverrides = Partial<CommandBindings>;
@@ -76,6 +78,10 @@ export const COMMAND_METADATA: Record<CommandName, CommandMetadata> = {
   forwardMessage: { label: 'Forward', description: 'Forward the selected message.' },
   editDraft: { label: 'Edit draft', description: 'Resume editing the selected draft.' },
   focusSearch: { label: 'Search', description: 'Jump to the search field.' },
+  toggleAssistant: {
+    label: 'AI assistant',
+    description: 'Show or hide the AI assistant panel.',
+  },
 };
 
 export function resolveCommandBindings(overrides: CommandOverrides = {}): CommandBindings {
