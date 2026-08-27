@@ -32,17 +32,43 @@ pub fn passage_block(passages: &[Passage]) -> String {
         .enumerate()
         .map(|(index, passage)| {
             format!(
-                "[{}] From: {}\nTo: {}\nSubject: {}\nDate: {}\n{}",
+                "[{}] From: {}\nTo: {}\nSubject: {}\nDate: {}\n{}\n{}",
                 index + 1,
                 passage.sender,
                 passage.recipients,
                 passage.subject,
                 sent_at_label(passage.sent_at),
+                metadata_label(passage),
                 passage.text
             )
         })
         .collect::<Vec<_>>()
         .join(PASSAGE_SEPARATOR)
+}
+
+fn metadata_label(passage: &Passage) -> String {
+    format!(
+        "Attachments: {} | Starred: {} | Unread: {}",
+        attachments(passage.has_attachments, passage.attachment_count),
+        yes_or_no(passage.is_starred),
+        yes_or_no(passage.is_unread)
+    )
+}
+
+fn attachments(has_attachments: bool, count: i64) -> String {
+    match (has_attachments, count) {
+        (false, _) => "none".to_owned(),
+        (true, count) if count > 0 => count.to_string(),
+        (true, _) => "yes".to_owned(),
+    }
+}
+
+fn yes_or_no(flag: bool) -> &'static str {
+    if flag {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn sent_at_label(sent_at: i64) -> String {

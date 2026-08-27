@@ -68,6 +68,10 @@ fn source(message_seq: i64, id: &str, sender: &str) -> PassageSource {
         plain_body: None,
         html_body: None,
         truncated_body: Some(BODY.into()),
+        has_attachments: false,
+        attachment_count: 0,
+        is_starred: false,
+        is_unread: false,
     }
 }
 
@@ -81,6 +85,10 @@ fn passage(message_seq: i64) -> Passage {
         recipients: "me@example.com".into(),
         subject: "Subject alice".into(),
         text: BODY.into(),
+        has_attachments: false,
+        attachment_count: 0,
+        is_starred: false,
+        is_unread: false,
     }
 }
 

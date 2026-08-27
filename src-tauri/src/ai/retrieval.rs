@@ -15,6 +15,7 @@ pub const SIMILARITY_FLOOR: f64 = 0.5;
 pub const PASSAGE_LIMIT: usize = 15;
 pub const LEXICAL_LIMIT: i64 = 50;
 pub const CHRONOLOGICAL_LIMIT: i64 = 15;
+pub const RECENCY_LIMIT: i64 = 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -47,6 +48,10 @@ pub struct Passage {
     pub recipients: String,
     pub subject: String,
     pub text: String,
+    pub has_attachments: bool,
+    pub attachment_count: i64,
+    pub is_starred: bool,
+    pub is_unread: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,6 +81,7 @@ enum Arm {
     Vector(Vec<f32>, RetrievalFilters),
     Lexical(RetrievalFilters),
     Chronological(RetrievalFilters),
+    Recency(RetrievalFilters, bool),
 }
 
 enum ArmOutput {
@@ -134,6 +140,15 @@ async fn run_arm(
                     &filters,
                 )?,
             )),
+            Arm::Recency(filters, ascending) => {
+                Ok(ArmOutput::Sequences(RetrievalRepository::recency(
+                    connection,
+                    &account_id,
+                    RECENCY_LIMIT,
+                    &filters,
+                    ascending,
+                )?))
+            }
         })
         .await
         .map_err(storage_error)
@@ -244,6 +259,10 @@ fn assemble(selected: &[Selected], sources: &[PassageSource]) -> Vec<Passage> {
                 recipients: source.recipients.clone(),
                 subject: source.subject.clone(),
                 text: body.to_owned(),
+                has_attachments: source.has_attachments,
+                attachment_count: source.attachment_count,
+                is_starred: source.is_starred,
+                is_unread: source.is_unread,
             })
         })
         .collect()
@@ -345,6 +364,9 @@ pub async fn retrieve(
             extra.push(Arm::Vector(vector, plan.filters.clone()));
         }
         extra.push(Arm::Lexical(plan.filters.clone()));
+    }
+    if constrained {
+        extra.push(Arm::Recency(plan.filters.clone(), plan.ascending));
     }
     if plan.ascending {
         extra.push(Arm::Chronological(plan.filters.clone()));

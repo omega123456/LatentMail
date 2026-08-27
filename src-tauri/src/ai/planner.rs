@@ -43,6 +43,8 @@ struct PlanResponse {
     is_starred: Option<Value>,
     #[serde(default)]
     date_order: Option<String>,
+    #[serde(default)]
+    direction: Option<String>,
 }
 
 pub fn response_format() -> Value {
@@ -64,18 +66,19 @@ pub fn response_format() -> Value {
                     "hasAttachment": {"type": ["boolean", "null"]},
                     "isRead": {"type": ["boolean", "null"]},
                     "isStarred": {"type": ["boolean", "null"]},
-                    "dateOrder": {"type": ["string", "null"], "enum": ["asc", null]}
+                    "dateOrder": {"type": ["string", "null"], "enum": ["asc", null]},
+                    "direction": {"type": ["string", "null"], "enum": ["sent", "received", null]}
                 },
                 "required": [
                     "query", "dateFrom", "dateTo", "sender", "recipient", "folder",
-                    "hasAttachment", "isRead", "isStarred", "dateOrder"
+                    "hasAttachment", "isRead", "isStarred", "dateOrder", "direction"
                 ]
             }
         }
     })
 }
 
-pub fn parse(raw: &str) -> RetrievalPlan {
+pub fn parse(raw: &str, account_email: &str) -> RetrievalPlan {
     let Ok(parsed) = serde_json::from_str::<Value>(raw.trim()) else {
         return RetrievalPlan::default();
     };
@@ -88,13 +91,16 @@ pub fn parse(raw: &str) -> RetrievalPlan {
     else {
         return RetrievalPlan::default();
     };
+    let direction = response.direction.as_deref();
+    let self_address = |side| (direction == Some(side)).then(|| account_email.to_owned());
     RetrievalPlan {
         query: text(response.query),
         filters: RetrievalFilters {
             date_from: day_start(response.date_from),
             date_to: day_end(response.date_to),
-            sender: text(response.sender),
-            recipient: text(response.recipient),
+            sender: self_address("sent").or_else(|| other_party(response.sender, account_email)),
+            recipient: self_address("received")
+                .or_else(|| other_party(response.recipient, account_email)),
             folder: text(response.folder),
             has_attachment: flag(response.has_attachment),
             is_read: flag(response.is_read),
@@ -124,7 +130,7 @@ pub async fn plan(
         .await
         .map_or_else(
             |_| RetrievalPlan::default(),
-            |raw| sanitize(parse(&raw), request, folders),
+            |raw| sanitize(parse(&raw, request.account_email), request, folders),
         )
 }
 
@@ -133,12 +139,6 @@ fn sanitize(
     request: &RetrievalRequest<'_>,
     folders: &[String],
 ) -> RetrievalPlan {
-    let question = request.question.to_lowercase();
-    let account_email = request.account_email.to_lowercase();
-    let words = question
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
     plan.query = plan.query.filter(|query| {
         !request.history.is_empty() && !query.trim().eq_ignore_ascii_case(request.question.trim())
     });
@@ -146,119 +146,18 @@ fn sanitize(
         folders
             .iter()
             .find(|available| available.eq_ignore_ascii_case(&folder))
-            .filter(|available| folder_is_stated(&words, available))
             .cloned()
     });
-    plan.filters.has_attachment = plan.filters.has_attachment.filter(|_| {
-        has_word(
-            &words,
-            &["attachment", "attachments", "attached", "file", "files"],
-        )
-    });
-    plan.filters.is_read = plan
-        .filters
-        .is_read
-        .filter(|_| has_word(&words, &["read", "unread"]));
-    plan.filters.is_starred = plan
-        .filters
-        .is_starred
-        .filter(|_| has_word(&words, &["star", "starred", "flag", "flagged"]));
-    if !date_scope_is_stated(&question, &words) {
+    if matches!((plan.filters.date_from, plan.filters.date_to), (Some(from), Some(to)) if from > to)
+    {
         plan.filters.date_from = None;
         plan.filters.date_to = None;
-    }
-    plan.ascending &= has_word(&words, &["first", "earliest", "oldest", "original"]);
-    if plan
-        .filters
-        .sender
-        .as_deref()
-        .is_some_and(|sender| sender.eq_ignore_ascii_case(request.account_email))
-        && !question.contains(&account_email)
-        && ![
-            "from me",
-            "from myself",
-            "sent by me",
-            "i sent",
-            "i have sent",
-            "did i send",
-            "my sent",
-        ]
-        .iter()
-        .any(|phrase| question.contains(phrase))
-    {
-        plan.filters.sender = None;
-    }
-    if plan
-        .filters
-        .recipient
-        .as_deref()
-        .is_some_and(|recipient| recipient.eq_ignore_ascii_case(request.account_email))
-        && !question.contains(&account_email)
-        && ![
-            "to me",
-            "sent me",
-            "send me",
-            "addressed to me",
-            "i received",
-        ]
-        .iter()
-        .any(|phrase| question.contains(phrase))
-    {
-        plan.filters.recipient = None;
     }
     plan
 }
 
-fn has_word(words: &[&str], expected: &[&str]) -> bool {
-    words.iter().any(|word| expected.contains(word))
-}
-
-fn folder_is_stated(words: &[&str], folder: &str) -> bool {
-    folder
-        .to_lowercase()
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty() && *word != "category" && *word != "mail")
-        .all(|word| words.contains(&word))
-}
-
-fn date_scope_is_stated(question: &str, words: &[&str]) -> bool {
-    has_word(
-        words,
-        &[
-            "today",
-            "yesterday",
-            "tomorrow",
-            "day",
-            "days",
-            "week",
-            "weeks",
-            "fortnight",
-            "month",
-            "months",
-            "quarter",
-            "quarters",
-            "year",
-            "years",
-            "january",
-            "february",
-            "march",
-            "april",
-            "may",
-            "june",
-            "july",
-            "august",
-            "september",
-            "october",
-            "november",
-            "december",
-        ],
-    ) || words.iter().any(|word| {
-        (word.len() == 4 && word.chars().all(|character| character.is_ascii_digit()))
-            || matches!(*word, "q1" | "q2" | "q3" | "q4")
-    }) || question.split_whitespace().any(|word| {
-        word.chars().any(|character| character.is_ascii_digit())
-            && (word.contains('/') || word.contains('-'))
-    })
+fn other_party(value: Option<String>, account_email: &str) -> Option<String> {
+    text(value).filter(|address| !address.eq_ignore_ascii_case(account_email))
 }
 
 fn conversation_label(history: &[HistoryMessage]) -> String {

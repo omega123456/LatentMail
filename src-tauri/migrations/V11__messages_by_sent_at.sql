@@ -1,0 +1,17 @@
+-- The AI retrieval fan-out gains a filter-only arm: the planner's filters
+-- with no MATCH clause, ordered by date, so a question whose whole meaning
+-- is metadata ("with attachments", "starred", "the last one") retrieves by
+-- constraint instead of by keyword.
+--
+-- No existing index orders an account's messages by date: `messages_by_thread`
+-- leads with `thread_id` and `messages_by_draft` is partial. Measured on the
+-- real schema, empty and at 5,000 messages, that arm plans as
+-- `SEARCH m USING INDEX messages_by_thread (account_id=?)` plus
+-- `USE TEMP B-TREE FOR ORDER BY`. With this index it plans as
+-- `SEARCH m USING INDEX messages_by_sent_at (account_id=?)` with no sort.
+--
+-- One index serves both directions: SQLite scans it backwards for DESC, so
+-- no DESC keyword is needed here. The FTS-driven lexical arms deliberately
+-- do not use it (see the ai chat refactor plan, D5) — they drive from the
+-- match, and an index here would invite a probe per message row instead.
+CREATE INDEX messages_by_sent_at ON messages(account_id, sent_at);

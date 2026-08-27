@@ -41,6 +41,10 @@ pub struct PassageSource {
     pub plain_body: Option<String>,
     pub html_body: Option<String>,
     pub truncated_body: Option<String>,
+    pub has_attachments: bool,
+    pub attachment_count: i64,
+    pub is_starred: bool,
+    pub is_unread: bool,
 }
 
 pub struct RetrievalRepository;
@@ -66,7 +70,7 @@ macro_rules! lexical_sql {
         concat!(
             "SELECT message_search.rowid,bm25(message_search) ",
             "FROM message_search ",
-            "JOIN messages m ON m.seq=message_search.rowid ",
+            "CROSS JOIN messages m ON m.seq=message_search.rowid ",
             "WHERE message_search MATCH ?1 ",
             "AND m.account_id=?2 ",
             "AND (?3 IS NULL OR m.sent_at>=?3) ",
@@ -85,11 +89,35 @@ macro_rules! lexical_sql {
     };
 }
 
-const SOURCES_SQL: &str = "SELECT m.seq,m.id,m.thread_id,m.sender,m.recipients,m.subject,m.sent_at,m.plain_body,m.html_body,m.truncated_body FROM json_each(?2) r CROSS JOIN messages m ON m.seq=r.value WHERE m.account_id=?1";
+macro_rules! recency_sql {
+    ($ordering:literal) => {
+        concat!(
+            "SELECT m.seq ",
+            "FROM messages m ",
+            "WHERE m.account_id=?1 ",
+            "AND (?2 IS NULL OR m.sent_at>=?2) ",
+            "AND (?3 IS NULL OR m.sent_at<=?3) ",
+            "AND (?4 IS NULL OR m.sender LIKE '%'||?4||'%') ",
+            "AND (?5 IS NULL OR m.recipients LIKE '%'||?5||'%') ",
+            "AND (?6 IS NULL OR EXISTS (SELECT 1 FROM message_labels ml ",
+            "JOIN labels l ON l.account_id=ml.account_id AND l.id=ml.label_id ",
+            "WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND l.name=?6)) ",
+            "AND (?7 IS NULL OR m.has_attachments=?7) ",
+            "AND (?8 IS NULL OR m.is_unread=?8) ",
+            "AND (?9 IS NULL OR m.is_starred=?9) ",
+            $ordering,
+            " LIMIT ?10"
+        )
+    };
+}
+
+const SOURCES_SQL: &str = "SELECT m.seq,m.id,m.thread_id,m.sender,m.recipients,m.subject,m.sent_at,m.plain_body,m.html_body,m.truncated_body,m.has_attachments,(SELECT COUNT(*) FROM message_attachments a WHERE a.account_id=m.account_id AND a.message_id=m.id),m.is_starred,m.is_unread FROM json_each(?2) r CROSS JOIN messages m ON m.seq=r.value WHERE m.account_id=?1";
 
 impl RetrievalRepository {
     pub const LEXICAL_RELEVANCE_SQL: &'static str = lexical_sql!("ORDER BY rank");
     pub const LEXICAL_CHRONOLOGICAL_SQL: &'static str = lexical_sql!("ORDER BY m.sent_at ASC");
+    pub const RECENCY_DESCENDING_SQL: &'static str = recency_sql!("ORDER BY m.sent_at DESC");
+    pub const RECENCY_ASCENDING_SQL: &'static str = recency_sql!("ORDER BY m.sent_at ASC");
 
     pub fn match_expression(question: &str) -> Option<String> {
         let terms: Vec<String> = question
@@ -136,6 +164,39 @@ impl RetrievalRepository {
             limit,
             filters,
         )
+    }
+
+    pub fn recency(
+        connection: &Connection,
+        account_id: &str,
+        limit: i64,
+        filters: &RetrievalFilters,
+        ascending: bool,
+    ) -> Result<Vec<i64>> {
+        let sql = if ascending {
+            Self::RECENCY_ASCENDING_SQL
+        } else {
+            Self::RECENCY_DESCENDING_SQL
+        };
+        let mut statement = connection.prepare_cached(sql)?;
+        let sequences = statement
+            .query_map(
+                params![
+                    account_id,
+                    filters.date_from,
+                    filters.date_to,
+                    filters.sender,
+                    filters.recipient,
+                    filters.folder,
+                    filters.has_attachment,
+                    filters.is_read.map(|read| !read),
+                    filters.is_starred,
+                    limit,
+                ],
+                |row| row.get(0),
+            )?
+            .collect();
+        sequences
     }
 
     fn lexical(
@@ -250,6 +311,10 @@ impl RetrievalRepository {
                     plain_body: row.get(7)?,
                     html_body: row.get(8)?,
                     truncated_body: row.get(9)?,
+                    has_attachments: row.get(10)?,
+                    attachment_count: row.get(11)?,
+                    is_starred: row.get(12)?,
+                    is_unread: row.get(13)?,
                 })
             })?
             .collect()

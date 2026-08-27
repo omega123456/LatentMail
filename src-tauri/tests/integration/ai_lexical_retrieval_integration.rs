@@ -110,6 +110,145 @@ fn chronological(
         .unwrap()
 }
 
+fn recency(
+    connection: &rusqlite::Connection,
+    filters: &RetrievalFilters,
+    ascending: bool,
+) -> Vec<i64> {
+    RetrievalRepository::recency(connection, "account", 50, filters, ascending).unwrap()
+}
+
+#[test]
+fn the_recency_path_orders_by_date_in_both_directions_and_honours_its_limit() {
+    let (connection, early_seq, late_seq) = filtered_fixture();
+    let filters = RetrievalFilters::default();
+
+    assert_eq!(
+        recency(&connection, &filters, false),
+        vec![late_seq, early_seq]
+    );
+    assert_eq!(
+        recency(&connection, &filters, true),
+        vec![early_seq, late_seq]
+    );
+    assert_eq!(
+        RetrievalRepository::recency(&connection, "account", 1, &filters, false).unwrap(),
+        vec![late_seq]
+    );
+}
+
+#[test]
+fn the_recency_path_returns_mail_that_no_keyword_can_reach() {
+    let (connection, _early_seq, _late_seq) = filtered_fixture();
+    let mut junk = message("account", "junk", "sdfdf", 3_000);
+    junk.subject = "asdsdasd".into();
+    junk.has_attachments = true;
+    let junk_seq = write(&connection, &junk);
+
+    let question = "Who was the last person who sent me an email with attachments?";
+    let filters = RetrievalFilters {
+        has_attachment: Some(true),
+        ..RetrievalFilters::default()
+    };
+
+    assert!(!relevance(&connection, question, &filters).contains(&junk_seq));
+    assert_eq!(
+        recency(&connection, &filters, false).first().copied(),
+        Some(junk_seq)
+    );
+}
+
+#[test]
+fn every_filter_field_restricts_the_recency_path() {
+    let (connection, early_seq, late_seq) = filtered_fixture();
+    let cases = [
+        (
+            RetrievalFilters {
+                date_from: Some(1_500),
+                ..RetrievalFilters::default()
+            },
+            late_seq,
+        ),
+        (
+            RetrievalFilters {
+                date_to: Some(1_500),
+                ..RetrievalFilters::default()
+            },
+            early_seq,
+        ),
+        (
+            RetrievalFilters {
+                sender: Some("alice@example.com".into()),
+                ..RetrievalFilters::default()
+            },
+            early_seq,
+        ),
+        (
+            RetrievalFilters {
+                recipient: Some("team@example.com".into()),
+                ..RetrievalFilters::default()
+            },
+            late_seq,
+        ),
+        (
+            RetrievalFilters {
+                folder: Some("Inbox".into()),
+                ..RetrievalFilters::default()
+            },
+            early_seq,
+        ),
+        (
+            RetrievalFilters {
+                folder: Some("Sent".into()),
+                ..RetrievalFilters::default()
+            },
+            late_seq,
+        ),
+        (
+            RetrievalFilters {
+                has_attachment: Some(true),
+                ..RetrievalFilters::default()
+            },
+            early_seq,
+        ),
+        (
+            RetrievalFilters {
+                is_read: Some(true),
+                ..RetrievalFilters::default()
+            },
+            early_seq,
+        ),
+        (
+            RetrievalFilters {
+                is_read: Some(false),
+                ..RetrievalFilters::default()
+            },
+            late_seq,
+        ),
+        (
+            RetrievalFilters {
+                is_starred: Some(true),
+                ..RetrievalFilters::default()
+            },
+            early_seq,
+        ),
+    ];
+
+    for (filters, expected) in cases {
+        assert_eq!(
+            recency(&connection, &filters, false),
+            vec![expected],
+            "recency path ignored {filters:?}"
+        );
+    }
+
+    let unknown_folder = RetrievalFilters {
+        folder: Some("SENT".into()),
+        ..RetrievalFilters::default()
+    };
+    assert!(recency(&connection, &unknown_folder, false).is_empty());
+}
+
 #[test]
 fn a_question_carrying_punctuation_and_quotes_produces_a_valid_expression_and_returns_matches() {
     let (connection, early_seq, late_seq) = filtered_fixture();

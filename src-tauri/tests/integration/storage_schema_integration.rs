@@ -696,9 +696,13 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         &connection,
         "EXPLAIN QUERY PLAN SELECT (SELECT COUNT(*) FROM messages WHERE account_id=?1)-(SELECT COUNT(DISTINCT message_id) FROM message_labels WHERE account_id=?1 AND label_id IN ('TRASH','SPAM','DRAFT'))",
     );
-    assert!(embedding_total_plan.iter().any(|step| step.contains(
-        "SEARCH messages USING COVERING INDEX sqlite_autoindex_messages_1 (account_id=?)"
-    )));
+    assert!(
+        embedding_total_plan
+            .iter()
+            .any(|step| step.contains("SEARCH messages USING COVERING INDEX")
+                && step.contains("(account_id=?)")),
+        "the eligible-message count must stay one covering range scan over the account"
+    );
     assert!(embedding_total_plan.iter().any(|step| step.contains(
         "SEARCH message_labels USING COVERING INDEX sqlite_autoindex_message_labels_1 (account_id=?)"
     )));
@@ -1022,6 +1026,26 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(lexical_chronological_plan
         .iter()
         .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+
+    for sql in [
+        RetrievalRepository::RECENCY_DESCENDING_SQL,
+        RetrievalRepository::RECENCY_ASCENDING_SQL,
+    ] {
+        let recency_plan = query_plan(&connection, &format!("EXPLAIN QUERY PLAN {sql}"));
+        assert!(
+            recency_plan.iter().any(
+                |step| step.contains("SEARCH m USING INDEX messages_by_sent_at (account_id=?)")
+            ),
+            "the filter-only read must take its date order from the index, not from a sort"
+        );
+        assert_eq!(
+            recency_plan
+                .iter()
+                .filter(|step| step.contains("TEMP B-TREE"))
+                .count(),
+            0
+        );
+    }
 }
 
 #[test]

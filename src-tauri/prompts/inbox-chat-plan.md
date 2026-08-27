@@ -12,7 +12,7 @@ Keywords are extracted from the new question mechanically. Set `query` only when
 
 A single JSON object containing every key shown below. The JSON schema requires every key. A field is semantically optional by setting its value to `null`; never invent a value merely because the key is required.
 
-{ "query": null, "dateFrom": null, "dateTo": null, "sender": null, "recipient": null, "folder": null, "hasAttachment": null, "isRead": null, "isStarred": null, "dateOrder": null }
+{ "query": null, "dateFrom": null, "dateTo": null, "sender": null, "recipient": null, "folder": null, "hasAttachment": null, "isRead": null, "isStarred": null, "dateOrder": null, "direction": null }
 
 Output-contract rules:
 
@@ -30,8 +30,9 @@ Output-contract rules:
 - `query`: include ONLY when a follow-up depends on an earlier topic. Use topic words only. Do not include dates, sender or recipient values, folder names, or status words that belong in filters.
 - `dateFrom`: use a date ONLY when the NEW question contains an explicit calendar scope such as "last week", "in March", "during 2025", "since August 4", or "before 2026-01-15". Otherwise use null.
 - `dateTo`: use a date ONLY when the same explicit calendar scope has an upper bound. Use inclusive bounds. Otherwise use null.
-- `sender`: include ONLY when the user explicitly asks about emails from a specific person or address.
-- `recipient`: include ONLY when the user explicitly asks about emails sent to a specific person or address.
+- `sender`: include ONLY when the user explicitly asks about emails from a specific OTHER person or address. Never put the user's own address here. Their own side is `direction`.
+- `recipient`: include ONLY when the user explicitly asks about emails sent to a specific OTHER person or address. Never put the user's own address here. Their own side is `direction`.
+- `direction`: which side of the message the user is on. Set `"sent"` when the user asks about mail THEY sent or wrote to somebody. Set `"received"` when the user asks about mail somebody sent TO them, or that they got, received, or found in their inbox. Leave null when the question says neither.
 - `folder`: include ONLY when the user explicitly asks about a specific folder (e.g. "emails in my inbox", "drafts about X", "in Sent Mail"). The value must exactly match one of the folder names from the Available folders list above. Only use folder names from that list. If no folder list is available ({{FOLDERS}} is empty), do not use the folder filter.
 - `hasAttachment`: set to `true` ONLY when the user explicitly asks about emails WITH attachments (e.g. "emails with attachments", "messages that have files"). Set to `false` ONLY when the user explicitly asks about emails WITHOUT attachments. Leave null when attachments are not mentioned.
 - `isRead`: set to `false` ONLY when the user explicitly asks about unread emails (e.g. "unread emails", "messages I haven't read"). Set to `true` ONLY when the user explicitly asks about emails they already read. Leave null when read status is not mentioned.
@@ -44,8 +45,8 @@ Check every non-null field against the NEW question:
 
 1. `query` needs an unresolved reference to conversation history. A standalone question always has `query: null`.
 2. `dateFrom` and `dateTo` need explicit calendar words in the NEW question. The word "last" by itself is not a date.
-3. `sender` needs an explicit sender or a clearly continued sender from history.
-4. `recipient` needs an explicit recipient or a clearly continued recipient from history.
+3. `sender` needs an explicit OTHER sender, or a clearly continued one from history. The user's own address is never a valid value.
+4. `recipient` needs an explicit OTHER recipient, or a clearly continued one from history. The user's own address is never a valid value.
 5. `folder` needs the actual folder name in the NEW question. Receiving a message does not mean the user asked for Inbox.
 6. Boolean values need the matching status words in the NEW question. Do not replace null with false.
 7. `dateOrder: "asc"` needs one of these exact oldest-first meanings: first, earliest, oldest, or original.
@@ -55,14 +56,27 @@ Important distinctions:
 
 - "last person", "last sender", "last email", "last order", and "latest" mean most recent. They do not create a date range and do not use `dateOrder: "asc"`.
 - "last week", "last month", and "last year" are calendar scopes and do create date bounds.
-- "sent me" can set `recipient` to the user email. It does not set `folder` to Inbox.
+- "sent me" sets `direction: "received"`. It does not set `recipient`, and it does not set `folder` to Inbox.
 - "with attachments" sets `hasAttachment: true`. It does not imply Inbox, unread, starred, a sender, or any date.
 - An assistant response can resolve a topic, person, or organisation. It can never supply date bounds for the new question.
 
-## Self-reference rules
+## Direction rules
 
-When the user refers to themselves — e.g. "from me", "emails I sent", "sent by me" — use {{USER_EMAIL}} as the `sender` value.
-When the user says "to me", "emails sent to me", "addressed to me" — use {{USER_EMAIL}} as the `recipient` value.
+`direction` is the only way to say that the user is one side of the message. Decide it from meaning, not from matching exact words. The user can phrase either side in any way they like, and they can misspell it.
+
+Set `direction: "sent"` when the user is the one who sent, wrote, replied, forwarded, or mailed. Examples of the meaning, not an exhaustive list: "emails I sent", "did I ever reply to Alice", "what have I written to the supplier", "invoices sent by me", "my sent mail".
+
+Set `direction: "received"` when somebody else is the sender and the user is the one who received, got, or was written to. Examples of the meaning, not an exhaustive list: "who emailed me", "did I get the invoice", "mail sent to me", "what arrived from the bank", "what landed in my inbox", "I never received the renewal".
+
+Set `direction: null` when the question names neither side, for example "the oldest starred email with attachments" or "summarise the budget thread". A question about somebody else's mail, such as "did my boss send the report", is also null: the user is not stated as either side.
+
+`direction` is about who sent or received the EMAIL. It is not about who performed the action the email describes. The user can be the one who ordered a desk, booked a table, joined a gym or changed a password, while the message confirming it still came FROM the company. "When did I order the standing desk" therefore has `direction: null`: the question asks about the order, and it says nothing about who wrote the email. Only a statement about sending or receiving mail sets `direction`.
+
+Three rules follow from this:
+
+1. The user's own address never appears in `sender` or `recipient`. It is expressed by `direction` alone.
+2. `direction` states one side only. A question cannot be both "sent" and "received".
+3. When in doubt, use null. A wrong `direction` hides the answer completely, because it removes every message from the other side.
 
 ## Rules
 
@@ -99,49 +113,53 @@ Conversation:
 User: Who emailed me about the quarterly budget?
 Assistant: Morgan Lee emailed you about the quarterly budget on March 15.
 New question: What did they say about the deadline?
-Output: {"query":"quarterly budget deadline","dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null}
+Output: {"query":"quarterly budget deadline","dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null,"direction":null}
 
 Conversation:
 User: Find emails from Morgan Lee.
 Assistant: Morgan sent three emails about the project timeline.
 New question: What was the timeline they mentioned?
-Output: {"query":"project timeline","dateFrom":null,"dateTo":null,"sender":"Morgan Lee","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null}
+Output: {"query":"project timeline","dateFrom":null,"dateTo":null,"sender":"Morgan Lee","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null,"direction":null}
 
 Conversation:
 User: What is the status of the office lease?
 Assistant: The latest lease email says the renewal is awaiting approval.
 New question: How about in February 2025?
-Output: {"query":"office lease renewal","dateFrom":"2025-02-01","dateTo":"2025-02-28","sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null}
+Output: {"query":"office lease renewal","dateFrom":"2025-02-01","dateTo":"2025-02-28","sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null,"direction":null}
+
+Conversation: (empty)
+New question: When did I order the standing desk?
+Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null,"direction":null}
 
 Conversation: (empty)
 New question: Summarize emails about the product launch.
-Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null}
+Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null,"direction":null}
 
 Conversation: (empty)
 New question: Which supplier sent me the most recent contract with an attachment?
-Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":"{{USER_EMAIL}}","folder":null,"hasAttachment":true,"isRead":null,"isStarred":null,"dateOrder":null}
+Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":true,"isRead":null,"isStarred":null,"dateOrder":null,"direction":"received"}
 
 Conversation: (empty)
 New question: Show me the oldest invoice with a file in my inbox.
-Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":"INBOX","hasAttachment":true,"isRead":null,"isStarred":null,"dateOrder":"asc"}
+Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":"INBOX","hasAttachment":true,"isRead":null,"isStarred":null,"dateOrder":"asc","direction":null}
 
 Conversation: (empty)
 New question: Show me unread emails with attachments in my inbox.
-Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":"INBOX","hasAttachment":true,"isRead":false,"isStarred":null,"dateOrder":null}
+Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":"INBOX","hasAttachment":true,"isRead":false,"isStarred":null,"dateOrder":null,"direction":null}
 
 Conversation: (empty)
 New question: Show messages from invoices@example.com during 2025.
-Output: {"query":null,"dateFrom":"2025-01-01","dateTo":"2025-12-31","sender":"invoices@example.com","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null}
+Output: {"query":null,"dateFrom":"2025-01-01","dateTo":"2025-12-31","sender":"invoices@example.com","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":null,"direction":null}
 
 Conversation: (empty)
 New question: Find starred budget emails from me.
-Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":"{{USER_EMAIL}}","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":true,"dateOrder":null}
+Output: {"query":null,"dateFrom":null,"dateTo":null,"sender":null,"recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":true,"dateOrder":null,"direction":"sent"}
 
 Conversation:
 User: What was the latest message from CloudBox?
 Assistant: The latest CloudBox message was a sharing notification on February 15.
 New question: When was the first one?
-Output: {"query":"sharing notification","dateFrom":null,"dateTo":null,"sender":"CloudBox","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":"asc"}
+Output: {"query":"sharing notification","dateFrom":null,"dateTo":null,"sender":"CloudBox","recipient":null,"folder":null,"hasAttachment":null,"isRead":null,"isStarred":null,"dateOrder":"asc","direction":null}
 
 ## Wrong interpretations
 
@@ -149,6 +167,7 @@ For "Which supplier sent me the most recent contract with an attachment?":
 
 - WRONG: any non-null `dateFrom` or `dateTo`. "Most recent" is ordering, not a calendar range.
 - WRONG: `dateOrder: "asc"`. Most recent is the opposite of oldest-first.
-- WRONG: `folder: "INBOX"`. "Sent me" identifies the recipient; it does not request a folder.
+- WRONG: `folder: "INBOX"`. "Sent me" sets `direction`; it does not request a folder.
 - WRONG: `query: "contract"`. The question stands alone, so keywords are already extracted mechanically.
-- CORRECT: only `recipient: "{{USER_EMAIL}}"` and `hasAttachment: true` are non-null.
+- WRONG: `recipient: "{{USER_EMAIL}}"`. The user's own address never goes in `sender` or `recipient`.
+- CORRECT: only `direction: "received"` and `hasAttachment: true` are non-null.

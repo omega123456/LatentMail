@@ -201,6 +201,37 @@ fn chronological_corpus() -> (tempfile::TempDir, Storage, Vec<i64>) {
     build(&entries)
 }
 
+fn attachment_corpus() -> (tempfile::TempDir, Storage, Vec<i64>) {
+    let mut entries = vec![(
+        message(
+            "alice",
+            "Alice Adams <alice@example.com>",
+            BODY,
+            1_700_000_100,
+        ),
+        vec![1.0, 0.0],
+    )];
+    for (id, sent_at) in [
+        ("junk-old", 1_000),
+        ("junk-mid", 2_000),
+        ("junk-new", 3_000),
+    ] {
+        let mut stored = message(id, "Jozsef <jozsef@example.com>", "sdfdf", sent_at);
+        stored.subject = "asdsdasd".into();
+        stored.has_attachments = true;
+        entries.push((stored, vec![0.0, 1.0]));
+    }
+    build(&entries)
+}
+
+fn identifiers(found: &latentmail_lib::ai::retrieval::Retrieved) -> Vec<&str> {
+    found
+        .sources
+        .iter()
+        .map(|source| source.message_id.as_str())
+        .collect()
+}
+
 async fn embeddings(server: &MockServer, vector: Vec<f32>) {
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
@@ -547,6 +578,53 @@ async fn a_planner_filter_replaces_the_unfiltered_arms() {
         vec!["carol"]
     );
     assert!(found.passages[0].similarity < f64::EPSILON);
+}
+
+const METADATA_QUESTION: &str = "Who was the last person who sent me an email with attachments?";
+
+#[tokio::test]
+async fn a_metadata_only_question_retrieves_the_newest_mail_no_keyword_can_reach() {
+    let (_directory, storage, _sequences) = attachment_corpus();
+    let server = MockServer::start().await;
+    plan_reply(&server, r#"{"hasAttachment":true}"#).await;
+    embeddings(&server, vec![1.0, 0.0]).await;
+    let found = found(&server, &storage, METADATA_QUESTION).await;
+    assert_eq!(
+        identifiers(&found),
+        vec!["junk-new", "junk-mid", "junk-old"]
+    );
+    assert!(found.context.contains("Attachments: yes"));
+}
+
+#[tokio::test]
+async fn an_ascending_metadata_question_lifts_the_oldest_match() {
+    let (_directory, storage, _sequences) = attachment_corpus();
+    let server = MockServer::start().await;
+    plan_reply(&server, r#"{"hasAttachment":true,"dateOrder":"asc"}"#).await;
+    embeddings(&server, vec![1.0, 0.0]).await;
+    let found = found(
+        &server,
+        &storage,
+        "What was the first email anyone sent me with attachments?",
+    )
+    .await;
+    assert_eq!(
+        identifiers(&found),
+        vec!["junk-old", "junk-mid", "junk-new"]
+    );
+}
+
+#[tokio::test]
+async fn an_unconstrained_plan_starts_no_recency_arm() {
+    let (_directory, storage, _sequences) = near_and_far();
+    let server = MockServer::start().await;
+    plan_reply(&server, "{}").await;
+    embeddings(&server, vec![1.0, 0.0]).await;
+    let found = found(&server, &storage, QUESTION).await;
+    assert_eq!(identifiers(&found), vec!["alice"]);
+    assert!(found
+        .context
+        .contains("Attachments: none | Starred: no | Unread: no"));
 }
 
 #[tokio::test]

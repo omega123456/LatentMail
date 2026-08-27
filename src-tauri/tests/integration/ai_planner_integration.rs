@@ -94,7 +94,8 @@ fn provider(server: &MockServer) -> Provider {
 #[test]
 fn the_planner_response_maps_onto_every_structured_filter() {
     let plan = planner::parse(
-        r#"{"query":"budget deadline","dateFrom":"2026-03-01","dateTo":"2026-03-05","sender":"alice@example.com","recipient":"me@example.com","folder":"Inbox","hasAttachment":true,"isRead":"false","isStarred":true,"dateOrder":"asc"}"#,
+        r#"{"query":"budget deadline","dateFrom":"2026-03-01","dateTo":"2026-03-05","sender":"alice@example.com","recipient":"bob@example.com","folder":"Inbox","hasAttachment":true,"isRead":"false","isStarred":true,"dateOrder":"asc"}"#,
+        "me@example.com",
     );
     assert!(plan.ascending);
     assert_eq!(plan.query, Some("budget deadline".into()));
@@ -104,13 +105,42 @@ fn the_planner_response_maps_onto_every_structured_filter() {
             date_from: Some(day_start("2026-03-01")),
             date_to: Some(day_end("2026-03-05")),
             sender: Some("alice@example.com".into()),
-            recipient: Some("me@example.com".into()),
+            recipient: Some("bob@example.com".into()),
             folder: Some("Inbox".into()),
             has_attachment: Some(true),
             is_read: Some(false),
             is_starred: Some(true),
         }
     );
+}
+
+#[test]
+fn direction_owns_the_self_address_and_outranks_an_echoed_one() {
+    let received = planner::parse(r#"{"direction":"received"}"#, "me@example.com");
+    assert_eq!(received.filters.recipient, Some("me@example.com".into()));
+    assert_eq!(received.filters.sender, None);
+
+    let sent = planner::parse(r#"{"direction":"sent"}"#, "me@example.com");
+    assert_eq!(sent.filters.sender, Some("me@example.com".into()));
+    assert_eq!(sent.filters.recipient, None);
+
+    let echoed = planner::parse(
+        r#"{"sender":"ME@example.com","recipient":"me@example.com"}"#,
+        "me@example.com",
+    );
+    assert_eq!(echoed.filters.sender, None);
+    assert_eq!(echoed.filters.recipient, None);
+
+    let mixed = planner::parse(
+        r#"{"direction":"received","sender":"alice@example.com","recipient":"me@example.com"}"#,
+        "me@example.com",
+    );
+    assert_eq!(mixed.filters.sender, Some("alice@example.com".into()));
+    assert_eq!(mixed.filters.recipient, Some("me@example.com".into()));
+
+    let unknown = planner::parse(r#"{"direction":"forwarded"}"#, "me@example.com");
+    assert_eq!(unknown.filters.sender, None);
+    assert_eq!(unknown.filters.recipient, None);
 }
 
 #[test]
@@ -122,13 +152,22 @@ fn an_unusable_planner_response_yields_empty_constraints() {
         "[]",
         "{\"dateOrder\":\"desc\"}",
     ] {
-        assert_eq!(planner::parse(raw), RetrievalPlan::default());
+        assert_eq!(
+            planner::parse(raw, "me@example.com"),
+            RetrievalPlan::default()
+        );
     }
-    let wrapped = planner::parse(r#"[{"folder":"  ","sender":"Ada","hasAttachment":"maybe"}]"#);
+    let wrapped = planner::parse(
+        r#"[{"folder":"  ","sender":"Ada","hasAttachment":"maybe"}]"#,
+        "me@example.com",
+    );
     assert_eq!(wrapped.filters.sender, Some("Ada".into()));
     assert_eq!(wrapped.filters.folder, None);
     assert_eq!(wrapped.filters.has_attachment, None);
-    let malformed = planner::parse(r#"{"dateFrom":"not-a-date","isRead":"TRUE"}"#);
+    let malformed = planner::parse(
+        r#"{"dateFrom":"not-a-date","isRead":"TRUE"}"#,
+        "me@example.com",
+    );
     assert_eq!(malformed.filters.date_from, None);
     assert_eq!(malformed.filters.is_read, Some(true));
 }
@@ -177,9 +216,9 @@ async fn the_planner_call_carries_the_schema_the_sampling_controls_and_the_conve
 }
 
 #[tokio::test]
-async fn the_planner_keeps_follow_up_context_and_discards_unsupported_filled_fields() {
+async fn the_planner_keeps_follow_up_context_and_discards_what_the_account_contradicts() {
     let (server, _bodies) = planner_server(
-        r#"{"query":"SSD health drive report","dateFrom":"2025-10-01","dateTo":"2025-10-31","sender":"me@example.com","recipient":"me@example.com","folder":"Inbox","hasAttachment":false,"isRead":false,"isStarred":false}"#,
+        r#"{"query":"SSD health drive report","dateFrom":"2025-10-31","dateTo":"2025-10-01","sender":"me@example.com","recipient":"me@example.com","folder":"Archive","hasAttachment":true,"isRead":false,"isStarred":true}"#,
     )
     .await;
     let history = vec![HistoryMessage {
@@ -193,59 +232,75 @@ async fn the_planner_keeps_follow_up_context_and_discards_unsupported_filled_fie
     )
     .await;
     assert_eq!(plan.query, Some("SSD health drive report".into()));
-    assert_eq!(plan.filters.date_from, Some(day_start("2025-10-01")));
-    assert_eq!(plan.filters.date_to, Some(day_end("2025-10-31")));
+    assert_eq!(plan.filters.date_from, None);
+    assert_eq!(plan.filters.date_to, None);
     assert_eq!(plan.filters.sender, None);
     assert_eq!(plan.filters.recipient, None);
     assert_eq!(plan.filters.folder, None);
-    assert_eq!(plan.filters.has_attachment, None);
-    assert_eq!(plan.filters.is_read, None);
-    assert_eq!(plan.filters.is_starred, None);
+    assert_eq!(plan.filters.has_attachment, Some(true));
+    assert_eq!(plan.filters.is_read, Some(false));
+    assert_eq!(plan.filters.is_starred, Some(true));
 }
 
 #[tokio::test]
-async fn explicit_self_direction_keeps_only_the_supported_address_filter() {
-    let (server, _bodies) =
-        planner_server(r#"{"sender":"me@example.com","recipient":"me@example.com"}"#).await;
-    let sent = planner::plan(
+async fn a_standalone_question_and_an_echoed_query_both_plan_without_a_query() {
+    let (server, _bodies) = planner_server(r#"{"query":"how is my ssd health?"}"#).await;
+    let history = vec![HistoryMessage {
+        role: Role::User,
+        content: "how is my ssd health?".into(),
+    }];
+    let echoed = planner::plan(
         &provider(&server),
-        &request("what emails did I send last month?", &[]),
+        &request("how is my ssd health?", &history),
         &[],
     )
     .await;
-    assert_eq!(sent.filters.sender, Some("me@example.com".into()));
-    assert_eq!(sent.filters.recipient, None);
-    let received = planner::plan(
+    assert_eq!(echoed.query, None);
+    let standalone = planner::plan(
         &provider(&server),
-        &request("which emails were sent to me?", &[]),
+        &request("how is my ssd health?", &[]),
         &[],
     )
     .await;
-    assert_eq!(received.filters.sender, None);
-    assert_eq!(received.filters.recipient, Some("me@example.com".into()));
+    assert_eq!(standalone.query, None);
 }
 
 #[tokio::test]
-async fn unsupported_recency_guesses_are_removed_from_a_metadata_filter() {
+async fn a_misspelled_question_still_plans_every_filter_the_model_reports() {
     let (server, _bodies) = planner_server(
-        r#"{"dateFrom":"2026-08-20","dateTo":"2026-08-26","folder":"INBOX","hasAttachment":true,"recipient":"me@example.com","dateOrder":"asc"}"#,
+        r#"{"hasAttachment":true,"isStarred":true,"direction":"received","dateOrder":"asc"}"#,
     )
     .await;
     let plan = planner::plan(
         &provider(&server),
         &request(
-            "which supplier sent me the most recent contract with attachments?",
+            "whats the oldest email with attachemetns i got that is also starred?",
             &[],
         ),
-        &["INBOX".into()],
+        &[],
     )
     .await;
-    assert_eq!(plan.filters.date_from, None);
-    assert_eq!(plan.filters.date_to, None);
-    assert_eq!(plan.filters.folder, None);
-    assert_eq!(plan.filters.has_attachment, Some(true));
     assert_eq!(plan.filters.recipient, Some("me@example.com".into()));
-    assert!(!plan.ascending);
+    assert_eq!(plan.filters.sender, None);
+    assert_eq!(plan.filters.has_attachment, Some(true));
+    assert_eq!(plan.filters.is_starred, Some(true));
+    assert!(plan.ascending);
+}
+
+#[tokio::test]
+async fn a_sent_direction_and_a_known_folder_reach_the_filters_intact() {
+    let (server, _bodies) =
+        planner_server(r#"{"direction":"sent","folder":"inbox","isStarred":true}"#).await;
+    let plan = planner::plan(
+        &provider(&server),
+        &request("find starred budget emails from me in my inbox", &[]),
+        &["Inbox".into()],
+    )
+    .await;
+    assert_eq!(plan.filters.sender, Some("me@example.com".into()));
+    assert_eq!(plan.filters.recipient, None);
+    assert_eq!(plan.filters.folder, Some("Inbox".into()));
+    assert_eq!(plan.filters.is_starred, Some(true));
 }
 
 #[tokio::test]
@@ -284,6 +339,9 @@ fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
     let system = prompts::system(now, "me@example.com");
     assert!(system.contains("Wednesday, August 26, 2026, 2:30 PM"));
     assert!(system.contains("me@example.com"));
+    assert!(system.contains(
+        "The metadata line is the only evidence about attachments, starring and read state."
+    ));
     assert!(!system.contains("{{"));
     let plan = prompts::plan(now, "me@example.com", &["Inbox".into(), "Sent".into()]);
     assert!(plan.contains("Today's date: 2026-08-26"));
@@ -302,6 +360,10 @@ fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
             recipients: "me@example.com".into(),
             subject: "Budget".into(),
             text: "first passage".into(),
+            has_attachments: false,
+            attachment_count: 0,
+            is_starred: false,
+            is_unread: false,
         },
         Passage {
             message_seq: 2,
@@ -312,10 +374,31 @@ fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
             recipients: "me@example.com".into(),
             subject: "Venue".into(),
             text: "second passage".into(),
+            has_attachments: true,
+            attachment_count: 2,
+            is_starred: true,
+            is_unread: false,
+        },
+        Passage {
+            message_seq: 3,
+            chunk_index: 0,
+            similarity: 0.7,
+            sent_at: seconds("2026-08-26", 16),
+            sender: "Carol <carol@example.com>".into(),
+            recipients: "me@example.com".into(),
+            subject: "Invoice".into(),
+            text: "third passage".into(),
+            has_attachments: true,
+            attachment_count: 0,
+            is_starred: false,
+            is_unread: true,
         },
     ]);
-    assert!(block.starts_with("[1] From: Alice <alice@example.com>\nTo: me@example.com\nSubject: Budget\nDate: Wednesday, August 26, 2026, 2:00 PM\nfirst passage"));
+    assert!(block.starts_with("[1] From: Alice <alice@example.com>\nTo: me@example.com\nSubject: Budget\nDate: Wednesday, August 26, 2026, 2:00 PM\nAttachments: none | Starred: no | Unread: no\nfirst passage"));
     assert!(block.contains("\n\n---\n\n[2] From: Bob <bob@example.com>"));
-    assert!(block.ends_with("second passage"));
+    assert!(block.contains(
+        "Date: Wednesday, August 26, 2026, 3:00 PM\nAttachments: 2 | Starred: yes | Unread: no\nsecond passage"
+    ));
+    assert!(block.ends_with("Attachments: yes | Starred: no | Unread: yes\nthird passage"));
     assert!(prompts::passage_block(&[]).is_empty());
 }
