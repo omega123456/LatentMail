@@ -15,6 +15,7 @@ const DATE_FORMAT: &str = "%Y-%m-%d";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RetrievalPlan {
+    pub query: Option<String>,
     pub filters: RetrievalFilters,
     pub ascending: bool,
 }
@@ -22,6 +23,8 @@ pub struct RetrievalPlan {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanResponse {
+    #[serde(default)]
+    query: Option<String>,
     #[serde(default)]
     date_from: Option<String>,
     #[serde(default)]
@@ -52,6 +55,7 @@ pub fn response_format() -> Value {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
+                    "query": {"type": ["string", "null"]},
                     "dateFrom": {"type": ["string", "null"]},
                     "dateTo": {"type": ["string", "null"]},
                     "sender": {"type": ["string", "null"]},
@@ -63,7 +67,7 @@ pub fn response_format() -> Value {
                     "dateOrder": {"type": ["string", "null"], "enum": ["asc", null]}
                 },
                 "required": [
-                    "dateFrom", "dateTo", "sender", "recipient", "folder",
+                    "query", "dateFrom", "dateTo", "sender", "recipient", "folder",
                     "hasAttachment", "isRead", "isStarred", "dateOrder"
                 ]
             }
@@ -85,6 +89,7 @@ pub fn parse(raw: &str) -> RetrievalPlan {
         return RetrievalPlan::default();
     };
     RetrievalPlan {
+        query: text(response.query),
         filters: RetrievalFilters {
             date_from: day_start(response.date_from),
             date_to: day_end(response.date_to),
@@ -117,7 +122,143 @@ pub async fn plan(
     provider
         .chat_completion(request.chat_model, messages, Some(response_format()))
         .await
-        .map_or_else(|_| RetrievalPlan::default(), |raw| parse(&raw))
+        .map_or_else(
+            |_| RetrievalPlan::default(),
+            |raw| sanitize(parse(&raw), request, folders),
+        )
+}
+
+fn sanitize(
+    mut plan: RetrievalPlan,
+    request: &RetrievalRequest<'_>,
+    folders: &[String],
+) -> RetrievalPlan {
+    let question = request.question.to_lowercase();
+    let account_email = request.account_email.to_lowercase();
+    let words = question
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    plan.query = plan.query.filter(|query| {
+        !request.history.is_empty() && !query.trim().eq_ignore_ascii_case(request.question.trim())
+    });
+    plan.filters.folder = plan.filters.folder.and_then(|folder| {
+        folders
+            .iter()
+            .find(|available| available.eq_ignore_ascii_case(&folder))
+            .filter(|available| folder_is_stated(&words, available))
+            .cloned()
+    });
+    plan.filters.has_attachment = plan.filters.has_attachment.filter(|_| {
+        has_word(
+            &words,
+            &["attachment", "attachments", "attached", "file", "files"],
+        )
+    });
+    plan.filters.is_read = plan
+        .filters
+        .is_read
+        .filter(|_| has_word(&words, &["read", "unread"]));
+    plan.filters.is_starred = plan
+        .filters
+        .is_starred
+        .filter(|_| has_word(&words, &["star", "starred", "flag", "flagged"]));
+    if !date_scope_is_stated(&question, &words) {
+        plan.filters.date_from = None;
+        plan.filters.date_to = None;
+    }
+    plan.ascending &= has_word(&words, &["first", "earliest", "oldest", "original"]);
+    if plan
+        .filters
+        .sender
+        .as_deref()
+        .is_some_and(|sender| sender.eq_ignore_ascii_case(request.account_email))
+        && !question.contains(&account_email)
+        && ![
+            "from me",
+            "from myself",
+            "sent by me",
+            "i sent",
+            "i have sent",
+            "did i send",
+            "my sent",
+        ]
+        .iter()
+        .any(|phrase| question.contains(phrase))
+    {
+        plan.filters.sender = None;
+    }
+    if plan
+        .filters
+        .recipient
+        .as_deref()
+        .is_some_and(|recipient| recipient.eq_ignore_ascii_case(request.account_email))
+        && !question.contains(&account_email)
+        && ![
+            "to me",
+            "sent me",
+            "send me",
+            "addressed to me",
+            "i received",
+        ]
+        .iter()
+        .any(|phrase| question.contains(phrase))
+    {
+        plan.filters.recipient = None;
+    }
+    plan
+}
+
+fn has_word(words: &[&str], expected: &[&str]) -> bool {
+    words.iter().any(|word| expected.contains(word))
+}
+
+fn folder_is_stated(words: &[&str], folder: &str) -> bool {
+    folder
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty() && *word != "category" && *word != "mail")
+        .all(|word| words.contains(&word))
+}
+
+fn date_scope_is_stated(question: &str, words: &[&str]) -> bool {
+    has_word(
+        words,
+        &[
+            "today",
+            "yesterday",
+            "tomorrow",
+            "day",
+            "days",
+            "week",
+            "weeks",
+            "fortnight",
+            "month",
+            "months",
+            "quarter",
+            "quarters",
+            "year",
+            "years",
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+        ],
+    ) || words.iter().any(|word| {
+        (word.len() == 4 && word.chars().all(|character| character.is_ascii_digit()))
+            || matches!(*word, "q1" | "q2" | "q3" | "q4")
+    }) || question.split_whitespace().any(|word| {
+        word.chars().any(|character| character.is_ascii_digit())
+            && (word.contains('/') || word.contains('-'))
+    })
 }
 
 fn conversation_label(history: &[HistoryMessage]) -> String {

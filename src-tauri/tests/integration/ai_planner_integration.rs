@@ -94,9 +94,10 @@ fn provider(server: &MockServer) -> Provider {
 #[test]
 fn the_planner_response_maps_onto_every_structured_filter() {
     let plan = planner::parse(
-        r#"{"dateFrom":"2026-03-01","dateTo":"2026-03-05","sender":"alice@example.com","recipient":"me@example.com","folder":"Inbox","hasAttachment":true,"isRead":"false","isStarred":true,"dateOrder":"asc"}"#,
+        r#"{"query":"budget deadline","dateFrom":"2026-03-01","dateTo":"2026-03-05","sender":"alice@example.com","recipient":"me@example.com","folder":"Inbox","hasAttachment":true,"isRead":"false","isStarred":true,"dateOrder":"asc"}"#,
     );
     assert!(plan.ascending);
+    assert_eq!(plan.query, Some("budget deadline".into()));
     assert_eq!(
         plan.filters,
         RetrievalFilters {
@@ -176,6 +177,78 @@ async fn the_planner_call_carries_the_schema_the_sampling_controls_and_the_conve
 }
 
 #[tokio::test]
+async fn the_planner_keeps_follow_up_context_and_discards_unsupported_filled_fields() {
+    let (server, _bodies) = planner_server(
+        r#"{"query":"SSD health drive report","dateFrom":"2025-10-01","dateTo":"2025-10-31","sender":"me@example.com","recipient":"me@example.com","folder":"Inbox","hasAttachment":false,"isRead":false,"isStarred":false}"#,
+    )
+    .await;
+    let history = vec![HistoryMessage {
+        role: Role::User,
+        content: "how is my ssd health?".into(),
+    }];
+    let plan = planner::plan(
+        &provider(&server),
+        &request("how about in october last year?", &history),
+        &["Inbox".into()],
+    )
+    .await;
+    assert_eq!(plan.query, Some("SSD health drive report".into()));
+    assert_eq!(plan.filters.date_from, Some(day_start("2025-10-01")));
+    assert_eq!(plan.filters.date_to, Some(day_end("2025-10-31")));
+    assert_eq!(plan.filters.sender, None);
+    assert_eq!(plan.filters.recipient, None);
+    assert_eq!(plan.filters.folder, None);
+    assert_eq!(plan.filters.has_attachment, None);
+    assert_eq!(plan.filters.is_read, None);
+    assert_eq!(plan.filters.is_starred, None);
+}
+
+#[tokio::test]
+async fn explicit_self_direction_keeps_only_the_supported_address_filter() {
+    let (server, _bodies) =
+        planner_server(r#"{"sender":"me@example.com","recipient":"me@example.com"}"#).await;
+    let sent = planner::plan(
+        &provider(&server),
+        &request("what emails did I send last month?", &[]),
+        &[],
+    )
+    .await;
+    assert_eq!(sent.filters.sender, Some("me@example.com".into()));
+    assert_eq!(sent.filters.recipient, None);
+    let received = planner::plan(
+        &provider(&server),
+        &request("which emails were sent to me?", &[]),
+        &[],
+    )
+    .await;
+    assert_eq!(received.filters.sender, None);
+    assert_eq!(received.filters.recipient, Some("me@example.com".into()));
+}
+
+#[tokio::test]
+async fn unsupported_recency_guesses_are_removed_from_a_metadata_filter() {
+    let (server, _bodies) = planner_server(
+        r#"{"dateFrom":"2026-08-20","dateTo":"2026-08-26","folder":"INBOX","hasAttachment":true,"recipient":"me@example.com","dateOrder":"asc"}"#,
+    )
+    .await;
+    let plan = planner::plan(
+        &provider(&server),
+        &request(
+            "which supplier sent me the most recent contract with attachments?",
+            &[],
+        ),
+        &["INBOX".into()],
+    )
+    .await;
+    assert_eq!(plan.filters.date_from, None);
+    assert_eq!(plan.filters.date_to, None);
+    assert_eq!(plan.filters.folder, None);
+    assert_eq!(plan.filters.has_attachment, Some(true));
+    assert_eq!(plan.filters.recipient, Some("me@example.com".into()));
+    assert!(!plan.ascending);
+}
+
+#[tokio::test]
 async fn an_empty_conversation_is_labelled_and_a_transport_failure_plans_nothing() {
     let (server, bodies) = planner_server("{}").await;
     let plan = planner::plan(&provider(&server), &request("hello", &[]), &[]).await;
@@ -215,7 +288,9 @@ fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
     let plan = prompts::plan(now, "me@example.com", &["Inbox".into(), "Sent".into()]);
     assert!(plan.contains("Today's date: 2026-08-26"));
     assert!(plan.contains("Available folders: Inbox, Sent"));
+    assert!(plan.contains("office lease renewal"));
     assert!(plan.contains("dateOrder decision table"));
+    assert!(plan.contains("Wrong interpretations"));
     assert!(!plan.contains("{{"));
     let block = prompts::passage_block(&[
         Passage {

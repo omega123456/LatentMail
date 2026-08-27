@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{Local, NaiveDate, TimeZone};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -30,6 +31,19 @@ use wiremock::{
 
 const BODY: &str = "The Q3 budget deadline is Friday and Priya owns the reconciliation";
 const QUESTION: &str = "what is the budget deadline";
+
+fn day(day: &str) -> i64 {
+    Local
+        .from_local_datetime(
+            &NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap(),
+        )
+        .earliest()
+        .unwrap()
+        .timestamp()
+}
 
 fn account() -> Account {
     Account {
@@ -302,7 +316,7 @@ async fn serve_after_rendezvous(
     let body = if embeddings {
         serde_json::json!({"data": [{"embedding": [1.0, 0.0]}]})
     } else {
-        serde_json::json!({"choices": [{"message": {"content": "{\"dateOrder\":\"asc\"}"}}]})
+        serde_json::json!({"choices": [{"message": {"content": "{}"}}]})
     }
     .to_string();
     let response = format!(
@@ -366,7 +380,7 @@ async fn the_planner_call_and_the_unfiltered_retrieval_pass_are_in_flight_at_the
             .iter()
             .map(|passage| passage.message_seq)
             .collect::<Vec<_>>(),
-        vec![sequences[0], sequences[2], sequences[1]]
+        vec![sequences[0], sequences[1], sequences[2]]
     );
 }
 
@@ -505,20 +519,20 @@ async fn an_ascending_plan_adds_the_chronological_arm_and_lifts_the_oldest_match
     let ascending_server = MockServer::start().await;
     plan_reply(&ascending_server, r#"{"dateOrder":"asc"}"#).await;
     embeddings(&ascending_server, vec![1.0, 0.0]).await;
-    let ascending = found(&ascending_server, &storage, question).await;
+    let ascending = found(&ascending_server, &storage, "oldest budget deadline").await;
     assert_eq!(
         ascending
             .passages
             .iter()
             .map(|passage| passage.message_seq)
             .collect::<Vec<_>>(),
-        vec![sequences[0], sequences[2], sequences[1]]
+        vec![sequences[2], sequences[0], sequences[1]]
     );
-    assert_eq!(ascending.sources[1].message_id, "oldest");
+    assert_eq!(ascending.sources[0].message_id, "oldest");
 }
 
 #[tokio::test]
-async fn a_planner_filter_narrows_the_result_without_removing_the_unfiltered_arms() {
+async fn a_planner_filter_replaces_the_unfiltered_arms() {
     let (_directory, storage, _sequences) = lexical_only_extra();
     let server = MockServer::start().await;
     plan_reply(&server, r#"{"sender":"carol@example.com"}"#).await;
@@ -530,9 +544,109 @@ async fn a_planner_filter_narrows_the_result_without_removing_the_unfiltered_arm
             .iter()
             .map(|source| source.message_id.as_str())
             .collect::<Vec<_>>(),
+        vec!["carol"]
+    );
+    assert!(found.passages[0].similarity < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn a_planner_filter_that_matches_nothing_falls_back_to_the_unfiltered_arms() {
+    let (_directory, storage, _sequences) = lexical_only_extra();
+    let server = MockServer::start().await;
+    plan_reply(&server, r#"{"sender":"nobody@example.com"}"#).await;
+    embeddings(&server, vec![1.0, 0.0]).await;
+    let found = found(&server, &storage, QUESTION).await;
+    assert_eq!(
+        found
+            .sources
+            .iter()
+            .map(|source| source.message_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["alice", "carol"]
     );
-    assert!(found.passages[1].similarity < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn a_contextual_follow_up_searches_the_prior_topic_inside_the_supported_date_filter() {
+    let (_directory, storage, _sequences) = build(&[
+        (
+            message(
+                "october-ssd",
+                "Raspberry Pi <reports@example.com>",
+                "SSD health SMART drive report passed",
+                day("2025-10-12"),
+            ),
+            vec![0.0, 1.0],
+        ),
+        (
+            message(
+                "older-ssd",
+                "Raspberry Pi <reports@example.com>",
+                "SSD health SMART drive report passed",
+                day("2024-03-22"),
+            ),
+            vec![0.0, 1.0],
+        ),
+        (
+            message(
+                "october-other",
+                "Someone <someone@example.com>",
+                "Unrelated lunch plans",
+                day("2025-10-20"),
+            ),
+            vec![1.0, 0.0],
+        ),
+    ]);
+    let server = MockServer::start().await;
+    plan_reply(
+        &server,
+        r#"{"query":"SSD health drive report","dateFrom":"2025-10-01","dateTo":"2025-10-31","sender":"me@example.com","recipient":"me@example.com","folder":"CATEGORY_PERSONAL","hasAttachment":false,"isRead":false,"isStarred":false}"#,
+    )
+    .await;
+    embeddings(&server, vec![1.0, 0.0]).await;
+    let history = vec![HistoryMessage {
+        role: Role::User,
+        content: "how is my ssd health?".into(),
+    }];
+    let outcome = retrieve(
+        &provider(&server),
+        &storage,
+        &request("how about in october last year?", &history),
+        &AtomicBool::new(false),
+    )
+    .await
+    .unwrap();
+    let Retrieval::Found(found) = outcome else {
+        panic!("expected passages, got {outcome:?}");
+    };
+    assert!(found
+        .sources
+        .iter()
+        .any(|source| source.message_id == "october-ssd"));
+    assert!(!found
+        .sources
+        .iter()
+        .any(|source| source.message_id == "older-ssd"));
+    let embedding_inputs = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|received| received.url.path() == "/v1/embeddings")
+        .map(|received| {
+            serde_json::from_slice::<serde_json::Value>(&received.body).unwrap()["input"][0]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        embedding_inputs,
+        vec![
+            "how about in october last year?".to_owned(),
+            "SSD health drive report".to_owned()
+        ]
+    );
 }
 
 #[tokio::test]

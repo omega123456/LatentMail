@@ -177,6 +177,18 @@ fn sequences(output: &ArmOutput) -> Vec<i64> {
     }
 }
 
+fn split(outcomes: Vec<Result<ArmOutput, String>>) -> (Vec<ArmOutput>, Option<String>) {
+    let mut outputs = Vec::new();
+    let mut failure = None;
+    for outcome in outcomes {
+        match outcome {
+            Ok(output) => outputs.push(output),
+            Err(error) => failure = failure.or(Some(error)),
+        }
+    }
+    (outputs, failure)
+}
+
 fn scored(outputs: &[ArmOutput]) -> Vec<Selected> {
     outputs
         .iter()
@@ -308,33 +320,52 @@ pub async fn retrieve(
         planner::plan(provider, request, &folders),
     )
     .await;
-    let (vector, mut outcomes) = base?;
+    let (vector, outcomes) = base?;
     if cancelled(cancel) {
         return Ok(Retrieval::Cancelled);
     }
+    let query = plan.query.as_deref().unwrap_or(request.question);
+    let contextual = plan.query.is_some();
+    let planned_vector = if contextual {
+        provider
+            .embed(request.embedding_model, vec![query.to_owned()])
+            .await
+            .ok()
+            .and_then(|vectors| vectors.into_iter().next())
+    } else {
+        Some(vector)
+    };
+    if cancelled(cancel) {
+        return Ok(Retrieval::Cancelled);
+    }
+    let constrained = !plan.filters.is_empty();
     let mut extra: Vec<Arm> = Vec::new();
-    if !plan.filters.is_empty() {
-        extra.push(Arm::Vector(vector, plan.filters.clone()));
+    if constrained || contextual {
+        if let Some(vector) = planned_vector {
+            extra.push(Arm::Vector(vector, plan.filters.clone()));
+        }
         extra.push(Arm::Lexical(plan.filters.clone()));
     }
     if plan.ascending {
         extra.push(Arm::Chronological(plan.filters.clone()));
     }
+    let mut narrowed: Vec<Result<ArmOutput, String>> = Vec::new();
     if !extra.is_empty() {
-        outcomes.extend(run_arms(storage, request.account_id, request.question, extra).await);
+        narrowed = run_arms(storage, request.account_id, query, extra).await;
         if cancelled(cancel) {
             return Ok(Retrieval::Cancelled);
         }
     }
-    let mut outputs: Vec<ArmOutput> = Vec::new();
-    let mut failure: Option<String> = None;
-    for outcome in outcomes {
-        match outcome {
-            Ok(output) => outputs.push(output),
-            Err(error) => failure = failure.or(Some(error)),
-        }
-    }
-    if let (true, Some(error)) = (outputs.is_empty(), failure) {
+    let (unfiltered, unfiltered_failure) = split(outcomes);
+    let (filtered, filtered_failure) = split(narrowed);
+    let outputs = if (constrained || contextual)
+        && filtered.iter().any(|output| !sequences(output).is_empty())
+    {
+        filtered
+    } else {
+        unfiltered.into_iter().chain(filtered).collect()
+    };
+    if let (true, Some(error)) = (outputs.is_empty(), unfiltered_failure.or(filtered_failure)) {
         return Err(error);
     }
     let arms: Vec<Vec<i64>> = outputs.iter().map(sequences).collect();
