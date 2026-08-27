@@ -1,17 +1,28 @@
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    task::{Context, Poll},
 };
 
-use reqwest::{Client, StatusCode};
+use async_openai::{
+    config::OpenAIConfig,
+    error::{ApiError, ApiErrorResponse, OpenAIError},
+    middleware::HttpRequestFactory,
+    types::stream::StreamResponse,
+    Client,
+};
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
+use reqwest::{header::AUTHORIZATION, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
+use tower::Service;
 use url::Url;
-
-const FRAME_SEPARATOR: &str = "\n\n";
-const DATA_PREFIX: &str = "data:";
-const DONE_MARKER: &str = "[DONE]";
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProviderError {
@@ -63,6 +74,10 @@ pub fn reasoning_off_fields(tier: usize) -> Map<String, Value> {
         _ => Map::new(),
     }
 }
+
+pub const TEMPERATURE: f64 = 0.0;
+pub const SEED: i64 = 20_260_827;
+pub const MAX_TOKENS: i64 = 2048;
 
 const LAST_REASONING_TIER: usize = 3;
 const THINK_OPEN: [&str; 3] = ["<think>", "<thinking>", "<reasoning>"];
@@ -128,32 +143,125 @@ fn partial_tag_len(text: &str, tags: &[&str]) -> usize {
         .unwrap_or(0)
 }
 
+const STREAM_REQUEST_MARKER: &[u8] = b"\"stream\":true";
+const TRUNCATION_SENTINEL_FRAME: &[u8] = b"\n\ndata: {\"streamEndedWithoutDoneMarker\":true}\n\n";
+
+#[derive(Clone)]
+struct StatusPreservingTransport {
+    client: reqwest::Client,
+    authorized: bool,
+}
+
+impl Service<HttpRequestFactory> for StatusPreservingTransport {
+    type Response = Response;
+    type Error = OpenAIError;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, OpenAIError>> + Send>>;
+
+    fn poll_ready(&mut self, _context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, factory: HttpRequestFactory) -> Self::Future {
+        let client = self.client.clone();
+        let authorized = self.authorized;
+        Box::pin(async move {
+            let mut request = factory.build().await?;
+            if !authorized {
+                request.headers_mut().remove(AUTHORIZATION);
+            }
+            let streaming = asks_for_a_stream(&request);
+            let response = client
+                .execute(request)
+                .await
+                .map_err(OpenAIError::Reqwest)?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(status_error(
+                    status,
+                    response.text().await.unwrap_or_default(),
+                ));
+            }
+            Ok(if streaming {
+                sentinel_terminated(response)
+            } else {
+                response
+            })
+        })
+    }
+}
+
+fn asks_for_a_stream(request: &reqwest::Request) -> bool {
+    request
+        .body()
+        .and_then(reqwest::Body::as_bytes)
+        .is_some_and(|body| {
+            body.windows(STREAM_REQUEST_MARKER.len())
+                .any(|window| window == STREAM_REQUEST_MARKER)
+        })
+}
+
+fn status_error(status: StatusCode, body: String) -> OpenAIError {
+    OpenAIError::ApiError(ApiErrorResponse {
+        status_code: status,
+        api_error: ApiError {
+            message: body,
+            r#type: None,
+            param: None,
+            code: None,
+        },
+    })
+}
+
+fn sentinel_terminated(response: Response) -> Response {
+    let (mut parts, ()) = http::Response::new(()).into_parts();
+    parts.status = response.status();
+    parts.version = response.version();
+    parts.headers = response.headers().clone();
+    let body = reqwest::Body::wrap_stream(with_trailing_sentinel(response.bytes_stream()));
+    http::Response::from_parts(parts, body).into()
+}
+
+fn with_trailing_sentinel(
+    stream: impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static,
+) -> impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static {
+    futures_util::stream::unfold(Some(Box::pin(stream)), |state| async move {
+        let mut stream = state?;
+        match stream.next().await {
+            Some(item) => Some((item, Some(stream))),
+            None => Some((Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)), None)),
+        }
+    })
+}
+
 #[derive(Clone)]
 pub struct Provider {
-    client: Client,
-    base_url: Url,
-    api_key: Option<String>,
+    client: Client<OpenAIConfig>,
     reasoning_tier: Arc<AtomicUsize>,
 }
 
 impl Provider {
     pub fn new(base_url: &str, api_key: Option<String>) -> Result<Self, String> {
+        let root = api_root(base_url)?;
+        let authorized = api_key.as_deref().is_some_and(|key| !key.is_empty());
+        let config = OpenAIConfig::new()
+            .with_api_base(root.as_str().trim_end_matches('/'))
+            .with_api_key(api_key.unwrap_or_default());
+        let transport = crate::http_client();
         Ok(Self {
-            client: crate::http_client(),
-            base_url: api_root(base_url)?,
-            api_key,
+            client: Client::build(transport.clone(), config).with_http_service(
+                StatusPreservingTransport {
+                    client: transport,
+                    authorized,
+                },
+            ),
             reasoning_tier: Arc::new(AtomicUsize::new(0)),
         })
     }
     pub async fn models(&self) -> Result<Vec<ProviderModel>, ProviderError> {
         let response: ModelsResponse = self
-            .get("models")
-            .send()
-            .await
-            .map_err(provider_error)?
-            .error_for_status()
-            .map_err(provider_error)?
-            .json()
+            .client
+            .models()
+            .list_byot()
             .await
             .map_err(provider_error)?;
         Ok(response
@@ -171,14 +279,9 @@ impl Provider {
         input: Vec<String>,
     ) -> Result<Vec<Vec<f32>>, ProviderError> {
         let response: EmbeddingsResponse = self
-            .post("embeddings")
-            .json(&serde_json::json!({"model":model,"input":input}))
-            .send()
-            .await
-            .map_err(provider_error)?
-            .error_for_status()
-            .map_err(provider_error)?
-            .json()
+            .client
+            .embeddings()
+            .create_byot(json!({"model": model, "input": input}))
             .await
             .map_err(provider_error)?;
         Ok(response
@@ -190,14 +293,18 @@ impl Provider {
     pub async fn chat_completion(
         &self,
         model: &str,
-        messages: serde_json::Value,
+        messages: Value,
+        response_format: Option<Value>,
     ) -> Result<String, ProviderError> {
         let response: ChatResponse = self
-            .chat_request(model, &messages, false)
-            .await?
-            .json()
-            .await
-            .map_err(provider_error)?;
+            .send(
+                model,
+                &messages,
+                false,
+                response_format,
+                |body| async move { self.client.chat().create_byot(body).await },
+            )
+            .await?;
         response
             .choices
             .into_iter()
@@ -208,93 +315,111 @@ impl Provider {
     pub async fn chat_completion_stream(
         &self,
         model: &str,
-        messages: serde_json::Value,
+        messages: Value,
         cancel: &AtomicBool,
         on_delta: &mut (dyn FnMut(&str) + Send),
     ) -> Result<(), ProviderError> {
-        let mut response = self.chat_request(model, &messages, true).await?;
-        let mut buffer = String::new();
+        let mut stream: StreamResponse<StreamChunk> = self
+            .send(model, &messages, true, None, |body| async move {
+                self.client.chat().create_stream_byot(body).await
+            })
+            .await?;
         let mut think = ThinkFilter::default();
-        let mut completed = false;
-        while let Some(chunk) = response.chunk().await.map_err(provider_error)? {
+        let mut delivered = false;
+        while let Some(item) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            buffer.push_str(&String::from_utf8_lossy(&chunk).replace('\r', ""));
-            while let Some(offset) = buffer.find(FRAME_SEPARATOR) {
-                if cancel.load(Ordering::SeqCst) {
-                    return Ok(());
-                }
-                let frame = buffer[..offset].to_owned();
-                buffer.replace_range(..offset + FRAME_SEPARATOR.len(), "");
-                match read_frame(&frame)? {
-                    Frame::Delta(text) => {
-                        let visible = think.push(&text);
-                        if !visible.is_empty() {
-                            on_delta(&visible);
-                        }
-                    }
-                    Frame::Done => completed = true,
-                    Frame::Ignored => {}
-                }
+            let chunk = item.map_err(provider_error)?;
+            if chunk.stream_ended_without_done_marker {
+                return Err(ProviderError::Response);
             }
+            let Some(text) = chunk
+                .choices
+                .into_iter()
+                .find_map(|choice| choice.delta.and_then(|delta| delta.content))
+                .filter(|text| !text.is_empty())
+            else {
+                continue;
+            };
+            delivered = true;
+            let visible = think.push(&text);
+            if !visible.is_empty() {
+                on_delta(&visible);
+            }
+        }
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(());
         }
         let tail = think.flush();
         if !tail.is_empty() {
             on_delta(&tail);
         }
-        if completed {
+        if delivered {
             Ok(())
         } else {
             Err(ProviderError::Response)
         }
     }
-    async fn chat_request(
+    async fn send<T, F, Fut>(
         &self,
         model: &str,
         messages: &Value,
         stream: bool,
-    ) -> Result<reqwest::Response, ProviderError> {
+        response_format: Option<Value>,
+        call: F,
+    ) -> Result<T, ProviderError>
+    where
+        F: Fn(Value) -> Fut,
+        Fut: std::future::Future<Output = Result<T, OpenAIError>>,
+    {
         loop {
             let tier = self.reasoning_tier.load(Ordering::SeqCst);
-            let mut body = Map::new();
-            body.insert("model".to_owned(), Value::String(model.to_owned()));
-            body.insert("messages".to_owned(), messages.clone());
-            if stream {
-                body.insert("stream".to_owned(), Value::Bool(true));
+            match call(chat_body(
+                model,
+                messages,
+                stream,
+                response_format.clone(),
+                tier,
+            ))
+            .await
+            {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    if rejects_the_request(&error) && tier < LAST_REASONING_TIER {
+                        self.reasoning_tier.store(tier + 1, Ordering::SeqCst);
+                        continue;
+                    }
+                    return Err(provider_error(error));
+                }
             }
-            body.extend(reasoning_off_fields(tier));
-            let response = self
-                .post("chat/completions")
-                .json(&Value::Object(body))
-                .send()
-                .await
-                .map_err(provider_error)?;
-            if response.status() == StatusCode::BAD_REQUEST && tier < LAST_REASONING_TIER {
-                self.reasoning_tier.store(tier + 1, Ordering::SeqCst);
-                continue;
-            }
-            return response.error_for_status().map_err(provider_error);
         }
     }
-    fn get(&self, path: &str) -> reqwest::RequestBuilder {
-        self.authorized(
-            self.client
-                .get(self.base_url.join(path).expect("relative provider path")),
-        )
+}
+
+fn chat_body(
+    model: &str,
+    messages: &Value,
+    stream: bool,
+    response_format: Option<Value>,
+    tier: usize,
+) -> Value {
+    let mut body = Map::new();
+    body.insert("model".to_owned(), Value::String(model.to_owned()));
+    body.insert("messages".to_owned(), messages.clone());
+    body.insert("stream".to_owned(), Value::Bool(stream));
+    body.insert("temperature".to_owned(), json!(TEMPERATURE));
+    body.insert("seed".to_owned(), json!(SEED));
+    body.insert("max_tokens".to_owned(), json!(MAX_TOKENS));
+    if let Some(format) = response_format {
+        body.insert("response_format".to_owned(), format);
     }
-    fn post(&self, path: &str) -> reqwest::RequestBuilder {
-        self.authorized(
-            self.client
-                .post(self.base_url.join(path).expect("relative provider path")),
-        )
-    }
-    fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match &self.api_key {
-            Some(key) => request.bearer_auth(key),
-            None => request,
-        }
-    }
+    body.extend(reasoning_off_fields(tier));
+    Value::Object(body)
+}
+
+fn rejects_the_request(error: &OpenAIError) -> bool {
+    matches!(error, OpenAIError::ApiError(response) if response.status_code.as_u16() == 400)
 }
 
 pub fn api_root(input: &str) -> Result<Url, String> {
@@ -316,42 +441,17 @@ pub fn api_root(input: &str) -> Result<Url, String> {
     }
     Ok(url)
 }
-enum Frame {
-    Delta(String),
-    Done,
-    Ignored,
-}
 
-fn read_frame(frame: &str) -> Result<Frame, ProviderError> {
-    let mut outcome = Frame::Ignored;
-    for line in frame.lines() {
-        let Some(payload) = line.trim().strip_prefix(DATA_PREFIX) else {
-            continue;
-        };
-        let payload = payload.trim();
-        if payload == DONE_MARKER {
-            return Ok(Frame::Done);
-        }
-        let parsed: StreamChunk =
-            serde_json::from_str(payload).map_err(|_| ProviderError::Response)?;
-        if let Some(text) = parsed
-            .choices
-            .into_iter()
-            .find_map(|choice| choice.delta.and_then(|delta| delta.content))
-            .filter(|text| !text.is_empty())
-        {
-            outcome = Frame::Delta(text);
-        }
-    }
-    Ok(outcome)
-}
-fn provider_error(error: reqwest::Error) -> ProviderError {
-    match error.status().map(|status| status.as_u16()) {
-        Some(401 | 403) => ProviderError::Authentication,
-        Some(429) => ProviderError::RateLimited,
-        Some(500..=599) => ProviderError::Server,
-        Some(_) => ProviderError::Response,
-        None => ProviderError::Transport,
+fn provider_error(error: OpenAIError) -> ProviderError {
+    match error {
+        OpenAIError::ApiError(response) => match response.status_code.as_u16() {
+            401 | 403 => ProviderError::Authentication,
+            429 => ProviderError::RateLimited,
+            500..=599 => ProviderError::Server,
+            _ => ProviderError::Response,
+        },
+        OpenAIError::Reqwest(_) | OpenAIError::StreamError(_) => ProviderError::Transport,
+        _ => ProviderError::Response,
     }
 }
 #[derive(Deserialize)]
@@ -390,9 +490,12 @@ struct ChatMessage {
     content: Option<String>,
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StreamChunk {
     #[serde(default)]
     choices: Vec<StreamChoice>,
+    #[serde(default)]
+    stream_ended_without_done_marker: bool,
 }
 #[derive(Deserialize)]
 struct StreamChoice {

@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, Result};
 
+use crate::search::query::fts_quote;
 use crate::storage::EmbeddingRepository;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,9 +49,128 @@ const CANDIDATE_SQL: &str = "SELECT e.message_seq,e.chunk_index,v.distance,m.sen
 
 const FILTERED_CANDIDATE_SQL: &str = "{candidates} AND v.rowid IN (SELECT c.seq FROM message_embeddings c CROSS JOIN messages f ON f.seq=c.message_seq WHERE c.account_id=?3 AND (?4 IS NULL OR f.sent_at>=?4) AND (?5 IS NULL OR f.sent_at<=?5) AND (?6 IS NULL OR f.sender LIKE '%'||?6||'%') AND (?7 IS NULL OR f.recipients LIKE '%'||?7||'%') AND (?8 IS NULL OR EXISTS (SELECT 1 FROM message_labels ml JOIN labels l ON l.account_id=ml.account_id AND l.id=ml.label_id WHERE ml.account_id=f.account_id AND ml.message_id=f.id AND l.name=?8)) AND (?9 IS NULL OR f.has_attachments=?9) AND (?10 IS NULL OR f.is_unread=?10) AND (?11 IS NULL OR f.is_starred=?11))";
 
+const STOP_WORDS: &[&str] = &[
+    "about", "after", "all", "also", "am", "an", "and", "any", "are", "as", "at", "be", "been",
+    "before", "but", "by", "can", "could", "did", "do", "does", "for", "from", "get", "got", "had",
+    "has", "have", "he", "her", "him", "his", "how", "if", "in", "into", "is", "it", "its", "just",
+    "like", "many", "may", "me", "more", "most", "much", "must", "my", "no", "not", "now", "of",
+    "off", "on", "one", "only", "or", "our", "out", "over", "own", "please", "said", "same", "she",
+    "should", "show", "since", "so", "some", "such", "tell", "than", "that", "the", "their",
+    "them", "then", "there", "these", "they", "this", "those", "through", "to", "too", "under",
+    "until", "up", "us", "use", "very", "was", "way", "we", "were", "what", "when", "where",
+    "which", "while", "who", "why", "will", "with", "would", "you", "your",
+];
+
+macro_rules! lexical_sql {
+    ($ordering:literal) => {
+        concat!(
+            "SELECT message_search.rowid,bm25(message_search) ",
+            "FROM message_search ",
+            "JOIN messages m ON m.seq=message_search.rowid ",
+            "WHERE message_search MATCH ?1 ",
+            "AND m.account_id=?2 ",
+            "AND (?3 IS NULL OR m.sent_at>=?3) ",
+            "AND (?4 IS NULL OR m.sent_at<=?4) ",
+            "AND (?5 IS NULL OR m.sender LIKE '%'||?5||'%') ",
+            "AND (?6 IS NULL OR m.recipients LIKE '%'||?6||'%') ",
+            "AND (?7 IS NULL OR EXISTS (SELECT 1 FROM message_labels ml ",
+            "JOIN labels l ON l.account_id=ml.account_id AND l.id=ml.label_id ",
+            "WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND l.name=?7)) ",
+            "AND (?8 IS NULL OR m.has_attachments=?8) ",
+            "AND (?9 IS NULL OR m.is_unread=?9) ",
+            "AND (?10 IS NULL OR m.is_starred=?10) ",
+            $ordering,
+            " LIMIT ?11"
+        )
+    };
+}
+
 const SOURCES_SQL: &str = "SELECT m.seq,m.id,m.thread_id,m.sender,m.recipients,m.subject,m.sent_at,m.plain_body,m.html_body,m.truncated_body FROM json_each(?2) r CROSS JOIN messages m ON m.seq=r.value WHERE m.account_id=?1";
 
 impl RetrievalRepository {
+    pub const LEXICAL_RELEVANCE_SQL: &'static str = lexical_sql!("ORDER BY rank");
+    pub const LEXICAL_CHRONOLOGICAL_SQL: &'static str = lexical_sql!("ORDER BY m.sent_at ASC");
+
+    pub fn match_expression(question: &str) -> Option<String> {
+        let terms: Vec<String> = question
+            .to_lowercase()
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|token| token.chars().count() > 1 && !STOP_WORDS.contains(token))
+            .map(fts_quote)
+            .collect();
+        if terms.is_empty() {
+            return None;
+        }
+        Some(terms.join(" OR "))
+    }
+
+    pub fn lexical_relevance(
+        connection: &Connection,
+        account_id: &str,
+        question: &str,
+        limit: i64,
+        filters: &RetrievalFilters,
+    ) -> Result<Vec<i64>> {
+        Self::lexical(
+            connection,
+            Self::LEXICAL_RELEVANCE_SQL,
+            account_id,
+            question,
+            limit,
+            filters,
+        )
+    }
+
+    pub fn lexical_chronological(
+        connection: &Connection,
+        account_id: &str,
+        question: &str,
+        limit: i64,
+        filters: &RetrievalFilters,
+    ) -> Result<Vec<i64>> {
+        Self::lexical(
+            connection,
+            Self::LEXICAL_CHRONOLOGICAL_SQL,
+            account_id,
+            question,
+            limit,
+            filters,
+        )
+    }
+
+    fn lexical(
+        connection: &Connection,
+        sql: &str,
+        account_id: &str,
+        question: &str,
+        limit: i64,
+        filters: &RetrievalFilters,
+    ) -> Result<Vec<i64>> {
+        let Some(expression) = Self::match_expression(question) else {
+            return Ok(Vec::new());
+        };
+        let mut statement = connection.prepare_cached(sql)?;
+        let sequences = statement
+            .query_map(
+                params![
+                    expression,
+                    account_id,
+                    filters.date_from,
+                    filters.date_to,
+                    filters.sender,
+                    filters.recipient,
+                    filters.folder,
+                    filters.has_attachment,
+                    filters.is_read.map(|read| !read),
+                    filters.is_starred,
+                    limit,
+                ],
+                |row| row.get(0),
+            )?
+            .collect();
+        sequences
+    }
+
     pub fn candidate_sql(table: &str, filtered: bool) -> String {
         let candidates = CANDIDATE_SQL.replace("{table}", table);
         if filtered {

@@ -121,21 +121,12 @@ async fn fixture(base_url: &str) -> (tempfile::TempDir, AiService) {
     (directory, AiService::new(storage))
 }
 
-fn variants(query: &str) -> String {
-    serde_json::Value::Array(
-        (0..5)
-            .map(|_| serde_json::json!({ "query": query }))
-            .collect(),
-    )
-    .to_string()
-}
-
 async fn pipeline(server: &MockServer, answer_body: String) {
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains("search query rewriter"))
+        .and(body_string_contains("retrieval planner"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "choices": [{"message": {"content": variants("budget deadline")}}]
+            "choices": [{"message": {"content": "{}"}}]
         })))
         .mount(server)
         .await;
@@ -145,14 +136,6 @@ async fn pipeline(server: &MockServer, answer_body: String) {
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"data": [{"embedding": [1.0, 0.0]}]})),
         )
-        .mount(server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .and(body_string_contains("relevance assessor"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "choices": [{"message": {"content": "{\"relevant\": true}"}}]
-        })))
         .mount(server)
         .await;
     Mock::given(method("POST"))
@@ -402,9 +385,9 @@ async fn retrieval_that_finds_nothing_answers_without_calling_the_chat_model() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains("search query rewriter"))
+        .and(body_string_contains("retrieval planner"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "choices": [{"message": {"content": variants("unrelated")}}]
+            "choices": [{"message": {"content": "{}"}}]
         })))
         .mount(&server)
         .await;
@@ -420,7 +403,7 @@ async fn retrieval_that_finds_nothing_answers_without_calling_the_chat_model() {
     let recorder = recorder();
     let request = service
         .chat()
-        .begin("account", "session", "deadline?")
+        .begin("account", "session", "zzzqqq wwwvvv?")
         .unwrap();
     latentmail_lib::ai::chat::run(recorder.app.handle(), &service, request).await;
 

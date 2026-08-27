@@ -28,7 +28,7 @@ async fn failing_server(status: u16) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .respond_with(ResponseTemplate::new(status))
+        .respond_with(ResponseTemplate::new(status).set_body_string("rejected"))
         .mount(&server)
         .await;
     server
@@ -43,7 +43,7 @@ fn messages() -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn a_streamed_response_yields_its_content_deltas_in_order_until_the_terminating_marker() {
+async fn a_streamed_response_yields_its_content_deltas_in_order() {
     let server = streaming_server(format!(
         "{}{}{}data: [DONE]\n\n",
         frame("The deadline "),
@@ -79,8 +79,12 @@ async fn carriage_returns_and_empty_content_frames_do_not_break_frame_parsing() 
 }
 
 #[tokio::test]
-async fn a_truncated_stream_reports_an_invalid_response_instead_of_completing() {
-    let server = streaming_server(frame("half an answer")).await;
+async fn a_stream_that_breaks_after_a_delta_reports_a_provider_error_instead_of_completing() {
+    let server = streaming_server(format!(
+        "{}data: {{\"choices\":7}}\n\n",
+        frame("half an answer")
+    ))
+    .await;
     let mut deltas: Vec<String> = Vec::new();
     let outcome = provider(&server)
         .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |delta| {
@@ -92,8 +96,24 @@ async fn a_truncated_stream_reports_an_invalid_response_instead_of_completing() 
 }
 
 #[tokio::test]
-async fn a_malformed_frame_reports_an_invalid_response() {
-    let server = streaming_server("data: {not json}\n\ndata: [DONE]\n\n".to_owned()).await;
+async fn a_stream_that_closes_cleanly_without_the_done_marker_reports_an_invalid_response() {
+    let server = streaming_server(format!("{}{}", frame("half an "), frame("answer"))).await;
+    let mut deltas: Vec<String> = Vec::new();
+    let outcome = provider(&server)
+        .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |delta| {
+            deltas.push(delta.to_owned())
+        })
+        .await;
+    assert_eq!(outcome, Err(ProviderError::Response));
+    assert_eq!(deltas, vec!["half an ", "answer"]);
+}
+
+#[tokio::test]
+async fn a_stream_that_yields_no_delta_at_all_reports_an_invalid_response() {
+    let server = streaming_server(
+        "data: {\"choices\":[]}\n\ndata: {\"id\":\"chunk\"}\n\ndata: [DONE]\n\n".to_owned(),
+    )
+    .await;
     let outcome = provider(&server)
         .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |_| {})
         .await;

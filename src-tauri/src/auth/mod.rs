@@ -10,6 +10,7 @@ use oauth2::{
     basic::BasicClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
 };
+use oauth2_reqwest::ReqwestClient;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 #[cfg(not(feature = "test-utils"))]
@@ -313,7 +314,7 @@ impl AuthService {
             }
             let token = client
                 .exchange_refresh_token(&RefreshToken::new(load_refresh_token(account_id)?))
-                .request_async(&crate::http_client())
+                .request_async(&ReqwestClient::from(crate::http_client()))
                 .await
                 .map_err(|e| e.to_string())?;
             let lifetime = token
@@ -473,7 +474,7 @@ pub async fn exchange_code(
     client
         .exchange_code(code)
         .set_pkce_verifier(verifier)
-        .request_async(&crate::http_client())
+        .request_async(&ReqwestClient::from(crate::http_client()))
         .await
         .map_err(|e| e.to_string())
 }

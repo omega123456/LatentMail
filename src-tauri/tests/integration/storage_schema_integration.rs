@@ -981,6 +981,47 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(!sources_plan
         .iter()
         .any(|step| step.contains("SCAN m ") || step.contains("TEMP B-TREE")));
+
+    let lexical_relevance_plan = query_plan(
+        &connection,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            RetrievalRepository::LEXICAL_RELEVANCE_SQL
+        ),
+    );
+    assert!(
+        lexical_relevance_plan
+            .iter()
+            .any(|step| step.contains("SCAN message_search VIRTUAL TABLE INDEX 32:M4")),
+        "the lexical relevance read must drive from the rank-ordered match"
+    );
+    assert!(lexical_relevance_plan
+        .iter()
+        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert_eq!(
+        lexical_relevance_plan
+            .iter()
+            .filter(|step| step.contains("TEMP B-TREE"))
+            .count(),
+        0
+    );
+
+    let lexical_chronological_plan = query_plan(
+        &connection,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            RetrievalRepository::LEXICAL_CHRONOLOGICAL_SQL
+        ),
+    );
+    assert!(
+        lexical_chronological_plan
+            .iter()
+            .any(|step| step.contains("SCAN message_search VIRTUAL TABLE INDEX 0:M4")),
+        "the lexical chronological read must still drive from the match, not from every message"
+    );
+    assert!(lexical_chronological_plan
+        .iter()
+        .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
 }
 
 #[test]

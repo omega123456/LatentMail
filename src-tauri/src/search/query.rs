@@ -143,7 +143,7 @@ fn tokenize(text: &str) -> Vec<RawToken> {
     tokens
 }
 
-fn fts_quote(value: &str) -> String {
+pub(crate) fn fts_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 

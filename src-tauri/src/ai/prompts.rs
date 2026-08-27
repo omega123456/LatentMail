@@ -3,10 +3,8 @@ use chrono::{DateTime, Local, TimeZone};
 use crate::ai::retrieval::Passage;
 
 const SYSTEM: &str = include_str!("../../prompts/inbox-chat-system.md");
-const REWRITE: &str = include_str!("../../prompts/inbox-chat-rewrite-multi-query.md");
-const RELEVANCE: &str = include_str!("../../prompts/inbox-chat-relevance-check.md");
+const PLAN: &str = include_str!("../../prompts/inbox-chat-plan.md");
 
-const EMPTY_BASELINE_FILTERS: &str = "{}";
 const DATE_TIME_FORMAT: &str = "%A, %B %-d, %Y, %-I:%M %p";
 const DATE_FORMAT: &str = "%Y-%m-%d";
 const PASSAGE_SEPARATOR: &str = "\n\n---\n\n";
@@ -21,17 +19,11 @@ pub fn system(now: DateTime<Local>, account_email: &str) -> String {
         .replace("{{USER_EMAIL}}", account_email)
 }
 
-pub fn rewrite(now: DateTime<Local>, account_email: &str, folders: &[String]) -> String {
-    REWRITE
-        .trim()
+pub fn plan(now: DateTime<Local>, account_email: &str, folders: &[String]) -> String {
+    PLAN.trim()
         .replace("{{TODAY_DATE}}", &now.format(DATE_FORMAT).to_string())
         .replace("{{FOLDERS}}", &folders.join(", "))
-        .replace("{{BASELINE_FILTERS}}", EMPTY_BASELINE_FILTERS)
         .replace("{{USER_EMAIL}}", account_email)
-}
-
-pub fn relevance() -> String {
-    RELEVANCE.trim().to_owned()
 }
 
 pub fn passage_block(passages: &[Passage]) -> String {

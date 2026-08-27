@@ -1,22 +1,20 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::{Local, NaiveDate, TimeZone};
-use serde::Deserialize;
-
 use crate::{
-    ai::{chunker, prompts, provider::Provider},
-    storage::{
-        CandidatePassage, PassageSource, RetrievalFilters, RetrievalRepository, Storage,
-        StorageError,
+    ai::{
+        chunker,
+        fusion::{self, Selected},
+        planner, prompts,
+        provider::Provider,
     },
+    storage::{PassageSource, RetrievalFilters, RetrievalRepository, Storage, StorageError},
 };
 
-pub const VARIANT_COUNT: usize = 5;
 pub const CANDIDATE_BUDGET: i64 = 1360;
 pub const SIMILARITY_FLOOR: f64 = 0.5;
 pub const PASSAGE_LIMIT: usize = 15;
-
-const DATE_FORMAT: &str = "%Y-%m-%d";
+pub const LEXICAL_LIMIT: i64 = 50;
+pub const CHRONOLOGICAL_LIMIT: i64 = 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -37,13 +35,6 @@ impl Role {
 pub struct HistoryMessage {
     pub role: Role,
     pub content: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Variant {
-    pub query: String,
-    pub filters: RetrievalFilters,
-    pub ascending: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,34 +72,15 @@ pub struct RetrievalRequest<'a> {
     pub history: &'a [HistoryMessage],
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RewriteVariant {
-    #[serde(default)]
-    query: Option<String>,
-    #[serde(default)]
-    date_from: Option<String>,
-    #[serde(default)]
-    date_to: Option<String>,
-    #[serde(default)]
-    sender: Option<String>,
-    #[serde(default)]
-    recipient: Option<String>,
-    #[serde(default)]
-    folder: Option<String>,
-    #[serde(default)]
-    has_attachment: Option<serde_json::Value>,
-    #[serde(default)]
-    is_read: Option<serde_json::Value>,
-    #[serde(default)]
-    is_starred: Option<serde_json::Value>,
-    #[serde(default)]
-    date_order: Option<String>,
+enum Arm {
+    Vector(Vec<f32>, RetrievalFilters),
+    Lexical(RetrievalFilters),
+    Chronological(RetrievalFilters),
 }
 
-#[derive(Deserialize)]
-struct RelevanceVerdict {
-    relevant: bool,
+enum ArmOutput {
+    Passages(Vec<Selected>),
+    Sequences(Vec<i64>),
 }
 
 fn storage_error(error: StorageError) -> String {
@@ -119,190 +91,131 @@ fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::SeqCst)
 }
 
-fn text(value: Option<String>) -> Option<String> {
-    value.filter(|entry| !entry.trim().is_empty())
-}
-
-fn flag(value: Option<serde_json::Value>) -> Option<bool> {
-    match value {
-        Some(serde_json::Value::Bool(value)) => Some(value),
-        Some(serde_json::Value::String(value)) => match value.to_lowercase().as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn day_start(value: Option<String>) -> Option<i64> {
-    let day = NaiveDate::parse_from_str(text(value)?.trim(), DATE_FORMAT).ok()?;
-    Local
-        .from_local_datetime(&day.and_hms_opt(0, 0, 0)?)
-        .earliest()
-        .map(|moment| moment.timestamp())
-}
-
-fn day_end(value: Option<String>) -> Option<i64> {
-    let day = NaiveDate::parse_from_str(text(value)?.trim(), DATE_FORMAT).ok()?;
-    Local
-        .from_local_datetime(&day.and_hms_opt(23, 59, 59)?)
-        .latest()
-        .map(|moment| moment.timestamp())
-}
-
-fn raw_variant(question: &str) -> Variant {
-    Variant {
-        query: question.to_owned(),
-        filters: RetrievalFilters::default(),
-        ascending: false,
-    }
-}
-
-fn fallback_variants(question: &str) -> Vec<Variant> {
-    (0..VARIANT_COUNT).map(|_| raw_variant(question)).collect()
-}
-
-pub fn parse_variants(raw: &str, question: &str) -> Vec<Variant> {
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
-        return fallback_variants(question);
-    };
-    let array = match parsed {
-        serde_json::Value::Array(entries) => Some(entries),
-        serde_json::Value::Object(entries) => {
-            entries.values().find_map(|value| value.as_array().cloned())
-        }
-        _ => None,
-    };
-    let Some(array) = array else {
-        return fallback_variants(question);
-    };
-    let mut variants: Vec<Variant> = array
-        .into_iter()
-        .filter_map(|entry| serde_json::from_value::<RewriteVariant>(entry).ok())
-        .map(|entry| Variant {
-            query: text(entry.query).unwrap_or_else(|| question.to_owned()),
-            filters: RetrievalFilters {
-                date_from: day_start(entry.date_from),
-                date_to: day_end(entry.date_to),
-                sender: text(entry.sender),
-                recipient: text(entry.recipient),
-                folder: text(entry.folder),
-                has_attachment: flag(entry.has_attachment),
-                is_read: flag(entry.is_read),
-                is_starred: flag(entry.is_starred),
-            },
-            ascending: entry.date_order.as_deref() == Some("asc"),
+async fn run_arm(
+    storage: Storage,
+    account_id: String,
+    question: String,
+    arm: Arm,
+) -> Result<ArmOutput, String> {
+    storage
+        .run(move |connection| match arm {
+            Arm::Vector(vector, filters) => Ok(ArmOutput::Passages(
+                RetrievalRepository::candidates(
+                    connection,
+                    &account_id,
+                    &vector,
+                    CANDIDATE_BUDGET,
+                    &filters,
+                )?
+                .into_iter()
+                .map(|candidate| Selected {
+                    message_seq: candidate.message_seq,
+                    chunk_index: candidate.chunk_index,
+                    similarity: 1.0 - candidate.distance,
+                })
+                .filter(|entry| entry.similarity >= SIMILARITY_FLOOR)
+                .collect(),
+            )),
+            Arm::Lexical(filters) => Ok(ArmOutput::Sequences(
+                RetrievalRepository::lexical_relevance(
+                    connection,
+                    &account_id,
+                    &question,
+                    LEXICAL_LIMIT,
+                    &filters,
+                )?,
+            )),
+            Arm::Chronological(filters) => Ok(ArmOutput::Sequences(
+                RetrievalRepository::lexical_chronological(
+                    connection,
+                    &account_id,
+                    &question,
+                    CHRONOLOGICAL_LIMIT,
+                    &filters,
+                )?,
+            )),
         })
-        .take(VARIANT_COUNT)
-        .collect();
-    while variants.len() < VARIANT_COUNT {
-        variants.push(raw_variant(question));
-    }
-    variants
+        .await
+        .map_err(storage_error)
 }
 
-fn history_json(history: &[HistoryMessage]) -> Vec<serde_json::Value> {
-    history
+async fn run_arms(
+    storage: &Storage,
+    account_id: &str,
+    question: &str,
+    arms: Vec<Arm>,
+) -> Vec<Result<ArmOutput, String>> {
+    let mut set = tokio::task::JoinSet::new();
+    for (index, arm) in arms.into_iter().enumerate() {
+        let storage = storage.clone();
+        let account_id = account_id.to_owned();
+        let question = question.to_owned();
+        set.spawn(async move { (index, run_arm(storage, account_id, question, arm).await) });
+    }
+    let mut collected: Vec<(usize, Result<ArmOutput, String>)> = Vec::new();
+    while let Some(joined) = set.join_next().await {
+        if let Ok(entry) = joined {
+            collected.push(entry);
+        }
+    }
+    collected.sort_by_key(|(index, _)| *index);
+    collected.into_iter().map(|(_, result)| result).collect()
+}
+
+fn sequences(output: &ArmOutput) -> Vec<i64> {
+    match output {
+        ArmOutput::Sequences(entries) => entries.clone(),
+        ArmOutput::Passages(entries) => {
+            let mut ordered: Vec<i64> = Vec::new();
+            for entry in entries {
+                if !ordered.contains(&entry.message_seq) {
+                    ordered.push(entry.message_seq);
+                }
+            }
+            ordered
+        }
+    }
+}
+
+fn scored(outputs: &[ArmOutput]) -> Vec<Selected> {
+    outputs
         .iter()
-        .map(
-            |message| serde_json::json!({"role": message.role.label(), "content": message.content}),
-        )
+        .filter_map(|output| match output {
+            ArmOutput::Passages(entries) => Some(entries.clone()),
+            ArmOutput::Sequences(_) => None,
+        })
+        .flatten()
         .collect()
 }
 
-fn conversation_label(history: &[HistoryMessage]) -> String {
-    if history.is_empty() {
-        return "Conversation: (empty)\n".to_owned();
-    }
-    let lines = history
+fn assemble(selected: &[Selected], sources: &[PassageSource]) -> Vec<Passage> {
+    let chunked: Vec<(i64, Vec<String>)> = sources
         .iter()
-        .map(|message| {
-            let role = match message.role {
-                Role::User => "User",
-                Role::Assistant => "Assistant",
-            };
-            format!("{role}: {}", message.content)
+        .map(|source| {
+            (
+                source.message_seq,
+                chunker::chunks(
+                    &source.sender,
+                    &source.recipients,
+                    &source.subject,
+                    source.truncated_body.as_deref(),
+                    source.plain_body.as_deref(),
+                    source.html_body.as_deref(),
+                ),
+            )
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("Conversation:\n{lines}\n")
-}
-
-pub async fn rewrite_variants(
-    provider: &Provider,
-    request: &RetrievalRequest<'_>,
-    folders: &[String],
-) -> Vec<Variant> {
-    let system = prompts::rewrite(Local::now(), request.account_email, folders);
-    let user = format!(
-        "{}New question: {}",
-        conversation_label(request.history),
-        request.question
-    );
-    let messages = serde_json::json!([
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]);
-    match provider.chat_completion(request.chat_model, messages).await {
-        Ok(raw) => parse_variants(&raw, request.question),
-        Err(_) => fallback_variants(request.question),
-    }
-}
-
-async fn is_relevant(provider: &Provider, request: &RetrievalRequest<'_>, context: &str) -> bool {
-    let mut messages = vec![serde_json::json!({"role":"system","content":prompts::relevance()})];
-    messages.extend(history_json(request.history));
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": format!(
-            "## Email Context\n\n{context}\n\n## Question\n\n{}",
-            request.question
-        ),
-    }));
-    match provider
-        .chat_completion(request.chat_model, serde_json::Value::Array(messages))
-        .await
-    {
-        Ok(raw) => serde_json::from_str::<RelevanceVerdict>(raw.trim())
-            .map(|verdict| verdict.relevant)
-            .unwrap_or(true),
-        Err(_) => true,
-    }
-}
-
-fn order_candidates(candidates: &mut [(CandidatePassage, f64)], ascending: bool) {
-    candidates.sort_by(|left, right| {
-        let by_date = if ascending {
-            left.0.sent_at.cmp(&right.0.sent_at)
-        } else {
-            right.0.sent_at.cmp(&left.0.sent_at)
-        };
-        by_date.then_with(|| {
-            right
-                .1
-                .partial_cmp(&left.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    });
-}
-
-fn assemble(candidates: &[(CandidatePassage, f64)], sources: &[PassageSource]) -> Vec<Passage> {
-    candidates
+        .collect();
+    selected
         .iter()
-        .filter_map(|(candidate, similarity)| {
+        .filter_map(|entry| {
             let source = sources
                 .iter()
-                .find(|source| source.message_seq == candidate.message_seq)?;
-            let chunks = chunker::chunks(
-                &source.sender,
-                &source.recipients,
-                &source.subject,
-                source.truncated_body.as_deref(),
-                source.plain_body.as_deref(),
-                source.html_body.as_deref(),
-            );
-            let index = usize::try_from(candidate.chunk_index).ok()?;
+                .find(|source| source.message_seq == entry.message_seq)?;
+            let chunks = &chunked
+                .iter()
+                .find(|(message_seq, _)| *message_seq == entry.message_seq)?
+                .1;
+            let index = usize::try_from(entry.chunk_index).ok()?;
             let raw = chunks.get(index)?;
             let body = if index == 0 {
                 raw.split_once("\n\n")
@@ -311,10 +224,10 @@ fn assemble(candidates: &[(CandidatePassage, f64)], sources: &[PassageSource]) -
                 raw.as_str()
             };
             Some(Passage {
-                message_seq: candidate.message_seq,
-                chunk_index: candidate.chunk_index,
-                similarity: *similarity,
-                sent_at: candidate.sent_at,
+                message_seq: entry.message_seq,
+                chunk_index: entry.chunk_index,
+                similarity: entry.similarity,
+                sent_at: source.sent_at,
                 sender: source.sender.clone(),
                 recipients: source.recipients.clone(),
                 subject: source.subject.clone(),
@@ -346,44 +259,34 @@ fn cited_sources(passages: &[Passage], sources: &[PassageSource]) -> Vec<Passage
         .collect()
 }
 
-async fn variant_passages(
+async fn unfiltered_pass(
+    provider: &Provider,
     storage: &Storage,
-    account_id: &str,
-    variant: &Variant,
-    vector: Vec<f32>,
-) -> Result<(Vec<Passage>, Vec<PassageSource>), String> {
-    let account = account_id.to_owned();
-    let filters = variant.filters.clone();
-    let ascending = variant.ascending;
-    storage
-        .run(move |connection| {
-            let mut retained: Vec<(CandidatePassage, f64)> = RetrievalRepository::candidates(
-                connection,
-                &account,
-                &vector,
-                CANDIDATE_BUDGET,
-                &filters,
-            )?
-            .into_iter()
-            .map(|candidate| {
-                let similarity = 1.0 - candidate.distance;
-                (candidate, similarity)
-            })
-            .filter(|(_, similarity)| *similarity >= SIMILARITY_FLOOR)
-            .collect();
-            order_candidates(&mut retained, ascending);
-            retained.truncate(PASSAGE_LIMIT);
-            let mut sequences: Vec<i64> = Vec::new();
-            for (candidate, _) in &retained {
-                if !sequences.contains(&candidate.message_seq) {
-                    sequences.push(candidate.message_seq);
-                }
-            }
-            let sources = RetrievalRepository::sources(connection, &account, &sequences)?;
-            Ok((assemble(&retained, &sources), sources))
-        })
-        .await
-        .map_err(storage_error)
+    request: &RetrievalRequest<'_>,
+) -> Result<(Vec<f32>, Vec<Result<ArmOutput, String>>), String> {
+    let (embedded, lexical) = futures_util::future::join(
+        provider.embed(request.embedding_model, vec![request.question.to_owned()]),
+        run_arms(
+            storage,
+            request.account_id,
+            request.question,
+            vec![Arm::Lexical(RetrievalFilters::default())],
+        ),
+    )
+    .await;
+    let vectors = embedded.map_err(|error| error.to_string())?;
+    let Some(vector) = vectors.into_iter().next() else {
+        return Err("Provider returned an incomplete embedding batch".to_owned());
+    };
+    let mut outputs = run_arms(
+        storage,
+        request.account_id,
+        request.question,
+        vec![Arm::Vector(vector.clone(), RetrievalFilters::default())],
+    )
+    .await;
+    outputs.extend(lexical);
+    Ok((vector, outputs))
 }
 
 pub async fn retrieve(
@@ -400,62 +303,59 @@ pub async fn retrieve(
     if cancelled(cancel) {
         return Ok(Retrieval::Cancelled);
     }
-    let variants = rewrite_variants(provider, request, &folders).await;
+    let (base, plan) = futures_util::future::join(
+        unfiltered_pass(provider, storage, request),
+        planner::plan(provider, request, &folders),
+    )
+    .await;
+    let (vector, mut outcomes) = base?;
     if cancelled(cancel) {
         return Ok(Retrieval::Cancelled);
     }
-    let mut queries: Vec<String> = Vec::new();
-    for variant in &variants {
-        if !queries.contains(&variant.query) {
-            queries.push(variant.query.clone());
+    let mut extra: Vec<Arm> = Vec::new();
+    if !plan.filters.is_empty() {
+        extra.push(Arm::Vector(vector, plan.filters.clone()));
+        extra.push(Arm::Lexical(plan.filters.clone()));
+    }
+    if plan.ascending {
+        extra.push(Arm::Chronological(plan.filters.clone()));
+    }
+    if !extra.is_empty() {
+        outcomes.extend(run_arms(storage, request.account_id, request.question, extra).await);
+        if cancelled(cancel) {
+            return Ok(Retrieval::Cancelled);
         }
     }
-    let vectors = provider
-        .embed(request.embedding_model, queries.clone())
+    let mut outputs: Vec<ArmOutput> = Vec::new();
+    let mut failure: Option<String> = None;
+    for outcome in outcomes {
+        match outcome {
+            Ok(output) => outputs.push(output),
+            Err(error) => failure = failure.or(Some(error)),
+        }
+    }
+    if let (true, Some(error)) = (outputs.is_empty(), failure) {
+        return Err(error);
+    }
+    let arms: Vec<Vec<i64>> = outputs.iter().map(sequences).collect();
+    let order = fusion::fuse(&arms);
+    let selected = fusion::select(&order, &scored(&outputs), PASSAGE_LIMIT);
+    let wanted: Vec<i64> = selected.iter().map(|entry| entry.message_seq).collect();
+    let account = request.account_id.to_owned();
+    let sources = storage
+        .run(move |connection| RetrievalRepository::sources(connection, &account, &wanted))
         .await
-        .map_err(|error| error.to_string())?;
-    if vectors.len() != queries.len() {
-        return Err("Provider returned an incomplete embedding batch".to_owned());
+        .map_err(storage_error)?;
+    let passages = assemble(&selected, &sources);
+    if cancelled(cancel) {
+        return Ok(Retrieval::Cancelled);
     }
-    let last = variants.len().saturating_sub(1);
-    let mut seen: Vec<String> = Vec::new();
-    for (index, variant) in variants.iter().enumerate() {
-        if cancelled(cancel) {
-            return Ok(Retrieval::Cancelled);
-        }
-        let key = format!("{}|{:?}", variant.query, variant.filters);
-        if index < last && seen.contains(&key) {
-            continue;
-        }
-        seen.push(key);
-        let Some(position) = queries.iter().position(|query| query == &variant.query) else {
-            continue;
-        };
-        let (passages, sources) = variant_passages(
-            storage,
-            request.account_id,
-            variant,
-            vectors[position].clone(),
-        )
-        .await?;
-        if passages.is_empty() {
-            if index < last {
-                continue;
-            }
-            return Ok(Retrieval::Empty);
-        }
-        let context = prompts::passage_block(&passages);
-        if cancelled(cancel) {
-            return Ok(Retrieval::Cancelled);
-        }
-        if index < last && !is_relevant(provider, request, &context).await {
-            continue;
-        }
-        return Ok(Retrieval::Found(Box::new(Retrieved {
-            sources: cited_sources(&passages, &sources),
-            context,
-            passages,
-        })));
+    if passages.is_empty() {
+        return Ok(Retrieval::Empty);
     }
-    Ok(Retrieval::Empty)
+    Ok(Retrieval::Found(Box::new(Retrieved {
+        sources: cited_sources(&passages, &sources),
+        context: prompts::passage_block(&passages),
+        passages,
+    })))
 }

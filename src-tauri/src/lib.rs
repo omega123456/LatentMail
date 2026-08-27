@@ -21,6 +21,10 @@ pub mod sync;
 pub mod updater;
 
 pub fn http_client() -> reqwest::Client {
+    static TLS_PROVIDER: std::sync::Once = std::sync::Once::new();
+    TLS_PROVIDER.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
     let builder = reqwest::Client::builder();
     #[cfg(feature = "test-utils")]
     let builder = builder.no_proxy();

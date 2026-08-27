@@ -28,5 +28,5 @@ test-group = 'ipc-contract'
 threads-required = "num-cpus"
 
 [[profile.default.overrides]]
-filter = 'test(/^ai_(provider_client|index_build|command_failures|retrieval_variants|chat_session|chat_streaming)_integration::/)'
+filter = 'test(/^ai_(provider_client|index_build|command_failures|planner|retrieval_orchestration|chat_session|chat_streaming)_integration::/)'
 test-group = 'ai-loopback'

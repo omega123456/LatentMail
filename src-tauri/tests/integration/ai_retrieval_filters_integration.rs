@@ -1,14 +1,7 @@
 use chrono::{Local, NaiveDate, TimeZone};
-use latentmail_lib::{
-    ai::{
-        prompts,
-        retrieval::{parse_variants, Passage},
-    },
-    storage::{
-        Account, AccountRepository, EmbeddingRepository, HtmlPresence, Label, LabelRepository,
-        Message, MessageEmbedding, MessageRepository, RetrievalFilters, RetrievalRepository,
-        Storage,
-    },
+use latentmail_lib::storage::{
+    Account, AccountRepository, EmbeddingRepository, HtmlPresence, Label, LabelRepository, Message,
+    MessageEmbedding, MessageRepository, RetrievalFilters, RetrievalRepository, Storage,
 };
 
 fn seconds(day: &str, hour: u32) -> i64 {
@@ -26,19 +19,6 @@ fn seconds(day: &str, hour: u32) -> i64 {
 
 fn day_start(day: &str) -> i64 {
     seconds(day, 0)
-}
-
-fn day_end(day: &str) -> i64 {
-    Local
-        .from_local_datetime(
-            &NaiveDate::parse_from_str(day, "%Y-%m-%d")
-                .unwrap()
-                .and_hms_opt(23, 59, 59)
-                .unwrap(),
-        )
-        .latest()
-        .unwrap()
-        .timestamp()
 }
 
 fn account() -> Account {
@@ -315,111 +295,4 @@ fn source_metadata_and_folder_names_resolve_for_the_account() {
         RetrievalRepository::folder_names(&connection, "account").unwrap(),
         vec!["Inbox".to_owned(), "Sent".to_owned()]
     );
-}
-
-#[test]
-fn the_rewriter_response_maps_onto_every_structured_filter() {
-    let variants = parse_variants(
-        r#"[{"query":"budget","dateFrom":"2026-03-01","dateTo":"2026-03-05","sender":"alice@example.com","recipient":"me@example.com","folder":"Inbox","hasAttachment":true,"isRead":"false","isStarred":true,"dateOrder":"asc"}]"#,
-        "raw question",
-    );
-    assert_eq!(variants.len(), 5);
-    assert_eq!(variants[0].query, "budget");
-    assert!(variants[0].ascending);
-    assert_eq!(
-        variants[0].filters,
-        RetrievalFilters {
-            date_from: Some(day_start("2026-03-01")),
-            date_to: Some(day_end("2026-03-05")),
-            sender: Some("alice@example.com".into()),
-            recipient: Some("me@example.com".into()),
-            folder: Some("Inbox".into()),
-            has_attachment: Some(true),
-            is_read: Some(false),
-            is_starred: Some(true),
-        }
-    );
-    assert_eq!(variants[4].query, "raw question");
-    assert!(variants[4].filters.is_empty());
-    assert!(!variants[4].ascending);
-}
-
-#[test]
-fn an_unusable_rewriter_response_falls_back_to_the_raw_question() {
-    for raw in ["not json", "\"a string\"", "{\"reason\":\"no array here\"}"] {
-        let variants = parse_variants(raw, "raw question");
-        assert_eq!(variants.len(), 5);
-        assert!(variants
-            .iter()
-            .all(|variant| variant.query == "raw question" && variant.filters.is_empty()));
-    }
-    let wrapped = parse_variants(r#"{"queries":[{"query":"wrapped","folder":"  "}]}"#, "raw");
-    assert_eq!(wrapped[0].query, "wrapped");
-    assert!(wrapped[0].filters.is_empty());
-    let overflow = parse_variants(
-        r#"[{"query":"a"},{"query":"b"},{"query":"c"},{"query":"d"},{"query":"e"},{"query":"f"}]"#,
-        "raw",
-    );
-    assert_eq!(
-        overflow
-            .iter()
-            .map(|variant| variant.query.as_str())
-            .collect::<Vec<_>>(),
-        vec!["a", "b", "c", "d", "e"]
-    );
-    let malformed = parse_variants(
-        r#"[{"query":"kept","hasAttachment":"maybe","dateFrom":"not-a-date"},7]"#,
-        "raw",
-    );
-    assert_eq!(malformed[0].query, "kept");
-    assert!(malformed[0].filters.is_empty());
-}
-
-#[test]
-fn the_prompts_carry_their_placeholders_and_the_numbered_passage_block() {
-    let now = Local
-        .from_local_datetime(
-            &NaiveDate::from_ymd_opt(2026, 8, 26)
-                .unwrap()
-                .and_hms_opt(14, 30, 0)
-                .unwrap(),
-        )
-        .earliest()
-        .unwrap();
-    let system = prompts::system(now, "me@example.com");
-    assert!(system.contains("Wednesday, August 26, 2026, 2:30 PM"));
-    assert!(system.contains("me@example.com"));
-    assert!(!system.contains("{{"));
-    let rewrite = prompts::rewrite(now, "me@example.com", &["Inbox".into(), "Sent".into()]);
-    assert!(rewrite.contains("Today's date: 2026-08-26"));
-    assert!(rewrite.contains("Available folders: Inbox, Sent"));
-    assert!(rewrite.contains("Required baseline filters"));
-    assert!(!rewrite.contains("{{"));
-    assert!(prompts::relevance().contains("{\"relevant\": true}"));
-    let block = prompts::passage_block(&[
-        Passage {
-            message_seq: 1,
-            chunk_index: 0,
-            similarity: 0.9,
-            sent_at: seconds("2026-08-26", 14),
-            sender: "Alice <alice@example.com>".into(),
-            recipients: "me@example.com".into(),
-            subject: "Budget".into(),
-            text: "first passage".into(),
-        },
-        Passage {
-            message_seq: 2,
-            chunk_index: 1,
-            similarity: 0.8,
-            sent_at: seconds("2026-08-26", 15),
-            sender: "Bob <bob@example.com>".into(),
-            recipients: "me@example.com".into(),
-            subject: "Venue".into(),
-            text: "second passage".into(),
-        },
-    ]);
-    assert!(block.starts_with("[1] From: Alice <alice@example.com>\nTo: me@example.com\nSubject: Budget\nDate: Wednesday, August 26, 2026, 2:00 PM\nfirst passage"));
-    assert!(block.contains("\n\n---\n\n[2] From: Bob <bob@example.com>"));
-    assert!(block.ends_with("second passage"));
-    assert!(prompts::passage_block(&[]).is_empty());
 }
