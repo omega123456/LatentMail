@@ -6,6 +6,7 @@ test-results/
 src-tauri/target/
 src-tauri/gen/
 src-tauri/secrets.json
+bench/
 .DS_Store
 *.tsbuildinfo
 .claude
