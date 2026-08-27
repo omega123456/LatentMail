@@ -139,7 +139,7 @@ pub struct Provider {
 impl Provider {
     pub fn new(base_url: &str, api_key: Option<String>) -> Result<Self, String> {
         Ok(Self {
-            client: Client::new(),
+            client: crate::http_client(),
             base_url: api_root(base_url)?,
             api_key,
             reasoning_tier: Arc::new(AtomicUsize::new(0)),

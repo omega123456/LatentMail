@@ -313,7 +313,7 @@ impl AuthService {
             }
             let token = client
                 .exchange_refresh_token(&RefreshToken::new(load_refresh_token(account_id)?))
-                .request_async(&reqwest::Client::new())
+                .request_async(&crate::http_client())
                 .await
                 .map_err(|e| e.to_string())?;
             let lifetime = token
@@ -473,13 +473,13 @@ pub async fn exchange_code(
     client
         .exchange_code(code)
         .set_pkce_verifier(verifier)
-        .request_async(&reqwest::Client::new())
+        .request_async(&crate::http_client())
         .await
         .map_err(|e| e.to_string())
 }
 
 pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
-    reqwest::Client::new()
+    crate::http_client()
         .get(oauth_endpoint("LATENTMAIL_GOOGLE_PROFILE_URL", PROFILE_URL))
         .bearer_auth(access_token)
         .send()
@@ -494,7 +494,7 @@ pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
 
 #[cfg(not(feature = "test-utils"))]
 pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
-    reqwest::Client::new()
+    crate::http_client()
         .get(oauth_endpoint(
             "LATENTMAIL_GOOGLE_USERINFO_URL",
             USERINFO_URL,

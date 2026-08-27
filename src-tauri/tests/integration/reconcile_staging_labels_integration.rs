@@ -1,5 +1,4 @@
-#[path = "reconcile_staging_integration.rs"]
-mod cases;
+use crate::reconcile_staging_integration as cases;
 
 #[tokio::test(flavor = "current_thread")]
 async fn reconciliation_resumes_label_enumeration_from_its_saved_page() {

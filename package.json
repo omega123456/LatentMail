@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build && tauri build --no-bundle",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:rust": "cargo nextest run --features test-utils --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "cargo nextest run --features test-utils --no-default-features --manifest-path src-tauri/Cargo.toml",
     "test:rust:coverage": "node scripts/run-rust-coverage.mjs",
     "test:e2e": "playwright test",
     "test:all": "pnpm test:coverage && pnpm test:rust:coverage && pnpm test:e2e",

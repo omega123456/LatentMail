@@ -1,5 +1,4 @@
-#[path = "reconcile_staging_integration.rs"]
-mod cases;
+use crate::reconcile_staging_integration as cases;
 
 #[tokio::test(flavor = "current_thread")]
 async fn completed_reconciliation_cursor_starts_a_fresh_resumable_run() {

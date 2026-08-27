@@ -1,5 +1,4 @@
-#[path = "reconcile_staging_integration.rs"]
-mod cases;
+use crate::reconcile_staging_integration as cases;
 
 #[tokio::test(flavor = "current_thread")]
 async fn reconciliation_resumes_universe_enumeration_with_its_saved_candidate() {

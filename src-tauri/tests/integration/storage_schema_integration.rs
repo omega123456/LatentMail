@@ -1083,14 +1083,14 @@ fn every_rowid_table_carries_a_leading_autoincrement_seq_and_its_former_key_as_a
 fn embedding_migrations_preserve_populated_v8_data_and_foreign_keys() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     for migration in [
-        include_str!("../migrations/V1__initial_schema.sql"),
-        include_str!("../migrations/V2__derive_label_unread_counts.sql"),
-        include_str!("../migrations/V3__failed_durable_operations_index.sql"),
-        include_str!("../migrations/V4__message_attachments.sql"),
-        include_str!("../migrations/V5__reconcile_staging.sql"),
-        include_str!("../migrations/V6__drop_reconcile_remote_labels_index.sql"),
-        include_str!("../migrations/V7__per_label_thread_latest_at.sql"),
-        include_str!("../migrations/V8__account_ai_config.sql"),
+        include_str!("../../migrations/V1__initial_schema.sql"),
+        include_str!("../../migrations/V2__derive_label_unread_counts.sql"),
+        include_str!("../../migrations/V3__failed_durable_operations_index.sql"),
+        include_str!("../../migrations/V4__message_attachments.sql"),
+        include_str!("../../migrations/V5__reconcile_staging.sql"),
+        include_str!("../../migrations/V6__drop_reconcile_remote_labels_index.sql"),
+        include_str!("../../migrations/V7__per_label_thread_latest_at.sql"),
+        include_str!("../../migrations/V8__account_ai_config.sql"),
     ] {
         connection.execute_batch(migration).unwrap();
     }
@@ -1107,11 +1107,11 @@ fn embedding_migrations_preserve_populated_v8_data_and_foreign_keys() {
         )
         .unwrap();
     connection
-        .execute_batch(include_str!("../migrations/V9__message_embeddings.sql"))
+        .execute_batch(include_str!("../../migrations/V9__message_embeddings.sql"))
         .unwrap();
     connection
         .execute_batch(include_str!(
-            "../migrations/V10__repair_embedding_invalidation_triggers.sql"
+            "../../migrations/V10__repair_embedding_invalidation_triggers.sql"
         ))
         .unwrap();
     connection

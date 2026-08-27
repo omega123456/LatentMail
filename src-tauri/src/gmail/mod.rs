@@ -44,7 +44,7 @@ const MAX_ATTACHMENT_RESPONSE_BYTES: usize = 40 * 1024 * 1024;
 
 pub const RESERVED_ATTACHMENT_ID_PREFIX: &str = "latentmail-inline-";
 
-static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(crate::http_client);
 
 pub mod labels;
 

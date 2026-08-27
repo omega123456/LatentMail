@@ -21,7 +21,7 @@ struct Shape {
 #[tokio::test]
 async fn committed_message_corpus_maps_payload_trees() {
     let shapes: Vec<Shape> =
-        serde_json::from_str(include_str!("fixtures/gmail_payload_corpus.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/gmail_payload_corpus.json")).unwrap();
     assert_eq!(shapes.len(), 9);
     for shape in shapes {
         let server = MockServer::start().await;

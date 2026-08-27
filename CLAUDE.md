@@ -78,9 +78,11 @@ Keep every test in a dedicated file under the appropriate test root (`src/tests/
 
 ### Rust
 
-- Tests only in `src-tauri/tests/<area>_<focus>_integration.rs`. Name files after what they test, not meta-goals like `coverage_boost`.
+- Tests only in `src-tauri/tests/integration/<area>_<focus>_integration.rs`. Name files after what they test, not meta-goals like `coverage_boost`.
+- **All integration tests compile into one binary** (`tests/integration/main.rs`). Every test file is a `mod` line there. Do not add a new `tests/*.rs` file: cargo turns each one into a separate test target, and each target relinks the whole dependency graph and pays a first-run macOS code-signature scan.
 - Native integration boundaries that can mutate host/global state must be gated out of Rust tests with `feature = "test-utils"` and tested through fakes or explicit `Unsupported` assertions. This includes NVAPI/NVIDIA DRS preset writes, registry-backed driver settings, real vendor APIs, and similar machine-global APIs.
-- After adding a new test file, register it in **both** aliases in the repo-root `.cargo/config.toml`: `gm-test-integration` and `gm-llvm-cov`.
+- After adding a new test file, add one `mod <file_stem>;` line to `src-tauri/tests/integration/main.rs`. The `.cargo/config.toml` aliases need no change.
+- **Never construct a `reqwest::Client` directly.** Use `latentmail_lib::http_client()`, in production code and in tests. A direct `Client::new()` reads the macOS system proxy configuration through `configd`, which serializes across processes and made the suite 18x slower.
 - Run with `pnpm test:rust` for fast iteration; `pnpm test:rust:coverage` for the coverage gate (`cargo llvm-cov nextest`). `cargo-llvm-cov` sets `--cfg coverage` to exclude the Tauri runtime entrypoint (`lib::run` / `main`); do not add other code behind `cfg(coverage)` to dodge coverage.
 
 ### Playwright (E2E + Visual Regression)

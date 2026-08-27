@@ -92,7 +92,7 @@ pub async fn download(url: &str) -> Option<Vec<u8>> {
     if parsed.scheme() != "https" {
         return None;
     }
-    let response = tokio::time::timeout(DOWNLOAD_BUDGET, reqwest::Client::new().get(parsed).send())
+    let response = tokio::time::timeout(DOWNLOAD_BUDGET, crate::http_client().get(parsed).send())
         .await
         .ok()?
         .ok()?;

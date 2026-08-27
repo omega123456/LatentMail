@@ -35,7 +35,7 @@ async fn serves_a_remote_image_from_the_application_origin() {
         .await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/hand.gif", server.uri())),
     )
     .await;
@@ -58,7 +58,7 @@ async fn refuses_responses_that_are_not_images() {
         .await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/page.html", server.uri())),
     )
     .await;
@@ -72,7 +72,7 @@ async fn reports_missing_images_as_not_found() {
     let server = MockServer::start().await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/gone.png", server.uri())),
     )
     .await;
@@ -90,7 +90,7 @@ async fn refuses_a_response_that_declares_no_content_type() {
         .await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/nothing", server.uri())),
     )
     .await;
@@ -112,7 +112,7 @@ async fn refuses_a_body_that_ends_before_its_declared_length() {
         .await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/truncated.png", server.uri())),
     )
     .await;
@@ -130,7 +130,7 @@ async fn refuses_a_target_that_redirects_forever() {
         .mount(&server)
         .await;
 
-    let response = respond(&reqwest::Client::new(), &proxy_url(&destination)).await;
+    let response = respond(&latentmail_lib::http_client(), &proxy_url(&destination)).await;
 
     assert_eq!(response.status(), 404);
 }
@@ -138,7 +138,7 @@ async fn refuses_a_target_that_redirects_forever() {
 #[tokio::test]
 async fn retries_once_when_the_connection_fails_and_then_reports_not_found() {
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url("http://127.0.0.1:1/a.png"),
     )
     .await;
@@ -160,7 +160,7 @@ async fn refuses_images_that_exceed_the_size_ceiling() {
         .await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/huge.png", server.uri())),
     )
     .await;
@@ -171,7 +171,7 @@ async fn refuses_images_that_exceed_the_size_ceiling() {
 #[tokio::test]
 async fn respond_refuses_a_target_that_is_not_http() {
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &format!("{SCHEME}://proxy/?url=ftp%3A%2F%2Fexample.com%2Fa.png"),
     )
     .await;
@@ -194,7 +194,7 @@ async fn sniffs_images_that_arrive_as_a_generic_binary_stream() {
         .await;
 
     let response = respond(
-        &reqwest::Client::new(),
+        &latentmail_lib::http_client(),
         &proxy_url(&format!("{}/qrcode.png", server.uri())),
     )
     .await;

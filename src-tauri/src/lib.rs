@@ -20,6 +20,13 @@ pub mod storage;
 pub mod sync;
 pub mod updater;
 
+pub fn http_client() -> reqwest::Client {
+    let builder = reqwest::Client::builder();
+    #[cfg(feature = "test-utils")]
+    let builder = builder.no_proxy();
+    builder.build().expect("http client")
+}
+
 #[cfg(not(coverage))]
 use tauri::Manager;
 
@@ -43,7 +50,7 @@ pub fn run() {
         println!("{message}");
         std::process::exit(code);
     }
-    let image_client = reqwest::Client::new();
+    let image_client = http_client();
     shell::register_plugins(ipc::register(tauri::Builder::default()))
         .register_asynchronous_uri_scheme_protocol(
             remote_images::SCHEME,
