@@ -2,6 +2,8 @@ import { Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Select as SelectPrimitive } from 'radix-ui';
 import { TextInput } from '@/components/shared/TextInput';
+import { modelsOfKind } from '@/lib/ai/model-kind';
+import { settingsLinkMuted } from './styles';
 import type { AiModel } from '@/lib/types/ipc';
 
 const triggerClass =
@@ -11,11 +13,12 @@ const contentClass =
 const scrollButtonClass =
   'flex h-5 cursor-default items-center justify-center text-settings-ink-mute dark:text-dark-settings-ink-mute';
 const itemClass =
-  'flex cursor-pointer select-none items-center gap-2 rounded-sm px-2.5 py-1.75 outline-none data-[highlighted]:bg-settings-container-low data-[state=checked]:bg-settings-primary-container data-[state=checked]:text-settings-on-primary-container dark:data-[highlighted]:bg-dark-settings-container-low dark:data-[state=checked]:bg-dark-settings-primary-container dark:data-[state=checked]:text-dark-settings-on-primary-container';
+  'flex cursor-pointer select-none items-center gap-2 rounded-sm px-2.5 py-1.75 outline-none hover:bg-settings-container-low dark:hover:bg-dark-settings-container-low data-[highlighted]:bg-settings-container-low data-[state=checked]:bg-settings-primary-container data-[state=checked]:text-settings-on-primary-container dark:data-[highlighted]:bg-dark-settings-container-low dark:data-[state=checked]:bg-dark-settings-primary-container dark:data-[state=checked]:text-dark-settings-on-primary-container';
 
 export function ModelCardList({
   accountEmail,
   label,
+  kind,
   models,
   selectedId,
   selectedDimension,
@@ -25,6 +28,7 @@ export function ModelCardList({
 }: {
   accountEmail: string;
   label: string;
+  kind: 'chat' | 'embedding';
   models: AiModel[];
   selectedId: string | null;
   selectedDimension?: number | null;
@@ -33,12 +37,18 @@ export function ModelCardList({
   onChange: (id: string) => void;
 }) {
   const [filter, setFilter] = useState('');
+  const [showAll, setShowAll] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
   const firstItemRef = useRef<HTMLDivElement>(null);
   const navigatingRef = useRef(false);
+  const ofKind = useMemo(
+    () => modelsOfKind(models, kind, selectedId),
+    [kind, models, selectedId],
+  );
+  const catalogue = showAll ? models : ofKind;
   const visible = useMemo(
-    () => models.filter((model) => model.id.toLowerCase().includes(filter.toLowerCase())),
-    [filter, models],
+    () => catalogue.filter((model) => model.id.toLowerCase().includes(filter.toLowerCase())),
+    [catalogue, filter],
   );
   const selected = models.find((model) => model.id === selectedId) ?? null;
   const detailFor = (model: AiModel) =>
@@ -55,7 +65,10 @@ export function ModelCardList({
         onValueChange={onChange}
         onOpenChange={(next) => {
           navigatingRef.current = false;
-          if (!next) setFilter('');
+          if (!next) {
+            setFilter('');
+            setShowAll(false);
+          }
         }}
       >
         <SelectPrimitive.Trigger
@@ -97,7 +110,7 @@ export function ModelCardList({
             style={{ minWidth: 'var(--radix-select-trigger-width)' }}
             onFocusCapture={(event) => {
               if (event.target === filterRef.current) return;
-              if (!navigatingRef.current) filterRef.current?.focus();
+              if (!navigatingRef.current) queueMicrotask(() => filterRef.current?.focus());
             }}
             onKeyDown={(event) => {
               if (event.key === 'ArrowUp' && document.activeElement === firstItemRef.current) {
@@ -128,9 +141,18 @@ export function ModelCardList({
               />
               <span className="shrink-0 text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
                 {filter
-                  ? `${visible.length.toLocaleString()} of ${models.length.toLocaleString()}`
-                  : `${models.length.toLocaleString()} ${models.length === 1 ? 'model' : 'models'}`}
+                  ? `${visible.length.toLocaleString()} of ${catalogue.length.toLocaleString()}`
+                  : `${catalogue.length.toLocaleString()} ${catalogue.length === 1 ? 'model' : 'models'}`}
               </span>
+              {ofKind.length !== models.length && (
+                <button
+                  type="button"
+                  onClick={() => setShowAll((value) => !value)}
+                  className={`shrink-0 ${settingsLinkMuted}`}
+                >
+                  {showAll ? `${label} only` : 'Show all'}
+                </button>
+              )}
             </div>
             <SelectPrimitive.ScrollUpButton className={scrollButtonClass}>
               <ChevronUp aria-hidden="true" className="size-4" />
@@ -141,6 +163,7 @@ export function ModelCardList({
                   key={model.id}
                   value={model.id}
                   ref={index === 0 ? firstItemRef : undefined}
+                  onPointerMove={(event) => event.preventDefault()}
                   className={itemClass}
                 >
                   <span className="min-w-0 flex-1">

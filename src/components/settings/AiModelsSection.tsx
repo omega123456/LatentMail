@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useAiModelsQuery } from '@/lib/query/hooks';
-import { modelsOfKind } from '@/lib/ai/model-kind';
 import { invoke } from '@/lib/ipc/commands';
 import { SubsectionHeading } from './GeneralSection';
 import { SettingsSubsection } from './SettingsSection';
@@ -79,7 +78,8 @@ export function AiModelsSection({
             <ModelCardList
               accountEmail={accountEmail}
               label="Chat"
-              models={modelsOfKind(models.data, 'chat', chatModel)}
+              kind="chat"
+              models={models.data}
               selectedId={chatModel}
               onChange={(model) => {
                 void invoke('select_ai_chat_model', { accountId, model }).then(onChanged);
@@ -91,7 +91,8 @@ export function AiModelsSection({
             <ModelCardList
               accountEmail={accountEmail}
               label="Embedding"
-              models={modelsOfKind(models.data, 'embedding', embeddingModel)}
+              kind="embedding"
+              models={models.data}
               selectedId={embeddingModel}
               selectedDimension={embeddingDimensions}
               loadingId={loadingModel}
