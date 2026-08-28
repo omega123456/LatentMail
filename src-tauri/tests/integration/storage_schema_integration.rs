@@ -1002,6 +1002,12 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     assert!(lexical_relevance_plan
         .iter()
         .any(|step| step.contains("SEARCH m USING INTEGER PRIMARY KEY (rowid=?)")));
+    assert!(
+        lexical_relevance_plan.iter().any(|step| step.contains(
+            "SEARCH ml USING COVERING INDEX message_labels_by_label (account_id=? AND label_id=? AND message_id=?)"
+        )),
+        "the folder filter must resolve its label once and probe membership on the covering index"
+    );
     assert_eq!(
         lexical_relevance_plan
             .iter()
@@ -1033,10 +1039,16 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
     ] {
         let recency_plan = query_plan(&connection, &format!("EXPLAIN QUERY PLAN {sql}"));
         assert!(
-            recency_plan.iter().any(
-                |step| step.contains("SEARCH m USING INDEX messages_by_sent_at (account_id=?)")
-            ),
-            "the filter-only read must take its date order from the index, not from a sort"
+            recency_plan.iter().any(|step| step.contains(
+                "SEARCH m USING INDEX messages_by_sent_at (account_id=? AND sent_at>? AND sent_at<?)"
+            )),
+            "the filter-only read must seek to the requested date window and take its order from the index, not filter and sort"
+        );
+        assert!(
+            recency_plan.iter().any(|step| step.contains(
+                "SEARCH ml USING COVERING INDEX message_labels_by_label (account_id=? AND label_id=? AND message_id=?)"
+            )),
+            "the folder filter must resolve its label once and probe membership on the covering index"
         );
         assert_eq!(
             recency_plan
