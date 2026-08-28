@@ -36,6 +36,8 @@ pub enum ProviderError {
     Authentication,
     #[error("Provider returned an invalid response")]
     Response,
+    #[error("The model reached its token limit while reasoning and returned no answer")]
+    ReasoningBudget,
 }
 
 impl ProviderError {
@@ -77,7 +79,7 @@ pub fn reasoning_off_fields(tier: usize) -> Map<String, Value> {
 
 pub const TEMPERATURE: f64 = 0.0;
 pub const SEED: i64 = 20_260_827;
-pub const MAX_TOKENS: i64 = 2048;
+pub const MAX_TOKENS: i64 = 16_384;
 
 const LAST_REASONING_TIER: usize = 3;
 const THINK_OPEN: [&str; 3] = ["<think>", "<thinking>", "<reasoning>"];
@@ -204,14 +206,23 @@ impl Service<HttpRequestFactory> for StatusPreservingTransport {
     }
 }
 
-const PREVIEW_LIMIT: usize = 8192;
+const PREVIEW_EDGE: usize = 4096;
 
 fn preview(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
-    match text.char_indices().nth(PREVIEW_LIMIT) {
-        Some((at, _)) => format!("{}… [{} bytes total]", &text[..at], body.len()),
-        None => text.into_owned(),
-    }
+    let Some((head, _)) = text.char_indices().nth(PREVIEW_EDGE) else {
+        return text.into_owned();
+    };
+    let tail = text
+        .char_indices()
+        .nth_back(PREVIEW_EDGE)
+        .map_or(head, |(at, _)| at.max(head));
+    format!(
+        "{}… [{} bytes elided] …{}",
+        &text[..head],
+        text[head..tail].len(),
+        &text[tail..]
+    )
 }
 
 fn asks_for_a_stream(request: &reqwest::Request) -> bool {
@@ -252,32 +263,23 @@ fn with_trailing_sentinel(
     stream: impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static,
     route: String,
 ) -> impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static {
-    futures_util::stream::unfold(
-        (Some(Box::pin(stream)), Vec::new()),
-        move |(state, mut seen)| {
-            let route = route.clone();
-            async move {
-                let mut stream = state?;
-                match stream.next().await {
-                    Some(Ok(bytes)) => {
-                        seen.extend_from_slice(&bytes);
-                        Some((Ok(bytes), (Some(stream), seen)))
-                    }
-                    Some(Err(error)) => {
-                        tracing::debug!(target: "ai", "stream {route} failed: {error}");
-                        Some((Err(error), (Some(stream), seen)))
-                    }
-                    None => {
-                        tracing::debug!(target: "ai", "stream {route} body {}", preview(&seen));
-                        Some((
-                            Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)),
-                            (None, seen),
-                        ))
-                    }
+    futures_util::stream::unfold(Some(Box::pin(stream)), move |state| {
+        let route = route.clone();
+        async move {
+            let mut stream = state?;
+            match stream.next().await {
+                Some(Ok(bytes)) => {
+                    tracing::debug!(target: "ai", "stream {route} {}", preview(&bytes));
+                    Some((Ok(bytes), Some(stream)))
                 }
+                Some(Err(error)) => {
+                    tracing::debug!(target: "ai", "stream {route} failed: {error}");
+                    Some((Err(error), Some(stream)))
+                }
+                None => Some((Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)), None)),
             }
-        },
-    )
+        }
+    })
 }
 
 #[derive(Clone)]
@@ -352,15 +354,14 @@ impl Provider {
                 |body| async move { self.client.chat().create_byot(body).await },
             )
             .await?;
-        response
-            .choices
-            .into_iter()
-            .find_map(|choice| choice.message.and_then(|message| message.content))
+        let choice = response.choices.into_iter().next();
+        let reasoned = choice.as_ref().is_some_and(ChatChoice::reasoned);
+        let truncated = choice.as_ref().is_some_and(ChatChoice::truncated);
+        choice
+            .and_then(|choice| choice.message.and_then(|message| message.content))
             .map(|content| strip_think_blocks(&content))
-            .ok_or_else(|| {
-                tracing::debug!(target: "ai", "chat completion carried no message content");
-                ProviderError::Response
-            })
+            .filter(|content| !content.is_empty())
+            .ok_or_else(|| empty_answer(reasoned, truncated))
     }
     pub async fn chat_completion_stream(
         &self,
@@ -376,6 +377,8 @@ impl Provider {
             .await?;
         let mut think = ThinkFilter::default();
         let mut delivered = false;
+        let mut reasoned = false;
+        let mut truncated = false;
         while let Some(item) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 return Ok(());
@@ -385,10 +388,14 @@ impl Provider {
                 tracing::debug!(target: "ai", "chat stream ended without a done marker");
                 return Err(ProviderError::Response);
             }
-            let Some(text) = chunk
-                .choices
-                .into_iter()
-                .find_map(|choice| choice.delta.and_then(|delta| delta.content))
+            let Some(choice) = chunk.choices.into_iter().next() else {
+                continue;
+            };
+            reasoned |= choice.reasoned();
+            truncated |= choice.truncated();
+            let Some(text) = choice
+                .delta
+                .and_then(|delta| delta.content)
                 .filter(|text| !text.is_empty())
             else {
                 continue;
@@ -409,8 +416,7 @@ impl Provider {
         if delivered {
             Ok(())
         } else {
-            tracing::debug!(target: "ai", "chat stream delivered no content deltas");
-            Err(ProviderError::Response)
+            Err(empty_answer(reasoned, truncated))
         }
     }
     async fn send<T, F, Fut>(
@@ -526,6 +532,16 @@ struct EmbeddingsResponse {
 struct EmbeddingResponse {
     embedding: Vec<f32>,
 }
+const LENGTH_FINISH_REASON: &str = "length";
+
+fn empty_answer(reasoned: bool, truncated: bool) -> ProviderError {
+    tracing::debug!(target: "ai", "chat produced no answer (reasoned={reasoned}, truncated={truncated})");
+    if reasoned && truncated {
+        return ProviderError::ReasoningBudget;
+    }
+    ProviderError::Response
+}
+
 #[derive(Deserialize)]
 struct ChatResponse {
     #[serde(default)]
@@ -535,11 +551,24 @@ struct ChatResponse {
 struct ChatChoice {
     #[serde(default)]
     message: Option<ChatMessage>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+#[derive(Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: Option<ChatMessage>,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct ChatMessage {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -549,8 +578,30 @@ struct StreamChunk {
     #[serde(default)]
     stream_ended_without_done_marker: bool,
 }
-#[derive(Deserialize)]
-struct StreamChoice {
-    #[serde(default)]
-    delta: Option<ChatMessage>,
+
+impl ChatMessage {
+    fn reasoned(&self) -> bool {
+        [self.reasoning.as_deref(), self.reasoning_content.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|text| !text.is_empty())
+    }
+}
+
+impl ChatChoice {
+    fn reasoned(&self) -> bool {
+        self.message.as_ref().is_some_and(ChatMessage::reasoned)
+    }
+    fn truncated(&self) -> bool {
+        self.finish_reason.as_deref() == Some(LENGTH_FINISH_REASON)
+    }
+}
+
+impl StreamChoice {
+    fn reasoned(&self) -> bool {
+        self.delta.as_ref().is_some_and(ChatMessage::reasoned)
+    }
+    fn truncated(&self) -> bool {
+        self.finish_reason.as_deref() == Some(LENGTH_FINISH_REASON)
+    }
 }

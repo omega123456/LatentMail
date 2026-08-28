@@ -199,7 +199,7 @@ async fn the_planner_call_carries_the_schema_the_sampling_controls_and_the_conve
     let body = &recorded[0];
     assert_eq!(body["temperature"], 0.0);
     assert_eq!(body["seed"], 20_260_827);
-    assert_eq!(body["max_tokens"], 2048);
+    assert_eq!(body["max_tokens"], 16_384);
     assert_eq!(body["stream"], false);
     assert_eq!(body["response_format"], planner::response_format());
     assert_eq!(

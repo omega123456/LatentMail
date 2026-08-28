@@ -397,3 +397,26 @@ async fn a_successful_completion_that_carries_no_choice_is_an_invalid_response()
         ProviderError::Response
     );
 }
+
+#[tokio::test]
+async fn a_completion_whose_reasoning_exhausts_the_token_limit_names_the_reasoning_budget() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "", "reasoning": "let me think"},
+                "finish_reason": "length"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
+    assert_eq!(
+        provider
+            .chat_completion("chat", serde_json::json!([]), None)
+            .await
+            .unwrap_err(),
+        ProviderError::ReasoningBudget
+    );
+}

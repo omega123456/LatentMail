@@ -235,3 +235,43 @@ async fn a_trailing_angle_bracket_that_never_becomes_a_tag_is_still_delivered() 
         .unwrap();
     assert_eq!(deltas.concat(), "compare 3 < 5");
 }
+
+#[tokio::test]
+async fn a_stream_of_reasoning_that_hits_the_token_limit_names_the_reasoning_budget() {
+    let server = streaming_server(
+        concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"let me think\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .to_owned(),
+    )
+    .await;
+    assert_eq!(
+        provider(&server)
+            .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |_| {})
+            .await
+            .unwrap_err(),
+        ProviderError::ReasoningBudget
+    );
+}
+
+#[tokio::test]
+async fn a_stream_of_reasoning_that_stops_on_its_own_stays_an_invalid_response() {
+    let server = streaming_server(
+        concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"let me think\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .to_owned(),
+    )
+    .await;
+    assert_eq!(
+        provider(&server)
+            .chat_completion_stream("chat", messages(), &AtomicBool::new(false), &mut |_| {})
+            .await
+            .unwrap_err(),
+        ProviderError::Response
+    );
+}
