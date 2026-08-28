@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { AiModelsSection } from '@/components/settings/AiModelsSection';
@@ -139,4 +139,40 @@ it('does not claim a partial index has a running build to cancel', async () => {
   expect(screen.getByRole('alert')).not.toHaveTextContent(
     'The build now running will be cancelled.',
   );
+});
+
+it('shows the embedding model loading while the provider reads its vector length', async () => {
+  const user = userEvent.setup();
+  let release = () => undefined as void;
+  ipc.override(
+    'select_ai_embedding_model',
+    () =>
+      new Promise<undefined>((resolve) => {
+        release = () => resolve(undefined);
+      }),
+  );
+  ipc.override('list_ai_models', [
+    { id: 'old', ownedBy: 'owner' },
+    { id: 'new', ownedBy: 'owner' },
+  ]);
+  renderWithQueryClient(
+    <AiModelsSection
+      accountId="account"
+      accountEmail="ada@example.com"
+      chatModel={null}
+      embeddingModel="old"
+      embeddingDimensions={1536}
+      onChanged={() => undefined}
+    />,
+  );
+  await pickEmbeddingModel(user, /new/i);
+  const trigger = screen.getByRole('combobox', { name: 'Embedding model for ada@example.com' });
+  expect(trigger).toHaveTextContent('Loading model…');
+  expect(trigger).toBeDisabled();
+  await act(async () => {
+    release();
+  });
+  expect(
+    screen.getByRole('combobox', { name: 'Embedding model for ada@example.com' }),
+  ).toBeEnabled();
 });

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Select as SelectPrimitive } from 'radix-ui';
 import { TextInput } from '@/components/shared/TextInput';
@@ -20,6 +20,7 @@ export function ModelCardList({
   selectedId,
   selectedDimension,
   confirm,
+  loadingId,
   onChange,
 }: {
   accountEmail: string;
@@ -28,6 +29,7 @@ export function ModelCardList({
   selectedId: string | null;
   selectedDimension?: number | null;
   confirm?: ReactNode;
+  loadingId?: string | null;
   onChange: (id: string) => void;
 }) {
   const [filter, setFilter] = useState('');
@@ -43,6 +45,8 @@ export function ModelCardList({
     model.id === selectedId && selectedDimension
       ? `${model.ownedBy ?? 'Unknown owner'} · ${selectedDimension.toLocaleString()} dimensions`
       : (model.ownedBy ?? 'Unknown owner');
+  const loading = loadingId ? { id: loadingId, detail: 'Loading model…' } : null;
+  const shown = loading ?? (selected ? { id: selected.id, detail: detailFor(selected) } : null);
 
   return (
     <div className="flex flex-col gap-2.25">
@@ -56,16 +60,16 @@ export function ModelCardList({
       >
         <SelectPrimitive.Trigger
           aria-label={`${label} model for ${accountEmail}`}
-          className={`flex items-center justify-between gap-3 text-left ${triggerClass}`}
+          aria-busy={Boolean(loading)}
+          disabled={Boolean(loading)}
+          className={`flex items-center justify-between gap-3 text-left disabled:cursor-progress disabled:opacity-70 ${triggerClass}`}
         >
           <span className="min-w-0 flex-1">
-            {selected ? (
+            {shown ? (
               <>
-                <span className="block truncate text-settings-desc font-medium">
-                  {selected.id}
-                </span>
+                <span className="block truncate text-settings-desc font-medium">{shown.id}</span>
                 <span className="block truncate text-settings-meta text-settings-ink-mute dark:text-dark-settings-ink-mute">
-                  {detailFor(selected)}
+                  {shown.detail}
                 </span>
               </>
             ) : (
@@ -75,7 +79,14 @@ export function ModelCardList({
             )}
           </span>
           <SelectPrimitive.Icon>
-            <ChevronDown aria-hidden="true" className="size-4 shrink-0 opacity-70" />
+            {loading ? (
+              <Loader2
+                aria-hidden="true"
+                className="size-4 shrink-0 opacity-70 motion-safe:animate-spin"
+              />
+            ) : (
+              <ChevronDown aria-hidden="true" className="size-4 shrink-0 opacity-70" />
+            )}
           </SelectPrimitive.Icon>
         </SelectPrimitive.Trigger>
         <SelectPrimitive.Portal>

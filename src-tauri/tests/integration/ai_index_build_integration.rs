@@ -734,3 +734,95 @@ async fn a_message_the_provider_rejects_is_skipped_instead_of_interrupting_the_i
         .is_empty());
     assert_eq!(status(&service, "skip".into()).await.unwrap().error, None);
 }
+
+struct RejectThenEmpty(AtomicUsize);
+impl wiremock::Respond for RejectThenEmpty {
+    fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            ResponseTemplate::new(400)
+        } else {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[]}))
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_per_message_retry_that_returns_no_vectors_fails_the_whole_build() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/embeddings"))
+        .respond_with(RejectThenEmpty(AtomicUsize::new(0)))
+        .mount(&server)
+        .await;
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.db")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(&connection, &account("empty")).unwrap();
+    MessageRepository::write_full_state(&connection, &message("empty", "one")).unwrap();
+    AccountAiConfigRepository::set_enabled(&connection, "empty", true).unwrap();
+    AccountAiConfigRepository::set_base_url(&connection, "empty", &format!("{}/v1/", server.uri()))
+        .unwrap();
+    AccountAiConfigRepository::set_embedding_model(&connection, "empty", "embed", 2).unwrap();
+    drop(connection);
+    credentials::save("empty", "key").unwrap();
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let service = AiService::new(storage.clone());
+
+    assert_eq!(
+        build(app.handle(), &service, "empty".into())
+            .await
+            .unwrap_err(),
+        "Provider returned an incomplete embedding batch"
+    );
+    let connection = storage.connection().unwrap();
+    assert_eq!(
+        EmbeddingRepository::count_indexed(&connection, "empty").unwrap(),
+        0
+    );
+    credentials::clear("empty").unwrap();
+}
+
+#[tokio::test]
+async fn a_queued_build_without_an_api_root_reports_unavailable_instead_of_running() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.db")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(&connection, &account("rootless")).unwrap();
+    MessageRepository::write_full_state(&connection, &message("rootless", "one")).unwrap();
+    AccountAiConfigRepository::set_enabled(&connection, "rootless", true).unwrap();
+    AccountAiConfigRepository::set_embedding_model(&connection, "rootless", "embed", 2).unwrap();
+    drop(connection);
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let service = AiService::new(storage.clone());
+    let registry = WorkRegistry::new();
+    let queue = create_queue_engine(250, 250, registry.clone());
+    let sync = SyncEngine::new(storage.clone(), queue.clone(), registry, noop_event_sink());
+
+    enqueue(
+        app.handle().clone(),
+        service.clone(),
+        sync,
+        "rootless".into(),
+    )
+    .await
+    .unwrap();
+
+    queue
+        .wait_for_account_lane("rootless", Lane::Embedding)
+        .await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if status(&service, "rootless".into()).await.unwrap().state == IndexState::Unavailable {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(service.index_error("rootless").unwrap().is_none());
+}

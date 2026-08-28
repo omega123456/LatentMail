@@ -29,15 +29,19 @@ export function AiModelsSection({
   const [revision, setRevision] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [loadingModel, setLoadingModel] = useState<string | null>(null);
   const models = useAiModelsQuery(accountId, revision, true);
   const selectEmbedding = async (model: string) => {
+    setPendingModel(null);
+    setLoadingModel(model);
     try {
       await invoke('select_ai_embedding_model', { accountId, model });
       setError(null);
-      setPendingModel(null);
       onChanged();
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      setLoadingModel(null);
     }
   };
   const running = indexStatus?.state === 'preparing' || indexStatus?.state === 'building';
@@ -90,6 +94,7 @@ export function AiModelsSection({
               models={modelsOfKind(models.data, 'embedding', embeddingModel)}
               selectedId={embeddingModel}
               selectedDimension={embeddingDimensions}
+              loadingId={loadingModel}
               confirm={
                 pendingModel && (
                   <InlineConfirm
