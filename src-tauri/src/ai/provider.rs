@@ -170,23 +170,47 @@ impl Service<HttpRequestFactory> for StatusPreservingTransport {
                 request.headers_mut().remove(AUTHORIZATION);
             }
             let streaming = asks_for_a_stream(&request);
-            let response = client
-                .execute(request)
-                .await
-                .map_err(OpenAIError::Reqwest)?;
+            let route = format!("{} {}", request.method(), request.url());
+            tracing::debug!(
+                target: "ai",
+                "request {route} {}",
+                preview(request.body().and_then(reqwest::Body::as_bytes).unwrap_or_default())
+            );
+            let response = client.execute(request).await.map_err(|error| {
+                tracing::debug!(target: "ai", "request {route} failed: {error}");
+                OpenAIError::Reqwest(error)
+            })?;
             let status = response.status();
+            let parts = parts_of(&response);
             if !status.is_success() {
-                return Err(status_error(
-                    status,
-                    response.text().await.unwrap_or_default(),
+                let body = response.text().await.unwrap_or_default();
+                tracing::debug!(target: "ai", "response {route} {status} {}", preview(body.as_bytes()));
+                return Err(status_error(status, body));
+            }
+            if streaming {
+                tracing::debug!(target: "ai", "response {route} {status} streaming");
+                return Ok(rebuilt(
+                    parts,
+                    reqwest::Body::wrap_stream(with_trailing_sentinel(
+                        response.bytes_stream(),
+                        route,
+                    )),
                 ));
             }
-            Ok(if streaming {
-                sentinel_terminated(response)
-            } else {
-                response
-            })
+            let body = response.bytes().await.map_err(OpenAIError::Reqwest)?;
+            tracing::debug!(target: "ai", "response {route} {status} {}", preview(&body));
+            Ok(rebuilt(parts, reqwest::Body::from(body)))
         })
+    }
+}
+
+const PREVIEW_LIMIT: usize = 8192;
+
+fn preview(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    match text.char_indices().nth(PREVIEW_LIMIT) {
+        Some((at, _)) => format!("{}… [{} bytes total]", &text[..at], body.len()),
+        None => text.into_owned(),
     }
 }
 
@@ -212,25 +236,48 @@ fn status_error(status: StatusCode, body: String) -> OpenAIError {
     })
 }
 
-fn sentinel_terminated(response: Response) -> Response {
+fn parts_of(response: &Response) -> http::response::Parts {
     let (mut parts, ()) = http::Response::new(()).into_parts();
     parts.status = response.status();
     parts.version = response.version();
     parts.headers = response.headers().clone();
-    let body = reqwest::Body::wrap_stream(with_trailing_sentinel(response.bytes_stream()));
+    parts
+}
+
+fn rebuilt(parts: http::response::Parts, body: reqwest::Body) -> Response {
     http::Response::from_parts(parts, body).into()
 }
 
 fn with_trailing_sentinel(
     stream: impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static,
+    route: String,
 ) -> impl Stream<Item = reqwest::Result<Bytes>> + Send + 'static {
-    futures_util::stream::unfold(Some(Box::pin(stream)), |state| async move {
-        let mut stream = state?;
-        match stream.next().await {
-            Some(item) => Some((item, Some(stream))),
-            None => Some((Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)), None)),
-        }
-    })
+    futures_util::stream::unfold(
+        (Some(Box::pin(stream)), Vec::new()),
+        move |(state, mut seen)| {
+            let route = route.clone();
+            async move {
+                let mut stream = state?;
+                match stream.next().await {
+                    Some(Ok(bytes)) => {
+                        seen.extend_from_slice(&bytes);
+                        Some((Ok(bytes), (Some(stream), seen)))
+                    }
+                    Some(Err(error)) => {
+                        tracing::debug!(target: "ai", "stream {route} failed: {error}");
+                        Some((Err(error), (Some(stream), seen)))
+                    }
+                    None => {
+                        tracing::debug!(target: "ai", "stream {route} body {}", preview(&seen));
+                        Some((
+                            Ok(Bytes::from_static(TRUNCATION_SENTINEL_FRAME)),
+                            (None, seen),
+                        ))
+                    }
+                }
+            }
+        },
+    )
 }
 
 #[derive(Clone)]
@@ -310,7 +357,10 @@ impl Provider {
             .into_iter()
             .find_map(|choice| choice.message.and_then(|message| message.content))
             .map(|content| strip_think_blocks(&content))
-            .ok_or(ProviderError::Response)
+            .ok_or_else(|| {
+                tracing::debug!(target: "ai", "chat completion carried no message content");
+                ProviderError::Response
+            })
     }
     pub async fn chat_completion_stream(
         &self,
@@ -332,6 +382,7 @@ impl Provider {
             }
             let chunk = item.map_err(provider_error)?;
             if chunk.stream_ended_without_done_marker {
+                tracing::debug!(target: "ai", "chat stream ended without a done marker");
                 return Err(ProviderError::Response);
             }
             let Some(text) = chunk
@@ -358,6 +409,7 @@ impl Provider {
         if delivered {
             Ok(())
         } else {
+            tracing::debug!(target: "ai", "chat stream delivered no content deltas");
             Err(ProviderError::Response)
         }
     }

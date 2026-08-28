@@ -302,7 +302,7 @@ fn citations_are_deduplicated_by_first_appearance_renumbered_and_pruned() {
 }
 
 #[tokio::test]
-async fn a_full_exchange_streams_deltas_then_sources_and_writes_no_chat_content_to_the_log() {
+async fn a_full_exchange_streams_deltas_then_sources_and_logs_the_provider_exchange_at_debug() {
     let server = MockServer::start().await;
     pipeline(&server, answer_stream()).await;
     let (_directory, service) = fixture(&format!("{}/v1", server.uri())).await;
@@ -360,9 +360,11 @@ async fn a_full_exchange_streams_deltas_then_sources_and_writes_no_chat_content_
             .path(),
     )
     .unwrap();
-    assert!(!log.contains(ANSWER));
-    assert!(!log.contains(BODY));
-    assert!(!log.contains("deadline?"));
+    assert!(log.contains("request POST"));
+    assert!(log.contains("/v1/chat/completions"));
+    assert!(log.contains("deadline?"));
+    assert!(log.contains(BODY));
+    assert!(log.contains("stream"));
 }
 
 #[tokio::test]

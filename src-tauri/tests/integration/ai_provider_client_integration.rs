@@ -379,3 +379,21 @@ async fn a_base_url_stored_with_a_trailing_slash_still_addresses_a_single_joined
     let requested = server.received_requests().await.unwrap();
     assert_eq!(requested[0].url.path(), "/v1/models");
 }
+
+#[tokio::test]
+async fn a_successful_completion_that_carries_no_choice_is_an_invalid_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"choices":[]})))
+        .mount(&server)
+        .await;
+    let provider = Provider::new(&format!("{}/v1", server.uri()), None).unwrap();
+    assert_eq!(
+        provider
+            .chat_completion("chat", serde_json::json!([]), None)
+            .await
+            .unwrap_err(),
+        ProviderError::Response
+    );
+}
