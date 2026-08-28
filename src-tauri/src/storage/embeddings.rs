@@ -194,6 +194,20 @@ impl EmbeddingRepository {
         transaction.commit()
     }
 
+    pub fn mark_skipped(
+        connection: &Connection,
+        account_id: &str,
+        message_seqs: &[i64],
+    ) -> Result<()> {
+        let mut statement = connection.prepare_cached(
+            "INSERT OR IGNORE INTO message_embeddings(account_id,message_seq,chunk_index) VALUES (?1,?2,0)",
+        )?;
+        for message_seq in message_seqs {
+            statement.execute(params![account_id, message_seq])?;
+        }
+        Ok(())
+    }
+
     pub fn nearest(
         connection: &Connection,
         account_id: &str,

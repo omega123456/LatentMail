@@ -21,7 +21,7 @@ use latentmail_lib::{
     sync::{create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry},
 };
 use wiremock::{
-    matchers::{method, path},
+    matchers::{body_string_contains, method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -652,4 +652,85 @@ async fn rebuilding_an_index_requires_stored_embedding_dimensions() {
         .unwrap_err(),
         "Embedding dimensions are missing"
     );
+}
+
+#[tokio::test]
+async fn a_message_the_provider_rejects_is_skipped_instead_of_interrupting_the_index() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/embeddings"))
+        .and(body_string_contains("Huge"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(
+            serde_json::json!({"error":{"message":"input size exceed the context limit"}}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/embeddings"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"data":[{"embedding":[1.0,2.0]}]})),
+        )
+        .mount(&server)
+        .await;
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.db")).unwrap();
+    let connection = storage.connection().unwrap();
+    AccountRepository::upsert(&connection, &account("skip")).unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            subject: "Small".into(),
+            ..message("skip", "small")
+        },
+    )
+    .unwrap();
+    MessageRepository::write_full_state(
+        &connection,
+        &Message {
+            subject: "Huge".into(),
+            ..message("skip", "huge")
+        },
+    )
+    .unwrap();
+    AccountAiConfigRepository::set_enabled(&connection, "skip", true).unwrap();
+    AccountAiConfigRepository::set_base_url(&connection, "skip", &format!("{}/v1/", server.uri()))
+        .unwrap();
+    AccountAiConfigRepository::set_embedding_model(&connection, "skip", "embed", 2).unwrap();
+    drop(connection);
+    credentials::save("skip", "key").unwrap();
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let service = AiService::new(storage.clone());
+
+    build(app.handle(), &service, "skip".into()).await.unwrap();
+
+    let connection = storage.connection().unwrap();
+    let sequence: i64 = connection
+        .query_row("SELECT seq FROM accounts WHERE id='skip'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let vectors: i64 = connection
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM {}",
+                EmbeddingRepository::table_name(sequence)
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(vectors, 1);
+    assert_eq!(
+        EmbeddingRepository::counts(&connection, "skip")
+            .unwrap()
+            .indexed_messages,
+        2
+    );
+    assert!(EmbeddingRepository::backlog(&connection, "skip", 10)
+        .unwrap()
+        .is_empty());
+    assert_eq!(status(&service, "skip".into()).await.unwrap().error, None);
 }

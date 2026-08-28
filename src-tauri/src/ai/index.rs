@@ -214,7 +214,8 @@ pub async fn build<R: Runtime>(
     if batch.is_empty() {
         return Ok(());
     }
-    let mut inputs = Vec::new();
+    let mut groups: Vec<(i64, Vec<String>)> = Vec::new();
+    let mut chunk_count = 0;
     for message in batch {
         let chunks = chunker::chunks(
             &message.sender,
@@ -224,51 +225,94 @@ pub async fn build<R: Runtime>(
             message.plain_body.as_deref(),
             message.html_body.as_deref(),
         );
-        if inputs.len() + chunks.len() > MAX_CHUNKS_PER_OPERATION {
+        if chunk_count + chunks.len() > MAX_CHUNKS_PER_OPERATION {
             break;
         }
-        inputs.extend(
-            chunks
-                .into_iter()
-                .enumerate()
-                .map(|(index, text)| (message.message_seq, index, text)),
-        );
+        chunk_count += chunks.len();
+        groups.push((message.message_seq, chunks));
     }
-    if inputs.is_empty() {
+    if groups.is_empty() {
         return Ok(());
     }
     let provider = Provider::new(&base_url, credentials::load(&account_id)?)?;
-    let vectors = embed_with_retry(
-        &provider,
-        &model,
-        inputs.iter().map(|(_, _, text)| text.clone()).collect(),
-        3,
-        |attempt| Duration::from_millis(50 * u64::from(attempt)),
-    )
-    .await?;
-    if vectors.len() != inputs.len() {
-        return Err("Provider returned an incomplete embedding batch".to_owned());
-    }
-    let entries = inputs
-        .into_iter()
-        .zip(vectors)
-        .map(|((message_seq, chunk_index, _), vector)| {
-            Ok(MessageEmbedding {
-                message_seq,
-                chunk_index: i64::try_from(chunk_index)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                vector,
-            })
-        })
-        .collect::<Result<Vec<_>, rusqlite::Error>>()
-        .map_err(|error| error.to_string())?;
+    let texts: Vec<String> = groups
+        .iter()
+        .flat_map(|(_, chunks)| chunks.iter().cloned())
+        .collect();
+    let batched = embed_with_retry(&provider, &model, texts, 3, |attempt| {
+        Duration::from_millis(50 * u64::from(attempt))
+    })
+    .await;
+    let (entries, skipped) = match batched {
+        Ok(vectors) if vectors.len() == chunk_count => {
+            let mut remaining = vectors.into_iter();
+            let mut entries = Vec::new();
+            for (message_seq, chunks) in &groups {
+                entries.extend(message_entries(
+                    *message_seq,
+                    remaining.by_ref().take(chunks.len()).collect(),
+                )?);
+            }
+            (entries, Vec::new())
+        }
+        Ok(_) => return Err("Provider returned an incomplete embedding batch".to_owned()),
+        Err(error) => {
+            embed_one_message_at_a_time(&provider, &model, &groups, &account_id, &error).await?
+        }
+    };
     let id = account_id.clone();
     storage
-        .run(move |connection| EmbeddingRepository::write(connection, &id, &entries))
+        .run(move |connection| {
+            EmbeddingRepository::write(connection, &id, &entries)?;
+            EmbeddingRepository::mark_skipped(connection, &id, &skipped)
+        })
         .await
         .map_err(|error| error.to_string())?;
     emit_status(app, service, account_id).await?;
     Ok(())
+}
+
+fn message_entries(
+    message_seq: i64,
+    vectors: Vec<Vec<f32>>,
+) -> Result<Vec<MessageEmbedding>, String> {
+    vectors
+        .into_iter()
+        .enumerate()
+        .map(|(chunk_index, vector)| {
+            Ok(MessageEmbedding {
+                message_seq,
+                chunk_index: i64::try_from(chunk_index)
+                    .map_err(|error: std::num::TryFromIntError| error.to_string())?,
+                vector,
+            })
+        })
+        .collect()
+}
+
+async fn embed_one_message_at_a_time(
+    provider: &Provider,
+    model: &str,
+    groups: &[(i64, Vec<String>)],
+    account_id: &str,
+    batch_error: &str,
+) -> Result<(Vec<MessageEmbedding>, Vec<i64>), String> {
+    let mut entries = Vec::new();
+    let mut skipped = Vec::new();
+    for (message_seq, chunks) in groups {
+        match provider.embed(model, chunks.clone()).await {
+            Ok(vectors) if vectors.len() == chunks.len() => {
+                entries.extend(message_entries(*message_seq, vectors)?);
+            }
+            Ok(_) => return Err("Provider returned an incomplete embedding batch".to_owned()),
+            Err(error) if error.transient() => return Err(error.to_string()),
+            Err(error) => {
+                tracing::warn!(target: "ai", "{account_id}: skipping message {message_seq}: {error} (batch failed: {batch_error})");
+                skipped.push(*message_seq);
+            }
+        }
+    }
+    Ok((entries, skipped))
 }
 
 pub async fn emit_status<R: Runtime>(
