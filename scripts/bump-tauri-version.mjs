@@ -135,8 +135,8 @@ function runGit(args, inheritIo = true) {
   });
 }
 
-function runCargoGenerateLockfile() {
-  execFileSync('cargo', ['generate-lockfile'], {
+function runCargoUpdateWorkspace() {
+  execFileSync('cargo', ['update', '--workspace'], {
     cwd: tauriDir,
     stdio: 'inherit',
   });
@@ -277,7 +277,7 @@ async function main() {
     writeFileSync(releaseBodyPath, `${releaseNotes}\n`, 'utf8');
 
     try {
-      runCargoGenerateLockfile();
+      runCargoUpdateWorkspace();
       runProductionBuild();
     } catch (error) {
       restoreFiles(snapshot);
