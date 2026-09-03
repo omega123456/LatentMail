@@ -333,4 +333,33 @@ describe('MessageCard', () => {
     fireEvent.click(stamp);
     expect(screen.queryByText('Preview')).not.toBeInTheDocument();
   });
+
+  it('marks a collapsed message that carries attachments', () => {
+    const collapsed = {
+      ...message,
+      html: '<p>Body</p>',
+      htmlPresence: 'present' as const,
+      attachments: [
+        {
+          id: 'attachment-1',
+          filename: 'Q3-summary.pdf',
+          mimeType: 'application/pdf',
+          size: 1468006,
+          position: 0,
+        },
+      ],
+    };
+    const { rerender } = renderWithQueryClient(
+      <MessageCard message={collapsed} expanded={false} newest={false} />,
+    );
+    expect(screen.getByLabelText('Has attachment')).toBeInTheDocument();
+    rerender(
+      <MessageCard
+        message={{ ...collapsed, attachments: [] }}
+        expanded={false}
+        newest={false}
+      />,
+    );
+    expect(screen.queryByLabelText('Has attachment')).not.toBeInTheDocument();
+  });
 });

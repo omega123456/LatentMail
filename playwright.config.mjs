@@ -11,6 +11,7 @@ export default defineConfig({
     ...devices['Desktop Chrome'],
     baseURL: 'http://127.0.0.1:1420',
     viewport: { width: 1280, height: 1024 },
+    timezoneId: 'Europe/London',
     deviceScaleFactor: 1.25,
     launchOptions: {
       args: ['--disable-dev-shm-usage', '--disable-gpu', '--disable-background-timer-throttling'],

@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlignLeft, ChevronDown, ChevronRight, FileWarning, ImageOff } from 'lucide-react';
+import {
+  AlignLeft,
+  ChevronDown,
+  ChevronRight,
+  FileWarning,
+  ImageOff,
+  Paperclip,
+} from 'lucide-react';
 import {
   MessageActionRibbon,
   type MessageActionRibbonProps,
@@ -137,9 +144,12 @@ export function MessageCard({
             onComposeTo={onComposeTo}
           />
           {!open && (
-            <p className="ml-16 mt-stack-gap-sm truncate text-body-sm text-secondary dark:text-dark-secondary">
-              {message.snippet}
-            </p>
+            <div className="ml-16 mt-stack-gap-sm flex items-center gap-2 text-body-sm text-secondary dark:text-dark-secondary">
+              <p className="min-w-0 flex-1 truncate">{message.snippet}</p>
+              {message.attachments && message.attachments.length > 0 && (
+                <Paperclip aria-label="Has attachment" className="shrink-0" size={15} />
+              )}
+            </div>
           )}
         </div>
       </div>

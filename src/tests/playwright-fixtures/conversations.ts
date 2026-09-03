@@ -15,7 +15,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       htmlBody: null,
       htmlPresence: 'present',
       plainBody: null,
-      hasAttachments: false,
+      hasAttachments: true,
       isUnread: false,
       isStarred: false,
       labelIds: [],
@@ -23,7 +23,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       remoteImagesAllowed: false,
       inlineImagesPending: false,
       truncated: false,
-      attachments: [],
+      attachments: playwrightMessageAttachments.slice(0, 1),
     },
     {
       id: 'message-2',
