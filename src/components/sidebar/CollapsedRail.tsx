@@ -1,5 +1,8 @@
 import { PanelLeftOpen, Plus, Settings } from 'lucide-react';
 import type { Account } from '@/lib/types/ipc';
+import { LABEL_COLOR_BY_ID } from '@/lib/labels/palette';
+import type { Label } from './LabelList';
+import { navRow } from './rowStyles';
 import type { Mailbox } from './FolderList';
 import { AccountSwitcher } from './AccountSwitcher';
 import { FolderList } from './FolderList';
@@ -10,6 +13,7 @@ export function CollapsedRail({
   activeAccountId,
   activeMailboxId,
   mailboxes,
+  labels,
   onSelectAccount,
   onSelectMailbox,
   onExpand,
@@ -22,6 +26,7 @@ export function CollapsedRail({
   activeAccountId: string | null;
   activeMailboxId: string | null;
   mailboxes: Mailbox[];
+  labels: Label[];
   onSelectAccount: (id: string) => void;
   onSelectMailbox: (id: string) => void;
   onExpand: () => void;
@@ -45,14 +50,39 @@ export function CollapsedRail({
         <Plus aria-hidden="true" size={18} />
       </button>
       {searchActive && <CollapsedSearchIndicator query={searchQuery} />}
-      <FolderList
-        activeMailboxId={activeMailboxId}
-        mailboxes={mailboxes}
-        showUnreadCounts={false}
-        collapsed
-        onSelect={onSelectMailbox}
-      />
-      <div className="flex-1" />
+      <div className="min-h-0 w-full flex-1 overflow-y-auto">
+        <FolderList
+          activeMailboxId={activeMailboxId}
+          mailboxes={mailboxes}
+          showUnreadCounts={false}
+          collapsed
+          onSelect={onSelectMailbox}
+        />
+        {labels.length > 0 && (
+          <nav
+            aria-label="Labels"
+            className="mt-stack-gap-md grid gap-1 border-t border-outline-variant pt-stack-gap-md dark:border-dark-outline-variant"
+          >
+            {labels.map((label) => (
+              <button
+                key={label.id}
+                type="button"
+                aria-label={label.name}
+                aria-current={activeMailboxId === label.id ? 'page' : undefined}
+                title={label.name}
+                onClick={() => onSelectMailbox(label.id)}
+                className={`${navRow(activeMailboxId === label.id)} justify-center px-0`}
+              >
+                <span aria-hidden="true" className="grid size-4.5 place-items-center">
+                  <span
+                    className={`size-chip-dot rounded-full ${LABEL_COLOR_BY_ID[label.color].dotClass}`}
+                  />
+                </span>
+              </button>
+            ))}
+          </nav>
+        )}
+      </div>
       <button
         type="button"
         aria-label="Expand sidebar"

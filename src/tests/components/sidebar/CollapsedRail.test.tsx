@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,7 @@ describe('CollapsedRail', () => {
           activeAccountId="account-1"
           activeMailboxId="INBOX"
           mailboxes={mailboxes}
+          labels={[]}
           onSelectAccount={vi.fn()}
           onSelectMailbox={onSelectMailbox}
           onExpand={onExpand}
@@ -47,6 +48,36 @@ describe('CollapsedRail', () => {
     expect(onCompose).toHaveBeenCalledOnce();
   });
 
+  it('shows colored labels with tooltips and selects a label mailbox', async () => {
+    const user = userEvent.setup();
+    const onSelectMailbox = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CollapsedRail
+          accounts={accounts}
+          activeAccountId="account-1"
+          activeMailboxId="work"
+          mailboxes={mailboxes}
+          labels={[
+            { id: 'work', name: 'Work', unreadCount: 3, color: 'blue' },
+            { id: 'personal', name: 'Personal', unreadCount: 0, color: 'green' },
+          ]}
+          onSelectAccount={vi.fn()}
+          onSelectMailbox={onSelectMailbox}
+          onExpand={vi.fn()}
+          onSettings={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    const labels = within(screen.getByRole('navigation', { name: 'Labels' }));
+    expect(labels.getByRole('button', { name: 'Work' })).toHaveAttribute('title', 'Work');
+    expect(labels.getByRole('button', { name: 'Work' })).toHaveAttribute('aria-current', 'page');
+    const personal = labels.getByRole('button', { name: 'Personal' });
+    expect(personal).not.toHaveAttribute('aria-current');
+    await user.click(personal);
+    expect(onSelectMailbox).toHaveBeenCalledWith('personal');
+  });
+
   it('gives the account control a real accessible label since it is the sole identity cue when collapsed', () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -55,6 +86,7 @@ describe('CollapsedRail', () => {
           activeAccountId="account-1"
           activeMailboxId="INBOX"
           mailboxes={mailboxes}
+          labels={[]}
           onSelectAccount={vi.fn()}
           onSelectMailbox={vi.fn()}
           onExpand={vi.fn()}
@@ -73,6 +105,7 @@ describe('CollapsedRail', () => {
           activeAccountId="account-1"
           activeMailboxId="INBOX"
           mailboxes={mailboxes}
+          labels={[]}
           onSelectAccount={vi.fn()}
           onSelectMailbox={vi.fn()}
           onExpand={vi.fn()}
@@ -94,6 +127,7 @@ describe('CollapsedRail', () => {
           activeAccountId="account-1"
           activeMailboxId="INBOX"
           mailboxes={mailboxes}
+          labels={[]}
           onSelectAccount={vi.fn()}
           onSelectMailbox={vi.fn()}
           onExpand={vi.fn()}

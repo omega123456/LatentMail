@@ -249,6 +249,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       activeAccountId={activeAccountId}
       activeMailboxId={activeMailboxId ?? 'INBOX'}
       mailboxes={mailboxes}
+      labels={labels}
       onSelectAccount={selectAccount}
       onSelectMailbox={selectMailbox}
       onExpand={() => setSidebarCollapsed(false)}
