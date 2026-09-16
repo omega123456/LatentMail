@@ -311,6 +311,91 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
 }
 
 #[tokio::test]
+async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
+    let server = MockServer::start().await;
+    let (engine, storage, _directory, events) = engine_with_seed();
+    Mock::given(method("GET"))
+        .and(path("/users/me/labels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"labels": []})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "messages": [{"id": "probed", "threadId": "t2"}]
+        })))
+        .mount(&server)
+        .await;
+    for id in ["probed", "reply"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id, "threadId": "t2", "historyId": "50",
+                "labelIds": ["INBOX", "UNREAD"], "internalDate": "3000",
+                "payload": {"mimeType": "text/plain", "headers": [
+                    {"name": "Subject", "value": id}
+                ], "body": {"data": "bmV3"}}
+            })))
+            .mount(&server)
+            .await;
+    }
+    engine
+        .probe_only("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+    let arrival_subjects = || {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name == "mail://new")
+            .flat_map(|(_, payload)| payload["arrivals"].as_array().unwrap().iter())
+            .map(|arrival| arrival["subject"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(arrival_subjects(), ["probed"]);
+    Mock::given(method("GET"))
+        .and(path("/users/me/history"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "historyId": "60", "history": [{
+                "id": "60", "messagesAdded": [
+                    {"message": {"id": "probed", "threadId": "t2"}},
+                    {"message": {"id": "reply", "threadId": "t2"}},
+                    {"message": {"id": "reply", "threadId": "t2"}}
+                ],
+                "labelsAdded": [{"message": {"id": "probed", "threadId": "t2"}, "labelIds": ["STARRED"]}]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    for _ in 0..2 {
+        engine
+            .run_sync("account", GmailClient::with_base_url("token", server.uri()))
+            .await
+            .unwrap();
+        assert_eq!(arrival_subjects(), ["probed", "reply"]);
+    }
+    engine
+        .probe_only("account", GmailClient::with_base_url("token", server.uri()))
+        .await
+        .unwrap();
+    assert_eq!(arrival_subjects(), ["probed", "reply"]);
+    let connection = storage.connection().unwrap();
+    let message = MessageRepository::get(&connection, "account", "probed")
+        .unwrap()
+        .unwrap();
+    assert!(message.is_unread);
+    assert!(message.is_starred);
+    assert_eq!(
+        AccountRepository::get(&connection, "account")
+            .unwrap()
+            .unwrap()
+            .history_id,
+        Some(60)
+    );
+}
+
+#[tokio::test]
 async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

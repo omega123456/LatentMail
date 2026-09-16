@@ -1084,14 +1084,24 @@ pub(crate) struct MaterializedBatch {
 }
 
 fn compute_arrivals(
+    connection: &rusqlite::Connection,
+    account_id: &str,
     messages: &[GmailMessage],
     now: chrono::DateTime<chrono::Utc>,
-) -> Vec<MailArrival> {
-    messages
+) -> rusqlite::Result<Vec<MailArrival>> {
+    let mut missing: HashSet<String> = MessageRepository::missing_ids(
+        connection,
+        account_id,
+        messages.iter().map(|message| message.id.clone()).collect(),
+    )?
+    .into_iter()
+    .collect();
+    Ok(messages
         .iter()
         .filter(|message| {
             let has = |label: &str| message.label_ids.iter().any(|id| id == label);
-            has("INBOX")
+            missing.remove(&message.id)
+                && has("INBOX")
                 && has("UNREAD")
                 && chrono::DateTime::from_timestamp(message.sent_at, 0).is_some_and(|sent_at| {
                     now.signed_duration_since(sent_at) <= chrono::Duration::minutes(10)
@@ -1103,7 +1113,7 @@ fn compute_arrivals(
             subject: message.subject.clone(),
             snippet: message.snippet.clone(),
         })
-        .collect()
+        .collect())
 }
 
 fn emit_new_mail_if_present(
@@ -1141,21 +1151,22 @@ async fn probe_only_body(
             added_count: 0,
         });
     }
-    let arrivals = compute_arrivals(&messages, now);
     let thread_ids: HashSet<String> = messages
         .iter()
         .map(|message| message.thread_id.clone())
         .collect();
     let account_owned = account_id.to_owned();
     let thread_ids_for_write = thread_ids.clone();
-    storage
+    let arrivals = storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
+            let arrivals = compute_arrivals(&transaction, &account_owned, &messages, now)?;
             for message in &messages {
                 write_message(&transaction, &account_owned, message, cache.as_ref())?;
             }
             ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
-            transaction.commit()
+            transaction.commit()?;
+            Ok(arrivals)
         })
         .await?;
     Ok(MaterializedBatch {
@@ -1254,16 +1265,16 @@ async fn incremental_body(
     let added_count = added_messages.len() as u32;
     let history_changed = !records.is_empty() || added_count > 0;
 
-    let arrivals = compute_arrivals(&added_messages, now);
     let added_thread_ids: HashSet<String> = added_messages
         .iter()
         .map(|message| message.thread_id.clone())
         .collect();
 
     let account_owned = account_id.to_owned();
-    let labels_changed = storage
+    let (labels_changed, arrivals) = storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
+            let arrivals = compute_arrivals(&transaction, &account_owned, &added_messages, now)?;
             let mut touched = HashSet::new();
             for message in &added_messages {
                 touched.insert(message.thread_id.clone());
@@ -1314,7 +1325,7 @@ async fn incremental_body(
                 sync_labels(&transaction, &account_owned, &gmail_labels, &mut touched)?;
             ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
             transaction.commit()?;
-            Ok(labels_changed)
+            Ok((labels_changed, arrivals))
         })
         .await?;
     let changed = history_changed || labels_changed;
