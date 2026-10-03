@@ -1,6 +1,6 @@
 [package]
 name = "latentmail"
-version = "2.2.5"
+version = "2.2.6"
 description = "LatentMail desktop Gmail client"
 authors = ["LatentMail"]
 edition = "2021"
