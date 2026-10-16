@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "latentmail"
-version = "2.2.6"
+version = "2.3.0"
 dependencies = [
  "ammonia",
  "async-openai",
