@@ -285,6 +285,8 @@
   --shadow-segment: 0 1px 2px rgba(19, 27, 46, 0.1);
   --shadow-pip-hollow: inset 0 0 0 1.5px var(--color-settings-outline);
   --shadow-dark-pip-hollow: inset 0 0 0 1.5px var(--color-dark-settings-outline);
+  --shadow-page: 0 1px 3px rgba(19, 27, 46, 0.12), 0 4px 12px rgba(19, 27, 46, 0.08);
+  --shadow-dark-page: 0 1px 3px rgba(0, 0, 0, 0.5);
 
   --radius-glyph: 1px;
   --radius-keycap: 5px;
@@ -335,7 +337,7 @@
   --spacing-ai-cite: 20px;
   --spacing-preview-modal-w: 1440px;
   --spacing-preview-modal-h: 1100px;
-  --spacing-pdf-page-max: 1100px;
+  --spacing-zoom-readout: 84px;
 
   --color-filetype-pdf-ink: #b3261e;
   --color-filetype-pdf-well: #fbe9e7;
