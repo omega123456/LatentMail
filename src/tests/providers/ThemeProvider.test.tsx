@@ -1,9 +1,9 @@
 import { render } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 
-it('loads the bundled Inter face when the browser supports it', async () => {
+it('loads every bundled Selawik weight when the browser supports it', async () => {
   const add = vi.fn();
-  const load = vi.fn().mockResolvedValue('inter-face');
+  const load = vi.fn().mockResolvedValue('selawik-face');
   class FakeFontFace {
     load = load;
   }
@@ -18,7 +18,8 @@ it('loads the bundled Inter face when the browser supports it', async () => {
     </ThemeProvider>,
   );
 
-  await vi.waitFor(() => expect(add).toHaveBeenCalledWith('inter-face'));
+  await vi.waitFor(() => expect(add).toHaveBeenCalledTimes(3));
+  expect(add).toHaveBeenCalledWith('selawik-face');
 });
 
 it('keeps rendering when the bundled font cannot load', async () => {

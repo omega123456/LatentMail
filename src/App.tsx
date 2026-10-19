@@ -12,7 +12,7 @@ export default function App() {
       <AssistantChatEvents />
       <ThemeProvider>
         <LayoutProvider>
-          <div className="h-full bg-background font-inter text-on-surface dark:bg-dark-background dark:text-dark-on-surface">
+          <div className="h-full bg-background font-ui text-on-surface dark:bg-dark-background dark:text-dark-on-surface">
             <AppShell />
           </div>
         </LayoutProvider>

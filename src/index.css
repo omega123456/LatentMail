@@ -214,7 +214,9 @@
   --color-dark-settings-tint-quota: #2c2416;
   --color-dark-settings-tint-pause: #24242b;
 
-  --font-inter: Inter, sans-serif;
+  --font-ui:
+    'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', Selawik, system-ui, -apple-system,
+    'Helvetica Neue', Arial, sans-serif;
   --text-display-sm: 30px;
   --text-display-sm--line-height: 38px;
   --text-display-sm--font-weight: 600;

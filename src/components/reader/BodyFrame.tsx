@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
-import interUrl from '@/assets/inter-latin.woff2?url';
 import { invoke } from '@/lib/ipc/commands';
+import { selawikFontFaceCss, uiFontStack } from '@/lib/ui-font';
 
 const maxFrameHeight = 32000;
 const allowedUriSchemes =
@@ -81,15 +81,14 @@ export function BodyFrame({
     );
   if (!html)
     return (
-      <pre className="select-text whitespace-pre-wrap font-inter text-body-sm text-on-surface dark:text-dark-on-surface">
+      <pre className="select-text whitespace-pre-wrap font-ui text-body-sm text-on-surface dark:text-dark-on-surface">
         {text}
       </pre>
     );
   const dark = document.documentElement.classList.contains('dark');
   const remoteImageSources = ' remoteimg: http://remoteimg.localhost https: http:';
   const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: inlineimg: http://inlineimg.localhost${allowRemoteImages ? remoteImageSources : ''}; style-src 'unsafe-inline'; font-src 'self'; form-action 'none'">`;
-  const frameFont = `@font-face{font-family:Inter;src:url(${interUrl}) format('woff2');font-weight:100 900;font-display:swap}`;
-  const srcDoc = `${frameCsp}<style>${frameFont}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:Inter,sans-serif;font-size:16px;line-height:1.625;overflow-wrap:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true, ALLOWED_URI_REGEXP: allowedUriSchemes })}`;
+  const srcDoc = `${frameCsp}<style>${selawikFontFaceCss}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:${uiFontStack};font-size:16px;line-height:1.625;overflow-wrap:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true, ALLOWED_URI_REGEXP: allowedUriSchemes })}`;
   return (
     <iframe
       ref={frameRef}

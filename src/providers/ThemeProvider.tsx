@@ -1,20 +1,25 @@
 import { useEffect, type PropsWithChildren } from 'react';
-import interUrl from '@/assets/inter-latin.woff2?url';
 import { applyTheme, useThemeStore } from '@/stores/theme';
+import { selawikFaces, selawikUnicodeRangeWithoutEllipsis } from '@/lib/ui-font';
 
 let fontLoaded = false;
 
-function loadInter() {
+function loadSelawik() {
   if (fontLoaded || typeof FontFace === 'undefined' || !document.fonts) {
     return;
   }
 
   fontLoaded = true;
-  const face = new FontFace('Inter', `url(${interUrl})`, { weight: '100 900' });
-  void face.load().then(
-    (loadedFace) => document.fonts.add(loadedFace),
-    () => undefined,
-  );
+  for (const { weight, url } of selawikFaces) {
+    const face = new FontFace('Selawik', `url(${url})`, {
+      weight,
+      unicodeRange: selawikUnicodeRangeWithoutEllipsis,
+    });
+    void face.load().then(
+      (loadedFace) => document.fonts.add(loadedFace),
+      () => undefined,
+    );
+  }
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
@@ -23,7 +28,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     applyTheme(theme);
-    loadInter();
+    loadSelawik();
   }, [theme]);
 
   useEffect(() => {
