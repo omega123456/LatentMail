@@ -55,6 +55,14 @@ pub fn sanitize(
     cid_sources: &HashMap<String, String>,
     allow_remote: bool,
 ) -> SanitizedHtml {
+    cap(clean(html, cid_sources, allow_remote))
+}
+
+pub fn sanitize_for_export(html: &str, cid_sources: &HashMap<String, String>) -> SanitizedHtml {
+    clean(html, cid_sources, false)
+}
+
+fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) -> SanitizedHtml {
     let cid_sources = cid_sources.clone();
     let outcome = std::sync::Arc::new(ImageOutcome::default());
     let outcome_in_filter = std::sync::Arc::clone(&outcome);
@@ -114,10 +122,13 @@ pub fn sanitize(
                 _ => Some(Cow::Borrowed(value)),
             },
         );
-    let mut sanitized = cap(builder.clean(html).to_string());
-    sanitized.remote_images_blocked = ImageOutcome::read(&outcome.remote_blocked);
-    sanitized.inline_images_missing = ImageOutcome::read(&outcome.inline_missing);
-    sanitized
+    let html = builder.clean(html).to_string();
+    SanitizedHtml {
+        html,
+        truncated: false,
+        remote_images_blocked: ImageOutcome::read(&outcome.remote_blocked),
+        inline_images_missing: ImageOutcome::read(&outcome.inline_missing),
+    }
 }
 
 fn image_source(
@@ -185,22 +196,16 @@ fn style_images(
     Some(rewritten)
 }
 
-fn cap(html: String) -> SanitizedHtml {
-    if html.len() <= MAX_SANITIZED_HTML_BYTES {
-        return SanitizedHtml {
-            html,
-            truncated: false,
-            remote_images_blocked: false,
-            inline_images_missing: false,
-        };
+fn cap(sanitized: SanitizedHtml) -> SanitizedHtml {
+    if sanitized.html.len() <= MAX_SANITIZED_HTML_BYTES {
+        return sanitized;
     }
-    let boundary = html[..MAX_SANITIZED_HTML_BYTES]
+    let boundary = sanitized.html[..MAX_SANITIZED_HTML_BYTES]
         .rfind('>')
         .map_or(MAX_SANITIZED_HTML_BYTES, |index| index + 1);
     SanitizedHtml {
-        html: html[..boundary].to_owned(),
+        html: sanitized.html[..boundary].to_owned(),
         truncated: true,
-        remote_images_blocked: false,
-        inline_images_missing: false,
+        ..sanitized
     }
 }

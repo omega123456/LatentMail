@@ -1,9 +1,10 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ReadingPane, readerFixtures } from '@/components/reader/ReadingPane';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
+import { useMessageSourceStore } from '@/stores/message-source';
 
 describe('ReadingPane', () => {
   it('renders reader states', () => {
@@ -175,5 +176,54 @@ describe('ReadingPane', () => {
     expect(ribbon.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
     expect(await ribbon.findByRole('button', { name: 'Move to' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByLabelText('Message body').length).toBeGreaterThan(0));
+  });
+
+  it('offers source and export actions on sent messages but not on drafts', async () => {
+    const user = userEvent.setup();
+    const savedTo: string[] = [];
+    const defaultPaths: string[] = [];
+    ipc.override('plugin:dialog|save', ({ options }) => {
+      defaultPaths.push(options.defaultPath ?? '');
+      return '/Users/me/Downloads/export';
+    });
+    ipc.override('save_message_source_to_path', ({ messageId }) => {
+      savedTo.push(`eml:${messageId}`);
+    });
+    ipc.override('save_message_html_to_path', ({ messageId }) => {
+      savedTo.push(`html:${messageId}`);
+    });
+    useMessageSourceStore.setState({ target: null });
+    const conversation = {
+      ...readerFixtures['thread-1'],
+      messages: [
+        { ...readerFixtures['thread-1'].messages[0], isDraft: false },
+        { ...readerFixtures['thread-1'].messages[1], isDraft: true },
+      ],
+    };
+    renderWithQueryClient(
+      <ReadingPane threadId="thread-1" conversation={conversation} accountId="account-1" />,
+    );
+    expect(screen.getAllByRole('button', { name: 'More message actions' })).toHaveLength(1);
+    const ribbon = within(screen.getAllByRole('toolbar', { name: 'Message actions' })[0]);
+
+    await user.click(ribbon.getByRole('button', { name: 'More message actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /Show original/ }));
+    expect(useMessageSourceStore.getState().target).toEqual({
+      accountId: 'account-1',
+      messageId: 'message-1',
+    });
+    await user.click(ribbon.getByRole('button', { name: 'More message actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Download message (.eml)' }));
+    await user.click(ribbon.getByRole('button', { name: 'More message actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Download as web page (.html)' }));
+
+    await waitFor(() => expect(savedTo).toEqual(['eml:message-1', 'html:message-1']));
+    expect(defaultPaths[0]).toMatch(/^\d{4}-\d{2}-\d{2} Q3 Marketing Strategy Review\.eml$/);
+    act(() => useMessageSourceStore.setState({ target: null }));
+  });
+
+  it('offers no export actions without an account', () => {
+    renderWithQueryClient(<ReadingPane threadId="thread-1" />);
+    expect(screen.queryByRole('button', { name: 'More message actions' })).not.toBeInTheDocument();
   });
 });

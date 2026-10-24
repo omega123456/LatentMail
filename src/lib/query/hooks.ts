@@ -353,6 +353,20 @@ export function useMessageBodyQuery(
   });
 }
 
+export function useMessageSourceQuery(accountId: string | null, messageId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.messageSource(accountId ?? '', messageId ?? ''),
+    queryFn: () =>
+      invoke('read_message_source', {
+        accountId: accountId as string,
+        messageId: messageId as string,
+      }),
+    enabled: accountId !== null && messageId !== null,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 export function useCachedAttachmentQuery(
   accountId: string | null,
   messageId: string | null,

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ActionRibbon, type ActionRibbonProps } from '@/components/actions/ActionRibbon';
 import { BulkSelectionPanel } from '@/components/actions/BulkSelectionPanel';
+import type { MessageExportActions } from '@/components/actions/MessageActionRibbon';
 import { EmptyState } from '@/components/states/EmptyState';
 import { ErrorState } from '@/components/states/ErrorState';
 import { LoadingState } from '@/components/states/LoadingState';
@@ -19,10 +20,12 @@ import {
 } from '@/lib/query/hooks';
 import { buildGmailThreadWebUrl } from '@/lib/gmail/thread-url';
 import { messageBadges } from '@/lib/labels/badges';
+import { saveMessageAs } from '@/lib/messages/save';
 import { computeThreadLabelMembership, mapConversation, mapThreadToRow } from '@/lib/query/mappers';
 import type { Conversation } from '@/lib/types/conversation';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useLayoutStore } from '@/stores/layout';
+import { useMessageSourceStore } from '@/stores/message-source';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import type { MoveDestinationId } from '@/components/actions/MoveToMenu';
@@ -179,6 +182,22 @@ export function ReadingPane({
   const composeThread = (action: ComposeAction) => {
     if (lastMessage) onCompose?.(action, lastMessage.id);
   };
+  const exportActionsFor = (message: ReaderMessage): MessageExportActions | undefined => {
+    if (!accountId || message.isDraft) return undefined;
+    const target = {
+      accountId,
+      messageId: message.id,
+      subject: conversation.subject,
+      sender: message.sender.address,
+      sentAt: message.sentAt,
+    };
+    return {
+      onShowOriginal: () =>
+        useMessageSourceStore.getState().open({ accountId, messageId: message.id }),
+      onDownloadEml: () => void saveMessageAs('eml', target),
+      onDownloadHtml: () => void saveMessageAs('html', target),
+    };
+  };
   const messageRibbonBase: MessageRibbonProps = {
     systemLabelIds: [],
     labels: labelMenuEntries,
@@ -237,6 +256,7 @@ export function ReadingPane({
                 onEditDraft: message.isDraft
                   ? () => onCompose?.('edit-draft', message.id)
                   : undefined,
+                exportActions: exportActionsFor(message),
               }}
               onFetchBody={onFetchBody}
               onComposeTo={onComposeTo}

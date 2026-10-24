@@ -9,6 +9,7 @@ import { playwrightSettings } from './settings';
 import { playwrightLogEntries } from './logs';
 import { playwrightContactSuggestions, playwrightStagedAttachment } from './compose';
 import { playwrightCachedAttachment } from './attachments';
+import { playwrightMessageSource } from './message-source';
 import {
   playwrightPausedQueueSummary,
   playwrightQueueOperationsSnapshot,
@@ -94,6 +95,9 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   read_attachment_bytes: new ArrayBuffer(0),
   read_attachment_text: '',
   save_attachment_to_path: undefined,
+  read_message_source: playwrightMessageSource,
+  save_message_source_to_path: undefined,
+  save_message_html_to_path: undefined,
   list_threads: playwrightThreadPage,
   load_conversation: playwrightConversation,
   load_message_body: {

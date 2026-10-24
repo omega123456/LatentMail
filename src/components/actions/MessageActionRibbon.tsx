@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import {
+  Download,
+  EllipsisVertical,
+  FileCode,
   FolderInput,
   Forward,
+  Globe,
   Mail,
   MailOpen,
   PenSquare,
@@ -14,9 +18,18 @@ import {
   Tag,
   Trash2,
 } from 'lucide-react';
+import { formatBindingParts, isMacPlatform, primaryBinding } from '@/lib/keyboard/format';
+import { useCommandBindings } from '@/providers/CommandProvider';
 import { computeRibbonVisibility } from './ActionRibbon';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
+import { itemClass, menuContentClass } from './RowContextMenu';
+
+export type MessageExportActions = {
+  onShowOriginal: () => void;
+  onDownloadEml: () => void;
+  onDownloadHtml: () => void;
+};
 
 export type MessageActionRibbonProps = {
   systemLabelIds: string[];
@@ -34,6 +47,7 @@ export type MessageActionRibbonProps = {
   onReplyAll: () => void;
   onForward: () => void;
   onEditDraft?: () => void;
+  exportActions?: MessageExportActions;
 };
 
 const iconButtonClass =
@@ -55,6 +69,7 @@ export function MessageActionRibbon({
   onReplyAll,
   onForward,
   onEditDraft,
+  exportActions,
 }: MessageActionRibbonProps) {
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -222,6 +237,48 @@ export function MessageActionRibbon({
           </button>
         </>
       )}
+      {exportActions && <MoreMessageActions actions={exportActions} />}
     </div>
+  );
+}
+
+function MoreMessageActions({ actions }: { actions: MessageExportActions }) {
+  const bindings = useCommandBindings();
+  const isMac = isMacPlatform();
+  const binding = primaryBinding(bindings.showOriginal, isMac);
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label="More message actions"
+          title="More message actions"
+          className={iconButtonClass}
+        >
+          <EllipsisVertical aria-hidden="true" size={14} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="end" className={menuContentClass} collisionPadding={8}>
+          <DropdownMenu.Item className={itemClass} onSelect={actions.onShowOriginal}>
+            <FileCode aria-hidden="true" size={16} />
+            Show original
+            {binding && (
+              <span className="ml-auto pl-4 text-label-sm text-secondary dark:text-dark-secondary">
+                {formatBindingParts(binding, isMac).join(isMac ? '' : '+')}
+              </span>
+            )}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={itemClass} onSelect={actions.onDownloadEml}>
+            <Download aria-hidden="true" size={16} />
+            Download message (.eml)
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className={itemClass} onSelect={actions.onDownloadHtml}>
+            <Globe aria-hidden="true" size={16} />
+            Download as web page (.html)
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }

@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-read-message-source"
+description = "Enables fetching a message's raw RFC 822 source from Gmail for the Show original dialog."
+commands.allow = ["read_message_source"]
+
+[[permission]]
+identifier = "allow-save-message-source-to-path"
+description = "Enables writing a message's raw RFC 822 source to a user-chosen .eml destination path."
+commands.allow = ["save_message_source_to_path"]
+
+[[permission]]
+identifier = "allow-save-message-html-to-path"
+description = "Enables writing a sanitized standalone HTML copy of a message to a user-chosen destination path."
+commands.allow = ["save_message_html_to_path"]

@@ -17,6 +17,7 @@ export {
   playwrightCachedAttachment,
   playwrightAttachmentImageSrc,
 } from './attachments';
+export { playwrightMessageSource } from './message-source';
 export { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
 export { playwrightTraversalStatus } from './traversal';
 export { playwrightSettings, playwrightTrustedSenderSettings } from './settings';

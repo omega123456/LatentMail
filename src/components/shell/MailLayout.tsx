@@ -35,12 +35,14 @@ import { LabelList } from '@/components/sidebar/LabelList';
 import { PanelLeftClose, Pencil, Settings, Sparkles } from 'lucide-react';
 import brandMark from '@/assets/brand-mark.png';
 import { ResizeHandle } from './ResizeHandle';
+import { MessageSourceDialog } from '@/components/reader/MessageSourceDialog';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
 import { StatusBar } from '@/components/statusbar/StatusBar';
 import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
 import { useCommands } from '@/lib/keyboard/useCommands';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useComposeStore } from '@/stores/compose';
+import { useMessageSourceStore } from '@/stores/message-source';
 import { useSearchStore } from '@/stores/search';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
@@ -181,6 +183,12 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     },
     [activeAccount, keyboardConversation.data, keyboardMultiSelect],
   );
+  const showOriginal = useCallback(() => {
+    if (!activeAccount || keyboardMultiSelect || !keyboardConversation.data) return;
+    const message = keyboardConversation.data.messages.at(-1);
+    if (!message || message.labelIds.includes('DRAFT')) return;
+    useMessageSourceStore.getState().open({ accountId: activeAccount.id, messageId: message.id });
+  }, [activeAccount, keyboardConversation.data, keyboardMultiSelect]);
   useCommands({
     newMessage: (event) => {
       event.preventDefault();
@@ -209,6 +217,10 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     toggleAssistant: (event) => {
       event.preventDefault();
       toggleAssistant();
+    },
+    showOriginal: (event) => {
+      event.preventDefault();
+      showOriginal();
     },
   });
   const mailboxName =
@@ -520,6 +532,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           <ComposeOverlay />
         </Suspense>
       )}
+      <MessageSourceDialog />
     </div>
   );
 }

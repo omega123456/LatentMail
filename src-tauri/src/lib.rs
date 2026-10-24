@@ -9,6 +9,7 @@ pub mod gmail;
 pub mod inline_images;
 pub mod ipc;
 pub mod logging;
+pub mod message_export;
 pub mod os;
 pub mod queue;
 pub mod remote_images;

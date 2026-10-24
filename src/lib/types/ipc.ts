@@ -105,6 +105,15 @@ export interface IpcCommandMap {
     args: { accountId: string; messageId: string; attachmentId: string; destination: string };
     result: void;
   };
+  read_message_source: { args: { accountId: string; messageId: string }; result: MessageSource };
+  save_message_source_to_path: {
+    args: { accountId: string; messageId: string; destination: string };
+    result: void;
+  };
+  save_message_html_to_path: {
+    args: { accountId: string; messageId: string; destination: string };
+    result: void;
+  };
   stage_attachment_into_draft: {
     args: { accountId: string; messageId: string; attachmentId: string; owner: string };
     result: StagedAttachment;
@@ -644,6 +653,19 @@ export interface MessageBody {
   remoteImagesBlocked: boolean;
   remoteImagesAllowed: boolean;
   inlineImagesPending: boolean;
+}
+
+export interface MessageSource {
+  messageId: string | null;
+  sentAt: number;
+  sender: string;
+  to: string;
+  cc: string;
+  subject: string;
+  authenticationResults: string | null;
+  sizeBytes: number;
+  raw: string;
+  display: string;
 }
 
 export type SyncEngineState = 'idle' | 'syncing' | 'error';

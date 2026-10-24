@@ -8,6 +8,7 @@ import { queryKeys } from '@/lib/query/keys';
 import type { IpcCommandMap } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
+import { useMessageSourceStore } from '@/stores/message-source';
 import { useSearchStore } from '@/stores/search';
 import { useSelectionStore } from '@/stores/selection';
 import { useSyncStore } from '@/stores/sync';
@@ -161,6 +162,60 @@ describe('AppShell wired to real data', () => {
       'srcdoc',
       expect.stringContaining('Attached slides'),
     );
+  });
+
+  it('opens the original source of the newest message from the keyboard', async () => {
+    useMessageSourceStore.setState({ target: null });
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    ipc.override('load_conversation', conversationOne);
+    ipc.override('read_message_source', {
+      messageId: '<q3@example.com>',
+      sentAt: conversationOne.messages[0].sentAt,
+      sender: conversationOne.messages[0].sender,
+      to: 'You <you@example.com>',
+      cc: '',
+      subject: 'Q3 review',
+      authenticationResults: null,
+      sizeBytes: 64,
+      raw: 'Subject: Q3 review\r\n\r\nAttached slides',
+      display: 'Subject: Q3 review\n\nAttached slides',
+    });
+
+    render(<App />);
+    expect(await screen.findByText('Q3 review')).toBeInTheDocument();
+    await act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
+    await screen.findByTestId('message-message-1');
+    await act(() =>
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u', ctrlKey: true })),
+    );
+
+    expect(await screen.findByText('Original message · Q3 review')).toBeInTheDocument();
+    expect(useMessageSourceStore.getState().target).toEqual({
+      accountId: 'account-1',
+      messageId: 'message-1',
+    });
+    act(() => useMessageSourceStore.setState({ target: null }));
+  });
+
+  it('ignores the source shortcut when the newest message is a draft', async () => {
+    useMessageSourceStore.setState({ target: null });
+    ipc.override('list_accounts', [accountOne]);
+    overrideAccount('account-1', [threadOne]);
+    ipc.override('load_conversation', {
+      ...conversationOne,
+      messages: [{ ...conversationOne.messages[0], labelIds: ['DRAFT'] }],
+    });
+
+    render(<App />);
+    expect(await screen.findByText('Q3 review')).toBeInTheDocument();
+    await act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' })));
+    await screen.findByTestId('message-message-1');
+    await act(() =>
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u', ctrlKey: true })),
+    );
+
+    expect(useMessageSourceStore.getState().target).toBeNull();
   });
 
   it('selects the first account and Inbox on a fresh launch without restoring prior selection', async () => {

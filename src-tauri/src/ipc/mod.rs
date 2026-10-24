@@ -174,6 +174,9 @@ pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         crate::attachments::commands::read_attachment_text,
         crate::attachments::commands::save_attachment_to_path,
         crate::attachments::commands::stage_attachment_into_draft,
+        crate::message_export::commands::read_message_source,
+        crate::message_export::commands::save_message_source_to_path,
+        crate::message_export::commands::save_message_html_to_path,
         crate::updater::check_for_update,
         crate::updater::install_update
     ])

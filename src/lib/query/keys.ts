@@ -41,6 +41,8 @@ export const queryKeys = {
   queueOperations: ['queueOperations'] as const,
   logEntries: ['logEntries'] as const,
   appUpdate: ['appUpdate'] as const,
+  messageSource: (accountId: string, messageId: string) =>
+    ['messageSource', accountId, messageId] as const,
   cachedAttachment: (accountId: string, messageId: string, attachmentId: string) =>
     ['cachedAttachment', accountId, messageId, attachmentId] as const,
   attachmentText: (accountId: string, messageId: string, attachmentId: string) =>

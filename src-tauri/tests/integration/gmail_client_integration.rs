@@ -336,3 +336,44 @@ async fn message_rescues_an_oversize_body_with_a_metadata_only_refetch() {
     assert!(message.html_body.is_none());
     assert!(message.plain_body.is_none());
 }
+
+#[tokio::test]
+async fn raw_message_requests_the_raw_format_and_decodes_base64url() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .and(query_param("format", "raw"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "id": "m1", "raw": "U3ViamVjdDogSGk_DQoNCmJvZHk" }),
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    let raw = GmailClient::with_base_url("token", server.uri())
+        .raw_message("m1")
+        .await
+        .unwrap();
+
+    assert_eq!(raw, b"Subject: Hi?\r\n\r\nbody");
+}
+
+#[tokio::test]
+async fn raw_message_rejects_a_payload_that_is_not_base64url() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "raw": "not*base64" })),
+        )
+        .mount(&server)
+        .await;
+
+    let error = GmailClient::with_base_url("token", server.uri())
+        .raw_message("m1")
+        .await
+        .expect_err("an undecodable raw payload must fail");
+
+    assert!(matches!(error, GmailError::RawMessageData));
+}

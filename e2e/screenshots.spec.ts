@@ -201,6 +201,18 @@ for (const theme of themes) {
     );
   });
 
+  test(`message source modal ${theme}`, async ({ page }) => {
+    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await page.goto('/');
+    await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
+    await toggleTheme(page, theme);
+    await page.keyboard.press('j');
+    await page.getByRole('button', { name: 'More message actions' }).last().click();
+    await page.getByRole('menuitem', { name: /Show original/ }).click();
+    await expect(page.getByRole('button', { name: 'Copy' })).toBeVisible();
+    await screenshot(page, page.getByTestId('message-source-modal'), 'message-source-modal', theme);
+  });
+
   test(`status bar ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(
       page,

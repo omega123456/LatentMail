@@ -18,7 +18,8 @@ export type CommandName =
   | 'forwardMessage'
   | 'editDraft'
   | 'focusSearch'
-  | 'toggleAssistant';
+  | 'toggleAssistant'
+  | 'showOriginal';
 
 export type CommandBindings = Record<CommandName, string[]>;
 
@@ -43,6 +44,7 @@ export const DEFAULT_COMMAND_BINDINGS: CommandBindings = {
   editDraft: [],
   focusSearch: ['Meta+F', 'Control+F', '/'],
   toggleAssistant: ['Meta+Shift+A', 'Control+Shift+A'],
+  showOriginal: ['Meta+U', 'Control+U'],
 };
 
 export type CommandOverrides = Partial<CommandBindings>;
@@ -81,6 +83,10 @@ export const COMMAND_METADATA: Record<CommandName, CommandMetadata> = {
   toggleAssistant: {
     label: 'AI assistant',
     description: 'Show or hide the AI assistant panel.',
+  },
+  showOriginal: {
+    label: 'Show original',
+    description: 'View the raw source of the newest message.',
   },
 };
 

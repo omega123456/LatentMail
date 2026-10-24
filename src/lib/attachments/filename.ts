@@ -1,3 +1,5 @@
+import { format } from 'date-fns';
+
 const RESERVED_WINDOWS_NAMES = new Set([
   'CON',
   'PRN',
@@ -32,4 +34,22 @@ export function sanitizeFilename(filename: string): string {
   const [stem] = trimmed.split('.');
   if (RESERVED_WINDOWS_NAMES.has(stem.toUpperCase())) return `_${trimmed}`;
   return trimmed;
+}
+
+const MAX_EXPORT_STEM_LENGTH = 120;
+const PATH_UNSAFE_CHARACTERS = /[/\\:*?"<>|]+/g;
+
+export function messageExportFilename(
+  subject: string,
+  sentAt: Date,
+  sender: string,
+  extension: 'eml' | 'html',
+): string {
+  const title = subject.trim() || `Message from ${sender}`;
+  const stem = `${format(sentAt, 'yyyy-MM-dd')} ${title}`
+    .replace(PATH_UNSAFE_CHARACTERS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_EXPORT_STEM_LENGTH);
+  return `${sanitizeFilename(stem)}.${extension}`;
 }

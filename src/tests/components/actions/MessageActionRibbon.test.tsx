@@ -144,4 +144,51 @@ describe('MessageActionRibbon', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Move to' })).toBeInTheDocument();
   });
+
+  it('offers no overflow menu when the message has no export actions', () => {
+    render(
+      <MessageActionRibbon
+        systemLabelIds={[]}
+        unread={false}
+        starred={false}
+        labels={[]}
+        {...baseHandlers()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'More message actions' })).not.toBeInTheDocument();
+  });
+
+  it('places the overflow menu after Delete and dispatches each export action', async () => {
+    const user = userEvent.setup();
+    const exportActions = {
+      onShowOriginal: vi.fn(),
+      onDownloadEml: vi.fn(),
+      onDownloadHtml: vi.fn(),
+    };
+    render(
+      <MessageActionRibbon
+        systemLabelIds={[]}
+        unread={false}
+        starred={false}
+        labels={[]}
+        {...baseHandlers()}
+        exportActions={exportActions}
+      />,
+    );
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.at(-1)).toHaveAccessibleName('More message actions');
+    expect(buttons.at(-2)).toHaveAccessibleName('Delete');
+
+    await user.click(screen.getByRole('button', { name: 'More message actions' }));
+    expect(screen.getByRole('menuitem', { name: /Show original/ })).toHaveTextContent('Ctrl+U');
+    await user.click(screen.getByRole('menuitem', { name: /Show original/ }));
+    await user.click(screen.getByRole('button', { name: 'More message actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Download message (.eml)' }));
+    await user.click(screen.getByRole('button', { name: 'More message actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Download as web page (.html)' }));
+
+    expect(exportActions.onShowOriginal).toHaveBeenCalledTimes(1);
+    expect(exportActions.onDownloadEml).toHaveBeenCalledTimes(1);
+    expect(exportActions.onDownloadHtml).toHaveBeenCalledTimes(1);
+  });
 });

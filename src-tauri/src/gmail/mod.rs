@@ -41,6 +41,7 @@ const MESSAGE_METADATA_FIELDS: &str =
     "id,threadId,historyId,labelIds,snippet,internalDate,payload(headers)";
 const MAX_GMAIL_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ATTACHMENT_RESPONSE_BYTES: usize = 40 * 1024 * 1024;
+const MAX_RAW_MESSAGE_RESPONSE_BYTES: usize = 72 * 1024 * 1024;
 
 pub const RESERVED_ATTACHMENT_ID_PREFIX: &str = "latentmail-inline-";
 
@@ -172,6 +173,8 @@ pub enum GmailError {
     Response(#[from] serde_json::Error),
     #[error("invalid Gmail attachment payload")]
     AttachmentData,
+    #[error("invalid Gmail raw message payload")]
+    RawMessageData,
     #[error("Gmail response exceeded the {MAX_GMAIL_RESPONSE_BYTES}-byte cap")]
     ResponseTooLarge,
 }
@@ -540,6 +543,20 @@ impl GmailClient {
             )
             .await?;
         decode(&raw.data).ok_or(GmailError::AttachmentData)
+    }
+    pub async fn raw_message(&self, id: &str) -> Result<Vec<u8>, GmailError> {
+        self.acquire(MESSAGES_GET_COST).await;
+        let source: RawSource = self
+            .request_capped(
+                reqwest::Method::GET,
+                &format!("/users/me/messages/{id}"),
+                [("format", "raw")],
+                Option::<&()>::None,
+                false,
+                MAX_RAW_MESSAGE_RESPONSE_BYTES,
+            )
+            .await?;
+        decode(&source.raw).ok_or(GmailError::RawMessageData)
     }
     pub async fn modify_message(
         &self,
@@ -935,6 +952,10 @@ impl RawDraftMessage {
 #[derive(Deserialize)]
 struct RawAttachment {
     data: String,
+}
+#[derive(Deserialize)]
+struct RawSource {
+    raw: String,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

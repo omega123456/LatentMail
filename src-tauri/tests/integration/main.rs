@@ -47,6 +47,7 @@ mod ipc_contract_integration;
 mod lifecycle_suspension_integration;
 mod logging_reader_integration;
 mod logging_writer_integration;
+mod message_export_integration;
 mod mutations_coalescing_integration;
 mod mutations_star_integration;
 mod mutations_triage_integration;
