@@ -4,7 +4,25 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PdfPreview } from '@/components/reader/previews/PdfPreview';
 
-const { getDocument } = vi.hoisted(() => ({ getDocument: vi.fn() }));
+const { getDocument, TextLayer, textLayerCancel } = vi.hoisted(() => {
+  const textLayerCancel = vi.fn();
+  return {
+    getDocument: vi.fn(),
+    textLayerCancel,
+    TextLayer: vi.fn(function (this: object, { container }: { container: HTMLElement }) {
+      return {
+        render: () => {
+          container.append(
+            Object.assign(document.createElement('span'), { textContent: 'Hello' }),
+            Object.assign(document.createElement('span'), { textContent: 'World' }),
+          );
+          return Promise.resolve();
+        },
+        cancel: textLayerCancel,
+      };
+    }),
+  };
+});
 const cancel = vi.fn();
 let renderOutcome: () => Promise<void> = () => Promise.resolve();
 const renderPage = vi.fn<
@@ -19,6 +37,7 @@ function makePage(pageNumber: number) {
     pageNumber,
     getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 140 * scale }),
     render: renderPage,
+    streamTextContent: () => new ReadableStream(),
   };
 }
 
@@ -39,6 +58,7 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: {},
   PixelsPerInch: { PDF_TO_CSS_UNITS: 96 / 72 },
   getDocument,
+  TextLayer,
 }));
 
 HTMLCanvasElement.prototype.getContext = vi.fn(
@@ -65,6 +85,8 @@ beforeEach(() => {
   renderOutcome = () => Promise.resolve();
   renderPage.mockClear();
   cancel.mockClear();
+  TextLayer.mockClear();
+  textLayerCancel.mockClear();
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
     configurable: true,
     get: () => 400,
@@ -126,6 +148,71 @@ describe('PdfPreview', () => {
     expect(cancel).toHaveBeenCalled();
     expect(canvas.width).toBe(0);
     expect(canvas.height).toBe(0);
+  });
+
+  it('lays selectable text over the pages near the view and scales it with zoom', async () => {
+    const user = userEvent.setup();
+    await openPreview(10);
+    await waitFor(() => expect(screen.getAllByTestId('pdf-text-layer')).toHaveLength(3));
+    const [layer] = screen.getAllByTestId('pdf-text-layer');
+    expect(await screen.findAllByText('Hello')).toHaveLength(3);
+    expect(layer.style.getPropertyValue('--scale-factor')).toBe(String(1.25 * (96 / 72)));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(layer.style.getPropertyValue('--scale-factor')).toBe(String(1.5 * (96 / 72)));
+    expect(TextLayer).toHaveBeenCalledTimes(3);
+  });
+
+  it('cancels and clears the text layer when the preview closes', async () => {
+    const { unmount } = await openPreview(1);
+    const layer = await screen.findByTestId('pdf-text-layer');
+    await screen.findByText('Hello');
+    unmount();
+    expect(textLayerCancel).toHaveBeenCalled();
+    expect(layer).toBeEmptyDOMElement();
+  });
+
+  it('keeps the selection anchored while dragging across the gaps between words', async () => {
+    await openPreview(1);
+    const layer = await screen.findByTestId('pdf-text-layer');
+    const hello = await screen.findByText('Hello');
+    const world = screen.getByText('World');
+    const end = () => layer.lastElementChild as HTMLElement;
+    await waitFor(() => expect(end().tagName).toBe('DIV'));
+    const endOfContent = end();
+    const select = (from: Node, to: Node) =>
+      act(() => {
+        document.getSelection()?.setBaseAndExtent(from, 0, to, 1);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+
+    fireEvent.mouseDown(layer);
+    expect(endOfContent).toHaveAttribute('data-selecting');
+    select(hello.firstChild!, world.firstChild!);
+    expect(world.nextSibling).toBe(endOfContent);
+    select(world.firstChild!, world.firstChild!);
+    expect(world.previousSibling).toBe(endOfContent);
+    fireEvent.pointerUp(document);
+    expect(end()).toBe(endOfContent);
+    expect(endOfContent).not.toHaveAttribute('data-selecting');
+
+    select(hello.firstChild!, hello.firstChild!);
+    fireEvent.pointerDown(document);
+    fireEvent.keyUp(document);
+    expect(endOfContent).toHaveAttribute('data-selecting');
+    fireEvent.blur(window);
+    expect(endOfContent).not.toHaveAttribute('data-selecting');
+
+    select(hello.firstChild!, hello.firstChild!);
+    fireEvent.keyUp(document);
+    expect(end()).toBe(endOfContent);
+    expect(endOfContent).not.toHaveAttribute('data-selecting');
+
+    select(hello.firstChild!, hello.firstChild!);
+    act(() => {
+      document.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(endOfContent).not.toHaveAttribute('data-selecting');
   });
 
   it('shows the fallback hint when a page fails to draw', async () => {

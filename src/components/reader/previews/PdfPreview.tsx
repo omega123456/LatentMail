@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import pdfWorkerSrc from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import type { PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -96,6 +96,89 @@ function PdfCanvas({
   }, []);
 
   return <canvas ref={canvasRef} className="absolute inset-0 size-full" data-testid="pdf-canvas" />;
+}
+
+function followSelection(container: HTMLElement): () => void {
+  const end = document.createElement('div');
+  end.className = 'absolute inset-x-0 top-full bottom-0 -z-1 select-none data-selecting:top-0';
+  container.append(end);
+  const controller = new AbortController();
+  const { signal } = controller;
+  let pointerDown = false;
+  let previous: Range | null = null;
+  const reset = () => {
+    container.append(end);
+    end.toggleAttribute('data-selecting', false);
+  };
+  const release = () => {
+    pointerDown = false;
+    reset();
+  };
+  container.addEventListener('mousedown', () => end.toggleAttribute('data-selecting', true), {
+    signal,
+  });
+  document.addEventListener('pointerdown', () => (pointerDown = true), { signal });
+  document.addEventListener('pointerup', release, { signal });
+  window.addEventListener('blur', release, { signal });
+  document.addEventListener('keyup', () => !pointerDown && reset(), { signal });
+  document.addEventListener(
+    'selectionchange',
+    () => {
+      const selection = document.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      const before = previous;
+      previous = range?.cloneRange() ?? null;
+      if (!range?.intersectsNode(container)) return reset();
+      end.toggleAttribute('data-selecting', true);
+      const extendsStart =
+        before !== null &&
+        (range.compareBoundaryPoints(Range.END_TO_END, before) === 0 ||
+          range.compareBoundaryPoints(Range.START_TO_END, before) === 0);
+      const boundary = extendsStart ? range.startContainer : range.endContainer;
+      const anchor = boundary.nodeType === Node.TEXT_NODE ? boundary.parentElement : boundary;
+      if (anchor?.parentElement === container)
+        container.insertBefore(end, extendsStart ? anchor : anchor.nextSibling);
+    },
+    { signal },
+  );
+  return () => controller.abort();
+}
+
+function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const layer = new pdfjsLib.TextLayer({
+      textContentSource: page.streamTextContent(),
+      container,
+      viewport: page.getViewport({ scale: pdfjsLib.PixelsPerInch.PDF_TO_CSS_UNITS }),
+    });
+    let active = true;
+    let stopFollowing = () => {};
+    layer
+      .render()
+      .then(() => {
+        if (active) stopFollowing = followSelection(container);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      layer.cancel();
+      stopFollowing();
+      container.replaceChildren();
+    };
+  }, [page]);
+
+  return (
+    <div
+      ref={containerRef}
+      data-testid="pdf-text-layer"
+      className="absolute inset-0 z-0 origin-top-left overflow-clip leading-none select-text forced-color-adjust-none selection:bg-primary/25 **:absolute **:origin-top-left **:cursor-text **:whitespace-pre **:text-transparent"
+      style={{ '--scale-factor': zoom * pdfjsLib.PixelsPerInch.PDF_TO_CSS_UNITS } as CSSProperties}
+    />
+  );
 }
 
 export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
@@ -202,6 +285,9 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
                 >
                   {renderZoom !== null && visibility?.near[index] && (
                     <PdfCanvas page={page} zoom={renderZoom} onError={showError} />
+                  )}
+                  {renderZoom !== null && visibility?.near[index] && (
+                    <PdfTextLayer page={page} zoom={zoom} />
                   )}
                 </div>
               ))}
