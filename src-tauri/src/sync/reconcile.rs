@@ -120,11 +120,9 @@ pub async fn run(
                     .list_messages_page_matching(&[], None, token.as_deref(), options)
                     .await?;
                 state.discovered_count += page.items.len() as i64;
-                let next = page.next_page_token.clone();
-                let next_phase = if next.is_some() {
-                    Phase::Universe(next)
-                } else {
-                    first_label(&labels).unwrap_or(Phase::Fetch(None))
+                let next_phase = match page.next_page_token {
+                    Some(token) => Phase::Universe(Some(token)),
+                    None => first_label(&labels).unwrap_or(Phase::Fetch(None)),
                 };
                 state.position = Some(next_phase.position(candidate));
                 state.last_advanced_at = chrono::Utc::now().timestamp();
@@ -142,11 +140,9 @@ pub async fn run(
                         options,
                     )
                     .await?;
-                let next = page.next_page_token.clone();
-                let next_phase = if next.is_some() {
-                    Phase::Label(label_id.clone(), next)
-                } else {
-                    label_after(&labels, label_id).unwrap_or(Phase::Fetch(None))
+                let next_phase = match page.next_page_token {
+                    Some(token) => Phase::Label(label_id.clone(), Some(token)),
+                    None => label_after(&labels, label_id).unwrap_or(Phase::Fetch(None)),
                 };
                 state.position = Some(next_phase.position(candidate));
                 state.last_advanced_at = chrono::Utc::now().timestamp();
@@ -299,6 +295,13 @@ async fn checkpoint(storage: &Storage, state: TraversalCursor) -> Result<(), Syn
         .await?;
     Ok(())
 }
+fn reconciliation_state(completed: bool) -> TraversalState {
+    if completed {
+        return TraversalState::Complete;
+    }
+    TraversalState::Reconciling
+}
+
 fn emit(events: &EventSink, account_id: &str, state: &TraversalCursor, completed: bool) {
     traversal::emit_traversal_progress(
         events,
@@ -308,11 +311,7 @@ fn emit(events: &EventSink, account_id: &str, state: &TraversalCursor, completed
             discovered_count: state.discovered_count,
             persisted_count: state.persisted_count,
             completed: completed,
-            state: if completed {
-                TraversalState::Complete
-            } else {
-                TraversalState::Reconciling
-            },
+            state: reconciliation_state(completed),
             last_advanced_at: to_millis(state.last_advanced_at),
             is_resumed: state.resumed,
         },

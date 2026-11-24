@@ -17,7 +17,9 @@ pub fn parse(value: &str) -> Option<Mailto> {
         return None;
     }
     let url = Url::parse(value).ok()?;
-    if url.scheme() != "mailto" || url.host().is_some() || url.port().is_some() {
+    let is_invalid_mailto =
+        url.scheme() != "mailto" || url.host().is_some() || url.port().is_some();
+    if is_invalid_mailto {
         return None;
     }
     let recipients = |value: &str| {
@@ -48,21 +50,24 @@ pub fn parse(value: &str) -> Option<Mailto> {
     Some(mailto)
 }
 
+fn is_percent_escape(bytes: &[u8], index: usize) -> bool {
+    index + 2 < bytes.len()
+        && bytes[index + 1].is_ascii_hexdigit()
+        && bytes[index + 2].is_ascii_hexdigit()
+}
+
 fn valid_percent_encoding(value: &str) -> bool {
     let bytes = value.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len()
-                || !bytes[index + 1].is_ascii_hexdigit()
-                || !bytes[index + 2].is_ascii_hexdigit()
-            {
-                return false;
-            }
-            index += 3;
-        } else {
+        if bytes[index] != b'%' {
             index += 1;
+            continue;
         }
+        if !is_percent_escape(bytes, index) {
+            return false;
+        }
+        index += 3;
     }
     true
 }

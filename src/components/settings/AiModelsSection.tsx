@@ -8,6 +8,17 @@ import type { AiIndexStatus } from '@/lib/types/ipc';
 import { InlineConfirm } from './InlineConfirm';
 import { settingsQuietButton } from './styles';
 
+function indexRebuildBody(indexStatus: AiIndexStatus | undefined, running: boolean): string {
+  const count = indexStatus?.indexedMessages.toLocaleString() ?? '0';
+  const cancelSuffix = running ? ' The build now running will be cancelled.' : '';
+  return `Vectors from a different model cannot be compared. This account's ${count} indexed messages will be removed and re-indexed from the start.${cancelSuffix}`;
+}
+
+function hasExistingIndexData(indexStatus: AiIndexStatus | undefined): boolean {
+  if (!indexStatus) return false;
+  return indexStatus.indexedMessages > 0 || indexStatus.indexedPassages > 0;
+}
+
 export function AiModelsSection({
   accountId,
   accountEmail,
@@ -44,9 +55,14 @@ export function AiModelsSection({
     }
   };
   const running = indexStatus?.state === 'preparing' || indexStatus?.state === 'building';
-  const hasIndexData = Boolean(
-    indexStatus && (indexStatus.indexedMessages > 0 || indexStatus.indexedPassages > 0),
-  );
+  const hasIndexData = hasExistingIndexData(indexStatus);
+  const requestEmbeddingModel = (model: string) => {
+    if (model !== embeddingModel && hasIndexData) {
+      setPendingModel(model);
+      return;
+    }
+    void selectEmbedding(model);
+  };
   return (
     <SettingsSubsection
       title="Models"
@@ -100,17 +116,14 @@ export function AiModelsSection({
                 pendingModel && (
                   <InlineConfirm
                     title={`Rebuild AI index for ${accountEmail}?`}
-                    body={`Vectors from a different model cannot be compared. This account's ${indexStatus?.indexedMessages.toLocaleString() ?? '0'} indexed messages will be removed and re-indexed from the start.${running ? ' The build now running will be cancelled.' : ''}`}
+                    body={indexRebuildBody(indexStatus, running)}
                     action="Change model"
                     onCancel={() => setPendingModel(null)}
                     onConfirm={() => void selectEmbedding(pendingModel)}
                   />
                 )
               }
-              onChange={(model) => {
-                if (model !== embeddingModel && hasIndexData) setPendingModel(model);
-                else void selectEmbedding(model);
-              }}
+              onChange={requestEmbeddingModel}
             />
             <p className="mt-2.5 text-settings-meta text-settings-ink-mute dark:text-dark-settings-ink-mute">
               Dimensions are read from a live embedding call before saving.

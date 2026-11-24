@@ -18,6 +18,15 @@ function describeTiming(operation: OperationRecord, now: Date) {
   return `${formatDistanceStrict(fromUnixTime(operation.updatedAt), now)} ago`;
 }
 
+function resolveErrorLine(
+  operation: OperationRecord,
+  cancelArrivedTooLate: boolean,
+): string | null {
+  if (cancelArrivedTooLate) return 'Already running — couldn’t cancel.';
+  if (operation.status === 'failed') return operation.error;
+  return null;
+}
+
 export function QueueOperationRow({
   operation,
   now = new Date(),
@@ -33,11 +42,7 @@ export function QueueOperationRow({
   const statusMeta = OPERATION_STATUS_META[operation.status];
   const canCancel = CANCELLABLE_STATUSES.has(operation.status);
   const canRetry = operation.status === 'failed' && operation.retryable;
-  const errorLine = cancelArrivedTooLate
-    ? 'Already running — couldn’t cancel.'
-    : operation.status === 'failed'
-      ? operation.error
-      : null;
+  const errorLine = resolveErrorLine(operation, cancelArrivedTooLate);
 
   const handleCancel = async () => {
     setCancelArrivedTooLate(false);

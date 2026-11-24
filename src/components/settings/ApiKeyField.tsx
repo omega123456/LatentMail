@@ -6,6 +6,50 @@ import { InlineConfirm } from './InlineConfirm';
 import { aiFieldSaveButton, settingsLinkMuted, settingsLinkPrimary } from './styles';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
+function ApiKeyError({ error }: { error: string | null }) {
+  if (!error) return null;
+  return (
+    <span role="alert" className="text-settings-meta text-settings-error">
+      {error}
+    </span>
+  );
+}
+
+function SavedApiKeyField({
+  error,
+  onReplace,
+  onClear,
+}: {
+  error: string | null;
+  onReplace: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-2.5">
+        <TextInput
+          aria-label="Saved API key"
+          value="••••••••••••"
+          readOnly
+          className="w-ai-field tracking-widest text-settings-ink-mute dark:text-dark-settings-ink-mute"
+        />
+        <span className="flex w-ai-action items-center justify-end gap-2">
+          <button type="button" onClick={onReplace} className={settingsLinkPrimary}>
+            Replace
+          </button>
+          <button type="button" onClick={onClear} className={settingsLinkMuted}>
+            Clear
+          </button>
+        </span>
+      </div>
+      <span aria-live="polite" className="sr-only">
+        API key saved
+      </span>
+      <ApiKeyError error={error} />
+    </div>
+  );
+}
+
 export function ApiKeyField({
   accountId,
   hasKey,
@@ -73,32 +117,11 @@ export function ApiKeyField({
 
   if (!editing && hasKey) {
     return (
-      <div className="flex flex-col items-end gap-1">
-        <div className="flex items-center gap-2.5">
-          <TextInput
-            aria-label="Saved API key"
-            value="••••••••••••"
-            readOnly
-            className="w-ai-field tracking-widest text-settings-ink-mute dark:text-dark-settings-ink-mute"
-          />
-          <span className="flex w-ai-action items-center justify-end gap-2">
-            <button type="button" onClick={() => setEditing(true)} className={settingsLinkPrimary}>
-              Replace
-            </button>
-            <button type="button" onClick={() => setConfirming(true)} className={settingsLinkMuted}>
-              Clear
-            </button>
-          </span>
-        </div>
-        <span aria-live="polite" className="sr-only">
-          API key saved
-        </span>
-        {error && (
-          <span role="alert" className="text-settings-meta text-settings-error">
-            {error}
-          </span>
-        )}
-      </div>
+      <SavedApiKeyField
+        error={error}
+        onReplace={() => setEditing(true)}
+        onClear={() => setConfirming(true)}
+      />
     );
   }
 
@@ -141,11 +164,7 @@ export function ApiKeyField({
       <span aria-live="polite" className="sr-only">
         {editing ? 'Editing API key' : 'API key saved'}
       </span>
-      {error && (
-        <span role="alert" className="text-settings-meta text-settings-error">
-          {error}
-        </span>
-      )}
+      <ApiKeyError error={error} />
     </div>
   );
 }

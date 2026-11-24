@@ -1,6 +1,8 @@
 import { useRef } from 'react';
 import { Inbox, ShieldAlert, Trash2 } from 'lucide-react';
 import { ICON_SIZE } from '@/components/shared/icon-size';
+import { wrapIndex } from '@/lib/collections';
+import { dispatchKey } from '@/lib/keyboard/dispatch';
 
 export type MoveDestinationId = 'INBOX' | 'SPAM' | 'TRASH';
 
@@ -23,24 +25,20 @@ export function MoveToMenu({ currentSystemLabelIds, onSelect }: MoveToMenuProps)
 
   const focusSelectableAt = (index: number) => {
     if (selectable.length === 0) return;
-    const wrapped = ((index % selectable.length) + selectable.length) % selectable.length;
-    const target = selectable[wrapped];
+    const target = selectable[wrapIndex(index, 0, selectable.length)];
     const domIndex = DESTINATIONS.findIndex((destination) => destination.id === target.id);
     itemRefs.current[domIndex]?.focus();
   };
 
   const handleKeyDown = (event: React.KeyboardEvent, id: MoveDestinationId) => {
     const selectableIndex = selectable.findIndex((destination) => destination.id === id);
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      focusSelectableAt(selectableIndex + 1);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      focusSelectableAt(selectableIndex - 1);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onSelect(id);
-    }
+    const selectCurrent = () => onSelect(id);
+    dispatchKey(event, {
+      ArrowDown: () => focusSelectableAt(selectableIndex + 1),
+      ArrowUp: () => focusSelectableAt(selectableIndex - 1),
+      Enter: selectCurrent,
+      ' ': selectCurrent,
+    });
   };
 
   return (

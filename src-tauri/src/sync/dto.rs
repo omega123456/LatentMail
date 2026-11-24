@@ -123,13 +123,12 @@ impl TraversalStatusDto {
         match (backfill, reconciliation) {
             (None, None) => Self::not_started(account_id),
             (Some(cursor), None) | (None, Some(cursor)) => Self::from(cursor),
-            (Some(backfill), Some(reconciliation)) => {
-                if reconciliation.last_advanced_at >= backfill.last_advanced_at {
-                    Self::from(reconciliation)
-                } else {
-                    Self::from(backfill)
-                }
+            (Some(backfill), Some(reconciliation))
+                if reconciliation.last_advanced_at >= backfill.last_advanced_at =>
+            {
+                Self::from(reconciliation)
             }
+            (Some(backfill), Some(_)) => Self::from(backfill),
         }
     }
 }
@@ -137,13 +136,10 @@ impl TraversalStatusDto {
 impl From<TraversalCursor> for TraversalStatusDto {
     fn from(cursor: TraversalCursor) -> Self {
         let kind: TraversalKind = cursor.kind.into();
-        let state = if cursor.completed {
-            TraversalState::Complete
-        } else {
-            match kind {
-                TraversalKind::Backfill => TraversalState::Backfilling,
-                TraversalKind::Reconciliation => TraversalState::Reconciling,
-            }
+        let state = match (cursor.completed, kind) {
+            (true, _) => TraversalState::Complete,
+            (false, TraversalKind::Backfill) => TraversalState::Backfilling,
+            (false, TraversalKind::Reconciliation) => TraversalState::Reconciling,
         };
         Self {
             account_id: cursor.account_id,

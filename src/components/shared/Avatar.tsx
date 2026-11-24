@@ -57,6 +57,34 @@ export type AvatarProps = {
   className?: string;
 };
 
+function avatarCircleClassName(
+  showImage: boolean,
+  textSize: string,
+  fallbackClassName: string | undefined,
+  ring: boolean,
+): string {
+  const base =
+    'flex size-full items-center justify-center overflow-hidden rounded-full font-semibold';
+  if (showImage) {
+    return `${base} ${textSize} bg-surface-container-lowest ring-1 ring-outline-variant/40`;
+  }
+  const fallback =
+    fallbackClassName ??
+    `${textSize} bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary`;
+  const ringClass = ring ? 'ring-2 ring-surface-container dark:ring-dark-surface-container' : '';
+  return `${base} ${fallback} ${ringClass}`;
+}
+
+function avatarAccessibilityProps(ariaLabel: string | undefined) {
+  if (ariaLabel) return { role: 'img' as const, 'aria-label': ariaLabel };
+  return { 'aria-hidden': true as const };
+}
+
+function resolveImageSrc(src: string | null | undefined, failed: boolean): string | null {
+  if (failed || !src) return null;
+  return src;
+}
+
 export function Avatar({
   size,
   src,
@@ -70,37 +98,33 @@ export function Avatar({
 }: AvatarProps) {
   const dimension = DIMENSION_CLASS[size];
   const textSize = TEXT_CLASS[size];
-  const showNotch = unread;
   const [failed, setFailed] = useState(false);
   const [trackedSrc, setTrackedSrc] = useState(src);
   if (src !== trackedSrc) {
     setTrackedSrc(src);
     setFailed(false);
   }
-  const imageSrc = !failed && src ? src : null;
-  const showImage = imageSrc !== null;
+  const imageSrc = resolveImageSrc(src, failed);
+  const circleClassName = avatarCircleClassName(
+    imageSrc !== null,
+    textSize,
+    fallbackClassName,
+    ring,
+  );
 
   return (
     <span
       className={`relative inline-flex shrink-0 ${dimension} ${className}`}
-      {...(ariaLabel ? { role: 'img', 'aria-label': ariaLabel } : { 'aria-hidden': true })}
+      {...avatarAccessibilityProps(ariaLabel)}
     >
-      <span
-        className={`flex size-full items-center justify-center overflow-hidden rounded-full font-semibold ${
-          showImage
-            ? `${textSize} bg-surface-container-lowest ring-1 ring-outline-variant/40`
-            : `${fallbackClassName ?? `${textSize} bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary`} ${
-                ring ? 'ring-2 ring-surface-container dark:ring-dark-surface-container' : ''
-              }`
-        }`}
-      >
+      <span className={circleClassName}>
         {imageSrc ? (
           <AvatarImage key={imageSrc} src={imageSrc} onError={() => setFailed(true)} />
         ) : (
           initialFor(label)
         )}
       </span>
-      {showNotch && (
+      {unread && (
         <span
           aria-hidden="true"
           className={`absolute bottom-0 right-0 size-2 rounded-full bg-primary ring-2 dark:bg-dark-primary ${notchRingClassName}`}

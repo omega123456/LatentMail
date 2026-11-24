@@ -111,15 +111,29 @@ fn without_account(values: Vec<String>, account_email: &str) -> Vec<String> {
         })
 }
 fn prefixed(subject: &str, prefix: &str) -> String {
-    if subject
+    let expected_prefix = format!("{}:", prefix.to_ascii_lowercase());
+    let already_prefixed = subject
         .trim_start()
         .to_ascii_lowercase()
-        .starts_with(&format!("{}:", prefix.to_ascii_lowercase()))
-    {
-        subject.to_owned()
-    } else {
-        format!("{prefix}: {subject}")
+        .starts_with(&expected_prefix);
+    if already_prefixed {
+        return subject.to_owned();
     }
+    format!("{prefix}: {subject}")
+}
+
+fn initial_reply_recipients(from_self: bool, to: &str, sender: &str) -> Vec<String> {
+    if from_self {
+        return split_addresses(to);
+    }
+    split_addresses(sender)
+}
+
+fn reply_cc_recipients(all: bool, cc: &str) -> Vec<String> {
+    if all {
+        return split_addresses(cc);
+    }
+    Vec::new()
 }
 
 pub fn reply(
@@ -132,15 +146,11 @@ pub fn reply(
     attachments: Vec<ReplyAttachment>,
 ) -> ReplyContext {
     let from_self = address_key(&message.sender) == account_email.to_ascii_lowercase();
-    let mut recipients = if from_self {
-        split_addresses(to)
-    } else {
-        split_addresses(&message.sender)
-    };
+    let mut recipients = initial_reply_recipients(from_self, to, &message.sender);
     if all {
         recipients.extend(split_addresses(to));
     }
-    let cc = if all { split_addresses(cc) } else { Vec::new() };
+    let cc = reply_cc_recipients(all, cc);
     let mut chain = references.map(split_addresses).unwrap_or_default();
     if let Some(id) = &message.rfc_message_id {
         chain.push(id.clone());

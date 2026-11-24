@@ -105,9 +105,9 @@ async fn interactive_star_dispatches_with_500_background_operations_queued() {
             Box::pin(async move {
                 if operation.lane == Lane::Interactive {
                     star_started.store(true, Ordering::Release);
-                } else {
-                    std::future::pending::<()>().await;
+                    return Ok(());
                 }
+                std::future::pending::<()>().await;
                 Ok(())
             })
         })
@@ -187,11 +187,11 @@ async fn rapid_distinct_thread_stars_coalesce_into_one_batch_modify_request() {
         .expect(1)
         .mount(&server)
         .await;
-    for id in ["message-a", "message-b"] {
+    for (id, thread_id) in [("message-a", "thread-a"), ("message-b", "thread-b")] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": id, "threadId": if id == "message-a" { "thread-a" } else { "thread-b" },
+                "id": id, "threadId": thread_id,
                 "historyId": "20", "labelIds": ["INBOX", "STARRED"], "snippet": "updated",
                 "internalDate": "1", "payload": { "headers": [] }
             })))
@@ -251,11 +251,11 @@ async fn sync_engine_star_preempts_500_background_operations_and_coalesces_threa
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .mount(&server)
         .await;
-    for id in ["message-a", "message-b"] {
+    for (id, thread_id) in [("message-a", "thread-a"), ("message-b", "thread-b")] {
         Mock::given(method("GET"))
             .and(path(format!("/users/me/messages/{id}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": id, "threadId": if id == "message-a" { "thread-a" } else { "thread-b" },
+                "id": id, "threadId": thread_id,
                 "historyId": "20", "labelIds": ["INBOX", "STARRED"], "snippet": "updated",
                 "internalDate": "1", "payload": { "headers": [] }
             })))

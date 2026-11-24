@@ -21,10 +21,9 @@ pub const MOVE_DESTINATIONS: [&str; 3] = ["INBOX", SPAM, TRASH];
 
 fn validate_destination(destination: &str) -> Result<(), String> {
     if MOVE_DESTINATIONS.contains(&destination) {
-        Ok(())
-    } else {
-        Err(format!("'{destination}' is not a valid move destination"))
+        return Ok(());
     }
+    Err(format!("'{destination}' is not a valid move destination"))
 }
 
 pub fn thread_raw_membership(

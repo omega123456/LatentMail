@@ -13,7 +13,7 @@
     "test:e2e": "playwright test",
     "test:all": "pnpm test:coverage && pnpm test:rust:coverage && pnpm test:e2e",
     "clean:rust-target": "cargo clean --manifest-path src-tauri/Cargo.toml",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/check-rust-else.mjs",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "typecheck": "tsc -b",

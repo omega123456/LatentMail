@@ -78,34 +78,51 @@ function MessageSourceContent({
         </>
       }
     >
-      {data ? (
-        <MessageSourceBody source={data} />
-      ) : source.isError ? (
-        <ReaderDialogStatus>
-          <FileWarning
-            size={ICON_SIZE.xl4}
-            aria-hidden="true"
-            className="text-outline dark:text-dark-outline"
-          />
-          <p className="font-semibold text-on-surface dark:text-dark-on-surface">
-            Couldn&apos;t load the original message.
-          </p>
-          <p>{failure}</p>
-          <button
-            type="button"
-            onClick={() => void source.refetch()}
-            className={dialogQuietButtonClass}
-          >
-            Retry
-          </button>
-        </ReaderDialogStatus>
-      ) : (
-        <ReaderDialogStatus>
-          <Loader2 className="animate-spin" size={ICON_SIZE.xl2} aria-hidden="true" />
-          <span>Loading source…</span>
-        </ReaderDialogStatus>
-      )}
+      <MessageSourceDialogBody
+        data={data}
+        isError={source.isError}
+        failure={failure}
+        onRetry={() => void source.refetch()}
+      />
     </ReaderDialogFrame>
+  );
+}
+
+function MessageSourceDialogBody({
+  data,
+  isError,
+  failure,
+  onRetry,
+}: {
+  data: MessageSource | undefined;
+  isError: boolean;
+  failure: string;
+  onRetry: () => void;
+}) {
+  if (data) return <MessageSourceBody source={data} />;
+  if (isError) {
+    return (
+      <ReaderDialogStatus>
+        <FileWarning
+          size={ICON_SIZE.xl4}
+          aria-hidden="true"
+          className="text-outline dark:text-dark-outline"
+        />
+        <p className="font-semibold text-on-surface dark:text-dark-on-surface">
+          Couldn&apos;t load the original message.
+        </p>
+        <p>{failure}</p>
+        <button type="button" onClick={onRetry} className={dialogQuietButtonClass}>
+          Retry
+        </button>
+      </ReaderDialogStatus>
+    );
+  }
+  return (
+    <ReaderDialogStatus>
+      <Loader2 className="animate-spin" size={ICON_SIZE.xl2} aria-hidden="true" />
+      <span>Loading source…</span>
+    </ReaderDialogStatus>
   );
 }
 

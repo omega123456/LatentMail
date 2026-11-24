@@ -95,10 +95,9 @@ async fn interactive_dispatches_promptly_with_many_traversal_operations_queued()
         Box::pin(async move {
             if operation.lane == Lane::Interactive {
                 notify.notify_one();
-                Ok(())
-            } else {
-                std::future::pending::<Result<(), QueueError>>().await
+                return Ok(());
             }
+            std::future::pending::<Result<(), QueueError>>().await
         })
     });
     let queue = QueueEngine::new(1_000, 1_000, executor);

@@ -7,6 +7,8 @@ import {
   type LabelColorSwatch,
 } from '@/lib/labels/palette';
 import { ICON_SIZE } from '@/components/shared/icon-size';
+import { wrapIndex } from '@/lib/collections';
+import { dispatchKey } from '@/lib/keyboard/dispatch';
 
 const COLUMNS = 10;
 const HEX_RADIX = 16;
@@ -72,28 +74,19 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
   }
 
   const focusIndex = (index: number) => {
-    const count = palette.length;
-    const wrapped = ((index % count) + count) % count;
-    cellRefs.current[wrapped]?.focus();
+    cellRefs.current[wrapIndex(index, 0, palette.length)]?.focus();
   };
 
   const handleKeyDown = (event: React.KeyboardEvent, index: number) => {
-    if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      focusIndex(index + 1);
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      focusIndex(index - 1);
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      focusIndex(index + COLUMNS);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      focusIndex(index - COLUMNS);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      setPendingId(palette[index].id);
-    }
+    const selectCurrent = () => setPendingId(palette[index].id);
+    dispatchKey(event, {
+      ArrowRight: () => focusIndex(index + 1),
+      ArrowLeft: () => focusIndex(index - 1),
+      ArrowDown: () => focusIndex(index + COLUMNS),
+      ArrowUp: () => focusIndex(index - COLUMNS),
+      Enter: selectCurrent,
+      ' ': selectCurrent,
+    });
   };
 
   return (

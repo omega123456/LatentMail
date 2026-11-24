@@ -9,6 +9,84 @@ import { SettingsSection } from './SettingsSection';
 import { SettingsDivider, SettingSwitch, StatusPip, SubsectionHeading } from './primitives';
 import { UPDATE_INTERVAL_OPTIONS } from '@/lib/update-intervals';
 import { DATE_FORMAT } from '@/lib/format/date-formats';
+import type { UpdateSummary } from '@/lib/types/ipc';
+
+function updateDetailText(
+  available: UpdateSummary | null,
+  currentVersion: string,
+  dataUpdatedAt: number,
+): string {
+  if (available) {
+    const releaseSuffix = available.dateMillis
+      ? ` · released ${format(new Date(available.dateMillis), DATE_FORMAT.longDayMonthYear)}`
+      : '';
+    return `You have ${currentVersion}${releaseSuffix}`;
+  }
+  if (dataUpdatedAt) {
+    return `Up to date · checked ${formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}`;
+  }
+  return 'Checking for updates…';
+}
+
+function UpdateStatusCard({
+  available,
+  currentVersion,
+  dataUpdatedAt,
+  isFetching,
+  installing,
+  onInstall,
+  onCheckNow,
+}: {
+  available: UpdateSummary | null;
+  currentVersion: string;
+  dataUpdatedAt: number;
+  isFetching: boolean;
+  installing: boolean;
+  onInstall: () => void;
+  onCheckNow: () => void;
+}) {
+  const cardTone = available
+    ? 'border-settings-primary-container bg-settings-primary-container dark:border-dark-settings-primary-container dark:bg-dark-settings-primary-container'
+    : 'border-settings-outline-variant bg-settings-container-low dark:border-dark-settings-outline-variant dark:bg-dark-settings-container-low';
+  const heading = available
+    ? `LatentMail ${available.version} is available`
+    : `LatentMail ${currentVersion}`;
+  return (
+    <div
+      data-testid="updates-status"
+      className={`flex items-center justify-between gap-4 rounded-control border px-4 py-3.5 ${cardTone}`}
+    >
+      <div className="flex flex-col gap-0.5">
+        <span className="flex items-center gap-2 text-body-sm font-semibold text-settings-ink dark:text-dark-settings-ink">
+          {!available && <StatusPip className="bg-success dark:bg-dark-success" />}
+          {heading}
+        </span>
+        <span className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
+          {updateDetailText(available, currentVersion, dataUpdatedAt)}
+        </span>
+      </div>
+      {available ? (
+        <button
+          type="button"
+          onClick={onInstall}
+          disabled={installing}
+          className="inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-control bg-settings-primary px-3.75 py-2.25 text-settings-desc font-semibold text-on-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary disabled:cursor-not-allowed disabled:opacity-60 dark:bg-dark-settings-primary dark:text-dark-on-primary"
+        >
+          {installing ? 'Installing…' : 'Install and restart'}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onCheckNow}
+          disabled={isFetching}
+          className={`shrink-0 ${settingsButton} disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          {isFetching ? 'Checking…' : 'Check now'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function UpdatesSection() {
   const { data, dataUpdatedAt, isFetching, refetch } = useAppUpdateQuery();
@@ -23,67 +101,32 @@ export function UpdatesSection() {
   const available = data?.available ?? null;
   const currentVersion = data?.currentVersion ?? '…';
   const notes = available?.notes?.split('\n').filter(Boolean) ?? [];
+  const checkForUpdates = () => {
+    void refetch().then((result) => {
+      if (result.status === 'error') {
+        showError('Couldn’t check for updates.');
+        return;
+      }
+      if (!result.data?.available) {
+        showSuccess(`LatentMail ${result.data?.currentVersion} is up to date.`);
+      }
+    });
+  };
 
   return (
     <SettingsSection
       title="Updates"
       description="LatentMail checks GitHub Releases for new versions."
     >
-      <div
-        data-testid="updates-status"
-        className={`flex items-center justify-between gap-4 rounded-control border px-4 py-3.5 ${
-          available
-            ? 'border-settings-primary-container bg-settings-primary-container dark:border-dark-settings-primary-container dark:bg-dark-settings-primary-container'
-            : 'border-settings-outline-variant bg-settings-container-low dark:border-dark-settings-outline-variant dark:bg-dark-settings-container-low'
-        }`}
-      >
-        <div className="flex flex-col gap-0.5">
-          <span className="flex items-center gap-2 text-body-sm font-semibold text-settings-ink dark:text-dark-settings-ink">
-            {!available && <StatusPip className="bg-success dark:bg-dark-success" />}
-            {available
-              ? `LatentMail ${available.version} is available`
-              : `LatentMail ${currentVersion}`}
-          </span>
-          <span className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
-            {available
-              ? `You have ${currentVersion}${
-                  available.dateMillis
-                    ? ` · released ${format(new Date(available.dateMillis), DATE_FORMAT.longDayMonthYear)}`
-                    : ''
-                }`
-              : dataUpdatedAt
-                ? `Up to date · checked ${formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}`
-                : 'Checking for updates…'}
-          </span>
-        </div>
-        {available ? (
-          <button
-            type="button"
-            onClick={() => installMutation.mutate()}
-            disabled={installMutation.isPending}
-            className="inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-control bg-settings-primary px-3.75 py-2.25 text-settings-desc font-semibold text-on-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary disabled:cursor-not-allowed disabled:opacity-60 dark:bg-dark-settings-primary dark:text-dark-on-primary"
-          >
-            {installMutation.isPending ? 'Installing…' : 'Install and restart'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() =>
-              void refetch().then((result) => {
-                if (result.status === 'error') {
-                  showError('Couldn’t check for updates.');
-                } else if (!result.data?.available) {
-                  showSuccess(`LatentMail ${result.data?.currentVersion} is up to date.`);
-                }
-              })
-            }
-            disabled={isFetching}
-            className={`shrink-0 ${settingsButton} disabled:cursor-not-allowed disabled:opacity-60`}
-          >
-            {isFetching ? 'Checking…' : 'Check now'}
-          </button>
-        )}
-      </div>
+      <UpdateStatusCard
+        available={available}
+        currentVersion={currentVersion}
+        dataUpdatedAt={dataUpdatedAt}
+        isFetching={isFetching}
+        installing={installMutation.isPending}
+        onInstall={() => installMutation.mutate()}
+        onCheckNow={checkForUpdates}
+      />
 
       {notes.length > 0 && (
         <div

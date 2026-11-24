@@ -147,6 +147,17 @@ function normalizeRecipient(raw: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function buildThreadingFields(session: OpenArgs) {
+  return {
+    draftId: session.draftId ?? null,
+    threadId: session.threadId ?? null,
+    inReplyTo: session.inReplyTo ?? null,
+    references: session.references ?? [],
+    originalMessageId: session.originalMessageId ?? null,
+    originalGmailMessageId: session.originalGmailMessageId ?? null,
+  };
+}
+
 export const useComposeStore = create<ComposeStore>((set) => ({
   session: null,
   open: (session) =>
@@ -160,12 +171,7 @@ export const useComposeStore = create<ComposeStore>((set) => ({
         quoteOpen: false,
         dimensions: session.dimensions ?? initialDimensions(),
         attachments: session.attachments ?? [],
-        draftId: session.draftId ?? null,
-        threadId: session.threadId ?? null,
-        inReplyTo: session.inReplyTo ?? null,
-        references: session.references ?? [],
-        originalMessageId: session.originalMessageId ?? null,
-        originalGmailMessageId: session.originalGmailMessageId ?? null,
+        ...buildThreadingFields(session),
         draftStatus: 'idle',
         lifecycleError: null,
       },

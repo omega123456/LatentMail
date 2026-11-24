@@ -137,21 +137,34 @@ export async function openForward(
   });
 }
 
+type NewMessagePreset =
+  Participant | { to?: string[]; cc?: string[]; bcc?: string[]; subject?: string; body?: string };
+
+function resolveNewMessagePreset(preset?: NewMessagePreset) {
+  if (!preset) {
+    return { recipients: { to: [], cc: [], bcc: [] }, subject: '', html: '' };
+  }
+  if ('address' in preset) {
+    return { recipients: { to: [formatRaw(preset)], cc: [], bcc: [] }, subject: '', html: '' };
+  }
+  return {
+    recipients: { to: preset.to ?? [], cc: preset.cc ?? [], bcc: preset.bcc ?? [] },
+    subject: preset.subject ?? '',
+    html: preset.body ?? '',
+  };
+}
+
 export function openNewMessage(
   accountId: string,
   accountEmail: string,
-  preset?:
-    Participant | { to?: string[]; cc?: string[]; bcc?: string[]; subject?: string; body?: string },
+  preset?: NewMessagePreset,
 ): void {
-  const recipients =
-    preset && 'address' in preset
-      ? { to: [formatRaw(preset)], cc: [], bcc: [] }
-      : { to: preset?.to ?? [], cc: preset?.cc ?? [], bcc: preset?.bcc ?? [] };
+  const resolved = resolveNewMessagePreset(preset);
   openOrRetarget({
     ...baseSession('new', accountId, accountEmail),
-    recipients: recipients,
-    subject: preset && 'address' in preset ? '' : (preset?.subject ?? ''),
-    html: preset && 'address' in preset ? '' : (preset?.body ?? ''),
+    recipients: resolved.recipients,
+    subject: resolved.subject,
+    html: resolved.html,
   });
 }
 

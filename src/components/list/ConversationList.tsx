@@ -55,6 +55,112 @@ function intersectSystemLabelIds(conversations: Conversation[]): string[] {
   return intersectAll(conversations.map((conversation) => conversation.systemLabelIds ?? []));
 }
 
+function resolveListState(input: {
+  isError: boolean;
+  isPending: boolean;
+  rowCount: number;
+  searchActive: boolean;
+  backfillIncomplete: boolean;
+}): ListState {
+  if (input.isError) return 'error';
+  if (input.isPending) return 'loading';
+  if (input.rowCount > 0) return 'ready';
+  if (input.searchActive) return 'searchEmpty';
+  return input.backfillIncomplete ? 'syncing' : 'empty';
+}
+
+function ListStatusContent({
+  state,
+  mailboxId,
+  incompleteStrip,
+  searchQueryText,
+  syncProgress,
+  errorMessage,
+  onRetry,
+}: {
+  state: Exclude<ListState, 'ready'>;
+  mailboxId: string;
+  incompleteStrip: React.ReactNode;
+  searchQueryText?: string;
+  syncProgress?: { persistedCount: number; discoveredCount: number };
+  errorMessage?: string;
+  onRetry?: () => void;
+}) {
+  if (state === 'loading') return <LoadingState>Loading conversations…</LoadingState>;
+  if (state === 'empty') {
+    return <EmptyState>{emptyCopy[mailboxId] ?? 'No conversations in this mailbox.'}</EmptyState>;
+  }
+  if (state === 'searchEmpty') {
+    return (
+      <>
+        {incompleteStrip}
+        <EmptyState variant="search" query={searchQueryText ?? ''} />
+      </>
+    );
+  }
+  if (state === 'syncing') {
+    return (
+      <EmptyState
+        variant="syncing"
+        persistedCount={syncProgress?.persistedCount}
+        discoveredCount={syncProgress?.discoveredCount}
+      >
+        Older mail is still arriving
+      </EmptyState>
+    );
+  }
+  return (
+    <ErrorState>
+      Couldn’t load conversations.{' '}
+      <button
+        onClick={onRetry}
+        className="cursor-pointer underline focus-visible:outline-2 focus-visible:outline-primary"
+      >
+        Retry
+      </button>
+      {errorMessage && <span className="block text-body-sm">{errorMessage}</span>}
+    </ErrorState>
+  );
+}
+
+function hasRowModifier(event: ReactMouseEvent): boolean {
+  return event.shiftKey || event.metaKey || event.ctrlKey;
+}
+
+function useConversationListPagination(
+  pages: Conversation[][] | undefined,
+  threads: Conversation[],
+  mailboxId: string,
+) {
+  const [fixturePage, setFixturePage] = useState(0);
+  const [source, setSource] = useState(() => ({ pages, threads, mailboxId }));
+  const sourceChanged =
+    source.pages !== pages || source.threads !== threads || source.mailboxId !== mailboxId;
+  if (sourceChanged) {
+    setSource({ pages, threads, mailboxId });
+    setFixturePage(0);
+  }
+  const rows = useMemo(
+    () => (pages ? pages.slice(0, fixturePage + 1).flat() : threads),
+    [pages, fixturePage, threads],
+  );
+  const loadNextPage = () => {
+    if (!pages || fixturePage >= pages.length - 1) return;
+    setFixturePage((current) => current + 1);
+  };
+  return { rows: rows, fixturePage: fixturePage, loadNextPage: loadNextPage };
+}
+
+function resolveContainerSyncProgress(
+  traversal: { persistedCount: number; discoveredCount: number } | undefined,
+) {
+  if (!traversal) return undefined;
+  return {
+    persistedCount: traversal.persistedCount,
+    discoveredCount: traversal.discoveredCount,
+  };
+}
+
 export function ConversationList({
   threads = conversationFixtures,
   pages,
@@ -105,15 +211,10 @@ export function ConversationList({
   const selectAll = useMultiSelectStore((multiSelect) => multiSelect.selectAll);
   const pruneSelected = useMultiSelectStore((multiSelect) => multiSelect.prune);
   const clearMultiSelect = useMultiSelectStore((multiSelect) => multiSelect.clear);
-  const [fixturePage, setFixturePage] = useState(0);
-  const [source, setSource] = useState(() => ({ pages, threads, mailboxId }));
-  if (source.pages !== pages || source.threads !== threads || source.mailboxId !== mailboxId) {
-    setSource({ pages, threads, mailboxId });
-    setFixturePage(0);
-  }
-  const rows = useMemo(
-    () => (pages ? pages.slice(0, fixturePage + 1).flat() : threads),
-    [pages, fixturePage, threads],
+  const { rows, fixturePage, loadNextPage } = useConversationListPagination(
+    pages,
+    threads,
+    mailboxId,
   );
   useLayoutEffect(() => {
     const parent = parentRef.current;
@@ -237,8 +338,7 @@ export function ConversationList({
       const row = rows[index];
       if (!row) return;
       const activeId = cursor === null ? undefined : rows[cursor]?.id;
-      if ((event.shiftKey || event.metaKey || event.ctrlKey) && !multiSelectActive && activeId)
-        toggleSelected(activeId);
+      if (hasRowModifier(event) && !multiSelectActive && activeId) toggleSelected(activeId);
       if (event.shiftKey) {
         selectRange(rowIds, row.id);
         return;
@@ -261,44 +361,12 @@ export function ConversationList({
       Results may be incomplete — mail is still syncing.
     </div>
   );
-  const content = (() => {
-    if (state === 'loading') return <LoadingState>Loading conversations…</LoadingState>;
-    if (state === 'empty')
-      return <EmptyState>{emptyCopy[mailboxId] ?? 'No conversations in this mailbox.'}</EmptyState>;
-    if (state === 'searchEmpty')
-      return (
-        <>
-          {incompleteStrip}
-          <EmptyState variant="search" query={searchQueryText ?? ''} />
-        </>
-      );
-    if (state === 'syncing')
-      return (
-        <EmptyState
-          variant="syncing"
-          persistedCount={syncProgress?.persistedCount}
-          discoveredCount={syncProgress?.discoveredCount}
-        >
-          Older mail is still arriving
-        </EmptyState>
-      );
-    if (state === 'error')
-      return (
-        <ErrorState>
-          Couldn’t load conversations.{' '}
-          <button
-            onClick={onRetry}
-            className="cursor-pointer underline focus-visible:outline-2 focus-visible:outline-primary"
-          >
-            Retry
-          </button>
-          {errorMessage && <span className="block text-body-sm">{errorMessage}</span>}
-        </ErrorState>
-      );
+  const renderReadyRows = () => {
     const items = virtualizer.getVirtualItems();
     const visible = items.length
       ? items
       : rows.map((_row, index) => ({ key: index, index: index, start: index * rowHeight }));
+    const hasMoreFixturePages = Boolean(pages && fixturePage < pages.length - 1);
     return (
       <>
         {incompleteStrip}
@@ -346,37 +414,49 @@ export function ConversationList({
           ))}
         </div>
         <p className="p-stack-gap-sm text-center text-label-sm text-secondary dark:text-dark-secondary">
-          {pages && fixturePage < pages.length - 1
-            ? 'Loading more conversations…'
-            : 'End of conversations'}
+          {hasMoreFixturePages ? 'Loading more conversations…' : 'End of conversations'}
         </p>
       </>
     );
-  })();
-  const loadNextPage = () => {
-    if (!pages || fixturePage >= pages.length - 1) return;
-    setFixturePage((current) => current + 1);
+  };
+  const content =
+    state === 'ready' ? (
+      renderReadyRows()
+    ) : (
+      <ListStatusContent
+        state={state}
+        mailboxId={mailboxId}
+        incompleteStrip={incompleteStrip}
+        searchQueryText={searchQueryText}
+        syncProgress={syncProgress}
+        errorMessage={errorMessage}
+        onRetry={onRetry}
+      />
+    );
+  const handleScroll = () => {
+    const container = parentRef.current;
+    if (!container) return;
+    if (container.scrollTop <= rowHeight) onLoadPrevious?.();
+    const nearBottom =
+      container.scrollTop + container.clientHeight >= container.scrollHeight - rowHeight;
+    if (!nearBottom) return;
+    loadNextPage();
+    onLoadMore?.();
   };
   return (
     <div
       ref={parentRef}
       data-testid="conversation-list"
       className="min-h-0 flex-1 overflow-auto p-stack-gap-sm"
-      onScroll={() => {
-        if (parentRef.current && parentRef.current.scrollTop <= rowHeight) onLoadPrevious?.();
-        if (
-          parentRef.current &&
-          parentRef.current.scrollTop + parentRef.current.clientHeight >=
-            parentRef.current.scrollHeight - rowHeight
-        ) {
-          loadNextPage();
-          onLoadMore?.();
-        }
-      }}
+      onScroll={handleScroll}
     >
       {content}
     </div>
   );
+}
+
+function isBackfillIncomplete(state: string | undefined): boolean {
+  return state === 'backfilling' || state === 'reconciling';
 }
 
 export function ConversationListContainer() {
@@ -410,26 +490,21 @@ export function ConversationListContainer() {
       ),
     [activeQuery.data],
   );
-  const backfillIncomplete =
-    traversal.data?.state === 'backfilling' || traversal.data?.state === 'reconciling';
-  const state: ListState = activeQuery.isError
-    ? 'error'
-    : activeQuery.isPending
-      ? 'loading'
-      : rows.length === 0
-        ? searchActive
-          ? 'searchEmpty'
-          : backfillIncomplete
-            ? 'syncing'
-            : 'empty'
-        : 'ready';
+  const backfillIncomplete = isBackfillIncomplete(traversal.data?.state);
+  const state = resolveListState({
+    isError: activeQuery.isError,
+    isPending: activeQuery.isPending,
+    rowCount: rows.length,
+    searchActive: searchActive,
+    backfillIncomplete: backfillIncomplete,
+  });
   return (
     <ConversationList
       threads={rows}
       state={state}
       searchQueryText={searchActive ? searchQuery : undefined}
       searchIncomplete={backfillIncomplete}
-      errorMessage={activeQuery.error ? activeQuery.error.message : undefined}
+      errorMessage={activeQuery.error?.message}
       onRetry={() => void activeQuery.refetch()}
       onLoadMore={() => {
         if (activeQuery.hasNextPage && !activeQuery.isFetchingNextPage)
@@ -455,14 +530,7 @@ export function ConversationListContainer() {
         });
       }}
       composeTargetThreadId={activeThreadId}
-      syncProgress={
-        traversal.data
-          ? {
-              persistedCount: traversal.data.persistedCount,
-              discoveredCount: traversal.data.discoveredCount,
-            }
-          : undefined
-      }
+      syncProgress={resolveContainerSyncProgress(traversal.data)}
     />
   );
 }

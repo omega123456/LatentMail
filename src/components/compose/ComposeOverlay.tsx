@@ -17,12 +17,91 @@ import {
   selectHasReadingAttachment,
   selectQualifiesForDraft,
   useComposeStore,
+  type ComposeSession,
+  type DraftStatus,
 } from '@/stores/compose';
 import { toDraftRequest, useComposeAutosave } from '@/lib/compose/autosave';
 import { invoke } from '@/lib/ipc/commands';
 
 const fieldRow =
   'flex items-center gap-2 border-b border-outline-variant pt-field-row-y pb-field-row-y focus-within:border-b-2 focus-within:border-primary focus-within:pb-field-row-y-focus dark:border-dark-outline-variant dark:focus-within:border-dark-primary';
+
+const DRAFT_STATUS_COPY: Record<DraftStatus, string> = {
+  idle: '',
+  saving: 'Saving…',
+  saved: 'Draft saved',
+  failed: 'Couldn’t save draft',
+  superseded: 'Couldn’t save draft',
+};
+
+function hasDiscardableContent(session: ComposeSession): boolean {
+  return Boolean(session.subject.trim() || session.html.trim() || session.recipients.to.length);
+}
+
+function footerStatusText(session: ComposeSession): string {
+  return session.lifecycleError ?? DRAFT_STATUS_COPY[session.draftStatus];
+}
+
+function isBodyFocusMode(mode: ComposeSession['mode']): boolean {
+  return mode === 'reply' || mode === 'reply-all';
+}
+
+function isFooterFailed(session: ComposeSession): boolean {
+  return Boolean(session.lifecycleError) || session.draftStatus === 'failed';
+}
+
+function ComposeRecipients({
+  session,
+  toInputRef,
+  onRevealCcBcc,
+}: {
+  session: ComposeSession;
+  toInputRef: React.RefObject<HTMLInputElement | null>;
+  onRevealCcBcc: () => void;
+}) {
+  return (
+    <div data-testid="recipient-field" className="flex flex-col">
+      <div className={fieldRow}>
+        <RecipientField
+          fieldRole="to"
+          label="To"
+          accountId={session.accountId}
+          placeholder="Email addresses…"
+          inputRef={toInputRef}
+        />
+        {!session.ccBccRevealed && (
+          <button
+            type="button"
+            onClick={onRevealCcBcc}
+            className="shrink-0 cursor-pointer rounded-sm px-1.5 py-1 text-label-sm text-secondary hover:text-primary dark:text-dark-secondary dark:hover:text-dark-primary"
+          >
+            Cc/Bcc
+          </button>
+        )}
+      </div>
+      {session.ccBccRevealed && (
+        <>
+          <div className={fieldRow}>
+            <RecipientField
+              fieldRole="cc"
+              label="Cc"
+              accountId={session.accountId}
+              placeholder="Email addresses…"
+            />
+          </div>
+          <div className={fieldRow}>
+            <RecipientField
+              fieldRole="bcc"
+              label="Bcc"
+              accountId={session.accountId}
+              placeholder="Email addresses…"
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function ComposeOverlay() {
   const session = useComposeStore((compose) => compose.session);
@@ -62,10 +141,7 @@ export function ComposeOverlay() {
     close();
   };
   const discard = async () => {
-    if (
-      !discardOpen &&
-      (session.subject.trim() || session.html.trim() || session.recipients.to.length)
-    ) {
+    if (!discardOpen && hasDiscardableContent(session)) {
       setConfirmingFor(session.id);
       return;
     }
@@ -90,11 +166,21 @@ export function ComposeOverlay() {
     }
   };
 
-  const bodyFocusMode = session.mode === 'reply' || session.mode === 'reply-all';
+  const bodyFocusMode = isBodyFocusMode(session.mode);
   const onLink = () => {
     if (!editor) return;
-    if (editor.isActive('link')) editor.chain().focus().unsetLink().run();
-    else setLinkOpen(true);
+    if (editor.isActive('link')) {
+      editor.chain().focus().unsetLink().run();
+      return;
+    }
+    setLinkOpen(true);
+  };
+  const focusInitialField = () => {
+    if (bodyFocusMode) {
+      bodyRef.current?.focus();
+      return;
+    }
+    toInputRef.current?.focus();
   };
 
   return (
@@ -115,8 +201,7 @@ export function ComposeOverlay() {
           aria-labelledby={titleId}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            if (bodyFocusMode) bodyRef.current?.focus();
-            else toInputRef.current?.focus();
+            focusInitialField();
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
@@ -153,46 +238,11 @@ export function ComposeOverlay() {
             onDiscard={() => void discard()}
           />
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-stack-gap-md pt-stack-gap-md">
-            <div data-testid="recipient-field" className="flex flex-col">
-              <div className={fieldRow}>
-                <RecipientField
-                  fieldRole="to"
-                  label="To"
-                  accountId={session.accountId}
-                  placeholder="Email addresses…"
-                  inputRef={toInputRef}
-                />
-                {!session.ccBccRevealed && (
-                  <button
-                    type="button"
-                    onClick={revealCcBcc}
-                    className="shrink-0 cursor-pointer rounded-sm px-1.5 py-1 text-label-sm text-secondary hover:text-primary dark:text-dark-secondary dark:hover:text-dark-primary"
-                  >
-                    Cc/Bcc
-                  </button>
-                )}
-              </div>
-              {session.ccBccRevealed && (
-                <>
-                  <div className={fieldRow}>
-                    <RecipientField
-                      fieldRole="cc"
-                      label="Cc"
-                      accountId={session.accountId}
-                      placeholder="Email addresses…"
-                    />
-                  </div>
-                  <div className={fieldRow}>
-                    <RecipientField
-                      fieldRole="bcc"
-                      label="Bcc"
-                      accountId={session.accountId}
-                      placeholder="Email addresses…"
-                    />
-                  </div>
-                </>
-              )}
-            </div>
+            <ComposeRecipients
+              session={session}
+              toInputRef={toInputRef}
+              onRevealCcBcc={revealCcBcc}
+            />
             <div className={fieldRow}>
               <span className="w-13 shrink-0 text-label-md text-secondary dark:text-dark-secondary">
                 Subject
@@ -233,17 +283,8 @@ export function ComposeOverlay() {
             onAttach={onAttach}
             onInsertImage={onInsertImage}
             ready={ready}
-            status={
-              session.lifecycleError ??
-              (session.draftStatus === 'idle'
-                ? ''
-                : session.draftStatus === 'saving'
-                  ? 'Saving…'
-                  : session.draftStatus === 'saved'
-                    ? 'Draft saved'
-                    : 'Couldn’t save draft')
-            }
-            failed={Boolean(session.lifecycleError) || session.draftStatus === 'failed'}
+            status={footerStatusText(session)}
+            failed={isFooterFailed(session)}
             onRetry={() => void (session.lifecycleError ? send() : saveNow())}
             onSend={() => void send()}
             sending={sending}

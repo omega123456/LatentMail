@@ -255,9 +255,9 @@ impl SyncEngine {
             for request in accumulator.requests.drain(..) {
                 if request.survives(&delta) {
                     requests.push(request);
-                } else {
-                    let _ = request.reply.send(Ok(MutationOutcome::Superseded));
+                    continue;
                 }
+                let _ = request.reply.send(Ok(MutationOutcome::Superseded));
             }
             if !requests.is_empty() {
                 accumulator.requests = requests;
@@ -429,10 +429,9 @@ async fn execute_flush(
     }
 
     if any_failed {
-        Err(QueueError::Permanent)
-    } else {
-        Ok(())
+        return Err(QueueError::Permanent);
     }
+    Ok(())
 }
 
 async fn write_entity(

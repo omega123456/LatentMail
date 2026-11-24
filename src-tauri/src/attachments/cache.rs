@@ -62,6 +62,47 @@ impl AttachmentCache {
         mime_type.eq_ignore_ascii_case("image/tiff")
     }
 
+    fn write_display_path(
+        &self,
+        account_id: &str,
+        message_id: &str,
+        attachment_id: &str,
+        mime_type: &str,
+        bytes: &[u8],
+        raw: &Path,
+    ) -> io::Result<PathBuf> {
+        if !Self::is_tiff(mime_type) {
+            return Ok(raw.to_path_buf());
+        }
+        let raster = self.raster_path(account_id, message_id, attachment_id)?;
+        let Ok(png) = super::thumbnail::rasterize_tiff(bytes) else {
+            return Ok(raw.to_path_buf());
+        };
+        fs::write(&raster, &png)?;
+        Ok(raster)
+    }
+
+    fn lookup_display_path(
+        &self,
+        account_id: &str,
+        message_id: &str,
+        attachment_id: &str,
+        mime_type: &str,
+        raw: &Path,
+    ) -> Option<PathBuf> {
+        if !Self::is_tiff(mime_type) {
+            return Some(raw.to_path_buf());
+        }
+        let raster = self
+            .raster_path(account_id, message_id, attachment_id)
+            .ok()?;
+        if !raster.exists() {
+            return Some(raw.to_path_buf());
+        }
+        let _ = touch(&raster);
+        Some(raster)
+    }
+
     pub fn write_bytes(
         &self,
         account_id: &str,
@@ -75,18 +116,14 @@ impl AttachmentCache {
         fs::create_dir_all(&dir)?;
         let raw = self.raw_path(account_id, message_id, attachment_id)?;
         fs::write(&raw, bytes)?;
-        let display_path = if Self::is_tiff(mime_type) {
-            let raster = self.raster_path(account_id, message_id, attachment_id)?;
-            match super::thumbnail::rasterize_tiff(bytes) {
-                Ok(png) => {
-                    fs::write(&raster, &png)?;
-                    raster
-                }
-                Err(_) => raw.clone(),
-            }
-        } else {
-            raw.clone()
-        };
+        let display_path = self.write_display_path(
+            account_id,
+            message_id,
+            attachment_id,
+            mime_type,
+            bytes,
+            &raw,
+        )?;
         Ok(CachedAttachment {
             cache_path: raw,
             display_path: display_path,
@@ -107,19 +144,8 @@ impl AttachmentCache {
         let raw = self.raw_path(account_id, message_id, attachment_id).ok()?;
         let metadata = fs::metadata(&raw).ok()?;
         let _ = touch(&raw);
-        let display_path = if Self::is_tiff(mime_type) {
-            let raster = self
-                .raster_path(account_id, message_id, attachment_id)
-                .ok()?;
-            if raster.exists() {
-                let _ = touch(&raster);
-                raster
-            } else {
-                raw.clone()
-            }
-        } else {
-            raw.clone()
-        };
+        let display_path =
+            self.lookup_display_path(account_id, message_id, attachment_id, mime_type, &raw)?;
         Some(CachedAttachment {
             cache_path: raw,
             display_path: display_path,
@@ -236,7 +262,9 @@ fn collect_files(dir: &Path, out: &mut Vec<(PathBuf, u64, SystemTime)>) -> io::R
         let path = entry.path();
         if file_type.is_dir() {
             collect_files(&path, out)?;
-        } else if file_type.is_file() {
+            continue;
+        }
+        if file_type.is_file() {
             let metadata = entry.metadata()?;
             out.push((path, metadata.len(), metadata.modified()?));
         }

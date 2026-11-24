@@ -14,14 +14,17 @@ use wiremock::{
 
 struct LabelSequence(Mutex<VecDeque<serde_json::Value>>);
 
+fn next_label_batch(pending: &mut VecDeque<serde_json::Value>) -> serde_json::Value {
+    if pending.len() > 1 {
+        return pending.pop_front().unwrap();
+    }
+    pending.front().unwrap().clone()
+}
+
 impl Respond for LabelSequence {
     fn respond(&self, _request: &Request) -> ResponseTemplate {
         let mut pending = self.0.lock().unwrap();
-        let labels = if pending.len() > 1 {
-            pending.pop_front().unwrap()
-        } else {
-            pending.front().unwrap().clone()
-        };
+        let labels = next_label_batch(&mut pending);
         ResponseTemplate::new(200).set_body_json(serde_json::json!({ "labels": labels }))
     }
 }

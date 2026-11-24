@@ -29,8 +29,11 @@ it.each([
     />,
   );
   expect(screen.getByText(label)).toBeInTheDocument();
-  if (action) expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
-  else expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuetext', 'Preparing index');
+  if (action) {
+    expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
+    return;
+  }
+  expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuetext', 'Preparing index');
 });
 
 it('renders building progress and pauses only its account', async () => {

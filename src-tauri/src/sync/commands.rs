@@ -81,6 +81,26 @@ pub struct HydratedComposeDraft {
     attachments: Vec<super::dto::StagedAttachmentDto>,
 }
 
+fn compose_operation_prefix(send: bool) -> &'static str {
+    if send {
+        return "send";
+    }
+    "draft"
+}
+
+fn compose_operation_mode(
+    send: bool,
+    has_draft_id: bool,
+) -> crate::compose::drafts::DraftOperationMode {
+    if send {
+        return crate::compose::drafts::DraftOperationMode::Send;
+    }
+    if has_draft_id {
+        return crate::compose::drafts::DraftOperationMode::Update;
+    }
+    crate::compose::drafts::DraftOperationMode::Create
+}
+
 async fn admit_compose(
     queue: &std::sync::Arc<crate::queue::QueueEngine>,
     storage: &Storage,
@@ -89,7 +109,7 @@ async fn admit_compose(
     request: ComposeDraftRequest,
     send: bool,
 ) -> Result<ComposeQueueAcceptance, String> {
-    let operation_id = crate::compose::drafts::generate_id(if send { "send" } else { "draft" });
+    let operation_id = crate::compose::drafts::generate_id(compose_operation_prefix(send));
 
     let owners: Vec<&str> = request
         .draft_id
@@ -113,13 +133,7 @@ async fn admit_compose(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     let payload = crate::compose::drafts::DraftOperationPayload {
-        mode: if send {
-            crate::compose::drafts::DraftOperationMode::Send
-        } else if request.draft_id.is_some() {
-            crate::compose::drafts::DraftOperationMode::Update
-        } else {
-            crate::compose::drafts::DraftOperationMode::Create
-        },
+        mode: compose_operation_mode(send, request.draft_id.is_some()),
         draft_id: request.draft_id.clone(),
         thread_id: request.thread_id,
         from: request.from,
@@ -246,37 +260,15 @@ pub async fn hydrate_compose_draft<R: Runtime>(
         .map_err(|error| error.to_string())?;
     let mut attachments = Vec::new();
     for part in &draft.message.attachment_parts {
-        let staged = if let Some(bytes) = &part.inline_bytes {
-            let descriptor = crate::compose::staging::StagedPart {
-                id: crate::compose::drafts::generate_id("staged"),
-                filename: part.filename.clone(),
-                mime_type: part.mime_type.clone(),
-                path: std::path::PathBuf::new(),
-                content_id: None,
-                size: 0,
-            };
-            staging
-                .stage_bytes(&account_id, &draft_id, &descriptor, bytes)
-                .map_err(|error| error.to_string())?
-        } else {
-            staging
-                .stage_attachment(
-                    &client,
-                    &account_id,
-                    &draft_id,
-                    crate::compose::staging::GmailAttachmentSource {
-                        message_id: &draft.message.id,
-                        attachment_id: &part.attachment_id,
-                    },
-                    crate::compose::staging::NewStagedPart {
-                        id: crate::compose::drafts::generate_id("staged"),
-                        filename: part.filename.clone(),
-                        mime_type: part.mime_type.clone(),
-                        content_id: None,
-                    },
-                )
-                .await?
-        };
+        let staged = stage_hydrated_attachment(
+            staging.as_ref(),
+            &client,
+            &account_id,
+            &draft_id,
+            &draft.message.id,
+            part,
+        )
+        .await?;
         attachments.push(staged.into());
     }
     let quote_html = metadata.as_ref().and_then(|value| value.quote_html.clone());
@@ -302,15 +294,7 @@ pub async fn hydrate_compose_draft<R: Runtime>(
     }
 
     let metadata = boundary_matches.then_some(metadata).flatten();
-    let html = if boundary_matches {
-        quote_html
-            .as_ref()
-            .and_then(|quote| remote_html.strip_suffix(quote))
-            .unwrap_or(&remote_html)
-            .to_owned()
-    } else {
-        remote_html.clone()
-    };
+    let html = hydrated_editable_html(boundary_matches, quote_html.as_deref(), &remote_html);
     Ok(HydratedComposeDraft {
         session_id: crate::compose::drafts::generate_id("compose"),
         account_id: account_id,
@@ -345,6 +329,60 @@ pub async fn hydrate_compose_draft<R: Runtime>(
         original_gmail_message_id: metadata.and_then(|value| value.original_gmail_message_id),
         attachments: attachments,
     })
+}
+
+async fn stage_hydrated_attachment(
+    staging: &crate::compose::staging::Staging,
+    client: &crate::gmail::GmailClient,
+    account_id: &str,
+    draft_id: &str,
+    message_id: &str,
+    part: &crate::gmail::AttachmentPart,
+) -> Result<crate::compose::staging::StagedPart, String> {
+    if let Some(bytes) = &part.inline_bytes {
+        let descriptor = crate::compose::staging::StagedPart {
+            id: crate::compose::drafts::generate_id("staged"),
+            filename: part.filename.clone(),
+            mime_type: part.mime_type.clone(),
+            path: std::path::PathBuf::new(),
+            content_id: None,
+            size: 0,
+        };
+        return staging
+            .stage_bytes(account_id, draft_id, &descriptor, bytes)
+            .map_err(|error| error.to_string());
+    }
+    staging
+        .stage_attachment(
+            client,
+            account_id,
+            draft_id,
+            crate::compose::staging::GmailAttachmentSource {
+                message_id: message_id,
+                attachment_id: &part.attachment_id,
+            },
+            crate::compose::staging::NewStagedPart {
+                id: crate::compose::drafts::generate_id("staged"),
+                filename: part.filename.clone(),
+                mime_type: part.mime_type.clone(),
+                content_id: None,
+            },
+        )
+        .await
+}
+
+fn hydrated_editable_html(
+    boundary_matches: bool,
+    quote_html: Option<&str>,
+    remote_html: &str,
+) -> String {
+    if boundary_matches {
+        return quote_html
+            .and_then(|quote| remote_html.strip_suffix(quote))
+            .unwrap_or(remote_html)
+            .to_owned();
+    }
+    remote_html.to_owned()
 }
 
 #[tauri::command]
@@ -420,21 +458,20 @@ pub async fn reply_context(
                 size: attachment.size,
             })
             .collect::<Vec<_>>();
-        Ok(crate::compose::context::forward(
+        return Ok(crate::compose::context::forward(
             &context.message,
             attachments,
-        ))
-    } else {
-        Ok(crate::compose::context::reply(
-            &context.message,
-            &context.recipient_roles.0,
-            &context.recipient_roles.1,
-            &account_email,
-            reply_all,
-            context.references.as_deref(),
-            Vec::new(),
-        ))
+        ));
     }
+    Ok(crate::compose::context::reply(
+        &context.message,
+        &context.recipient_roles.0,
+        &context.recipient_roles.1,
+        &account_email,
+        reply_all,
+        context.references.as_deref(),
+        Vec::new(),
+    ))
 }
 
 #[tauri::command]
@@ -739,20 +776,16 @@ pub async fn fetch_message_body<R: Runtime>(
     )
     .ok_or_else(|| "Message is unavailable".to_owned())?;
 
-    if matches!(stored.0, crate::storage::HtmlPresence::TooLarge)
+    let already_complete = matches!(stored.0, crate::storage::HtmlPresence::TooLarge)
         || (!matches!(stored.0, crate::storage::HtmlPresence::NeverFetched)
             && !stored.1
-            && !stored.2)
-    {
+            && !stored.2);
+    if already_complete {
         return Ok(());
     }
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
     let message = string_try!(client.message(&message_id).await);
-    let html_presence = if message.oversize {
-        crate::storage::HtmlPresence::TooLarge
-    } else {
-        crate::storage::HtmlPresence::from_fetched_body(message.html_body.as_deref())
-    };
+    let html_presence = fetched_html_presence(message.oversize, message.html_body.as_deref());
     let html_body = message.html_body;
     let plain_body = message.plain_body;
     let mut parts = message
@@ -818,6 +851,23 @@ pub async fn fetch_message_body<R: Runtime>(
     Ok(())
 }
 
+fn fetched_html_presence(
+    oversize: bool,
+    html_body: Option<&str>,
+) -> crate::storage::HtmlPresence {
+    if oversize {
+        return crate::storage::HtmlPresence::TooLarge;
+    }
+    crate::storage::HtmlPresence::from_fetched_body(html_body)
+}
+
+fn single_label_delta(label_id: &'static str, present: bool) -> (HashSet<String>, HashSet<String>) {
+    if present {
+        return (HashSet::from([label_id.to_owned()]), HashSet::new());
+    }
+    (HashSet::new(), HashSet::from([label_id.to_owned()]))
+}
+
 async fn mutate_thread<R: Runtime>(
     app: AppHandle<R>,
     auth: tauri::State<'_, AuthService>,
@@ -829,11 +879,7 @@ async fn mutate_thread<R: Runtime>(
 ) -> Result<(), String> {
     let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
 
-    let (add, remove) = if present {
-        (HashSet::from([label_id.to_owned()]), HashSet::new())
-    } else {
-        (HashSet::new(), HashSet::from([label_id.to_owned()]))
-    };
+    let (add, remove) = single_label_delta(label_id, present);
     string_try!(
         engine
             .mutate(&account_id, client, thread_id, add, remove)

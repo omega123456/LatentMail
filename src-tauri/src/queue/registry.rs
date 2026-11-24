@@ -219,20 +219,18 @@ impl QueueRegistry {
     pub fn set_account_paused(&self, account_id: &str, paused: bool) -> bool {
         let mut inner = self.lock();
         if paused {
-            inner.account_paused.insert(account_id.to_owned())
-        } else {
-            inner.account_paused.remove(account_id)
+            return inner.account_paused.insert(account_id.to_owned());
         }
+        inner.account_paused.remove(account_id)
     }
 
     pub fn set_lane_paused(&self, account_id: &str, lane: Lane, paused: bool) -> bool {
         let mut inner = self.lock();
         let key = (account_id.to_owned(), lane);
         if paused {
-            inner.lane_paused.insert(key)
-        } else {
-            inner.lane_paused.remove(&key)
+            return inner.lane_paused.insert(key);
         }
+        inner.lane_paused.remove(&key)
     }
 
     pub fn clear_history(&self, account_id: Option<&str>) {
@@ -322,15 +320,7 @@ impl QueueRegistry {
                         let blocked =
                             !paused && lane != Lane::Interactive && blocked_by_interactive;
                         let running = !paused && !blocked && active > 0;
-                        let state = if paused {
-                            LaneState::Paused
-                        } else if blocked {
-                            LaneState::Blocked
-                        } else if running {
-                            LaneState::Running
-                        } else {
-                            LaneState::Idle
-                        };
+                        let state = lane_state(paused, blocked, running);
 
                         LaneSnapshot {
                             lane: lane,
@@ -363,4 +353,17 @@ impl QueueRegistry {
         snapshots.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         snapshots
     }
+}
+
+fn lane_state(paused: bool, blocked: bool, running: bool) -> LaneState {
+    if paused {
+        return LaneState::Paused;
+    }
+    if blocked {
+        return LaneState::Blocked;
+    }
+    if running {
+        return LaneState::Running;
+    }
+    LaneState::Idle
 }

@@ -9,6 +9,8 @@ import { type RecipientRole, useComposeStore } from '@/stores/compose';
 import type { ContactSuggestion } from '@/lib/types/ipc';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 import { POPOVER_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
+import { wrapIndex } from '@/lib/collections';
+import { formatCount } from '@/lib/format/strings';
 
 const CHIP_ROWS_3_PX = 96;
 
@@ -26,6 +28,90 @@ function useDebouncedValue(liveValue: string, delayMs: number) {
 function chipLabel(raw: string) {
   const { name, address } = parseParticipant(raw);
   return name || address;
+}
+
+function activeSuggestionFor(
+  open: boolean,
+  activeIndex: number,
+  suggestions: ContactSuggestion[],
+): ContactSuggestion | undefined {
+  if (!open || activeIndex < 0) return undefined;
+  return suggestions[activeIndex];
+}
+
+function stepSuggestionIndex(
+  setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
+  count: number,
+  delta: number,
+) {
+  setActiveIndex((index) => (count === 0 ? -1 : wrapIndex(index, delta, count)));
+}
+
+function handleRecipientKeyDown(
+  event: KeyboardEvent<HTMLInputElement>,
+  context: {
+    open: boolean;
+    suggestions: ContactSuggestion[];
+    activeIndex: number;
+    inputValue: string;
+    setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
+    selectSuggestion: (item: ContactSuggestion) => void;
+    commit: () => void;
+    removeLast: () => void;
+  },
+) {
+  const handlers: Record<string, () => void> = {
+    ArrowDown: () => {
+      if (!context.open) return;
+      event.preventDefault();
+      stepSuggestionIndex(context.setActiveIndex, context.suggestions.length, 1);
+    },
+    ArrowUp: () => {
+      if (!context.open) return;
+      event.preventDefault();
+      stepSuggestionIndex(context.setActiveIndex, context.suggestions.length, -1);
+    },
+    Enter: () => {
+      event.preventDefault();
+      const active = activeSuggestionFor(context.open, context.activeIndex, context.suggestions);
+      if (active) {
+        context.selectSuggestion(active);
+        return;
+      }
+      context.commit();
+    },
+    ',': () => {
+      event.preventDefault();
+      context.commit();
+    },
+    Tab: () => context.commit(),
+    Backspace: () => {
+      if (context.inputValue === '') context.removeLast();
+    },
+  };
+  handlers[event.key]?.();
+}
+
+function HiddenRecipientsButton({
+  hiddenCount,
+  onExpand,
+}: {
+  hiddenCount: number;
+  onExpand: () => void;
+}) {
+  if (hiddenCount <= 0) return null;
+  const label = `${formatCount(hiddenCount, 'more recipient')} hidden`;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onExpand}
+      className="cursor-pointer rounded-sm px-1.5 py-0.5 text-label-md text-primary hover:bg-surface-container-high dark:text-dark-primary dark:hover:bg-dark-surface-container-high"
+    >
+      +{hiddenCount} more
+    </button>
+  );
 }
 
 export function RecipientField({
@@ -115,36 +201,17 @@ export function RecipientField({
     return () => window.removeEventListener('keydown', handler, { capture: true });
   }, [open]);
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-      event.preventDefault();
-      const count = suggestions.length;
-      const delta = event.key === 'ArrowDown' ? 1 : -1;
-      setActiveIndex((index) => (count === 0 ? -1 : (index + delta + count) % count));
-      return;
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      if (open && activeIndex >= 0 && suggestions[activeIndex]) {
-        selectSuggestion(suggestions[activeIndex]);
-      } else {
-        commit();
-      }
-      return;
-    }
-    if (event.key === ',') {
-      event.preventDefault();
-      commit();
-      return;
-    }
-    if (event.key === 'Tab') {
-      commit();
-      return;
-    }
-    if (event.key === 'Backspace' && inputValue === '') {
-      removeLastRecipient(fieldRole);
-    }
-  };
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) =>
+    handleRecipientKeyDown(event, {
+      open: open,
+      suggestions: suggestions,
+      activeIndex: activeIndex,
+      inputValue: inputValue,
+      setActiveIndex: setActiveIndex,
+      selectSuggestion: selectSuggestion,
+      commit: commit,
+      removeLast: () => removeLastRecipient(fieldRole),
+    });
 
   const activeOptionId =
     open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
@@ -178,17 +245,10 @@ export function RecipientField({
                   </button>
                 </span>
               ))}
-              {hiddenCount > 0 && (
-                <button
-                  type="button"
-                  aria-label={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
-                  title={`${hiddenCount} more recipient${hiddenCount === 1 ? '' : 's'} hidden`}
-                  onClick={() => setVisibleCount(chips.length)}
-                  className="cursor-pointer rounded-sm px-1.5 py-0.5 text-label-md text-primary hover:bg-surface-container-high dark:text-dark-primary dark:hover:bg-dark-surface-container-high"
-                >
-                  +{hiddenCount} more
-                </button>
-              )}
+              <HiddenRecipientsButton
+                hiddenCount={hiddenCount}
+                onExpand={() => setVisibleCount(chips.length)}
+              />
               <TextInput
                 ref={inputRef}
                 value={inputValue}

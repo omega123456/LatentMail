@@ -32,6 +32,17 @@ pub fn usage() -> String {
     "LatentMail commands:\n  pause-sync   Pause background sync\n  resume-sync  Resume background sync".into()
 }
 
+fn select_status_message(
+    did_change: bool,
+    changed: &'static str,
+    unchanged: &'static str,
+) -> &'static str {
+    if did_change {
+        return changed;
+    }
+    unchanged
+}
+
 pub async fn apply(command: Command, queue: &Arc<QueueEngine>) -> Response {
     let (paused, changed, unchanged) = match command {
         Command::PauseSync => (true, "Background sync paused.", "Sync is already paused."),
@@ -43,11 +54,8 @@ pub async fn apply(command: Command, queue: &Arc<QueueEngine>) -> Response {
             };
         }
     };
-    let message = if queue.set_paused(&PauseScope::Global, paused).await {
-        changed
-    } else {
-        unchanged
-    };
+    let did_change = queue.set_paused(&PauseScope::Global, paused).await;
+    let message = select_status_message(did_change, changed, unchanged);
     Response {
         ok: true,
         message: message.into(),
@@ -98,16 +106,22 @@ pub fn start<R: Runtime>(_app: &AppHandle<R>) -> ControlSocket {
     ControlSocket::Unsupported
 }
 
+#[cfg(all(unix, debug_assertions))]
+const UNIX_SOCKET_NAME: &str = "latentmail-dev.sock";
+#[cfg(all(unix, not(debug_assertions)))]
+const UNIX_SOCKET_NAME: &str = "latentmail.sock";
+
+#[cfg(all(windows, debug_assertions))]
+const WINDOWS_PIPE_SUFFIX: &str = "-dev";
+#[cfg(all(windows, not(debug_assertions)))]
+const WINDOWS_PIPE_SUFFIX: &str = "";
+
 #[cfg(unix)]
 pub fn socket_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("LATENTMAIL_CLI_SOCKET") {
         return path.into();
     }
-    std::env::temp_dir().join(if cfg!(debug_assertions) {
-        "latentmail-dev.sock"
-    } else {
-        "latentmail.sock"
-    })
+    std::env::temp_dir().join(UNIX_SOCKET_NAME)
 }
 
 #[cfg(windows)]
@@ -120,8 +134,7 @@ pub fn socket_path() -> String {
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
         .collect();
-    let suffix = if cfg!(debug_assertions) { "-dev" } else { "" };
-    format!(r"\\.\pipe\latentmail-{username}{suffix}")
+    format!(r"\\.\pipe\latentmail-{username}{WINDOWS_PIPE_SUFFIX}")
 }
 
 #[cfg(unix)]

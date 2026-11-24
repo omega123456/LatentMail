@@ -17,6 +17,74 @@ const scrollButtonClass =
 const itemClass =
   'flex cursor-pointer select-none items-center gap-2 rounded-sm px-2.5 py-1.75 outline-none hover:bg-settings-container-low dark:hover:bg-dark-settings-container-low data-[highlighted]:bg-settings-container-low data-[state=checked]:bg-settings-primary-container data-[state=checked]:text-settings-on-primary-container dark:data-[highlighted]:bg-dark-settings-container-low dark:data-[state=checked]:bg-dark-settings-primary-container dark:data-[state=checked]:text-dark-settings-on-primary-container';
 
+type ShownModel = { id: string; detail: string };
+
+function modelDetail(
+  model: AiModel,
+  selectedId: string | null,
+  selectedDimension: number | null | undefined,
+): string {
+  const owner = model.ownedBy ?? 'Unknown owner';
+  if (model.id === selectedId && selectedDimension) {
+    return `${owner} · ${selectedDimension.toLocaleString()} dimensions`;
+  }
+  return owner;
+}
+
+function resolveShownModel(
+  loadingId: string | null | undefined,
+  selected: AiModel | null,
+  selectedId: string | null,
+  selectedDimension: number | null | undefined,
+): ShownModel | null {
+  if (loadingId) return { id: loadingId, detail: 'Loading model…' };
+  if (!selected) return null;
+  return { id: selected.id, detail: modelDetail(selected, selectedId, selectedDimension) };
+}
+
+function formatCatalogueCount(filter: string, visibleCount: number, totalCount: number): string {
+  if (filter) return `${visibleCount.toLocaleString()} of ${totalCount.toLocaleString()}`;
+  const noun = totalCount === 1 ? 'model' : 'models';
+  return `${totalCount.toLocaleString()} ${noun}`;
+}
+
+function ModelTriggerSummary({
+  shown,
+  isLoading,
+}: {
+  shown: ShownModel | null;
+  isLoading: boolean;
+}) {
+  return (
+    <>
+      <span className="min-w-0 flex-1">
+        {shown ? (
+          <>
+            <span className="block truncate text-settings-desc font-medium">{shown.id}</span>
+            <span className="block truncate text-settings-meta text-settings-ink-mute dark:text-dark-settings-ink-mute">
+              {shown.detail}
+            </span>
+          </>
+        ) : (
+          <span className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
+            Select a model…
+          </span>
+        )}
+      </span>
+      <SelectPrimitive.Icon>
+        {isLoading ? (
+          <Loader2
+            aria-hidden="true"
+            className="size-4 shrink-0 opacity-70 motion-safe:animate-spin"
+          />
+        ) : (
+          <ChevronDown aria-hidden="true" className="size-4 shrink-0 opacity-70" />
+        )}
+      </SelectPrimitive.Icon>
+    </>
+  );
+}
+
 export function ModelCardList({
   accountEmail,
   label,
@@ -50,12 +118,8 @@ export function ModelCardList({
     [catalogue, filter],
   );
   const selected = models.find((model) => model.id === selectedId) ?? null;
-  const detailFor = (model: AiModel) =>
-    model.id === selectedId && selectedDimension
-      ? `${model.ownedBy ?? 'Unknown owner'} · ${selectedDimension.toLocaleString()} dimensions`
-      : (model.ownedBy ?? 'Unknown owner');
-  const loading = loadingId ? { id: loadingId, detail: 'Loading model…' } : null;
-  const shown = loading ?? (selected ? { id: selected.id, detail: detailFor(selected) } : null);
+  const isLoading = Boolean(loadingId);
+  const shown = resolveShownModel(loadingId, selected, selectedId, selectedDimension);
 
   return (
     <div className="flex flex-col gap-2.25">
@@ -72,34 +136,11 @@ export function ModelCardList({
       >
         <SelectPrimitive.Trigger
           aria-label={`${label} model for ${accountEmail}`}
-          aria-busy={Boolean(loading)}
-          disabled={Boolean(loading)}
+          aria-busy={isLoading}
+          disabled={isLoading}
           className={`flex items-center justify-between gap-3 text-left disabled:cursor-progress disabled:opacity-70 ${triggerClass}`}
         >
-          <span className="min-w-0 flex-1">
-            {shown ? (
-              <>
-                <span className="block truncate text-settings-desc font-medium">{shown.id}</span>
-                <span className="block truncate text-settings-meta text-settings-ink-mute dark:text-dark-settings-ink-mute">
-                  {shown.detail}
-                </span>
-              </>
-            ) : (
-              <span className="text-settings-desc text-settings-ink-mute dark:text-dark-settings-ink-mute">
-                Select a model…
-              </span>
-            )}
-          </span>
-          <SelectPrimitive.Icon>
-            {loading ? (
-              <Loader2
-                aria-hidden="true"
-                className="size-4 shrink-0 opacity-70 motion-safe:animate-spin"
-              />
-            ) : (
-              <ChevronDown aria-hidden="true" className="size-4 shrink-0 opacity-70" />
-            )}
-          </SelectPrimitive.Icon>
+          <ModelTriggerSummary shown={shown} isLoading={isLoading} />
         </SelectPrimitive.Trigger>
         <SelectPrimitive.Portal>
           <SelectPrimitive.Content
@@ -139,9 +180,7 @@ export function ModelCardList({
                 className="min-w-0 flex-1"
               />
               <span className="shrink-0 text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">
-                {filter
-                  ? `${visible.length.toLocaleString()} of ${catalogue.length.toLocaleString()}`
-                  : `${catalogue.length.toLocaleString()} ${catalogue.length === 1 ? 'model' : 'models'}`}
+                {formatCatalogueCount(filter, visible.length, catalogue.length)}
               </span>
               {ofKind.length !== models.length && (
                 <button
@@ -172,7 +211,7 @@ export function ModelCardList({
                       </span>
                     </SelectPrimitive.ItemText>
                     <span className="block truncate text-settings-meta opacity-80">
-                      {detailFor(model)}
+                      {modelDetail(model, selectedId, selectedDimension)}
                     </span>
                   </span>
                   <SelectPrimitive.ItemIndicator>

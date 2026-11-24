@@ -97,33 +97,109 @@ export const readerFixtures: Record<string, ReaderConversation> = {
   },
 };
 
-export function ReadingPane({
-  threadId,
-  conversation = threadId ? readerFixtures[threadId] : undefined,
-  loading = false,
-  error = false,
-  systemLabelIds,
-  moveToCurrentLabelIds,
-  labelMenuEntries = [],
-  selectedCount = 0,
-  selectedThreads = [],
-  loadedThreadCount = 0,
-  onClearSelection = () => undefined,
-  onSelectAll = () => undefined,
-  unread = false,
-  starred = false,
-  triageHandlers,
-  onFetchBody,
-  loadingMessageId,
-  failedMessageId,
-  onMessageTriage,
-  onCompose,
-  onComposeTo,
-  onLoadImages,
-  onTrustSender,
-  gmailThreadUrl = null,
-  accountId = null,
-}: {
+function bulkMembershipFor(
+  labelName: string,
+  selectedThreads: { labelIndicators?: string[] }[],
+): 'checked' | 'unchecked' | 'indeterminate' {
+  if (selectedThreads.length === 0) return 'unchecked';
+  const matchCount = selectedThreads.filter((thread) =>
+    thread.labelIndicators?.includes(labelName),
+  ).length;
+  if (matchCount === 0) return 'unchecked';
+  return matchCount === selectedThreads.length ? 'checked' : 'indeterminate';
+}
+
+function resolveReadingPanePlaceholder(input: {
+  threadId: string | null;
+  loading: boolean;
+  error: boolean;
+  conversation: ReaderConversation | undefined;
+}) {
+  if (!input.threadId) return <EmptyState>Select a conversation to read it.</EmptyState>;
+  if (input.loading) return <LoadingState>Loading conversation…</LoadingState>;
+  if (input.error) return <ErrorState>Could not load this conversation.</ErrorState>;
+  if (!input.conversation) return <EmptyState>Conversation unavailable.</EmptyState>;
+  return null;
+}
+
+function buildExportActions(
+  accountId: string | null,
+  subject: string,
+  message: ReaderMessage,
+): MessageExportActions | undefined {
+  if (!accountId || message.isDraft) return undefined;
+  const target = {
+    accountId: accountId,
+    messageId: message.id,
+    subject: subject,
+    sender: message.sender.address,
+    sentAt: message.sentAt,
+  };
+  return {
+    onShowOriginal: () =>
+      useMessageSourceStore.getState().open({ accountId: accountId, messageId: message.id }),
+    onDownloadEml: () => void saveMessageAs('eml', target),
+    onDownloadHtml: () => void saveMessageAs('html', target),
+  };
+}
+
+function buildMessageRibbon(input: {
+  base: MessageRibbonProps;
+  message: ReaderMessage;
+  accountId: string | null;
+  subject: string;
+  onMessageTriage?: (messageId: string, intent: MessageTriageIntent) => void;
+  onCompose?: (action: ComposeAction, messageId: string) => void;
+}): MessageRibbonProps {
+  const { base, message, accountId, subject, onMessageTriage, onCompose } = input;
+  const labelIds = message.labelIds ?? [];
+  return {
+    ...base,
+    systemLabelIds: labelIds,
+    onApplyLabels: (changes) => onMessageTriage?.(message.id, { kind: 'label', ...changes }),
+    onMoveTo: (destination) =>
+      onMessageTriage?.(message.id, { kind: 'move', destination: destination }),
+    onToggleSpam: () => onMessageTriage?.(message.id, spamToggleIntent(labelIds.includes('SPAM'))),
+    onDelete: () => onMessageTriage?.(message.id, { kind: 'delete' }),
+    onReply: () => onCompose?.('reply', message.id),
+    onReplyAll: () => onCompose?.('reply-all', message.id),
+    onForward: () => onCompose?.('forward', message.id),
+    onEditDraft: message.isDraft ? () => onCompose?.('edit-draft', message.id) : undefined,
+    exportActions: buildExportActions(accountId, subject, message),
+  };
+}
+
+function resolveThreadSystemLabelIds(
+  provided: string[] | undefined,
+  conversation: ReaderConversation,
+): string[] {
+  if (provided) return provided;
+  return intersectMessageLabelIds(conversation.messages.map((message) => message.labelIds ?? []));
+}
+
+function defaultMessageRibbonBase(
+  labels: MessageRibbonProps['labels'],
+  threadHandlers: TriageHandlers,
+): MessageRibbonProps {
+  return {
+    systemLabelIds: [],
+    labels: labels,
+    ...threadHandlers,
+    onReply: () => undefined,
+    onReplyAll: () => undefined,
+    onForward: () => undefined,
+  };
+}
+
+function resolveConversation(
+  provided: ReaderConversation | undefined,
+  threadId: string | null,
+): ReaderConversation | undefined {
+  if (provided !== undefined) return provided;
+  return threadId ? readerFixtures[threadId] : undefined;
+}
+
+type ReadingPaneProps = {
   threadId: string | null;
   conversation?: ReaderConversation;
   loading?: boolean;
@@ -149,62 +225,46 @@ export function ReadingPane({
   onTrustSender?: (address: string) => void;
   gmailThreadUrl?: string | null;
   accountId?: string | null;
+};
+
+function bulkSelectionFlags(props: ReadingPaneProps) {
+  return {
+    systemLabelIds: props.systemLabelIds ?? [],
+    moveToCurrentLabelIds: props.moveToCurrentLabelIds,
+    unread: props.unread ?? false,
+    starred: props.starred ?? false,
+    labels: props.labelMenuEntries ?? [],
+  };
+}
+
+function renderBulkSelection(props: ReadingPaneProps) {
+  return (
+    <BulkSelectionPanel
+      count={props.selectedCount ?? 0}
+      selectedThreads={props.selectedThreads ?? []}
+      loadedThreadCount={props.loadedThreadCount ?? 0}
+      onClearSelection={props.onClearSelection ?? noop}
+      onSelectAll={props.onSelectAll ?? noop}
+      {...bulkSelectionFlags(props)}
+      {...(props.triageHandlers ?? noTriageHandlers)}
+    />
+  );
+}
+
+function ConversationView({
+  conversation,
+  props,
+}: {
+  conversation: ReaderConversation;
+  props: ReadingPaneProps;
 }) {
-  if (selectedCount > 0) {
-    return (
-      <BulkSelectionPanel
-        count={selectedCount}
-        selectedThreads={selectedThreads}
-        loadedThreadCount={loadedThreadCount}
-        onClearSelection={onClearSelection}
-        onSelectAll={onSelectAll}
-        systemLabelIds={systemLabelIds ?? []}
-        moveToCurrentLabelIds={moveToCurrentLabelIds}
-        unread={unread}
-        starred={starred}
-        labels={labelMenuEntries}
-        {...(triageHandlers ?? noTriageHandlers)}
-      />
-    );
-  }
-  if (!threadId) return <EmptyState>Select a conversation to read it.</EmptyState>;
-  if (loading) return <LoadingState>Loading conversation…</LoadingState>;
-  if (error) return <ErrorState>Could not load this conversation.</ErrorState>;
-  if (!conversation) return <EmptyState>Conversation unavailable.</EmptyState>;
-  const threadUnread = conversation.messages.some((message) => message.unread);
-  const threadStarred = conversation.messages.some((message) => message.starred);
-  const threadSystemLabelIds =
-    systemLabelIds ??
-    intersectMessageLabelIds(conversation.messages.map((message) => message.labelIds ?? []));
-  const threadHandlers = triageHandlers ?? noTriageHandlers;
+  const labelMenuEntries = props.labelMenuEntries ?? [];
+  const threadHandlers = props.triageHandlers ?? noTriageHandlers;
   const lastMessage = conversation.messages.at(-1);
   const composeThread = (action: ComposeAction) => {
-    if (lastMessage) onCompose?.(action, lastMessage.id);
+    if (lastMessage) props.onCompose?.(action, lastMessage.id);
   };
-  const exportActionsFor = (message: ReaderMessage): MessageExportActions | undefined => {
-    if (!accountId || message.isDraft) return undefined;
-    const target = {
-      accountId: accountId,
-      messageId: message.id,
-      subject: conversation.subject,
-      sender: message.sender.address,
-      sentAt: message.sentAt,
-    };
-    return {
-      onShowOriginal: () =>
-        useMessageSourceStore.getState().open({ accountId: accountId, messageId: message.id }),
-      onDownloadEml: () => void saveMessageAs('eml', target),
-      onDownloadHtml: () => void saveMessageAs('html', target),
-    };
-  };
-  const messageRibbonBase: MessageRibbonProps = {
-    systemLabelIds: [],
-    labels: labelMenuEntries,
-    ...threadHandlers,
-    onReply: () => undefined,
-    onReplyAll: () => undefined,
-    onForward: () => undefined,
-  };
+  const messageRibbonBase = defaultMessageRibbonBase(labelMenuEntries, threadHandlers);
   return (
     <ReaderContextMenu>
       <section
@@ -218,9 +278,9 @@ export function ReadingPane({
           </h1>
           <div className="mb-container-padding">
             <ActionRibbon
-              systemLabelIds={threadSystemLabelIds}
-              unread={threadUnread}
-              starred={threadStarred}
+              systemLabelIds={resolveThreadSystemLabelIds(props.systemLabelIds, conversation)}
+              unread={conversation.messages.some((message) => message.unread)}
+              starred={conversation.messages.some((message) => message.starred)}
               labels={labelMenuEntries}
               {...threadHandlers}
               onReply={() => composeThread('reply')}
@@ -236,41 +296,45 @@ export function ReadingPane({
               expanded={index === conversation.messages.length - 1}
               newest={index === conversation.messages.length - 1}
               badges={messageBadges(message, labelMenuEntries)}
-              ribbon={{
-                ...messageRibbonBase,
-                systemLabelIds: message.labelIds ?? [],
-                onApplyLabels: (changes) =>
-                  onMessageTriage?.(message.id, { kind: 'label', ...changes }),
-                onMoveTo: (destination) =>
-                  onMessageTriage?.(message.id, { kind: 'move', destination: destination }),
-                onToggleSpam: () =>
-                  onMessageTriage?.(message.id, {
-                    kind: 'move',
-                    destination: (message.labelIds ?? []).includes('SPAM') ? 'INBOX' : 'SPAM',
-                  }),
-                onDelete: () => onMessageTriage?.(message.id, { kind: 'delete' }),
-                onReply: () => onCompose?.('reply', message.id),
-                onReplyAll: () => onCompose?.('reply-all', message.id),
-                onForward: () => onCompose?.('forward', message.id),
-                onEditDraft: message.isDraft
-                  ? () => onCompose?.('edit-draft', message.id)
-                  : undefined,
-                exportActions: exportActionsFor(message),
-              }}
-              onFetchBody={onFetchBody}
-              onComposeTo={onComposeTo}
-              onLoadImages={onLoadImages}
-              onTrustSender={onTrustSender}
-              loadingBody={loadingMessageId === message.id}
-              bodyError={failedMessageId === message.id}
-              gmailThreadUrl={gmailThreadUrl}
-              accountId={accountId}
+              ribbon={buildMessageRibbon({
+                base: messageRibbonBase,
+                message: message,
+                accountId: props.accountId ?? null,
+                subject: conversation.subject,
+                onMessageTriage: props.onMessageTriage,
+                onCompose: props.onCompose,
+              })}
+              onFetchBody={props.onFetchBody}
+              onComposeTo={props.onComposeTo}
+              onLoadImages={props.onLoadImages}
+              onTrustSender={props.onTrustSender}
+              loadingBody={props.loadingMessageId === message.id}
+              bodyError={props.failedMessageId === message.id}
+              gmailThreadUrl={props.gmailThreadUrl ?? null}
+              accountId={props.accountId ?? null}
             />
           ))}
         </div>
       </section>
     </ReaderContextMenu>
   );
+}
+
+export function ReadingPane(props: ReadingPaneProps) {
+  if ((props.selectedCount ?? 0) > 0) return renderBulkSelection(props);
+  const conversation = resolveConversation(props.conversation, props.threadId);
+  const placeholder = resolveReadingPanePlaceholder({
+    threadId: props.threadId,
+    loading: props.loading ?? false,
+    error: props.error ?? false,
+    conversation: conversation,
+  });
+  if (placeholder || !conversation) return placeholder;
+  return <ConversationView conversation={conversation} props={props} />;
+}
+
+function noop() {
+  return undefined;
 }
 
 const noTriageHandlers: TriageHandlers = {
@@ -301,17 +365,84 @@ function triageHandlersFor(
   };
 }
 
+function resolveActiveIds(
+  multiSelectActive: boolean,
+  selectedIds: ReadonlySet<string>,
+  threadId: string | null,
+): string[] {
+  if (multiSelectActive) return [...selectedIds];
+  return threadId ? [threadId] : [];
+}
+
+function buildBulkLabelMenuEntries(
+  labels: import('@/lib/types/ipc').MailLabel[],
+  selectedThreads: { labelIndicators?: string[] }[],
+): MessageRibbonProps['labels'] {
+  return labels
+    .filter((label) => label.kind === 'user')
+    .map((label) => ({
+      id: label.id,
+      name: label.name,
+      color: labelColorId(label),
+      membership: bulkMembershipFor(label.name, selectedThreads),
+    }));
+}
+
+function resolveMoveToCurrentLabelIds(
+  multiSelectActive: boolean,
+  selectedThreads: { systemLabelIds?: string[] }[],
+): MoveDestinationId[] | undefined {
+  if (!multiSelectActive) return undefined;
+  if (selectedThreads.length === 0) return [];
+  return MOVE_DESTINATION_IDS.filter((id) =>
+    selectedThreads.every((thread) => (thread.systemLabelIds ?? []).includes(id)),
+  );
+}
+
+function deriveReaderTriageSummary(input: {
+  multiSelectActive: boolean;
+  selectedThreads: import('@/lib/types/ipc').MailThread[];
+  conversation: ReaderConversation | undefined;
+}) {
+  if (input.multiSelectActive) {
+    return {
+      unread: input.selectedThreads.some((thread) => thread.isUnread),
+      starred: input.selectedThreads.some((thread) => thread.isStarred),
+      systemLabelIds: intersectThreadSystemLabelIds(input.selectedThreads),
+    };
+  }
+  const messages = input.conversation?.messages ?? [];
+  return {
+    unread: messages.some((message) => message.unread),
+    starred: messages.some((message) => message.starred),
+    systemLabelIds: intersectMessageLabelIds(messages.map((message) => message.labelIds ?? [])),
+  };
+}
+
+function useReaderAccountEmail(accountId: string | null): string {
+  const accountsQuery = useAccountsQuery();
+  return accountsQuery.data?.find((account) => account.id === accountId)?.email ?? '';
+}
+
+function useLoadedThreads(accountId: string | null, mailboxId: string) {
+  const searchActive = useSearchStore((search) => search.active);
+  const searchQuery = useSearchStore((search) => search.submittedQuery);
+  const searchScope = useSearchStore((search) => search.scope);
+  const threadsQuery = useThreadsQuery(accountId, mailboxId);
+  const searchResultsQuery = useSearchThreadsQuery(accountId, searchQuery, searchScope);
+  const activeThreadsQuery = searchActive ? searchResultsQuery : threadsQuery;
+  return useMemo(
+    () => (activeThreadsQuery.data?.pages ?? []).flatMap((page) => page.items),
+    [activeThreadsQuery.data],
+  );
+}
+
 export function ReadingPaneContainer({ threadId }: { threadId: string | null }) {
   const accountId = useSelectionStore((selection) => selection.activeAccountId);
   const mailboxId = useSelectionStore((selection) => selection.activeMailboxId) ?? 'INBOX';
   const allowImagesFor = useSelectionStore((selection) => selection.allowImagesFor);
   const trustImageSender = useLayoutStore((layout) => layout.trustImageSender);
-  const searchActive = useSearchStore((search) => search.active);
-  const searchQuery = useSearchStore((search) => search.submittedQuery);
-  const searchScope = useSearchStore((search) => search.scope);
-  const accountsQuery = useAccountsQuery();
-  const accountEmail = accountsQuery.data?.find((account) => account.id === accountId)?.email ?? '';
-  const selectedCount = useMultiSelectStore((multiSelect) => multiSelect.selectedIds.size);
+  const accountEmail = useReaderAccountEmail(accountId);
   const selectedIds = useMultiSelectStore((multiSelect) => multiSelect.selectedIds);
   const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
   const clearSelection = useMultiSelectStore((multiSelect) => multiSelect.clear);
@@ -321,14 +452,8 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
   const triage = useThreadTriageIntentMutation(accountId);
   const messageTriage = useMessageTriageIntentMutation(accountId);
   const labelsQuery = useLabelsQuery(accountId);
-  const threadsQuery = useThreadsQuery(accountId, mailboxId);
-  const searchResultsQuery = useSearchThreadsQuery(accountId, searchQuery, searchScope);
-  const activeThreadsQuery = searchActive ? searchResultsQuery : threadsQuery;
+  const loadedThreads = useLoadedThreads(accountId, mailboxId);
   const conversation = conversationQuery.data ? mapConversation(conversationQuery.data) : undefined;
-  const loadedThreads = useMemo(
-    () => (activeThreadsQuery.data?.pages ?? []).flatMap((page) => page.items),
-    [activeThreadsQuery.data],
-  );
   const selectedThreads = useMemo(
     () => loadedThreads.filter((thread) => selectedIds.has(thread.id)),
     [selectedIds, loadedThreads],
@@ -337,57 +462,28 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
     () => selectedThreads.map(mapThreadToRow),
     [selectedThreads],
   );
-  const labelMenuEntries = useMemo(
-    () =>
-      multiSelectActive
-        ? (labelsQuery.data ?? [])
-            .filter((label) => label.kind === 'user')
-            .map((label) => ({
-              id: label.id,
-              name: label.name,
-              color: labelColorId(label),
-              membership:
-                selectedThreads.length === 0
-                  ? ('unchecked' as const)
-                  : selectedThreads.every((thread) => thread.labelIndicators?.includes(label.name))
-                    ? ('checked' as const)
-                    : selectedThreads.some((thread) => thread.labelIndicators?.includes(label.name))
-                      ? ('indeterminate' as const)
-                      : ('unchecked' as const),
-            }))
-        : computeThreadLabelMembership(
-            labelsQuery.data ?? [],
-            conversation?.messages.map((message) => message.labelIds ?? []) ?? [],
-          ),
-    [conversation, labelsQuery.data, multiSelectActive, selectedThreads],
-  );
-  const activeIds = multiSelectActive ? [...selectedIds] : threadId ? [threadId] : [];
-  const unread = multiSelectActive
-    ? selectedThreads.some((thread) => thread.isUnread)
-    : (conversation?.messages.some((message) => message.unread) ?? false);
-  const starred = multiSelectActive
-    ? selectedThreads.some((thread) => thread.isStarred)
-    : (conversation?.messages.some((message) => message.starred) ?? false);
-  const threadSystemLabelIds = intersectMessageLabelIds(
-    conversation?.messages.map((message) => message.labelIds ?? []) ?? [],
-  );
-  const systemLabelIds = multiSelectActive
-    ? intersectThreadSystemLabelIds(selectedThreads)
-    : threadSystemLabelIds;
-  const isSpam = systemLabelIds.includes('SPAM');
+  const labelMenuEntries = useMemo(() => {
+    const labels = labelsQuery.data ?? [];
+    if (multiSelectActive) return buildBulkLabelMenuEntries(labels, selectedThreads);
+    const messageLabels = conversation?.messages.map((message) => message.labelIds ?? []) ?? [];
+    return computeThreadLabelMembership(labels, messageLabels);
+  }, [conversation, labelsQuery.data, multiSelectActive, selectedThreads]);
+  const activeIds = resolveActiveIds(multiSelectActive, selectedIds, threadId);
+  const summary = deriveReaderTriageSummary({
+    multiSelectActive: multiSelectActive,
+    selectedThreads: selectedThreads,
+    conversation: conversation,
+  });
+  const isSpam = summary.systemLabelIds.includes('SPAM');
   const gmailThreadUrl = buildGmailThreadWebUrl(threadId, accountEmail);
-  const moveToCurrentLabelIds = multiSelectActive
-    ? MOVE_DESTINATION_IDS.filter(
-        (id) =>
-          selectedThreads.length > 0 &&
-          selectedThreads.every((thread) => (thread.systemLabelIds ?? []).includes(id)),
-      )
-    : undefined;
+  const moveToCurrentLabelIds = resolveMoveToCurrentLabelIds(multiSelectActive, selectedThreads);
+  const isConversationLoading =
+    conversationQuery.isPending && threadId !== null && !multiSelectActive;
   return (
     <ReadingPane
       threadId={threadId}
       conversation={conversation}
-      loading={conversationQuery.isPending && threadId !== null && !multiSelectActive}
+      loading={isConversationLoading}
       error={conversationQuery.isError}
       onFetchBody={(messageId) => fetchBody.mutate(messageId)}
       loadingMessageId={fetchBody.isPending ? fetchBody.variables : undefined}
@@ -412,17 +508,23 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       onTrustSender={trustImageSender}
       gmailThreadUrl={gmailThreadUrl}
       accountId={accountId}
-      systemLabelIds={systemLabelIds}
+      systemLabelIds={summary.systemLabelIds}
       moveToCurrentLabelIds={moveToCurrentLabelIds}
       labelMenuEntries={labelMenuEntries}
-      selectedCount={selectedCount}
+      selectedCount={selectedIds.size}
       selectedThreads={selectedRows}
       loadedThreadCount={loadedThreads.length}
       onClearSelection={clearSelection}
       onSelectAll={() => selectAll(loadedThreads.map((thread) => thread.id))}
-      unread={unread}
-      starred={starred}
-      triageHandlers={triageHandlersFor(activeIds, unread, starred, isSpam, triage.mutate)}
+      unread={summary.unread}
+      starred={summary.starred}
+      triageHandlers={triageHandlersFor(
+        activeIds,
+        summary.unread,
+        summary.starred,
+        isSpam,
+        triage.mutate,
+      )}
     />
   );
 }

@@ -1,5 +1,5 @@
-import { createElement, useState } from 'react';
-import { AlertCircle, Download, Loader2 } from 'lucide-react';
+import { createElement, useState, type ReactNode } from 'react';
+import { AlertCircle, Download, Loader2, type LucideIcon } from 'lucide-react';
 import { sanitizeFilename } from '@/lib/attachments/filename';
 import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc } from '@/lib/ipc/dispatch';
@@ -11,6 +11,60 @@ import type { MessageAttachment } from '@/lib/types/ipc';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
 type DownloadState = 'idle' | 'downloading' | 'failed';
+
+const ERROR_WELL_CLASS =
+  'bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container';
+const NEUTRAL_WELL_CLASS =
+  'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant';
+
+function chipWellClass(
+  downloadState: DownloadState,
+  coloured: boolean,
+  wellClassName: string,
+  inkClassName: string,
+): string {
+  if (downloadState === 'failed') return ERROR_WELL_CLASS;
+  if (coloured && downloadState !== 'downloading') return `${wellClassName} ${inkClassName}`;
+  return NEUTRAL_WELL_CLASS;
+}
+
+function renderWellContent(input: {
+  downloadState: DownloadState;
+  thumbnailPath: string | null;
+  thumbnailLoading: boolean;
+  Icon: LucideIcon;
+}): ReactNode {
+  if (input.downloadState === 'downloading') {
+    return <Loader2 className="animate-spin" size={ICON_SIZE.base} />;
+  }
+  if (input.downloadState === 'failed') {
+    return <AlertCircle size={ICON_SIZE.base} />;
+  }
+  if (input.thumbnailPath) {
+    return (
+      <img
+        data-testid="attachment-thumbnail"
+        src={dispatchConvertFileSrc(input.thumbnailPath)}
+        alt=""
+        className="size-full object-cover"
+      />
+    );
+  }
+  if (input.thumbnailLoading) return null;
+  return createElement(input.Icon, { size: ICON_SIZE.base });
+}
+
+function downloadSubtitle(downloadState: DownloadState, size: number): string {
+  if (downloadState === 'downloading') return 'Downloading…';
+  if (downloadState === 'failed') return "Couldn't download";
+  return formatFileSize(size);
+}
+
+const DOWNLOAD_ARIA_PREFIX: Record<DownloadState, string> = {
+  downloading: 'Downloading',
+  failed: 'Retry download of',
+  idle: 'Download',
+};
 
 export function ReceivedAttachmentChip({
   accountId,
@@ -31,7 +85,8 @@ export function ReceivedAttachmentChip({
   );
   const wantsThumbnail = prefetch && family === 'image';
   const cachedQuery = useCachedAttachmentQuery(accountId, messageId, attachment.id, wantsThumbnail);
-  const showThumbnail = wantsThumbnail && cachedQuery.isSuccess;
+  const thumbnailPath =
+    wantsThumbnail && cachedQuery.isSuccess ? cachedQuery.data.displayPath : null;
   const thumbnailLoading = wantsThumbnail && cachedQuery.isPending;
   const downloading = downloadState === 'downloading';
   const failed = downloadState === 'failed';
@@ -69,28 +124,14 @@ export function ReceivedAttachmentChip({
       />
       <div
         aria-hidden="true"
-        className={`relative size-7 shrink-0 overflow-hidden rounded-chip ${
-          failed
-            ? 'bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container'
-            : coloured && !downloading
-              ? `${wellClassName} ${inkClassName}`
-              : 'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant'
-        } grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
+        className={`relative size-7 shrink-0 overflow-hidden rounded-chip ${chipWellClass(downloadState, coloured, wellClassName, inkClassName)} grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
       >
-        {downloading ? (
-          <Loader2 className="animate-spin" size={ICON_SIZE.base} />
-        ) : failed ? (
-          <AlertCircle size={ICON_SIZE.base} />
-        ) : showThumbnail && cachedQuery.data ? (
-          <img
-            data-testid="attachment-thumbnail"
-            src={dispatchConvertFileSrc(cachedQuery.data.displayPath)}
-            alt=""
-            className="size-full object-cover"
-          />
-        ) : thumbnailLoading ? null : (
-          createElement(Icon, { size: 16 })
-        )}
+        {renderWellContent({
+          downloadState: downloadState,
+          thumbnailPath: thumbnailPath,
+          thumbnailLoading: thumbnailLoading,
+          Icon: Icon,
+        })}
       </div>
       <div className="min-w-0 flex-1">
         <p
@@ -104,22 +145,12 @@ export function ReceivedAttachmentChip({
             failed ? 'text-error dark:text-dark-error' : 'text-outline dark:text-dark-outline'
           }`}
         >
-          {downloading
-            ? 'Downloading…'
-            : failed
-              ? "Couldn't download"
-              : formatFileSize(attachment.size)}
+          {downloadSubtitle(downloadState, attachment.size)}
         </p>
       </div>
       <button
         type="button"
-        aria-label={
-          downloading
-            ? `Downloading ${attachment.filename}`
-            : failed
-              ? `Retry download of ${attachment.filename}`
-              : `Download ${attachment.filename}`
-        }
+        aria-label={`${DOWNLOAD_ARIA_PREFIX[downloadState]} ${attachment.filename}`}
         disabled={downloading}
         onClick={() => void download()}
         className="relative z-10 shrink-0 cursor-pointer rounded-chip p-1 text-secondary hover:bg-surface-container hover:text-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary disabled:cursor-not-allowed dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"

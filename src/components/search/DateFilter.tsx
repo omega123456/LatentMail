@@ -52,27 +52,104 @@ const MODES: { value: DateFilterMode; label: string }[] = [
 
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
+const DAY_NAVIGATION: Record<string, (day: Date, shiftKey: boolean) => Date> = {
+  ArrowLeft: (day) => addDays(day, -1),
+  ArrowRight: (day) => addDays(day, 1),
+  ArrowUp: (day) => addWeeks(day, -1),
+  ArrowDown: (day) => addWeeks(day, 1),
+  Home: (day) => startOfWeek(day, WEEK_OPTIONS),
+  End: (day) => endOfWeek(day, WEEK_OPTIONS),
+  PageUp: (day, shiftKey) => (shiftKey ? addYears(day, -1) : addMonths(day, -1)),
+  PageDown: (day, shiftKey) => (shiftKey ? addYears(day, 1) : addMonths(day, 1)),
+};
+
 export function nextFocusedDay(key: string, shiftKey: boolean, day: Date): Date | null {
-  switch (key) {
-    case 'ArrowLeft':
-      return addDays(day, -1);
-    case 'ArrowRight':
-      return addDays(day, 1);
-    case 'ArrowUp':
-      return addWeeks(day, -1);
-    case 'ArrowDown':
-      return addWeeks(day, 1);
-    case 'Home':
-      return startOfWeek(day, WEEK_OPTIONS);
-    case 'End':
-      return endOfWeek(day, WEEK_OPTIONS);
-    case 'PageUp':
-      return shiftKey ? addYears(day, -1) : addMonths(day, -1);
-    case 'PageDown':
-      return shiftKey ? addYears(day, 1) : addMonths(day, 1);
-    default:
-      return null;
+  const move = DAY_NAVIGATION[key];
+  return move ? move(day, shiftKey) : null;
+}
+
+function dayButtonClass(input: {
+  selected: boolean;
+  disabled: boolean;
+  sameMonth: boolean;
+  isToday: boolean;
+}): string {
+  if (input.selected)
+    return 'bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary';
+  if (input.disabled) return 'cursor-default text-outline-variant dark:text-dark-outline-variant';
+  if (!input.sameMonth) {
+    return 'text-outline hover:bg-surface-container-high dark:text-dark-outline dark:hover:bg-dark-surface-container-high';
   }
+  if (input.isToday) {
+    return 'text-primary inset-ring inset-ring-primary dark:text-dark-primary dark:inset-ring-dark-primary';
+  }
+  return 'text-on-surface hover:bg-surface-container-high dark:text-dark-on-surface dark:hover:bg-dark-surface-container-high';
+}
+
+function rangeBandClass(inRange: boolean, isStart: boolean, isEnd: boolean): string {
+  if (!inRange) return '';
+  const startCap = isStart ? 'rounded-l-full' : '';
+  const endCap = isEnd ? 'rounded-r-full' : '';
+  return `bg-secondary-container dark:bg-dark-secondary-container ${startCap} ${endCap}`;
+}
+
+function DayCell({
+  day,
+  today,
+  monthAnchor,
+  startDay,
+  endDay,
+  focusedDay,
+  onSelectDay,
+  onFocusDay,
+  onKeyDown,
+}: {
+  day: Date;
+  today: Date;
+  monthAnchor: Date;
+  startDay: Date | null;
+  endDay: Date | null;
+  focusedDay: Date;
+  onSelectDay: (day: Date) => void;
+  onFocusDay: (day: Date) => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
+}) {
+  const isStart = startDay !== null && isSameDay(day, startDay);
+  const isEnd = endDay !== null && isSameDay(day, endDay);
+  const selected = isStart || isEnd;
+  const inRange =
+    startDay !== null && endDay !== null && isWithinInterval(day, { start: startDay, end: endDay });
+  const disabled = isAfter(day, today);
+  const focused = isSameDay(day, focusedDay);
+  const isToday = isSameDay(day, today);
+  const toneClass = dayButtonClass({
+    selected: selected,
+    disabled: disabled,
+    sameMonth: isSameMonth(day, monthAnchor),
+    isToday: isToday,
+  });
+  return (
+    <div
+      role="gridcell"
+      aria-selected={selected}
+      className={`flex h-9.5 items-center justify-center ${rangeBandClass(inRange, isStart, isEnd)}`}
+    >
+      <button
+        type="button"
+        data-focused={focused}
+        tabIndex={focused ? 0 : -1}
+        aria-disabled={disabled}
+        aria-current={isToday ? 'date' : undefined}
+        aria-label={format(day, DATE_FORMAT.longDayMonthYear)}
+        onClick={() => !disabled && onSelectDay(day)}
+        onFocus={() => onFocusDay(day)}
+        onKeyDown={onKeyDown}
+        className={`flex size-8.5 cursor-pointer items-center justify-center rounded-full text-body-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary dark:focus-visible:outline-dark-primary ${toneClass}`}
+      >
+        {format(day, DATE_FORMAT.dayOfMonth)}
+      </button>
+    </div>
+  );
 }
 
 const chipClass =
@@ -261,53 +338,20 @@ export function DateFilter({
             >
               {weeks.map((week) => (
                 <div key={format(week[0], DATE_FORMAT.isoDate)} role="row" className="contents">
-                  {week.map((day) => {
-                    const isStart = startDay !== null && isSameDay(day, startDay);
-                    const isEnd = endDay !== null && isSameDay(day, endDay);
-                    const selected = isStart || isEnd;
-                    const inRange =
-                      startDay !== null &&
-                      endDay !== null &&
-                      isWithinInterval(day, { start: startDay, end: endDay });
-                    const disabled = isAfter(day, today);
-                    const focused = isSameDay(day, focusedDay);
-                    const bandClass = !inRange
-                      ? ''
-                      : `bg-secondary-container dark:bg-dark-secondary-container ${isStart ? 'rounded-l-full' : ''} ${isEnd ? 'rounded-r-full' : ''}`;
-                    return (
-                      <div
-                        key={format(day, DATE_FORMAT.isoDate)}
-                        role="gridcell"
-                        aria-selected={selected}
-                        className={`flex h-9.5 items-center justify-center ${bandClass}`}
-                      >
-                        <button
-                          type="button"
-                          data-focused={focused}
-                          tabIndex={focused ? 0 : -1}
-                          aria-disabled={disabled}
-                          aria-current={isSameDay(day, today) ? 'date' : undefined}
-                          aria-label={format(day, DATE_FORMAT.longDayMonthYear)}
-                          onClick={() => !disabled && selectDay(day)}
-                          onFocus={() => setFocusedDay(day)}
-                          onKeyDown={handleKeyDown}
-                          className={`flex size-8.5 cursor-pointer items-center justify-center rounded-full text-body-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary dark:focus-visible:outline-dark-primary ${
-                            selected
-                              ? 'bg-primary text-on-primary dark:bg-dark-primary dark:text-dark-on-primary'
-                              : disabled
-                                ? 'cursor-default text-outline-variant dark:text-dark-outline-variant'
-                                : !isSameMonth(day, monthAnchor)
-                                  ? 'text-outline hover:bg-surface-container-high dark:text-dark-outline dark:hover:bg-dark-surface-container-high'
-                                  : isSameDay(day, today)
-                                    ? 'text-primary inset-ring inset-ring-primary dark:text-dark-primary dark:inset-ring-dark-primary'
-                                    : 'text-on-surface hover:bg-surface-container-high dark:text-dark-on-surface dark:hover:bg-dark-surface-container-high'
-                          }`}
-                        >
-                          {format(day, DATE_FORMAT.dayOfMonth)}
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {week.map((day) => (
+                    <DayCell
+                      key={format(day, DATE_FORMAT.isoDate)}
+                      day={day}
+                      today={today}
+                      monthAnchor={monthAnchor}
+                      startDay={startDay}
+                      endDay={endDay}
+                      focusedDay={focusedDay}
+                      onSelectDay={selectDay}
+                      onFocusDay={setFocusedDay}
+                      onKeyDown={handleKeyDown}
+                    />
+                  ))}
                 </div>
               ))}
             </div>

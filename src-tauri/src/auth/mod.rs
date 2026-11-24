@@ -159,26 +159,37 @@ impl AuthService {
                 )
                 .await?;
 
-            let account = if token_has_scope(&token, "profile") {
-                match userinfo(token.access_token().secret()).await {
-                    Ok(info) => self
-                        .apply_profile(&account.id, info.name, info.picture)
-                        .await?
-                        .unwrap_or(account),
-                    Err(error) => {
-                        tracing::warn!(target: "auth", "userinfo fetch failed, keeping placeholder identity: {error}");
-                        account
-                    }
-                }
-            } else {
-                account
-            };
+            let has_profile_scope = token_has_scope(&token, "profile");
+            let account = self
+                .enrich_profile(token.access_token().secret(), has_profile_scope, account)
+                .await?;
 
             string_try!(app.emit(crate::events::ACCOUNT_STATE, account));
             Ok(())
         }
         .await
         .inspect_err(|error: &String| tracing::error!(target: "auth", "sign-in failed: {error}"))
+    }
+
+    async fn enrich_profile(
+        &self,
+        access_token: &str,
+        has_profile_scope: bool,
+        account: AccountDto,
+    ) -> Result<AccountDto, String> {
+        if !has_profile_scope {
+            return Ok(account);
+        }
+        match userinfo(access_token).await {
+            Ok(info) => Ok(self
+                .apply_profile(&account.id, info.name, info.picture)
+                .await?
+                .unwrap_or(account)),
+            Err(error) => {
+                tracing::warn!(target: "auth", "userinfo fetch failed, keeping placeholder identity: {error}");
+                Ok(account)
+            }
+        }
     }
 
     pub async fn save_account(
@@ -483,12 +494,7 @@ pub async fn receive_code(
         .nth(1)
         .ok_or_else(|| "Invalid OAuth callback".to_owned())?;
     let callback = parse_callback(target, expected_state);
-    let valid = callback.is_ok();
-    let message = if valid {
-        "Sign-in complete. You can close this tab."
-    } else {
-        "Invalid sign-in response."
-    };
+    let message = callback_response_body(callback.is_ok());
     string_try!(
         stream
             .write_all(
@@ -501,6 +507,13 @@ pub async fn receive_code(
             .await
     );
     callback
+}
+
+fn callback_response_body(valid: bool) -> &'static str {
+    if valid {
+        return "Sign-in complete. You can close this tab.";
+    }
+    "Invalid sign-in response."
 }
 
 pub fn parse_callback(target: &str, expected_state: &str) -> Result<AuthorizationCode, String> {

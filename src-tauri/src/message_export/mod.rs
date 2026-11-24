@@ -50,6 +50,13 @@ fn header_block(raw: &str) -> Vec<String> {
     headers
 }
 
+fn next_part_name(current: Option<String>, content: &str) -> Option<String> {
+    if content.starts_with("--") {
+        return None;
+    }
+    declared_name(content).or(current)
+}
+
 pub fn collapse_encoded_bodies(raw: &str) -> String {
     let mut output = String::with_capacity(raw.len().min(BYTES_PER_MEGABYTE));
     let mut run: Vec<&str> = Vec::new();
@@ -61,11 +68,7 @@ pub fn collapse_encoded_bodies(raw: &str) -> String {
             continue;
         }
         flush_run(&mut output, &mut run, part_name.as_deref());
-        if content.starts_with("--") {
-            part_name = None;
-        } else if let Some(name) = declared_name(content) {
-            part_name = Some(name);
-        }
+        part_name = next_part_name(part_name, content);
         output.push_str(line);
     }
     flush_run(&mut output, &mut run, part_name.as_deref());
@@ -104,10 +107,23 @@ fn declared_name(line: &str) -> Option<String> {
 fn decoded_size(encoded: usize) -> String {
     let bytes = encoded / 4 * 3;
     if bytes >= BYTES_PER_MEGABYTE {
-        format!("{:.1} MB", bytes as f64 / BYTES_PER_MEGABYTE as f64)
-    } else {
-        format!("{} KB", (bytes / BYTES_PER_KILOBYTE).max(1))
+        return format!("{:.1} MB", bytes as f64 / BYTES_PER_MEGABYTE as f64);
     }
+    format!("{} KB", (bytes / BYTES_PER_KILOBYTE).max(1))
+}
+
+fn primary_recipient<'a>(to_role: &'a str, fallback_recipients: &'a str) -> &'a str {
+    if to_role.is_empty() {
+        return fallback_recipients;
+    }
+    to_role
+}
+
+fn remote_images_notice(blocked: bool) -> String {
+    if blocked {
+        return format!("<p style=\"{NOTICE_STYLE}\">{REMOTE_IMAGES_NOTICE}</p>");
+    }
+    String::new()
 }
 
 pub fn export_document(
@@ -130,11 +146,7 @@ pub fn export_document(
         ),
         (None, None) => return None,
     };
-    let to = if roles.to.is_empty() {
-        message.recipients.as_str()
-    } else {
-        roles.to
-    };
+    let to = primary_recipient(roles.to, message.recipients.as_str());
     let date = DateTime::from_timestamp(message.sent_at, 0)
         .map(|sent| {
             sent.with_timezone(&Local)
@@ -164,11 +176,7 @@ pub fn export_document(
         )
     })
     .collect::<String>();
-    let notice = if remote_images_blocked {
-        format!("<p style=\"{NOTICE_STYLE}\">{REMOTE_IMAGES_NOTICE}</p>")
-    } else {
-        String::new()
-    };
+    let notice = remote_images_notice(remote_images_blocked);
     Some(format!(
         "<!doctype html>\n<html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"{EXPORT_CSP}\"><title>{}</title></head><body><table style=\"{HEADER_TABLE_STYLE}\">{rows}</table>{notice}<div>{body}</div></body></html>\n",
         clean_text(&message.subject)

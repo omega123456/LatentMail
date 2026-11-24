@@ -126,6 +126,28 @@ function PdfCanvas({
   return <canvas ref={canvasRef} className="absolute inset-0 size-full" data-testid="pdf-canvas" />;
 }
 
+function selectionExtendsStart(range: Range, before: Range | null): boolean {
+  if (before === null) return false;
+  return (
+    range.compareBoundaryPoints(Range.END_TO_END, before) === 0 ||
+    range.compareBoundaryPoints(Range.START_TO_END, before) === 0
+  );
+}
+
+function positionSelectionEnd(
+  container: HTMLElement,
+  end: HTMLDivElement,
+  range: Range,
+  before: Range | null,
+) {
+  end.toggleAttribute('data-selecting', true);
+  const extendsStart = selectionExtendsStart(range, before);
+  const boundary = extendsStart ? range.startContainer : range.endContainer;
+  const anchor = boundary.nodeType === Node.TEXT_NODE ? boundary.parentElement : boundary;
+  if (anchor?.parentElement !== container) return;
+  container.insertBefore(end, extendsStart ? anchor : anchor.nextSibling);
+}
+
 function followSelection(container: HTMLElement): () => void {
   const end = document.createElement('div');
   end.className = 'absolute inset-x-0 top-full bottom-0 -z-1 select-none data-selecting:top-0';
@@ -157,15 +179,7 @@ function followSelection(container: HTMLElement): () => void {
       const before = previous;
       previous = range?.cloneRange() ?? null;
       if (!range?.intersectsNode(container)) return reset();
-      end.toggleAttribute('data-selecting', true);
-      const extendsStart =
-        before !== null &&
-        (range.compareBoundaryPoints(Range.END_TO_END, before) === 0 ||
-          range.compareBoundaryPoints(Range.START_TO_END, before) === 0);
-      const boundary = extendsStart ? range.startContainer : range.endContainer;
-      const anchor = boundary.nodeType === Node.TEXT_NODE ? boundary.parentElement : boundary;
-      if (anchor?.parentElement === container)
-        container.insertBefore(end, extendsStart ? anchor : anchor.nextSibling);
+      positionSelectionEnd(container, end, range, before);
     },
     { signal },
   );
@@ -209,10 +223,71 @@ function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
   );
 }
 
+type LoadedPdf = { pages: PDFPageProxy[]; sizes: Size[] };
+
+function computePageVisibility(
+  pdf: LoadedPdf | null,
+  layout: PageLayout | null,
+  viewport: Size | null,
+  zoom: number,
+  scrollTop: number,
+) {
+  if (!pdf || !layout || !viewport) return null;
+  return pageVisibility(pdf.sizes, layout, zoom, scrollTop, viewport.height);
+}
+
+function PdfPageStack({
+  pdf,
+  layout,
+  zoom,
+  renderZoom,
+  near,
+  onError,
+}: {
+  pdf: LoadedPdf;
+  layout: PageLayout;
+  zoom: number;
+  renderZoom: number | null;
+  near: boolean[] | undefined;
+  onError: () => void;
+}) {
+  return (
+    <div className="grid min-h-full w-max min-w-full place-items-center">
+      <div
+        className="flex flex-col items-center"
+        style={{
+          width: layout.content.width * zoom,
+          height: layout.content.height * zoom,
+          padding: PREVIEW_PADDING * zoom,
+          gap: PREVIEW_PADDING * zoom,
+        }}
+      >
+        {pdf.pages.map((page, index) => {
+          const shouldRender = renderZoom !== null && Boolean(near?.[index]);
+          return (
+            <div
+              key={page.pageNumber}
+              data-testid="pdf-page"
+              className="relative shrink-0 bg-white shadow-page dark:shadow-dark-page"
+              style={{
+                width: pdf.sizes[index].width * zoom,
+                height: pdf.sizes[index].height * zoom,
+              }}
+            >
+              {shouldRender && <PdfCanvas page={page} zoom={renderZoom} onError={onError} />}
+              {shouldRender && <PdfTextLayer page={page} zoom={zoom} />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef<DocumentLoad | null>(null);
-  const [pdf, setPdf] = useState<{ pages: PDFPageProxy[]; sizes: Size[] } | null>(null);
+  const [pdf, setPdf] = useState<LoadedPdf | null>(null);
   const [error, setError] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [renderZoom, setRenderZoom] = useState<number | null>(null);
@@ -248,7 +323,7 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
   const layout = useMemo(() => (pdf ? layoutPages(pdf.sizes) : null), [pdf]);
   const { zoom, mode, viewport, ready, zoomIn, zoomOut, selectPreset } = useZoom({
     scrollRef: scrollRef,
-    content: layout?.content ?? null,
+    content: layout ? layout.content : null,
     defaultMode: 'fit-width',
     fitCap: PDF_FIT_CAP,
   });
@@ -270,10 +345,8 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
       </div>
     );
 
-  const visibility =
-    pdf && layout && viewport
-      ? pageVisibility(pdf.sizes, layout, zoom, scrollTop, viewport.height)
-      : null;
+  const visibility = computePageVisibility(pdf, layout, viewport, zoom, scrollTop);
+  const currentPage = (visibility?.current ?? 0) + 1;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -285,43 +358,21 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
         className="min-h-0 flex-1 overflow-auto bg-surface-container-high dark:bg-dark-surface-container"
       >
         {pdf && layout && (
-          <div className="grid min-h-full w-max min-w-full place-items-center">
-            <div
-              className="flex flex-col items-center"
-              style={{
-                width: layout.content.width * zoom,
-                height: layout.content.height * zoom,
-                padding: PREVIEW_PADDING * zoom,
-                gap: PREVIEW_PADDING * zoom,
-              }}
-            >
-              {pdf.pages.map((page, index) => (
-                <div
-                  key={page.pageNumber}
-                  data-testid="pdf-page"
-                  className="relative shrink-0 bg-white shadow-page dark:shadow-dark-page"
-                  style={{
-                    width: pdf.sizes[index].width * zoom,
-                    height: pdf.sizes[index].height * zoom,
-                  }}
-                >
-                  {renderZoom !== null && visibility?.near[index] && (
-                    <PdfCanvas page={page} zoom={renderZoom} onError={showError} />
-                  )}
-                  {renderZoom !== null && visibility?.near[index] && (
-                    <PdfTextLayer page={page} zoom={zoom} />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
+          <PdfPageStack
+            pdf={pdf}
+            layout={layout}
+            zoom={zoom}
+            renderZoom={renderZoom}
+            near={visibility?.near}
+            onError={showError}
+          />
         )}
       </div>
       {pdf && (
         <ZoomToolbar
           zoom={zoom}
           mode={mode}
-          leading={`Page ${(visibility?.current ?? 0) + 1} of ${pdf.pages.length}`}
+          leading={`Page ${currentPage} of ${pdf.pages.length}`}
           onZoomIn={zoomIn}
           onZoomOut={zoomOut}
           onSelectPreset={selectPreset}

@@ -72,18 +72,14 @@ impl Lifecycle {
 
     pub fn exit_decision(&self, restart: bool) -> ExitDecision {
         let count = self.queue.executing_sends();
-        if restart || count == 0 || self.close_confirmed.load(Ordering::Acquire) {
-            ExitDecision::Exit
-        } else {
-            let noun = if count == 1 {
-                "message is"
-            } else {
-                "messages are"
-            };
-            ExitDecision::Confirm {
-                count: count,
-                message: format!("{count} {noun} still sending. Close anyway?"),
-            }
+        let can_exit = restart || count == 0 || self.close_confirmed.load(Ordering::Acquire);
+        if can_exit {
+            return ExitDecision::Exit;
+        }
+        let noun = sending_noun(count);
+        ExitDecision::Confirm {
+            count: count,
+            message: format!("{count} {noun} still sending. Close anyway?"),
         }
     }
 
@@ -92,10 +88,16 @@ impl Lifecycle {
     }
 }
 
+fn sending_noun(count: usize) -> &'static str {
+    if count == 1 {
+        return "message is";
+    }
+    "messages are"
+}
+
 pub fn settling_delay() -> Duration {
     if cfg!(target_os = "macos") {
-        Duration::seconds(MACOS_SETTLING_SECONDS)
-    } else {
-        Duration::seconds(OTHER_SETTLING_SECONDS)
+        return Duration::seconds(MACOS_SETTLING_SECONDS);
     }
+    Duration::seconds(OTHER_SETTLING_SECONDS)
 }

@@ -5,15 +5,17 @@ import { TextInput } from '@/components/shared/TextInput';
 export function LinkDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const [url, setUrl] = useState('');
   const apply = () => {
-    if (editor.isActive('link')) editor.chain().focus().unsetLink().run();
-    else {
-      const normalized = /^[a-z][a-z\d+.-]*:/i.test(url) ? url : `https://${url}`;
-      try {
-        new URL(normalized);
-        editor.chain().focus().setLink({ href: normalized }).run();
-      } catch {
-        return;
-      }
+    if (editor.isActive('link')) {
+      editor.chain().focus().unsetLink().run();
+      onClose();
+      return;
+    }
+    const normalized = /^[a-z][a-z\d+.-]*:/i.test(url) ? url : `https://${url}`;
+    try {
+      new URL(normalized);
+      editor.chain().focus().setLink({ href: normalized }).run();
+    } catch {
+      return;
     }
     onClose();
   };

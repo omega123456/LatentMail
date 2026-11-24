@@ -71,11 +71,11 @@ pub fn parse_address(entry: &str) -> Option<AddressIdentity> {
 }
 
 fn unquote(value: &str) -> String {
-    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
-        value[1..value.len() - 1].to_owned()
-    } else {
-        value.to_owned()
+    let is_quoted = value.len() >= 2 && value.starts_with('"') && value.ends_with('"');
+    if is_quoted {
+        return value[1..value.len() - 1].to_owned();
     }
+    value.to_owned()
 }
 
 pub fn first_identity(header: &str) -> Option<AddressIdentity> {
@@ -91,8 +91,7 @@ pub fn domain_of(address: &str) -> Option<String> {
     let domain = address.rsplit('@').next()?;
     let domain = domain.trim().to_ascii_lowercase();
     if domain.is_empty() {
-        None
-    } else {
-        Some(domain)
+        return None;
     }
+    Some(domain)
 }

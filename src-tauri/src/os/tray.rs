@@ -104,6 +104,13 @@ pub enum TrayAction {
     Quit,
 }
 
+fn menu_separators(needs_reauthentication: bool) -> Vec<usize> {
+    if needs_reauthentication {
+        return vec![1, 4, 5];
+    }
+    vec![1, 3, 4]
+}
+
 pub fn menu(state: &IndicatorState) -> TrayMenu {
     let mut rows = vec![state.status_row()];
     if state.needs_reauthentication {
@@ -120,11 +127,7 @@ pub fn menu(state: &IndicatorState) -> TrayMenu {
             .chain(std::iter::repeat(false))
             .take(rows.len())
             .collect(),
-        separators_after: if state.needs_reauthentication {
-            vec![1, 4, 5]
-        } else {
-            vec![1, 3, 4]
-        },
+        separators_after: menu_separators(state.needs_reauthentication),
         rows: rows,
     }
 }
@@ -176,8 +179,72 @@ impl FakeTray {
 }
 
 #[cfg(all(windows, not(feature = "test-utils")))]
+struct TrayMenuBinding {
+    id: &'static str,
+    focus_window: bool,
+    intent_kind: Option<&'static str>,
+    exit_app: bool,
+}
+
+#[cfg(all(windows, not(feature = "test-utils")))]
+const TRAY_MENU_BINDINGS: &[TrayMenuBinding] = &[
+    TrayMenuBinding {
+        id: "compose",
+        focus_window: true,
+        intent_kind: Some("compose"),
+        exit_app: false,
+    },
+    TrayMenuBinding {
+        id: "sync",
+        focus_window: false,
+        intent_kind: Some("syncNow"),
+        exit_app: false,
+    },
+    TrayMenuBinding {
+        id: "reauthenticate",
+        focus_window: true,
+        intent_kind: Some("openAccounts"),
+        exit_app: false,
+    },
+    TrayMenuBinding {
+        id: "show",
+        focus_window: true,
+        intent_kind: None,
+        exit_app: false,
+    },
+    TrayMenuBinding {
+        id: "quit",
+        focus_window: false,
+        intent_kind: None,
+        exit_app: true,
+    },
+];
+
+#[cfg(all(windows, not(feature = "test-utils")))]
+fn dispatch_tray_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, menu_id: &str) {
+    use tauri::Emitter;
+
+    let Some(binding) = TRAY_MENU_BINDINGS.iter().find(|entry| entry.id == menu_id) else {
+        return;
+    };
+    if binding.exit_app {
+        app.exit(0);
+        return;
+    }
+    if binding.focus_window {
+        crate::os::window::show_and_focus(app);
+    }
+    if let Some(kind) = binding.intent_kind {
+        let _ = app.emit(
+            crate::events::OS_INTENT,
+            serde_json::json!({ "kind": kind }),
+        );
+    }
+}
+
+#[cfg(all(windows, not(feature = "test-utils")))]
 fn initialize_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-    use tauri::{menu::Menu, tray::TrayIconBuilder, Emitter};
+    use tauri::{menu::Menu, tray::TrayIconBuilder};
 
     let icon = super::icon::tray_icon(0, false)?;
     let menu = Menu::with_items(app, &[]).map_err(|error| error.to_string())?;
@@ -191,31 +258,7 @@ fn initialize_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(
         .tooltip("LatentMail — 0 unread")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "compose" => {
-                crate::os::window::show_and_focus(app);
-                let _ = app.emit(
-                    crate::events::OS_INTENT,
-                    serde_json::json!({ "kind": "compose" }),
-                );
-            }
-            "sync" => {
-                let _ = app.emit(
-                    crate::events::OS_INTENT,
-                    serde_json::json!({ "kind": "syncNow" }),
-                );
-            }
-            "reauthenticate" => {
-                crate::os::window::show_and_focus(app);
-                let _ = app.emit(
-                    crate::events::OS_INTENT,
-                    serde_json::json!({ "kind": "openAccounts" }),
-                );
-            }
-            "show" => crate::os::window::show_and_focus(app),
-            "quit" => app.exit(0),
-            _ => {}
-        })
+        .on_menu_event(|app, event| dispatch_tray_menu_event(app, event.id().as_ref()))
         .on_tray_icon_event(move |_, event| {
             if matches!(
                 event,

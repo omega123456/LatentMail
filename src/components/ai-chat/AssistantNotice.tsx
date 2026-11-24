@@ -1,6 +1,13 @@
 export type AssistantUnavailableCause =
   'disabled' | 'noApiRoot' | 'noChatModel' | 'needsRebuild' | 'indexNotReady' | 'unreachable';
 
+type NoticeContext = {
+  accountEmail: string;
+  indexed: number;
+  total: number;
+  endpoint: string | null;
+};
+
 const actionLabel: Record<AssistantUnavailableCause, string> = {
   disabled: 'Open AI settings',
   noApiRoot: 'Open AI settings',
@@ -28,34 +35,19 @@ function endpointHost(endpoint: string | null) {
   }
 }
 
-function description({
-  cause,
-  accountEmail,
-  indexed,
-  total,
-  endpoint,
-}: {
-  cause: AssistantUnavailableCause;
-  accountEmail: string;
-  indexed: number;
-  total: number;
-  endpoint: string | null;
-}) {
-  switch (cause) {
-    case 'disabled':
-      return `Turn it on for ${accountEmail} to ask questions about this mailbox.`;
-    case 'noApiRoot':
-      return 'Save the address of an OpenAI-compatible endpoint for this account.';
-    case 'noChatModel':
-      return 'Choose a chat model for this account before asking a question.';
-    case 'needsRebuild':
-      return "This index was built with the previous distance measure. Rebuilding re-embeds this account's mail.";
-    case 'indexNotReady':
-      return `${indexed.toLocaleString()} of ${total.toLocaleString()} messages are indexed. You can ask once it reaches partial.`;
-    case 'unreachable':
-      return `The last check to ${endpointHost(endpoint)} failed. Answers are unavailable until it responds.`;
-  }
-}
+const DESCRIPTION_BY_CAUSE: Record<AssistantUnavailableCause, (context: NoticeContext) => string> =
+  {
+    disabled: ({ accountEmail }) =>
+      `Turn it on for ${accountEmail} to ask questions about this mailbox.`,
+    noApiRoot: () => 'Save the address of an OpenAI-compatible endpoint for this account.',
+    noChatModel: () => 'Choose a chat model for this account before asking a question.',
+    needsRebuild: () =>
+      "This index was built with the previous distance measure. Rebuilding re-embeds this account's mail.",
+    indexNotReady: ({ indexed, total }) =>
+      `${indexed.toLocaleString()} of ${total.toLocaleString()} messages are indexed. You can ask once it reaches partial.`,
+    unreachable: ({ endpoint }) =>
+      `The last check to ${endpointHost(endpoint)} failed. Answers are unavailable until it responds.`,
+  };
 
 export function AssistantNotice({
   cause,
@@ -84,7 +76,7 @@ export function AssistantNotice({
       />
       <span className="text-body-sm font-semibold">{title[cause]}</span>
       <span className="text-label-md font-normal text-on-surface-variant dark:text-dark-on-surface-variant">
-        {description({ cause, accountEmail, indexed, total, endpoint })}
+        {DESCRIPTION_BY_CAUSE[cause]({ accountEmail, indexed, total, endpoint })}
       </span>
       <button
         type="button"

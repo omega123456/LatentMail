@@ -336,26 +336,29 @@ async fn serve_after_rendezvous(
         }
     }
     let head = String::from_utf8_lossy(&received).into_owned();
-    let embeddings = head.contains("/v1/embeddings");
-    let path = if embeddings {
-        "/v1/embeddings"
-    } else {
-        "/v1/chat/completions"
-    };
+    let (path, payload) = rendezvous_response(head.contains("/v1/embeddings"));
     arrivals.lock().unwrap().push(path.to_owned());
     barrier.wait().await;
-    let body = if embeddings {
-        serde_json::json!({"data": [{"embedding": [1.0, 0.0]}]})
-    } else {
-        serde_json::json!({"choices": [{"message": {"content": "{}"}}]})
-    }
-    .to_string();
+    let body = payload.to_string();
     let response = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = socket.write_all(response.as_bytes()).await;
     let _ = socket.shutdown().await;
+}
+
+fn rendezvous_response(is_embeddings: bool) -> (&'static str, serde_json::Value) {
+    if is_embeddings {
+        return (
+            "/v1/embeddings",
+            serde_json::json!({"data": [{"embedding": [1.0, 0.0]}]}),
+        );
+    }
+    (
+        "/v1/chat/completions",
+        serde_json::json!({"choices": [{"message": {"content": "{}"}}]}),
+    )
 }
 
 fn head_length(received: &[u8]) -> Option<usize> {

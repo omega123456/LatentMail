@@ -39,6 +39,12 @@ function RadioItem({ value: presetName, label }: { value: string; label: string 
   );
 }
 
+function zoomAnnouncement(percent: string, atMin: boolean, atMax: boolean): string {
+  if (atMax) return `Maximum zoom, ${percent}`;
+  if (atMin) return `Minimum zoom, ${percent}`;
+  return `Zoom ${percent}`;
+}
+
 export function ZoomToolbar({
   zoom,
   mode,
@@ -57,11 +63,7 @@ export function ZoomToolbar({
   const percent = formatZoom(zoom);
   const atMin = zoom <= MIN_ZOOM;
   const atMax = zoom >= MAX_ZOOM;
-  const announcement = atMax
-    ? `Maximum zoom, ${percent}`
-    : atMin
-      ? `Minimum zoom, ${percent}`
-      : `Zoom ${percent}`;
+  const announcement = zoomAnnouncement(percent, atMin, atMax);
 
   return (
     <div

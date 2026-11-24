@@ -7,13 +7,24 @@ import { MENU_COLLISION_PADDING_PX } from '@/components/shared/floating-offsets'
 
 type ReaderTarget = { href: string; selection: string };
 
+function readTargetHref(element: Element | null, frame: HTMLIFrameElement | null): string {
+  if (frame?.dataset.contextHref) return frame.dataset.contextHref;
+  const link = element?.closest('a[href]');
+  return link?.getAttribute('href') ?? '';
+}
+
+function readTargetSelection(frame: HTMLIFrameElement | null): string {
+  const source = frame?.contentDocument ?? document;
+  const selection = source.getSelection();
+  return (selection?.toString() ?? '').trim();
+}
+
 function readTarget(node: EventTarget | null): ReaderTarget {
   const element = node instanceof Element ? node : null;
   const frame = element?.closest('iframe') ?? null;
-  const source = frame?.contentDocument ?? document;
   return {
-    href: frame?.dataset.contextHref || element?.closest('a[href]')?.getAttribute('href') || '',
-    selection: (source.getSelection()?.toString() ?? '').trim(),
+    href: readTargetHref(element, frame),
+    selection: readTargetSelection(frame),
   };
 }
 

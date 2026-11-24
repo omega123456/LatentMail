@@ -20,10 +20,9 @@ async fn retries_only_retryable_errors_with_exponential_backoff() {
         let calls = Arc::clone(&calls_for_executor);
         Box::pin(async move {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(QueueError::Http(429))
-            } else {
-                Ok(())
+                return Err(QueueError::Http(429));
             }
+            Ok(())
         })
     });
     let queue = QueueEngine::new(250, 250, executor);

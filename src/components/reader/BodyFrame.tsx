@@ -48,6 +48,19 @@ function wireFrame(
   return true;
 }
 
+function buildFrameSrcDoc(html: string, allowRemoteImages: boolean, dark: boolean): string {
+  const remoteImageSources = ' remoteimg: http://remoteimg.localhost https: http:';
+  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: inlineimg: http://inlineimg.localhost${allowRemoteImages ? remoteImageSources : ''}; style-src 'unsafe-inline'; font-src 'self'; form-action 'none'">`;
+  const textColor = dark ? '#c3c6d7' : '#414755';
+  const markerColor = dark ? '#b4c5ff' : '#0058bc';
+  const sanitized = DOMPurify.sanitize(html, {
+    ADD_TAGS: ['style'],
+    FORCE_BODY: true,
+    ALLOWED_URI_REGEXP: allowedUriSchemes,
+  });
+  return `${frameCsp}<style>${selawikFontFaceCss}body{margin:0;color:${textColor};font-family:${uiFontStack};font-size:16px;line-height:1.625;overflow-wrap:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${markerColor}}</style>${sanitized}`;
+}
+
 export function BodyFrame({
   html,
   text,
@@ -86,9 +99,7 @@ export function BodyFrame({
       </pre>
     );
   const dark = document.documentElement.classList.contains('dark');
-  const remoteImageSources = ' remoteimg: http://remoteimg.localhost https: http:';
-  const frameCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: inlineimg: http://inlineimg.localhost${allowRemoteImages ? remoteImageSources : ''}; style-src 'unsafe-inline'; font-src 'self'; form-action 'none'">`;
-  const srcDoc = `${frameCsp}<style>${selawikFontFaceCss}body{margin:0;color:${dark ? '#c3c6d7' : '#414755'};font-family:${uiFontStack};font-size:16px;line-height:1.625;overflow-wrap:break-word}ul,ol{padding-left:24px}li{margin-bottom:8px}li::marker{color:${dark ? '#b4c5ff' : '#0058bc'}}</style>${DOMPurify.sanitize(html, { ADD_TAGS: ['style'], FORCE_BODY: true, ALLOWED_URI_REGEXP: allowedUriSchemes })}`;
+  const srcDoc = buildFrameSrcDoc(html, allowRemoteImages, dark);
   return (
     <iframe
       ref={frameRef}

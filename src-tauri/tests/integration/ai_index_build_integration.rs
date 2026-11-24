@@ -491,11 +491,10 @@ struct FlakyThenOk(std::sync::atomic::AtomicUsize);
 impl wiremock::Respond for FlakyThenOk {
     fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
-            ResponseTemplate::new(500)
-        } else {
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"data":[{"embedding":[1.0,2.0]}]}))
+            return ResponseTemplate::new(500);
         }
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"data":[{"embedding":[1.0,2.0]}]}))
     }
 }
 
@@ -739,10 +738,9 @@ struct RejectThenEmpty(AtomicUsize);
 impl wiremock::Respond for RejectThenEmpty {
     fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
-            ResponseTemplate::new(400)
-        } else {
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[]}))
+            return ResponseTemplate::new(400);
         }
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[]}))
     }
 }
 

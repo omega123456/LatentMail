@@ -196,26 +196,22 @@ impl TokenBucket {
             capacity: f64::from(capacity),
         }
     }
+    async fn try_consume(&self, cost: f64) -> Option<Duration> {
+        let mut state = self.tokens.lock().await;
+        let now = Instant::now();
+        state.0 = (state.0 + (now - state.1).as_secs_f64() * self.rate).min(self.capacity);
+        state.1 = now;
+        if state.0 >= cost {
+            state.0 -= cost;
+            return None;
+        }
+        Some(Duration::from_secs_f64((cost - state.0) / self.rate))
+    }
+
     async fn acquire(&self, cost: u32) {
         let cost = f64::from(cost);
-        loop {
-            let wait = {
-                let mut state = self.tokens.lock().await;
-                let now = Instant::now();
-                state.0 = (state.0 + (now - state.1).as_secs_f64() * self.rate).min(self.capacity);
-                state.1 = now;
-                if state.0 >= cost {
-                    state.0 -= cost;
-                    None
-                } else {
-                    Some(Duration::from_secs_f64((cost - state.0) / self.rate))
-                }
-            };
-            if let Some(wait) = wait {
-                tokio::time::sleep(wait).await;
-            } else {
-                return;
-            }
+        while let Some(wait) = self.try_consume(cost).await {
+            tokio::time::sleep(wait).await;
         }
     }
 }
@@ -352,17 +348,19 @@ impl QueueEngine {
             .count(OperationKind::Send, OperationStatus::Active)
     }
 
+    fn set_global_paused(&self, paused: bool) -> bool {
+        let was_paused = self.paused.load(Ordering::Acquire);
+        if paused {
+            self.pause();
+            return was_paused != paused;
+        }
+        self.resume();
+        was_paused != paused
+    }
+
     pub async fn set_paused(&self, scope: &PauseScope, paused: bool) -> bool {
         let changed = match scope {
-            PauseScope::Global => {
-                let was_paused = self.paused.load(Ordering::Acquire);
-                if paused {
-                    self.pause();
-                } else {
-                    self.resume();
-                }
-                was_paused != paused
-            }
+            PauseScope::Global => self.set_global_paused(paused),
             PauseScope::Account { account_id } => {
                 let changed = self.registry.set_account_paused(account_id, paused);
                 if changed && !paused {
@@ -762,17 +760,20 @@ pub async fn admit_durable(
     engine.enqueue(operation).await
 }
 
+fn recovered_lane(lane: &str) -> Lane {
+    if lane == "background" {
+        return Lane::Background;
+    }
+    Lane::Interactive
+}
+
 pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation> {
     let kind = match operation.kind.as_str() {
         "draft" => OperationKind::Draft,
         "send" => OperationKind::Send,
         _ => return None,
     };
-    let lane = if operation.lane == "background" {
-        Lane::Background
-    } else {
-        Lane::Interactive
-    };
+    let lane = recovered_lane(&operation.lane);
     let description = match kind {
         OperationKind::Send => "Resumed send".to_owned(),
         _ => "Resumed draft".to_owned(),

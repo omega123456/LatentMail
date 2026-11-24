@@ -67,10 +67,9 @@ fn attachments(has_attachments: bool, count: i64) -> String {
 
 fn yes_or_no(flag: bool) -> &'static str {
     if flag {
-        "yes"
-    } else {
-        "no"
+        return "yes";
     }
+    "no"
 }
 
 fn sent_at_label(sent_at: i64) -> String {

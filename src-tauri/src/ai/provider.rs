@@ -53,25 +53,40 @@ pub struct ProviderModel {
     pub owned_by: Option<String>,
 }
 
+fn full_reasoning_off_fields() -> Value {
+    json!({
+        "reasoning_effort": "none",
+        "reasoning": {"enabled": false, "exclude": true},
+        "thinking": {"type": "disabled", "budget_tokens": 0},
+        "enable_thinking": false,
+        "think": false,
+        "thinking_budget": 0,
+        "reasoning_budget": 0,
+        "thinking_budget_tokens": 0,
+        "chat_template_kwargs": {"enable_thinking": false, "thinking": false, "reasoning": false},
+        "google": {"thinking_config": {"thinking_budget": 0, "include_thoughts": false}},
+    })
+}
+
+fn none_effort_fields() -> Value {
+    json!({"reasoning_effort": "none"})
+}
+
+fn low_effort_fields() -> Value {
+    json!({"reasoning_effort": "low"})
+}
+
+const REASONING_OFF_TIERS: [fn() -> Value; 3] = [
+    full_reasoning_off_fields,
+    none_effort_fields,
+    low_effort_fields,
+];
+
 pub fn reasoning_off_fields(tier: usize) -> Map<String, Value> {
-    let fields = match tier {
-        0 => json!({
-            "reasoning_effort": "none",
-            "reasoning": {"enabled": false, "exclude": true},
-            "thinking": {"type": "disabled", "budget_tokens": 0},
-            "enable_thinking": false,
-            "think": false,
-            "thinking_budget": 0,
-            "reasoning_budget": 0,
-            "thinking_budget_tokens": 0,
-            "chat_template_kwargs": {"enable_thinking": false, "thinking": false, "reasoning": false},
-            "google": {"thinking_config": {"thinking_budget": 0, "include_thoughts": false}},
-        }),
-        1 => json!({"reasoning_effort": "none"}),
-        2 => json!({"reasoning_effort": "low"}),
-        _ => json!({}),
+    let Some(builder) = REASONING_OFF_TIERS.get(tier) else {
+        return Map::new();
     };
-    match fields {
+    match builder() {
         Value::Object(map) => map,
         _ => Map::new(),
     }
@@ -81,7 +96,7 @@ pub const TEMPERATURE: f64 = 0.0;
 pub const SEED: i64 = 20_260_827;
 pub const MAX_TOKENS: i64 = 16_384;
 
-const LAST_REASONING_TIER: usize = 3;
+const LAST_REASONING_TIER: usize = REASONING_OFF_TIERS.len();
 const THINK_OPEN: [&str; 3] = ["<think>", "<thinking>", "<reasoning>"];
 const THINK_CLOSE: [&str; 3] = ["</think>", "</thinking>", "</reasoning>"];
 
@@ -92,11 +107,18 @@ pub struct ThinkFilter {
 }
 
 impl ThinkFilter {
+    fn active_tags(&self) -> [&'static str; 3] {
+        if self.inside {
+            return THINK_CLOSE;
+        }
+        THINK_OPEN
+    }
+
     pub fn push(&mut self, delta: &str) -> String {
         self.pending.push_str(delta);
         let mut visible = String::new();
         loop {
-            let tags = if self.inside { THINK_CLOSE } else { THINK_OPEN };
+            let tags = self.active_tags();
             match first_tag(&self.pending, &tags) {
                 Some((at, len)) => {
                     if !self.inside {
@@ -414,10 +436,9 @@ impl Provider {
             on_delta(&tail);
         }
         if delivered {
-            Ok(())
-        } else {
-            Err(empty_answer(reasoned, truncated))
+            return Ok(());
         }
+        Err(empty_answer(reasoned, truncated))
     }
     async fn send<T, F, Fut>(
         &self,
@@ -444,7 +465,9 @@ impl Provider {
             {
                 Ok(value) => return Ok(value),
                 Err(error) => {
-                    if rejects_the_request(&error) && tier < LAST_REASONING_TIER {
+                    let should_step_down =
+                        rejects_the_request(&error) && tier < LAST_REASONING_TIER;
+                    if should_step_down {
                         self.reasoning_tier.store(tier + 1, Ordering::SeqCst);
                         continue;
                     }
@@ -485,10 +508,12 @@ pub fn api_root(input: &str) -> Result<Url, String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("API root must use HTTP or HTTPS".to_owned());
     }
-    if !url.username().is_empty() || url.password().is_some() {
+    let has_credentials = !url.username().is_empty() || url.password().is_some();
+    if has_credentials {
         return Err("API root must not contain credentials".to_owned());
     }
-    if url.query().is_some() || url.fragment().is_some() {
+    let has_query_or_fragment = url.query().is_some() || url.fragment().is_some();
+    if has_query_or_fragment {
         return Err("API root must not contain a query or fragment".to_owned());
     }
     if url.host_str().is_none() {
@@ -500,14 +525,23 @@ pub fn api_root(input: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+const STATUS_ERROR_RULES: &[(u16, u16, ProviderError)] = &[
+    (401, 401, ProviderError::Authentication),
+    (403, 403, ProviderError::Authentication),
+    (429, 429, ProviderError::RateLimited),
+    (500, 599, ProviderError::Server),
+];
+
+fn api_status_error(status: u16) -> ProviderError {
+    STATUS_ERROR_RULES
+        .iter()
+        .find(|(min_code, max_code, _)| (*min_code..=*max_code).contains(&status))
+        .map_or(ProviderError::Response, |(_, _, error)| error.clone())
+}
+
 fn provider_error(error: OpenAIError) -> ProviderError {
     match error {
-        OpenAIError::ApiError(response) => match response.status_code.as_u16() {
-            401 | 403 => ProviderError::Authentication,
-            429 => ProviderError::RateLimited,
-            500..=599 => ProviderError::Server,
-            _ => ProviderError::Response,
-        },
+        OpenAIError::ApiError(response) => api_status_error(response.status_code.as_u16()),
         OpenAIError::Reqwest(_) | OpenAIError::StreamError(_) => ProviderError::Transport,
         _ => ProviderError::Response,
     }

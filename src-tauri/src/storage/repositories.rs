@@ -59,6 +59,18 @@ impl<'a> ChunkedAccountQuery<'a> {
 
 const INSERT_MESSAGE_LABEL: &str =
     "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)";
+const DELETE_MESSAGE_LABEL: &str =
+    "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2 AND label_id=?3";
+const DENORMALISED_LABEL_FLAG_SQL: &[(&str, &str)] = &[
+    (
+        "UNREAD",
+        "UPDATE messages SET is_unread=?1 WHERE account_id=?2 AND id=?3",
+    ),
+    (
+        "STARRED",
+        "UPDATE messages SET is_starred=?1 WHERE account_id=?2 AND id=?3",
+    ),
+];
 const DELETE_MESSAGE_RETURNING_THREAD: &str =
     "DELETE FROM messages WHERE account_id=?1 AND id=?2 RETURNING thread_id";
 const SELECT_MESSAGE_LABEL_IDS: &str =
@@ -320,10 +332,9 @@ impl HtmlPresence {
 
     pub fn from_fetched_body(html_body: Option<&str>) -> Self {
         if html_body.is_some() {
-            Self::Present
-        } else {
-            Self::Absent
+            return Self::Present;
         }
+        Self::Absent
     }
 }
 
@@ -725,19 +736,9 @@ impl MessageRepository {
         thread_id: &str,
         entry_scope: Option<&ConversationEntryScope>,
     ) -> Result<Vec<ConversationMessage>> {
-        let sql = if entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed) {
-            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,NULL,NULL,has_attachments,is_unread,is_starred,history_id,NULL,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
-             FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at,id"
-        } else {
-            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,NULL,NULL,has_attachments,is_unread,is_starred,history_id,NULL,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
-             FROM messages m WHERE account_id=?1 AND thread_id=?2
-               AND NOT EXISTS (
-                 SELECT 1 FROM message_labels ml
-                 WHERE ml.account_id=m.account_id AND ml.message_id=m.id
-                   AND ml.label_id IN ('TRASH','SPAM')
-               )
-             ORDER BY sent_at,id"
-        };
+        let include_trashed_and_spammed =
+            entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed);
+        let sql = conversation_metadata_sql(include_trashed_and_spammed);
         let mut statement = connection.prepare_cached(sql)?;
         let mut messages = statement
             .query_map(params![account_id, thread_id], |row| {
@@ -814,11 +815,9 @@ impl MessageRepository {
         message_id: &str,
         entry_scope: Option<&ConversationEntryScope>,
     ) -> Result<Option<(Message, Vec<String>)>> {
-        let sql = if entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed) {
-            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND id=?2"
-        } else {
-            "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages m WHERE account_id=?1 AND id=?2 AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ('TRASH','SPAM'))"
-        };
+        let include_trashed_and_spammed =
+            entry_scope.is_some_and(ConversationEntryScope::includes_trashed_and_spammed);
+        let sql = conversation_body_sql(include_trashed_and_spammed);
         let message = connection
             .prepare_cached(sql)?
             .query_row(params![account_id, message_id], message)
@@ -1015,23 +1014,11 @@ impl MessageRepository {
         label_id: &str,
         present: bool,
     ) -> Result<()> {
-        if present {
-            connection
-                .prepare_cached(INSERT_MESSAGE_LABEL)?
-                .execute(params![account_id, message_id, label_id])?;
-        } else {
-            connection
-                .prepare_cached(
-                    "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2 AND label_id=?3",
-                )?
-                .execute(params![account_id, message_id, label_id])?;
-        }
-        let denormalised = match label_id {
-            "UNREAD" => Some("UPDATE messages SET is_unread=?1 WHERE account_id=?2 AND id=?3"),
-            "STARRED" => Some("UPDATE messages SET is_starred=?1 WHERE account_id=?2 AND id=?3"),
-            _ => None,
-        };
-        if let Some(sql) = denormalised {
+        let membership_sql = label_membership_sql(present);
+        connection
+            .prepare_cached(membership_sql)?
+            .execute(params![account_id, message_id, label_id])?;
+        if let Some(sql) = denormalised_flag_sql(label_id) {
             connection
                 .prepare_cached(sql)?
                 .execute(params![present, account_id, message_id])?;
@@ -1659,11 +1646,7 @@ impl SearchRepository {
         limit: i64,
         direction: crate::sync::ThreadPageDirection,
     ) -> Result<Vec<ThreadListRow>> {
-        let (sql, values) = if parsed.has_text_term {
-            search_text_sql(account_id, parsed, scope, cursor, limit, direction)
-        } else {
-            search_thread_driven_sql(account_id, parsed, scope, cursor, limit, direction)
-        };
+        let (sql, values) = search_query_sql(account_id, parsed, scope, cursor, limit, direction);
         let mut statement = connection.prepare_cached(&sql)?;
         let rows = statement
             .query_map(rusqlite::params_from_iter(values.iter()), |row| {
@@ -1694,15 +1677,68 @@ impl SearchRepository {
         scope: &crate::search::scope::ScopeFilter,
     ) -> Result<i64> {
         let (where_sql, values) = search_predicate_sql(account_id, parsed, scope);
-        let select_from = if parsed.has_text_term {
-            "SELECT COUNT(DISTINCT m.thread_id) FROM message_search JOIN messages m ON m.seq=message_search.rowid WHERE "
-        } else {
-            "SELECT COUNT(DISTINCT m.thread_id) FROM messages m WHERE "
-        };
+        let select_from = search_count_select_from(parsed.has_text_term);
         let sql = [select_from, where_sql.as_str()].concat();
         let mut statement = connection.prepare_cached(&sql)?;
         statement.query_row(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
     }
+}
+
+fn conversation_metadata_sql(include_trashed_and_spammed: bool) -> &'static str {
+    if include_trashed_and_spammed {
+        return "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,NULL,NULL,has_attachments,is_unread,is_starred,history_id,NULL,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
+             FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at,id";
+    }
+    "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,NULL,NULL,has_attachments,is_unread,is_starred,history_id,NULL,html_presence,to_recipients,cc_recipients,bcc_recipients,draft_id
+             FROM messages m WHERE account_id=?1 AND thread_id=?2
+               AND NOT EXISTS (
+                 SELECT 1 FROM message_labels ml
+                 WHERE ml.account_id=m.account_id AND ml.message_id=m.id
+                   AND ml.label_id IN ('TRASH','SPAM')
+               )
+             ORDER BY sent_at,id"
+}
+
+fn conversation_body_sql(include_trashed_and_spammed: bool) -> &'static str {
+    if include_trashed_and_spammed {
+        return "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND id=?2";
+    }
+    "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages m WHERE account_id=?1 AND id=?2 AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ('TRASH','SPAM'))"
+}
+
+fn label_membership_sql(present: bool) -> &'static str {
+    if present {
+        return INSERT_MESSAGE_LABEL;
+    }
+    DELETE_MESSAGE_LABEL
+}
+
+fn denormalised_flag_sql(label_id: &str) -> Option<&'static str> {
+    DENORMALISED_LABEL_FLAG_SQL
+        .iter()
+        .find(|(candidate, _)| *candidate == label_id)
+        .map(|(_, sql)| *sql)
+}
+
+fn search_query_sql(
+    account_id: &str,
+    parsed: &crate::search::query::ParsedQuery,
+    scope: &crate::search::scope::ScopeFilter,
+    cursor: Option<(i64, String)>,
+    limit: i64,
+    direction: crate::sync::ThreadPageDirection,
+) -> (String, Vec<Value>) {
+    if parsed.has_text_term {
+        return search_text_sql(account_id, parsed, scope, cursor, limit, direction);
+    }
+    search_thread_driven_sql(account_id, parsed, scope, cursor, limit, direction)
+}
+
+fn search_count_select_from(has_text_term: bool) -> &'static str {
+    if has_text_term {
+        return "SELECT COUNT(DISTINCT m.thread_id) FROM message_search JOIN messages m ON m.seq=message_search.rowid WHERE ";
+    }
+    "SELECT COUNT(DISTINCT m.thread_id) FROM messages m WHERE "
 }
 
 fn search_text_sql(
@@ -1855,10 +1891,9 @@ fn search_predicate_fragment(predicate: &crate::search::query::Predicate) -> (St
         ),
     };
     if predicate.negated {
-        (format!("NOT ({inner})"), values)
-    } else {
-        (inner, values)
+        return (format!("NOT ({inner})"), values);
     }
+    (inner, values)
 }
 
 fn thread_message_row(row: &rusqlite::Row<'_>) -> Result<ThreadMessageRow> {

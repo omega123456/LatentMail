@@ -30,9 +30,9 @@ function pageItems(page: number, pageCount: number): (number | 'ellipsis')[] {
     const isNearCurrent = Math.abs(index - page) <= PAGE_WINDOW;
     if (isEdge || isNearCurrent) {
       items.push(index);
-    } else if (items[items.length - 1] !== 'ellipsis') {
-      items.push('ellipsis');
+      continue;
     }
+    if (items[items.length - 1] !== 'ellipsis') items.push('ellipsis');
   }
   return items;
 }
@@ -79,6 +79,126 @@ function timeLabel(date: Date) {
 
 function entryLine(entry: LogEntry) {
   return `${timeLabel(entry.timestamp)} ${entry.level.toUpperCase()} ${entry.message}`;
+}
+
+function LogEmptyOrLoadingState({
+  isLoading,
+  isError,
+  totalCount,
+  visibleCount,
+}: {
+  isLoading: boolean;
+  isError: boolean;
+  totalCount: number | undefined;
+  visibleCount: number;
+}) {
+  if (isLoading) return <SettingsStateText>Loading log entries…</SettingsStateText>;
+  if (isError) {
+    return (
+      <SettingsStateText tone="error" role="alert">
+        Couldn&apos;t read the log files.
+      </SettingsStateText>
+    );
+  }
+  if (totalCount === 0) return <SettingsStateText>No log entries found.</SettingsStateText>;
+  if (totalCount !== undefined && totalCount > 0 && visibleCount === 0) {
+    return <SettingsStateText>No entries match your search.</SettingsStateText>;
+  }
+  return null;
+}
+
+function LogPaginationFooter({
+  page,
+  pageCount,
+  pageStart,
+  visibleLength,
+  dataUpdatedAt,
+  onSelectPage,
+}: {
+  page: number;
+  pageCount: number;
+  pageStart: number;
+  visibleLength: number;
+  dataUpdatedAt: number;
+  onSelectPage: (page: number) => void;
+}) {
+  const rangeStart = visibleLength === 0 ? 0 : pageStart + 1;
+  const rangeEnd = Math.min(pageStart + ENTRIES_PER_PAGE, visibleLength);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-settings-card-line bg-settings-container-low px-4 py-2.5 text-settings-meta text-settings-ink-mute dark:border-dark-settings-card-line dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
+      <span className="flex items-center gap-3 tabular-nums">
+        <span data-testid="log-page-summary" className="inline-block min-w-log-summary">
+          {rangeStart}–{rangeEnd} of {visibleLength} entries
+        </span>
+        {pageCount > 1 && (
+          <span className="flex items-center gap-0.5">
+            <button
+              type="button"
+              aria-label="First page"
+              disabled={page === 1}
+              onClick={() => onSelectPage(1)}
+              className={pageButtonClass}
+            >
+              <ChevronsLeft className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Previous page"
+              disabled={page === 1}
+              onClick={() => onSelectPage(page - 1)}
+              className={pageButtonClass}
+            >
+              <ChevronLeft className="size-3.5" />
+            </button>
+            {pageItems(page, pageCount).map((item, index) =>
+              item === 'ellipsis' ? (
+                <span
+                  key={`ellipsis-${index}`}
+                  className="flex size-7 shrink-0 items-center justify-center text-settings-ink-mute dark:text-dark-settings-ink-mute"
+                >
+                  …
+                </span>
+              ) : (
+                <button
+                  key={item}
+                  type="button"
+                  aria-current={page === item}
+                  onClick={() => onSelectPage(item)}
+                  className={pageButtonClass}
+                >
+                  {item}
+                </button>
+              ),
+            )}
+            <button
+              type="button"
+              aria-label="Next page"
+              disabled={page === pageCount}
+              onClick={() => onSelectPage(page + 1)}
+              className={pageButtonClass}
+            >
+              <ChevronRight className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Last page"
+              disabled={page === pageCount}
+              onClick={() => onSelectPage(pageCount)}
+              className={pageButtonClass}
+            >
+              <ChevronsRight className="size-3.5" />
+            </button>
+          </span>
+        )}
+      </span>
+      {dataUpdatedAt > 0 && (
+        <span>
+          Last updated {format(new Date(dataUpdatedAt), DATE_FORMAT.timeOfDay)} · auto-refreshes
+          every 5s
+        </span>
+      )}
+    </div>
+  );
 }
 
 export function LogsSection() {
@@ -183,18 +303,12 @@ export function LogsSection() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {isLoading && <SettingsStateText>Loading log entries…</SettingsStateText>}
-          {isError && (
-            <SettingsStateText tone="error" role="alert">
-              Couldn&apos;t read the log files.
-            </SettingsStateText>
-          )}
-          {!isLoading && !isError && entries?.length === 0 && (
-            <SettingsStateText>No log entries found.</SettingsStateText>
-          )}
-          {!isLoading && !isError && entries && entries.length > 0 && visible.length === 0 && (
-            <SettingsStateText>No entries match your search.</SettingsStateText>
-          )}
+          <LogEmptyOrLoadingState
+            isLoading={isLoading}
+            isError={isError}
+            totalCount={entries?.length}
+            visibleCount={visible.length}
+          />
           {pageEntries.map((entry, index) => {
             const previous = pageEntries[index - 1];
             const crossedDay =
@@ -238,80 +352,14 @@ export function LogsSection() {
           })}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-settings-card-line bg-settings-container-low px-4 py-2.5 text-settings-meta text-settings-ink-mute dark:border-dark-settings-card-line dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
-          <span className="flex items-center gap-3 tabular-nums">
-            <span data-testid="log-page-summary" className="inline-block min-w-log-summary">
-              {visible.length === 0 ? 0 : pageStart + 1}–
-              {Math.min(pageStart + ENTRIES_PER_PAGE, visible.length)} of {visible.length} entries
-            </span>
-            {pageCount > 1 && (
-              <span className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  aria-label="First page"
-                  disabled={page === 1}
-                  onClick={() => setRequestedPage(1)}
-                  className={pageButtonClass}
-                >
-                  <ChevronsLeft className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Previous page"
-                  disabled={page === 1}
-                  onClick={() => setRequestedPage(page - 1)}
-                  className={pageButtonClass}
-                >
-                  <ChevronLeft className="size-3.5" />
-                </button>
-                {pageItems(page, pageCount).map((item, index) =>
-                  item === 'ellipsis' ? (
-                    <span
-                      key={`ellipsis-${index}`}
-                      className="flex size-7 shrink-0 items-center justify-center text-settings-ink-mute dark:text-dark-settings-ink-mute"
-                    >
-                      …
-                    </span>
-                  ) : (
-                    <button
-                      key={item}
-                      type="button"
-                      aria-current={page === item}
-                      onClick={() => setRequestedPage(item)}
-                      className={pageButtonClass}
-                    >
-                      {item}
-                    </button>
-                  ),
-                )}
-                <button
-                  type="button"
-                  aria-label="Next page"
-                  disabled={page === pageCount}
-                  onClick={() => setRequestedPage(page + 1)}
-                  className={pageButtonClass}
-                >
-                  <ChevronRight className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="Last page"
-                  disabled={page === pageCount}
-                  onClick={() => setRequestedPage(pageCount)}
-                  className={pageButtonClass}
-                >
-                  <ChevronsRight className="size-3.5" />
-                </button>
-              </span>
-            )}
-          </span>
-          {dataUpdatedAt > 0 && (
-            <span>
-              Last updated {format(new Date(dataUpdatedAt), DATE_FORMAT.timeOfDay)} · auto-refreshes
-              every 5s
-            </span>
-          )}
-        </div>
+        <LogPaginationFooter
+          page={page}
+          pageCount={pageCount}
+          pageStart={pageStart}
+          visibleLength={visible.length}
+          dataUpdatedAt={dataUpdatedAt}
+          onSelectPage={setRequestedPage}
+        />
       </div>
     </div>
   );

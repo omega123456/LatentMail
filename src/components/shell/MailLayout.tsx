@@ -76,6 +76,383 @@ function ComposeFallback() {
     </div>
   );
 }
+function MailWorkspaceBody({
+  layout,
+  hasReader,
+  assistantDocked,
+  assistantOpen,
+  list,
+  reader,
+  dockedAssistant,
+  onResizeList,
+  onResizeAssistant,
+  onResizeReader,
+}: {
+  layout: string;
+  hasReader: boolean;
+  assistantDocked: boolean;
+  assistantOpen: boolean;
+  list: ReactNode;
+  reader: ReactNode;
+  dockedAssistant: ReactNode;
+  onResizeList: (offset: number) => void;
+  onResizeAssistant: (offset: number) => void;
+  onResizeReader: (offset: number) => void;
+}) {
+  if (layout === 'three-column') {
+    const showDockedAssistant = assistantDocked && assistantOpen;
+    return (
+      <main
+        className="grid min-h-0 flex-1"
+        style={{
+          gridTemplateColumns: showDockedAssistant
+            ? 'var(--list-w) auto 1fr auto var(--assistant-w)'
+            : 'var(--list-w) auto 1fr',
+        }}
+      >
+        {list}
+        <ResizeHandle
+          ariaLabel="Resize conversation list"
+          orientation="vertical"
+          onResize={onResizeList}
+        />
+        {reader}
+        {showDockedAssistant && (
+          <ResizeHandle
+            ariaLabel="Resize AI assistant"
+            orientation="vertical"
+            onResize={onResizeAssistant}
+          />
+        )}
+        {assistantDocked && dockedAssistant}
+      </main>
+    );
+  }
+  if (layout === 'bottom-preview' && hasReader) {
+    return (
+      <main
+        className="grid min-h-0 flex-1"
+        style={{ gridTemplateRows: '1fr auto var(--reader-h)' }}
+      >
+        {list}
+        <ResizeHandle
+          ariaLabel="Resize reader"
+          orientation="horizontal"
+          onResize={onResizeReader}
+        />
+        {reader}
+      </main>
+    );
+  }
+  return <main className="flex min-h-0 flex-1 flex-col">{list}</main>;
+}
+
+function resolveMailboxName(
+  mailboxes: { id: string; name: string }[],
+  labels: { id: string; name: string }[],
+  activeMailbox: string,
+): string {
+  const folder = mailboxes.find((mailbox) => mailbox.id === activeMailbox);
+  if (folder) return folder.name;
+  const userLabel = labels.find((label) => label.id === activeMailbox);
+  return userLabel ? userLabel.name : activeMailbox;
+}
+
+function MailSidebarRegion({
+  sidebarCollapsed,
+  accounts,
+  activeAccountId,
+  activeMailboxId,
+  mailboxes,
+  labels,
+  showUnreadCounts,
+  searchActive,
+  searchSubmittedQuery,
+  searchTotal,
+  searchLoading,
+  onSelectAccount,
+  onSelectMailbox,
+  onToggleCollapse,
+  onOpenSettings,
+  onCompose,
+  onClearSearchAndFocus,
+  onCreateLabel,
+  onRenameLabel,
+  onRecolorLabel,
+  onDeleteLabel,
+}: {
+  sidebarCollapsed: boolean;
+  accounts: Account[];
+  activeAccountId: string | null;
+  activeMailboxId: string | null;
+  mailboxes: ReturnType<typeof mapLabelsToMailboxes>;
+  labels: ReturnType<typeof mapLabelsToUserLabels>;
+  showUnreadCounts: boolean;
+  searchActive: boolean;
+  searchSubmittedQuery: string;
+  searchTotal: number;
+  searchLoading: boolean;
+  onSelectAccount: (id: string) => void;
+  onSelectMailbox: (id: string) => void;
+  onToggleCollapse: (collapsed: boolean) => void;
+  onOpenSettings: () => void;
+  onCompose: () => void;
+  onClearSearchAndFocus: () => void;
+  onCreateLabel: (input: { name: string; colorId: string | null }) => Promise<unknown>;
+  onRenameLabel: (input: { id: string; name: string }) => Promise<unknown>;
+  onRecolorLabel: (input: { id: string; colorId: string }) => Promise<unknown>;
+  onDeleteLabel: (id: string) => Promise<unknown>;
+}) {
+  if (sidebarCollapsed) {
+    return (
+      <CollapsedRail
+        accounts={accounts}
+        activeAccountId={activeAccountId}
+        activeMailboxId={activeMailboxId ?? 'INBOX'}
+        mailboxes={mailboxes}
+        labels={labels}
+        onSelectAccount={onSelectAccount}
+        onSelectMailbox={onSelectMailbox}
+        onExpand={() => onToggleCollapse(false)}
+        onSettings={onOpenSettings}
+        onCompose={onCompose}
+        searchActive={searchActive}
+        searchQuery={searchSubmittedQuery}
+      />
+    );
+  }
+  return (
+    <aside
+      data-testid="sidebar-slot"
+      className="flex min-h-0 min-w-0 flex-col border-r border-outline-variant bg-surface-container-low p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-surface-container-low"
+    >
+      <div className="mb-5 flex items-center gap-stack-gap-sm px-2 text-on-surface dark:text-dark-on-surface">
+        <img src={brandMark} alt="" aria-hidden="true" className="h-4 w-auto" />
+        <span className="text-body-md font-semibold">LatentMail</span>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+        <button
+          type="button"
+          title="Compose"
+          onClick={onCompose}
+          className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+        >
+          <Pencil aria-hidden="true" size={ICON_SIZE.base} />
+          Compose
+        </button>
+        {searchActive && (
+          <SearchResultsRow
+            query={searchSubmittedQuery}
+            total={searchTotal}
+            pending={searchLoading}
+            onClose={onClearSearchAndFocus}
+          />
+        )}
+        <FolderList
+          activeMailboxId={activeMailboxId ?? 'INBOX'}
+          mailboxes={mailboxes}
+          showUnreadCounts={showUnreadCounts}
+          onSelect={onSelectMailbox}
+        />
+        <LabelList
+          activeMailboxId={activeMailboxId}
+          labels={labels}
+          showUnreadCounts={showUnreadCounts}
+          onSelect={onSelectMailbox}
+          onCreateLabel={onCreateLabel}
+          onRenameLabel={onRenameLabel}
+          onRecolorLabel={onRecolorLabel}
+          onDeleteLabel={onDeleteLabel}
+        />
+        <button
+          type="button"
+          aria-label="Collapse sidebar"
+          onClick={() => onToggleCollapse(true)}
+          className={`mt-auto ${navItem}`}
+        >
+          <PanelLeftClose aria-hidden="true" size={ICON_SIZE.lg} />
+          Collapse
+        </button>
+        <button type="button" onClick={onOpenSettings} className={navItem}>
+          <Settings aria-hidden="true" size={ICON_SIZE.lg} />
+          Settings
+        </button>
+      </div>
+      <div className="mt-4 border-t border-outline-variant pt-4 dark:border-dark-outline-variant">
+        <AccountSwitcher
+          accounts={accounts}
+          activeAccountId={activeAccountId}
+          collapsed={false}
+          onSelect={onSelectAccount}
+        />
+      </div>
+    </aside>
+  );
+}
+
+function AssistantRegionView({
+  docked,
+  assistantOpen,
+  assistantRegion,
+  keepFocusOutWhileClosed,
+  children,
+}: {
+  docked: boolean;
+  assistantOpen: boolean;
+  assistantRegion: React.RefObject<HTMLDivElement | null>;
+  keepFocusOutWhileClosed: (event: FocusEvent<HTMLDivElement>) => void;
+  children: ReactNode;
+}) {
+  if (docked) {
+    return (
+      <div
+        ref={assistantRegion}
+        data-testid="assistant-docked"
+        hidden={!assistantOpen}
+        inert={!assistantOpen}
+        onFocusCapture={keepFocusOutWhileClosed}
+        className={
+          assistantOpen
+            ? 'grid min-h-0 min-w-0 border-l border-outline-variant dark:border-dark-outline-variant'
+            : 'hidden'
+        }
+      >
+        {children}
+      </div>
+    );
+  }
+  return (
+    <>
+      {assistantOpen && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 bg-on-surface/20 dark:bg-dark-on-surface/20"
+        />
+      )}
+      <div
+        ref={assistantRegion}
+        data-testid="assistant-drawer"
+        hidden={!assistantOpen}
+        inert={!assistantOpen}
+        onFocusCapture={keepFocusOutWhileClosed}
+        style={{ width: 'var(--assistant-w)' }}
+        className={
+          assistantOpen
+            ? 'absolute inset-y-0 right-0 z-20 grid min-h-0 border-l border-outline-variant shadow-lg dark:border-dark-outline-variant'
+            : 'hidden'
+        }
+      >
+        {children}
+      </div>
+    </>
+  );
+}
+
+function MailTopBar({
+  searchFieldRef,
+  labels,
+  assistantTrigger,
+  assistantOpen,
+  onToggleAssistant,
+}: {
+  searchFieldRef: React.RefObject<HTMLInputElement | null>;
+  labels: import('@/lib/types/ipc').MailLabel[];
+  assistantTrigger: React.RefObject<HTMLButtonElement | null>;
+  assistantOpen: boolean;
+  onToggleAssistant: () => void;
+}) {
+  const buttonTone = assistantOpen
+    ? 'bg-primary-fixed text-primary dark:bg-dark-primary-fixed dark:text-dark-primary'
+    : 'text-on-surface-variant hover:bg-surface-container dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
+  return (
+    <header className="flex h-16 shrink-0 items-center border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface">
+      <SearchField ref={searchFieldRef} labels={labels} />
+      <button
+        ref={assistantTrigger}
+        type="button"
+        aria-label="AI assistant"
+        aria-expanded={assistantOpen}
+        title="AI assistant"
+        onClick={onToggleAssistant}
+        className={`ml-2 grid size-9 shrink-0 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary ${buttonTone}`}
+      >
+        <Sparkles aria-hidden="true" size={ICON_SIZE.lg} />
+      </button>
+    </header>
+  );
+}
+
+function useShellWidth(shellRef: React.RefObject<HTMLDivElement | null>): number {
+  const [shellWidth, setShellWidth] = useState(Number.POSITIVE_INFINITY);
+  useEffect(() => {
+    const node = shellRef.current;
+    if (node === null) return;
+    const observer = new ResizeObserver((entries) =>
+      setShellWidth(entries[0]?.contentRect.width ?? Number.POSITIVE_INFINITY),
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [shellRef]);
+  return shellWidth;
+}
+
+function useEnsureActiveAccount(
+  accounts: Account[],
+  activeAccountId: string | null,
+  selectAccount: (id: string) => void,
+) {
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    const activeAccountStillExists = accounts.some((account) => account.id === activeAccountId);
+    if (activeAccountId === null || !activeAccountStillExists) selectAccount(accounts[0].id);
+  }, [accounts, activeAccountId, selectAccount]);
+}
+
+function EnabledAiPolls() {
+  const aiConfigs = useAiConfigsQuery();
+  return (aiConfigs.data ?? [])
+    .filter((config) => config.enabled)
+    .map((config) => <AccountConnectionPoll key={config.accountId} accountId={config.accountId} />);
+}
+
+function ComposeLayer({ open }: { open: boolean }) {
+  if (!open) return null;
+  return (
+    <Suspense
+      fallback={
+        <DelayedFallback>
+          <ComposeFallback />
+        </DelayedFallback>
+      }
+    >
+      <ComposeOverlay />
+    </Suspense>
+  );
+}
+
+function shellPaneVars(
+  sidebarCollapsed: boolean,
+  sidebarWidth: number,
+  listWidth: number,
+  readerHeight: number,
+  assistantWidth: number,
+): CSSProperties {
+  return {
+    '--sidebar-w': sidebarCollapsed ? '56px' : `${sidebarWidth}px`,
+    '--list-w': `${listWidth}px`,
+    '--reader-h': `${readerHeight}%`,
+    '--assistant-w': `${assistantWidth}px`,
+  } as CSSProperties;
+}
+
+function sidebarGridColumns(sidebarCollapsed: boolean): string {
+  return sidebarCollapsed ? 'var(--sidebar-w) 1fr' : 'var(--sidebar-w) auto 1fr';
+}
+
+function hasReaderPane(layout: string, activeThreadId: string | null): boolean {
+  return layout === 'three-column' || (layout === 'bottom-preview' && activeThreadId !== null);
+}
+
 export function MailLayout({ accounts }: { accounts: Account[] }) {
   const shell = useRef<HTMLDivElement>(null);
   const {
@@ -104,8 +481,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     clearSelection,
   } = useSelectionStore();
   const flaggedAccount = accounts.find((account) => account.needsReauthentication);
-  const hasReader =
-    layout === 'three-column' || (layout === 'bottom-preview' && activeThreadId !== null);
+  const hasReader = hasReaderPane(layout, activeThreadId);
   const setPane = (
     key: '--sidebar-w' | '--list-w' | '--reader-h' | '--assistant-w',
     size: number,
@@ -127,35 +503,29 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const searchFieldRef = useRef<HTMLInputElement>(null);
   const assistantTrigger = useRef<HTMLButtonElement>(null);
   const assistantRegion = useRef<HTMLDivElement>(null);
-  const [shellWidth, setShellWidth] = useState(Number.POSITIVE_INFINITY);
-  const aiConfigs = useAiConfigsQuery();
+  const shellWidth = useShellWidth(shell);
   const assistantDocked = layout === 'three-column' && shellWidth >= ASSISTANT_DOCK_MIN_SHELL_WIDTH;
   const closeAssistant = useCallback(() => {
     setAssistantOpen(false);
     assistantTrigger.current?.focus();
   }, [setAssistantOpen]);
   const toggleAssistant = useCallback(() => {
-    if (useLayoutStore.getState().assistantOpen) closeAssistant();
-    else setAssistantOpen(true);
+    if (useLayoutStore.getState().assistantOpen) {
+      closeAssistant();
+      return;
+    }
+    setAssistantOpen(true);
   }, [closeAssistant, setAssistantOpen]);
   const openAiSettings = useCallback(() => {
     useSettingsUiStore.getState().setActiveSection('ai');
     useLayoutStore.getState().setRoute('settings');
   }, []);
   useEffect(() => {
-    const node = shell.current;
-    if (node === null) return;
-    const observer = new ResizeObserver((entries) =>
-      setShellWidth(entries[0]?.contentRect.width ?? Number.POSITIVE_INFINITY),
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
     if (assistantOpen) assistantRegion.current?.querySelector('textarea')?.focus();
   }, [assistantOpen]);
-  const mailboxes = mapLabelsToMailboxes(labelsQuery.data ?? []);
-  const labels = mapLabelsToUserLabels(labelsQuery.data ?? []);
+  const rawLabels = labelsQuery.data ?? [];
+  const mailboxes = mapLabelsToMailboxes(rawLabels);
+  const labels = mapLabelsToUserLabels(rawLabels);
   const createLabelMutation = useCreateLabelMutation(activeAccountId);
   const renameLabelMutation = useRenameLabelMutation(activeAccountId);
   const recolorLabelMutation = useRecolorLabelMutation(activeAccountId);
@@ -220,10 +590,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       showOriginal();
     },
   });
-  const mailboxName =
-    mailboxes.find((mailbox) => mailbox.id === activeMailbox)?.name ??
-    labels.find((label) => label.id === activeMailbox)?.name ??
-    activeMailbox;
+  const mailboxName = resolveMailboxName(mailboxes, labels, activeMailbox);
   const clearSearchAndFocus = () => {
     searchClear();
     searchFieldRef.current?.focus();
@@ -241,117 +608,43 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     },
     [searchClear, setActiveAccountId, setActiveMailboxId, clearSelection],
   );
-  useEffect(() => {
-    if (accounts.length === 0) return;
-    const activeAccountStillExists = accounts.some((account) => account.id === activeAccountId);
-    if (activeAccountId === null || !activeAccountStillExists) selectAccount(accounts[0].id);
-  }, [accounts, activeAccountId, selectAccount]);
+  useEnsureActiveAccount(accounts, activeAccountId, selectAccount);
   const openSettings = () => useLayoutStore.getState().setRoute('settings');
-  const sidebar = sidebarCollapsed ? (
-    <CollapsedRail
+  const sidebar = (
+    <MailSidebarRegion
+      sidebarCollapsed={sidebarCollapsed}
       accounts={accounts}
       activeAccountId={activeAccountId}
-      activeMailboxId={activeMailboxId ?? 'INBOX'}
+      activeMailboxId={activeMailboxId}
       mailboxes={mailboxes}
       labels={labels}
+      showUnreadCounts={showUnreadCounts}
+      searchActive={searchActive}
+      searchSubmittedQuery={searchSubmittedQuery}
+      searchTotal={searchTotal}
+      searchLoading={searchResults.isLoading}
       onSelectAccount={selectAccount}
       onSelectMailbox={selectMailbox}
-      onExpand={() => setSidebarCollapsed(false)}
-      onSettings={openSettings}
+      onToggleCollapse={setSidebarCollapsed}
+      onOpenSettings={openSettings}
       onCompose={compose}
-      searchActive={searchActive}
-      searchQuery={searchSubmittedQuery}
+      onClearSearchAndFocus={clearSearchAndFocus}
+      onCreateLabel={({ name, colorId }) => createLabelMutation.mutateAsync({ name, colorId })}
+      onRenameLabel={({ id, name }) => renameLabelMutation.mutateAsync({ labelId: id, name: name })}
+      onRecolorLabel={({ id, colorId }) =>
+        recolorLabelMutation.mutateAsync({ labelId: id, colorId: colorId })
+      }
+      onDeleteLabel={(id) => deleteLabelMutation.mutateAsync({ labelId: id })}
     />
-  ) : (
-    <aside
-      data-testid="sidebar-slot"
-      className="flex min-h-0 min-w-0 flex-col border-r border-outline-variant bg-surface-container-low p-stack-gap-md dark:border-dark-outline-variant dark:bg-dark-surface-container-low"
-    >
-      <div className="mb-5 flex items-center gap-stack-gap-sm px-2 text-on-surface dark:text-dark-on-surface">
-        <img src={brandMark} alt="" aria-hidden="true" className="h-4 w-auto" />
-        <span className="text-body-md font-semibold">LatentMail</span>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-        <button
-          type="button"
-          title="Compose"
-          onClick={compose}
-          className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
-        >
-          <Pencil aria-hidden="true" size={ICON_SIZE.base} />
-          Compose
-        </button>
-        {searchActive && (
-          <SearchResultsRow
-            query={searchSubmittedQuery}
-            total={searchTotal}
-            pending={searchResults.isLoading}
-            onClose={clearSearchAndFocus}
-          />
-        )}
-        <FolderList
-          activeMailboxId={activeMailboxId ?? 'INBOX'}
-          mailboxes={mailboxes}
-          showUnreadCounts={showUnreadCounts}
-          onSelect={selectMailbox}
-        />
-        <LabelList
-          activeMailboxId={activeMailboxId}
-          labels={labels}
-          showUnreadCounts={showUnreadCounts}
-          onSelect={selectMailbox}
-          onCreateLabel={({ name, colorId }) => createLabelMutation.mutateAsync({ name, colorId })}
-          onRenameLabel={({ id, name }) =>
-            renameLabelMutation.mutateAsync({ labelId: id, name: name })
-          }
-          onRecolorLabel={({ id, colorId }) =>
-            recolorLabelMutation.mutateAsync({ labelId: id, colorId: colorId })
-          }
-          onDeleteLabel={(id) => deleteLabelMutation.mutateAsync({ labelId: id })}
-        />
-        <button
-          type="button"
-          aria-label="Collapse sidebar"
-          onClick={() => setSidebarCollapsed(true)}
-          className={`mt-auto ${navItem}`}
-        >
-          <PanelLeftClose aria-hidden="true" size={ICON_SIZE.lg} />
-          Collapse
-        </button>
-        <button type="button" onClick={openSettings} className={navItem}>
-          <Settings aria-hidden="true" size={ICON_SIZE.lg} />
-          Settings
-        </button>
-      </div>
-      <div className="mt-4 border-t border-outline-variant pt-4 dark:border-dark-outline-variant">
-        <AccountSwitcher
-          accounts={accounts}
-          activeAccountId={activeAccountId}
-          collapsed={false}
-          onSelect={selectAccount}
-        />
-      </div>
-    </aside>
   );
   const topBar = (
-    <header className="flex h-16 shrink-0 items-center border-b border-outline-variant/30 bg-surface-bright px-container-padding shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface">
-      <SearchField ref={searchFieldRef} labels={labelsQuery.data ?? []} />
-      <button
-        ref={assistantTrigger}
-        type="button"
-        aria-label="AI assistant"
-        aria-expanded={assistantOpen}
-        title="AI assistant"
-        onClick={toggleAssistant}
-        className={`ml-2 grid size-9 shrink-0 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary ${
-          assistantOpen
-            ? 'bg-primary-fixed text-primary dark:bg-dark-primary-fixed dark:text-dark-primary'
-            : 'text-on-surface-variant hover:bg-surface-container dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'
-        }`}
-      >
-        <Sparkles aria-hidden="true" size={ICON_SIZE.lg} />
-      </button>
-    </header>
+    <MailTopBar
+      searchFieldRef={searchFieldRef}
+      labels={rawLabels}
+      assistantTrigger={assistantTrigger}
+      assistantOpen={assistantOpen}
+      onToggleAssistant={toggleAssistant}
+    />
   );
   const assistant = activeAccountId !== null && (
     <AssistantPanel
@@ -364,45 +657,24 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     if (!assistantOpen) event.target.blur();
   };
   const dockedAssistant = (
-    <div
-      ref={assistantRegion}
-      data-testid="assistant-docked"
-      hidden={!assistantOpen}
-      inert={!assistantOpen}
-      onFocusCapture={keepFocusOutWhileClosed}
-      className={
-        assistantOpen
-          ? 'grid min-h-0 min-w-0 border-l border-outline-variant dark:border-dark-outline-variant'
-          : 'hidden'
-      }
+    <AssistantRegionView
+      docked
+      assistantOpen={assistantOpen}
+      assistantRegion={assistantRegion}
+      keepFocusOutWhileClosed={keepFocusOutWhileClosed}
     >
       {assistant}
-    </div>
+    </AssistantRegionView>
   );
   const drawerAssistant = (
-    <>
-      {assistantOpen && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 bg-on-surface/20 dark:bg-dark-on-surface/20"
-        />
-      )}
-      <div
-        ref={assistantRegion}
-        data-testid="assistant-drawer"
-        hidden={!assistantOpen}
-        inert={!assistantOpen}
-        onFocusCapture={keepFocusOutWhileClosed}
-        style={{ width: 'var(--assistant-w)' }}
-        className={
-          assistantOpen
-            ? 'absolute inset-y-0 right-0 z-20 grid min-h-0 border-l border-outline-variant shadow-lg dark:border-dark-outline-variant'
-            : 'hidden'
-        }
-      >
-        {assistant}
-      </div>
-    </>
+    <AssistantRegionView
+      docked={false}
+      assistantOpen={assistantOpen}
+      assistantRegion={assistantRegion}
+      keepFocusOutWhileClosed={keepFocusOutWhileClosed}
+    >
+      {assistant}
+    </AssistantRegionView>
   );
   const list = (
     <section
@@ -428,69 +700,35 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
       readerHeight - percentOf(offset, shell.current?.clientHeight || 1),
       setReaderHeight,
     );
-  const body: ReactNode =
-    layout === 'three-column' ? (
-      <main
-        className="grid min-h-0 flex-1"
-        style={{
-          gridTemplateColumns:
-            assistantDocked && assistantOpen
-              ? 'var(--list-w) auto 1fr auto var(--assistant-w)'
-              : 'var(--list-w) auto 1fr',
-        }}
-      >
-        {list}
-        <ResizeHandle
-          ariaLabel="Resize conversation list"
-          orientation="vertical"
-          onResize={(offset) => setPane('--list-w', listWidth + offset, setListWidth)}
-        />
-        {reader}
-        {assistantDocked && assistantOpen && (
-          <ResizeHandle
-            ariaLabel="Resize AI assistant"
-            orientation="vertical"
-            onResize={(offset) =>
-              setPane('--assistant-w', assistantWidth - offset, setAssistantWidth)
-            }
-          />
-        )}
-        {assistantDocked && dockedAssistant}
-      </main>
-    ) : layout === 'bottom-preview' && hasReader ? (
-      <main
-        className="grid min-h-0 flex-1"
-        style={{ gridTemplateRows: '1fr auto var(--reader-h)' }}
-      >
-        {list}
-        <ResizeHandle ariaLabel="Resize reader" orientation="horizontal" onResize={readerResize} />
-        {reader}
-      </main>
-    ) : (
-      <main className="flex min-h-0 flex-1 flex-col">{list}</main>
-    );
+  const body = (
+    <MailWorkspaceBody
+      layout={layout}
+      hasReader={hasReader}
+      assistantDocked={assistantDocked}
+      assistantOpen={assistantOpen}
+      list={list}
+      reader={reader}
+      dockedAssistant={dockedAssistant}
+      onResizeList={(offset) => setPane('--list-w', listWidth + offset, setListWidth)}
+      onResizeAssistant={(offset) =>
+        setPane('--assistant-w', assistantWidth - offset, setAssistantWidth)
+      }
+      onResizeReader={readerResize}
+    />
+  );
   return (
     <div
       ref={shell}
       data-testid="mail-layout"
       data-layout={layout}
       data-density={density}
-      style={
-        {
-          '--sidebar-w': sidebarCollapsed ? '56px' : `${sidebarWidth}px`,
-          '--list-w': `${listWidth}px`,
-          '--reader-h': `${readerHeight}%`,
-          '--assistant-w': `${assistantWidth}px`,
-        } as CSSProperties
-      }
+      style={shellPaneVars(sidebarCollapsed, sidebarWidth, listWidth, readerHeight, assistantWidth)}
       className="grid h-full grid-rows-app-shell overflow-hidden bg-surface dark:bg-dark-surface"
     >
       <div
         className="grid min-h-0"
         style={{
-          gridTemplateColumns: sidebarCollapsed
-            ? 'var(--sidebar-w) 1fr'
-            : 'var(--sidebar-w) auto 1fr',
+          gridTemplateColumns: sidebarGridColumns(sidebarCollapsed),
         }}
       >
         {sidebar}
@@ -510,22 +748,8 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
         </div>
       </div>
       <StatusBar accountId={activeAccountId} />
-      {(aiConfigs.data ?? [])
-        .filter((config) => config.enabled)
-        .map((config) => (
-          <AccountConnectionPoll key={config.accountId} accountId={config.accountId} />
-        ))}
-      {composeOpen && (
-        <Suspense
-          fallback={
-            <DelayedFallback>
-              <ComposeFallback />
-            </DelayedFallback>
-          }
-        >
-          <ComposeOverlay />
-        </Suspense>
-      )}
+      <EnabledAiPolls />
+      <ComposeLayer open={composeOpen} />
       <MessageSourceDialog />
     </div>
   );

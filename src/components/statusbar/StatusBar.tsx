@@ -31,15 +31,15 @@ const controlClass =
 const restingControlClass = `${controlClass} hover:bg-surface-container-high focus-visible:bg-surface-container-high dark:hover:bg-dark-surface-container-high dark:focus-visible:bg-dark-surface-container-high`;
 const pausedControlClass = `${controlClass} hover:bg-on-warning-container/10 focus-visible:bg-on-warning-container/10 dark:hover:bg-dark-on-warning-container/10 dark:focus-visible:bg-dark-on-warning-container/10`;
 
-function aiModelLabel(config: AiConfig | undefined) {
-  if (!config || !config.enabled) return 'AI off';
-  return config.chatModel ?? 'No model selected';
-}
-
 const queueClass =
   'inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-sm px-2 focus-visible:outline-2 focus-visible:outline-primary';
 const restingQueueClass = `${queueClass} hover:bg-surface-container-high focus-visible:bg-surface-container-high dark:hover:bg-dark-surface-container-high dark:focus-visible:bg-dark-surface-container-high`;
 const pausedQueueClass = `${queueClass} hover:bg-on-warning-container/10 focus-visible:bg-on-warning-container/10 dark:hover:bg-dark-on-warning-container/10 dark:focus-visible:bg-dark-on-warning-container/10`;
+
+function aiModelLabel(config: AiConfig | undefined) {
+  if (!config || !config.enabled) return 'AI off';
+  return config.chatModel ?? 'No model selected';
+}
 
 function freshness(lastSynced: Date | null, now: Date) {
   if (!lastSynced) return 'Not yet synced';
@@ -57,6 +57,40 @@ function traversalLabel(traversal: TraversalStatus) {
 function activeTraversal(traversal: TraversalStatus | undefined) {
   if (!traversal) return null;
   return traversal.state === 'backfilling' || traversal.state === 'reconciling' ? traversal : null;
+}
+
+type StatusLabelInput = {
+  paused: boolean;
+  reconnecting: boolean;
+  traversal: TraversalStatus | null;
+  indexing: boolean;
+  refreshing: boolean;
+  failed: boolean;
+  pendingCount: number;
+  lastSynced: Date | null;
+  now: Date;
+};
+
+function statusLabel(input: StatusLabelInput): string {
+  if (input.paused) return `Paused · ${input.pendingCount} queued`;
+  if (input.reconnecting) return 'Sync resumes shortly';
+  if (input.traversal) return traversalLabel(input.traversal);
+  if (input.indexing) return 'Indexing mail';
+  if (input.refreshing) return 'Checking for new mail…';
+  if (input.failed) return "Couldn't sync";
+  return freshness(input.lastSynced, input.now);
+}
+
+function statusDotClass(failed: boolean, paused: boolean): string {
+  if (failed) return 'bg-error dark:bg-dark-error';
+  if (paused) return 'bg-on-warning-container dark:bg-dark-on-warning-container';
+  return 'bg-outline dark:bg-dark-outline';
+}
+
+function statusTitle(failed: boolean, error: string | undefined, lastSynced: Date | null) {
+  if (failed) return error;
+  if (lastSynced) return exactTime(lastSynced);
+  return undefined;
 }
 
 function ProgressTrack({
@@ -92,6 +126,209 @@ function ProgressTrack({
   );
 }
 
+function ActiveProgress({
+  traversal,
+  indexing,
+  reconnecting,
+  index,
+}: {
+  traversal: TraversalStatus | null;
+  indexing: boolean;
+  reconnecting: boolean;
+  index: { indexed: number; total: number };
+}) {
+  if (reconnecting) return null;
+  if (traversal) {
+    return (
+      <ProgressTrack
+        completed={traversal.persistedCount}
+        total={traversal.discoveredCount}
+        name="Sync progress"
+        unit="messages"
+      />
+    );
+  }
+  if (!indexing) return null;
+  return (
+    <ProgressTrack
+      completed={index.indexed}
+      total={index.total}
+      name="Index progress"
+      unit="messages"
+    />
+  );
+}
+
+function StatusRightActions({
+  accountId,
+  aiConfig,
+  paused,
+  pending,
+  failed,
+  onOpenSection,
+}: {
+  accountId: string | null;
+  aiConfig: AiConfig | undefined;
+  paused: boolean;
+  pending: number;
+  failed: number;
+  onOpenSection: (section: 'ai' | 'queue') => void;
+}) {
+  const buttonClass = paused ? pausedQueueClass : restingQueueClass;
+  const showQueue = pending > 0 || failed > 0;
+  return (
+    <div className="flex items-center gap-stack-gap-sm">
+      {accountId && (
+        <button
+          type="button"
+          aria-label="Open AI settings"
+          title={aiModelLabel(aiConfig)}
+          onClick={() => onOpenSection('ai')}
+          className={buttonClass}
+        >
+          <Sparkles aria-hidden="true" size={ICON_SIZE.sm} />
+          <span className="max-w-40 truncate">{aiModelLabel(aiConfig)}</span>
+        </button>
+      )}
+      {showQueue && (
+        <button
+          type="button"
+          aria-label="Open queue settings"
+          onClick={() => onOpenSection('queue')}
+          className={buttonClass}
+        >
+          <ListChecks aria-hidden="true" size={ICON_SIZE.sm} />
+          <span className={`tabular-nums ${failed > 0 ? 'text-error dark:text-dark-error' : ''}`}>
+            {failed > 0 ? `${failed} failed` : `${pending} queued`}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function useActiveIndexTotals() {
+  const { data: indexStatuses = [] } = useAiIndexStatusesQuery();
+  const activeIndexes = indexStatuses.filter(
+    (status) => status.state === 'preparing' || status.state === 'building',
+  );
+  const totals = activeIndexes.reduce(
+    (sum, status) => ({
+      indexed: sum.indexed + status.indexed,
+      total: sum.total + status.total,
+    }),
+    { indexed: 0, total: 0 },
+  );
+  return { indexing: activeIndexes.length > 0, totals: totals };
+}
+
+function StatusLeftControls({
+  accountId,
+  paused,
+  reconnecting,
+  failed,
+  working,
+  refreshing,
+  label,
+  title,
+  traversal,
+  indexing,
+  index,
+  onRefresh,
+  onTogglePaused,
+}: {
+  accountId: string | null;
+  paused: boolean;
+  reconnecting: boolean;
+  failed: boolean;
+  working: boolean;
+  refreshing: boolean;
+  label: string;
+  title: string | undefined;
+  traversal: TraversalStatus | null;
+  indexing: boolean;
+  index: { indexed: number; total: number };
+  onRefresh: () => void;
+  onTogglePaused: () => void;
+}) {
+  const pauseLabel = paused ? 'Resume sync' : 'Pause sync';
+  const refreshDisabled = !accountId || refreshing || reconnecting;
+  return (
+    <div className="flex min-w-0 items-center gap-stack-gap-sm">
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        {working ? (
+          <Loader2 aria-hidden="true" size={ICON_SIZE.sm} className="motion-safe:animate-spin" />
+        ) : (
+          <span className={`size-chip-dot rounded-full ${statusDotClass(failed, paused)}`} />
+        )}
+      </span>
+      <span
+        role="status"
+        aria-live="polite"
+        className={`truncate ${failed ? 'text-error dark:text-dark-error' : ''}`}
+        title={title}
+      >
+        {label}
+      </span>
+      <ActiveProgress
+        traversal={traversal}
+        indexing={indexing}
+        reconnecting={reconnecting}
+        index={index}
+      />
+      {failed && (
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="shrink-0 cursor-pointer underline hover:no-underline"
+        >
+          Retry
+        </button>
+      )}
+      {!paused && (
+        <button
+          type="button"
+          disabled={refreshDisabled}
+          aria-label="Refresh mail"
+          title="Refresh mail"
+          onClick={onRefresh}
+          className={restingControlClass}
+        >
+          <RefreshCw aria-hidden="true" size={ICON_SIZE.sm} />
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label={pauseLabel}
+        title={pauseLabel}
+        onClick={onTogglePaused}
+        className={paused ? pausedControlClass : restingControlClass}
+      >
+        {paused ? (
+          <Play aria-hidden="true" size={ICON_SIZE.sm} />
+        ) : (
+          <Pause aria-hidden="true" size={ICON_SIZE.sm} />
+        )}
+      </button>
+    </div>
+  );
+}
+
+function deriveSyncFlags(input: {
+  paused: boolean;
+  suspended: boolean;
+  syncState: string;
+  traversal: TraversalStatus | null;
+  indexing: boolean;
+  refreshing: boolean;
+}) {
+  const reconnecting = input.suspended && !input.paused;
+  const failed = input.syncState === 'error' && !input.paused && !reconnecting;
+  const hasActiveWork = input.traversal !== null || input.indexing || input.refreshing;
+  const working = !input.paused && !reconnecting && hasActiveWork;
+  return { reconnecting: reconnecting, failed: failed, working: working };
+}
+
 export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   const { queue, lastSynced, syncState, error, refreshing } = useSyncStore();
   const setRoute = useLayoutStore((layout) => layout.setRoute);
@@ -100,18 +337,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   const traversal = activeTraversal(useTraversalStatusQuery(accountId).data);
   const { data: aiConfigs = [] } = useAiConfigsQuery();
   const aiConfig = aiConfigs.find((config) => config.accountId === accountId);
-  const { data: indexStatuses = [] } = useAiIndexStatusesQuery();
-  const activeIndexes = indexStatuses.filter(
-    (status) => status.state === 'preparing' || status.state === 'building',
-  );
-  const index = activeIndexes.reduce(
-    (total, status) => ({
-      indexed: total.indexed + status.indexed,
-      total: total.total + status.total,
-    }),
-    { indexed: 0, total: 0 },
-  );
-  const indexing = activeIndexes.length > 0;
+  const { indexing, totals: index } = useActiveIndexTotals();
 
   useEffect(() => {
     void useSyncStore.getState().hydrate();
@@ -119,9 +345,14 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   }, [accountId]);
 
   const paused = queue.paused;
-  const reconnecting = queue.suspended && !paused;
-  const failed = syncState === 'error' && !paused && !reconnecting;
-  const working = !paused && !reconnecting && (traversal !== null || indexing || refreshing);
+  const { reconnecting, failed, working } = deriveSyncFlags({
+    paused: paused,
+    suspended: queue.suspended,
+    syncState: syncState,
+    traversal: traversal,
+    indexing: indexing,
+    refreshing: refreshing,
+  });
   const refresh = () => {
     if (accountId) void useSyncStore.getState().triggerSync(accountId);
   };
@@ -129,133 +360,48 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
     const command = paused ? 'resume_queue' : 'pause_queue';
     void invoke(command, {}).then((summary) => useSyncStore.getState().setQueue(summary));
   };
+  const openSection = (section: 'ai' | 'queue') => {
+    setActiveSection(section);
+    setRoute('settings');
+  };
 
-  const label = paused
-    ? `Paused · ${queue.pending} queued`
-    : reconnecting
-      ? 'Sync resumes shortly'
-      : traversal
-        ? traversalLabel(traversal)
-        : indexing
-          ? 'Indexing mail'
-          : refreshing
-            ? 'Checking for new mail…'
-            : failed
-              ? "Couldn't sync"
-              : freshness(lastSynced, now);
-
-  const dotClass = failed
-    ? 'bg-error dark:bg-dark-error'
-    : paused
-      ? 'bg-on-warning-container dark:bg-dark-on-warning-container'
-      : 'bg-outline dark:bg-dark-outline';
-
-  const showQueue = queue.pending > 0 || queue.failed > 0;
+  const label = statusLabel({
+    paused: paused,
+    reconnecting: reconnecting,
+    traversal: traversal,
+    indexing: indexing,
+    refreshing: refreshing,
+    failed: failed,
+    pendingCount: queue.pending,
+    lastSynced: lastSynced,
+    now: now,
+  });
 
   return (
     <footer data-testid="status-bar" className={paused ? pausedBarClass : restingBarClass}>
-      <div className="flex min-w-0 items-center gap-stack-gap-sm">
-        <span className="flex size-4 shrink-0 items-center justify-center">
-          {working ? (
-            <Loader2 aria-hidden="true" size={ICON_SIZE.sm} className="motion-safe:animate-spin" />
-          ) : (
-            <span className={`size-chip-dot rounded-full ${dotClass}`} />
-          )}
-        </span>
-        <span
-          role="status"
-          aria-live="polite"
-          className={`truncate ${failed ? 'text-error dark:text-dark-error' : ''}`}
-          title={failed ? error : lastSynced ? exactTime(lastSynced) : undefined}
-        >
-          {label}
-        </span>
-        {traversal && !reconnecting && (
-          <ProgressTrack
-            completed={traversal.persistedCount}
-            total={traversal.discoveredCount}
-            name="Sync progress"
-            unit="messages"
-          />
-        )}
-        {!traversal && indexing && !reconnecting && (
-          <ProgressTrack
-            completed={index.indexed}
-            total={index.total}
-            name="Index progress"
-            unit="messages"
-          />
-        )}
-        {failed && (
-          <button
-            type="button"
-            onClick={refresh}
-            className="shrink-0 cursor-pointer underline hover:no-underline"
-          >
-            Retry
-          </button>
-        )}
-        {!paused && (
-          <button
-            type="button"
-            disabled={!accountId || refreshing || reconnecting}
-            aria-label="Refresh mail"
-            title="Refresh mail"
-            onClick={refresh}
-            className={restingControlClass}
-          >
-            <RefreshCw aria-hidden="true" size={ICON_SIZE.sm} />
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label={paused ? 'Resume sync' : 'Pause sync'}
-          title={paused ? 'Resume sync' : 'Pause sync'}
-          onClick={togglePaused}
-          className={paused ? pausedControlClass : restingControlClass}
-        >
-          {paused ? (
-            <Play aria-hidden="true" size={ICON_SIZE.sm} />
-          ) : (
-            <Pause aria-hidden="true" size={ICON_SIZE.sm} />
-          )}
-        </button>
-      </div>
-      <div className="flex items-center gap-stack-gap-sm">
-        {accountId && (
-          <button
-            type="button"
-            aria-label="Open AI settings"
-            title={aiModelLabel(aiConfig)}
-            onClick={() => {
-              setActiveSection('ai');
-              setRoute('settings');
-            }}
-            className={paused ? pausedQueueClass : restingQueueClass}
-          >
-            <Sparkles aria-hidden="true" size={ICON_SIZE.sm} />
-            <span className="max-w-40 truncate">{aiModelLabel(aiConfig)}</span>
-          </button>
-        )}
-        {showQueue && (
-          <button
-            type="button"
-            aria-label="Open queue settings"
-            onClick={() => {
-              setActiveSection('queue');
-              setRoute('settings');
-            }}
-            className={paused ? pausedQueueClass : restingQueueClass}
-          >
-            <ListChecks aria-hidden="true" size={ICON_SIZE.sm} />
-            <span
-              className={`tabular-nums ${queue.failed > 0 ? 'text-error dark:text-dark-error' : ''}`}
-            >
-              {queue.failed > 0 ? `${queue.failed} failed` : `${queue.pending} queued`}
-            </span>
-          </button>
-        )}
-      </div>
+      <StatusLeftControls
+        accountId={accountId}
+        paused={paused}
+        reconnecting={reconnecting}
+        failed={failed}
+        working={working}
+        refreshing={refreshing}
+        label={label}
+        title={statusTitle(failed, error, lastSynced)}
+        traversal={traversal}
+        indexing={indexing}
+        index={index}
+        onRefresh={refresh}
+        onTogglePaused={togglePaused}
+      />
+      <StatusRightActions
+        accountId={accountId}
+        aiConfig={aiConfig}
+        paused={paused}
+        pending={queue.pending}
+        failed={queue.failed}
+        onOpenSection={openSection}
+      />
     </footer>
   );
 }

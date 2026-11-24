@@ -8,11 +8,56 @@ import {
   stageAttachmentPath,
 } from '@/lib/compose/staging';
 import { invoke } from '@/lib/ipc/commands';
-import { useComposeStore } from '@/stores/compose';
+import { useComposeStore, type ComposeAttachment, type ComposeSession } from '@/stores/compose';
 import type { BodyEditorHandle } from './BodyEditor';
 
 function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
+}
+
+function resolveAttachmentScope(session: ComposeSession | null) {
+  if (!session) return { accountId: '', owner: '' };
+  return { accountId: session.accountId, owner: session.draftId ?? session.id };
+}
+
+function releaseStagedAttachment(accountId: string, owner: string, stagedId: string) {
+  void invoke('release_staged_attachment', {
+    accountId: accountId,
+    owner: owner,
+    id: stagedId,
+  });
+}
+
+function isRemovedInlineImage(
+  attachment: ComposeAttachment,
+  previousHtml: string,
+  currentHtml: string,
+): boolean {
+  if (!attachment.contentId || !attachment.staged) return false;
+  const assetUrl = attachment.staged.assetUrl;
+  return previousHtml.includes(assetUrl) && !currentHtml.includes(assetUrl);
+}
+
+function usePruneRemovedInlineImages(
+  session: ComposeSession | null,
+  accountId: string,
+  owner: string,
+  removeAttachment: (localId: string) => void,
+) {
+  const previousHtml = useRef(session?.html ?? '');
+  useEffect(() => {
+    const html = session?.html ?? '';
+    if (html === previousHtml.current) return;
+    const attachments = session?.attachments ?? [];
+    const removedInlineImages = attachments.filter((attachment) =>
+      isRemovedInlineImage(attachment, previousHtml.current, html),
+    );
+    previousHtml.current = html;
+    removedInlineImages.forEach((attachment) => {
+      removeAttachment(attachment.localId);
+      if (attachment.staged) releaseStagedAttachment(accountId, owner, attachment.staged.id);
+    });
+  }, [session?.html, session?.attachments, accountId, owner, removeAttachment]);
 }
 
 export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null>) {
@@ -22,8 +67,7 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
   const failAttachment = useComposeStore((compose) => compose.failAttachment);
   const removeAttachment = useComposeStore((compose) => compose.removeAttachment);
 
-  const accountId = session?.accountId ?? '';
-  const owner = session?.draftId ?? session?.id ?? '';
+  const { accountId, owner } = resolveAttachmentScope(session);
   const stagePathRef = useRef<(path: string, contentId: string | null) => void>(() => undefined);
 
   const stagePath = useCallback(
@@ -69,13 +113,7 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     (localId: string) => {
       const attachment = session?.attachments.find((entry) => entry.localId === localId);
       removeAttachment(localId);
-      if (attachment?.staged) {
-        void invoke('release_staged_attachment', {
-          accountId: accountId,
-          owner: owner,
-          id: attachment.staged.id,
-        });
-      }
+      if (attachment?.staged) releaseStagedAttachment(accountId, owner, attachment.staged.id);
     },
     [session?.attachments, removeAttachment, accountId, owner],
   );
@@ -88,29 +126,7 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     );
   }, [sessionId]);
 
-  const previousHtml = useRef(session?.html ?? '');
-  useEffect(() => {
-    const html = session?.html ?? '';
-    if (html === previousHtml.current) return;
-    const removedInlineImages = (session?.attachments ?? []).filter(
-      (attachment) =>
-        attachment.contentId &&
-        attachment.staged &&
-        previousHtml.current.includes(attachment.staged.assetUrl) &&
-        !html.includes(attachment.staged.assetUrl),
-    );
-    previousHtml.current = html;
-    removedInlineImages.forEach((attachment) => {
-      removeAttachment(attachment.localId);
-      if (attachment.staged) {
-        void invoke('release_staged_attachment', {
-          accountId: accountId,
-          owner: owner,
-          id: attachment.staged.id,
-        });
-      }
-    });
-  }, [session?.html, session?.attachments, accountId, owner, removeAttachment]);
+  usePruneRemovedInlineImages(session, accountId, owner, removeAttachment);
 
   return { onAttach, onInsertImage, onRemoveAttachment };
 }

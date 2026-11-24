@@ -54,6 +54,19 @@ export default tseslint.config(
       'id-length': ['error', { min: 2, properties: 'never' }],
       'object-shorthand': ['error', 'consistent'],
       '@typescript-eslint/no-non-null-assertion': 'error',
+      'no-nested-ternary': 'error',
+      complexity: ['error', 10],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'IfStatement[alternate]',
+          message: 'Avoid else — use early returns, a named helper, or a lookup table.',
+        },
+        {
+          selector: 'SwitchStatement',
+          message: 'Avoid switch — use a lookup table or early returns.',
+        },
+      ],
       'latentmail/no-magic-numbers': [
         'error',
         {

@@ -31,10 +31,9 @@ pub fn dot_geometry(size: u32) -> DotGeometry {
 
 pub fn dot_color(needs_reauthentication: bool) -> DotColor {
     if needs_reauthentication {
-        DotColor::Reauthentication
-    } else {
-        DotColor::Unread
+        return DotColor::Reauthentication;
     }
+    DotColor::Unread
 }
 
 pub fn dot_rgb(color: DotColor) -> [u8; 3] {

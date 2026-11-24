@@ -12,6 +12,125 @@ import { formatBindingLabel, isMacPlatform, primaryBinding } from '@/lib/keyboar
 import { useCommandBindings } from '@/providers/CommandProvider';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 import { POPOVER_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
+import { wrapIndex } from '@/lib/collections';
+
+type KeyDownContext = {
+  open: boolean;
+  suggestions: SearchSuggestion[];
+  activeIndex: number;
+  draft: string;
+  setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
+  applyAndKeepFocus: (item: SearchSuggestion) => void;
+  handleSubmit: (text: string) => void;
+  clear: () => void;
+};
+
+function stepActiveSuggestion(
+  setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
+  count: number,
+  delta: number,
+) {
+  setActiveIndex((index) => (count === 0 ? -1 : wrapIndex(index, delta, count)));
+}
+
+function activeSuggestion(
+  open: boolean,
+  activeIndex: number,
+  suggestions: SearchSuggestion[],
+): SearchSuggestion | undefined {
+  if (!open || activeIndex < 0) return undefined;
+  return suggestions[activeIndex];
+}
+
+function handleSearchInputKeyDown(event: React.KeyboardEvent, context: KeyDownContext) {
+  const { open, suggestions, activeIndex, draft } = context;
+  const handlers: Record<string, () => void> = {
+    ArrowDown: () => {
+      if (!open) return;
+      event.preventDefault();
+      stepActiveSuggestion(context.setActiveIndex, suggestions.length, 1);
+    },
+    ArrowUp: () => {
+      if (!open) return;
+      event.preventDefault();
+      stepActiveSuggestion(context.setActiveIndex, suggestions.length, -1);
+    },
+    Enter: () => {
+      event.preventDefault();
+      const selected = activeSuggestion(open, activeIndex, suggestions);
+      if (selected) {
+        context.applyAndKeepFocus(selected);
+        return;
+      }
+      context.handleSubmit(draft);
+    },
+    Tab: () => {
+      if (!open) return;
+      event.preventDefault();
+      context.applyAndKeepFocus(suggestions[activeIndex >= 0 ? activeIndex : 0]);
+    },
+    Escape: () => {
+      if (open) return;
+      if (draft.trim().length > 0) {
+        event.preventDefault();
+        context.clear();
+        return;
+      }
+      (event.target as HTMLInputElement).blur();
+    },
+  };
+  handlers[event.key]?.();
+}
+
+function SearchFieldTrailingControls({
+  hasDraft,
+  shortcutLabel,
+  panelOpen,
+  onClear,
+  onTogglePanel,
+}: {
+  hasDraft: boolean;
+  shortcutLabel: string | null;
+  panelOpen: boolean;
+  onClear: () => void;
+  onTogglePanel: () => void;
+}) {
+  return (
+    <>
+      {hasDraft && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          onClick={onClear}
+          className="shrink-0 cursor-pointer rounded p-0.5 text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:text-dark-on-surface"
+        >
+          <X aria-hidden="true" size={ICON_SIZE.base} />
+        </button>
+      )}
+      {shortcutLabel && (
+        <span
+          aria-hidden="true"
+          className="shrink-0 rounded border border-outline-variant px-1.5 py-0.5 text-label-sm text-on-surface-variant dark:border-dark-outline-variant dark:text-dark-on-surface-variant"
+        >
+          {shortcutLabel}
+        </span>
+      )}
+      <button
+        type="button"
+        aria-label={panelOpen ? 'Hide search options' : 'Show search options'}
+        aria-expanded={panelOpen}
+        onClick={onTogglePanel}
+        className="shrink-0 cursor-pointer rounded p-0.5 text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:text-dark-on-surface"
+      >
+        {panelOpen ? (
+          <ChevronUp aria-hidden="true" size={ICON_SIZE.base} />
+        ) : (
+          <ChevronDown aria-hidden="true" size={ICON_SIZE.base} />
+        )}
+      </button>
+    </>
+  );
+}
 
 export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>(
   function SearchField({ labels }, ref) {
@@ -33,7 +152,8 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
     const isMac = isMacPlatform();
     const searchBinding = primaryBinding(useCommandBindings().focusSearch, isMac);
     const hasDraft = draft.length > 0;
-    const showShortcutHint = !hasDraft && searchBinding !== null;
+    const shortcutLabel =
+      !hasDraft && searchBinding !== null ? formatBindingLabel(searchBinding, isMac) : null;
 
     const suggestions = useMemo(() => suggestionsFor(draft, labels), [draft, labels]);
     const open = focused && !dismissed && !panelOpen && suggestions.length > 0;
@@ -95,37 +215,18 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
                   setActiveIndex(-1);
                   setDismissed(false);
                 }}
-                onKeyDown={(event) => {
-                  if (open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-                    event.preventDefault();
-                    const count = suggestions.length;
-                    const delta = event.key === 'ArrowDown' ? 1 : -1;
-                    setActiveIndex((index) => (count === 0 ? -1 : (index + delta + count) % count));
-                    return;
-                  }
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    if (open && activeIndex >= 0 && suggestions[activeIndex]) {
-                      applyAndKeepFocus(suggestions[activeIndex]);
-                    } else {
-                      handleSubmit(draft);
-                    }
-                    return;
-                  }
-                  if (event.key === 'Tab' && open) {
-                    event.preventDefault();
-                    applyAndKeepFocus(suggestions[activeIndex >= 0 ? activeIndex : 0]);
-                    return;
-                  }
-                  if (event.key === 'Escape' && !open) {
-                    if (draft.trim().length > 0) {
-                      event.preventDefault();
-                      clear();
-                    } else {
-                      (event.target as HTMLInputElement).blur();
-                    }
-                  }
-                }}
+                onKeyDown={(event) =>
+                  handleSearchInputKeyDown(event, {
+                    open: open,
+                    suggestions: suggestions,
+                    activeIndex: activeIndex,
+                    draft: draft,
+                    setActiveIndex: setActiveIndex,
+                    applyAndKeepFocus: applyAndKeepFocus,
+                    handleSubmit: handleSubmit,
+                    clear: clear,
+                  })
+                }
                 variant="bare"
                 className="min-w-0 flex-1 text-body-sm text-on-surface placeholder:text-on-surface-variant dark:text-dark-on-surface dark:placeholder:text-dark-on-surface-variant"
               />
@@ -147,37 +248,13 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
-          {hasDraft && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => clear()}
-              className="shrink-0 cursor-pointer rounded p-0.5 text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:text-dark-on-surface"
-            >
-              <X aria-hidden="true" size={ICON_SIZE.base} />
-            </button>
-          )}
-          {showShortcutHint && (
-            <span
-              aria-hidden="true"
-              className="shrink-0 rounded border border-outline-variant px-1.5 py-0.5 text-label-sm text-on-surface-variant dark:border-dark-outline-variant dark:text-dark-on-surface-variant"
-            >
-              {formatBindingLabel(searchBinding, isMac)}
-            </span>
-          )}
-          <button
-            type="button"
-            aria-label={panelOpen ? 'Hide search options' : 'Show search options'}
-            aria-expanded={panelOpen}
-            onClick={() => (panelOpen ? closePanel() : openPanel())}
-            className="shrink-0 cursor-pointer rounded p-0.5 text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:text-dark-on-surface"
-          >
-            {panelOpen ? (
-              <ChevronUp aria-hidden="true" size={ICON_SIZE.base} />
-            ) : (
-              <ChevronDown aria-hidden="true" size={ICON_SIZE.base} />
-            )}
-          </button>
+          <SearchFieldTrailingControls
+            hasDraft={hasDraft}
+            shortcutLabel={shortcutLabel}
+            panelOpen={panelOpen}
+            onClear={() => clear()}
+            onTogglePanel={() => (panelOpen ? closePanel() : openPanel())}
+          />
         </div>
         {panelOpen && (
           <AdvancedSearchPanel

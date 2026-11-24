@@ -117,6 +117,23 @@ const ACCOUNT_BAR_CLASSES: Record<
   },
 };
 
+function resolveAccountBarState(pausedCount: number, isWorking: boolean): AccountBarState {
+  if (pausedCount > 0) return 'paused';
+  if (isWorking) return 'running';
+  return 'idle';
+}
+
+function resolveAccountBarStatusLabel(
+  state: AccountBarState,
+  pausedCount: number,
+  totalLanes: number,
+  activeCount: number,
+): string {
+  if (state === 'paused') return pausedCount === totalLanes ? 'Paused' : 'Partly paused';
+  if (state === 'running') return `${activeCount} active`;
+  return 'Idle';
+}
+
 export function describeAccountBar(snapshot: AccountQueueSnapshot): {
   state: AccountBarState;
   statusLabel: string;
@@ -129,15 +146,13 @@ export function describeAccountBar(snapshot: AccountQueueSnapshot): {
 } {
   const pausedLanes = snapshot.lanes.filter((lane) => lane.state === 'paused');
   const isWorking = snapshot.active > 0 || snapshot.queued > 0;
-  const state: AccountBarState = pausedLanes.length > 0 ? 'paused' : isWorking ? 'running' : 'idle';
-  const statusLabel =
-    state === 'paused'
-      ? pausedLanes.length === snapshot.lanes.length
-        ? 'Paused'
-        : 'Partly paused'
-      : state === 'running'
-        ? `${snapshot.active} active`
-        : 'Idle';
+  const state = resolveAccountBarState(pausedLanes.length, isWorking);
+  const statusLabel = resolveAccountBarStatusLabel(
+    state,
+    pausedLanes.length,
+    snapshot.lanes.length,
+    snapshot.active,
+  );
   const queuedLabel =
     snapshot.queued > 0 ? `${snapshot.queued.toLocaleString()} queued` : 'Nothing queued';
   return {

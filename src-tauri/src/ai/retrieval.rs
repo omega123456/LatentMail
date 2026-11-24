@@ -215,6 +215,13 @@ fn scored(outputs: &[ArmOutput]) -> Vec<Selected> {
         .collect()
 }
 
+fn passage_body(chunk_index: usize, raw: &str) -> &str {
+    if chunk_index == 0 {
+        return raw.split_once("\n\n").map_or(raw, |(_, rest)| rest);
+    }
+    raw
+}
+
 fn assemble(selected: &[Selected], sources: &[PassageSource]) -> Vec<Passage> {
     let chunked: Vec<(i64, Vec<String>)> = sources
         .iter()
@@ -244,12 +251,7 @@ fn assemble(selected: &[Selected], sources: &[PassageSource]) -> Vec<Passage> {
                 .1;
             let index = usize::try_from(entry.chunk_index).ok()?;
             let raw = chunks.get(index)?;
-            let body = if index == 0 {
-                raw.split_once("\n\n")
-                    .map_or(raw.as_str(), |(_, rest)| rest)
-            } else {
-                raw.as_str()
-            };
+            let body = passage_body(index, raw);
             Some(Passage {
                 message_seq: entry.message_seq,
                 chunk_index: entry.chunk_index,
@@ -320,6 +322,35 @@ async fn unfiltered_pass(
     Ok((vector, outputs))
 }
 
+async fn resolve_planned_vector(
+    provider: &Provider,
+    embedding_model: &str,
+    query: &str,
+    contextual: bool,
+    fallback: Vec<f32>,
+) -> Option<Vec<f32>> {
+    if !contextual {
+        return Some(fallback);
+    }
+    provider
+        .embed(embedding_model, vec![query.to_owned()])
+        .await
+        .ok()
+        .and_then(|vectors| vectors.into_iter().next())
+}
+
+fn select_outputs(
+    unfiltered: Vec<ArmOutput>,
+    filtered: Vec<ArmOutput>,
+    prefer_filtered: bool,
+) -> Vec<ArmOutput> {
+    let has_filtered_hits = filtered.iter().any(|output| !sequences(output).is_empty());
+    if prefer_filtered && has_filtered_hits {
+        return filtered;
+    }
+    unfiltered.into_iter().chain(filtered).collect()
+}
+
 pub async fn retrieve(
     provider: &Provider,
     storage: &Storage,
@@ -345,21 +376,15 @@ pub async fn retrieve(
     }
     let query = plan.query.as_deref().unwrap_or(request.question);
     let contextual = plan.query.is_some();
-    let planned_vector = if contextual {
-        provider
-            .embed(request.embedding_model, vec![query.to_owned()])
-            .await
-            .ok()
-            .and_then(|vectors| vectors.into_iter().next())
-    } else {
-        Some(vector)
-    };
+    let planned_vector =
+        resolve_planned_vector(provider, request.embedding_model, query, contextual, vector).await;
     if cancelled(cancel) {
         return Ok(Retrieval::Cancelled);
     }
     let constrained = !plan.filters.is_empty();
+    let prefer_filtered = constrained || contextual;
     let mut extra: Vec<Arm> = Vec::new();
-    if constrained || contextual {
+    if prefer_filtered {
         if let Some(vector) = planned_vector {
             extra.push(Arm::Vector(vector, plan.filters.clone()));
         }
@@ -380,13 +405,7 @@ pub async fn retrieve(
     }
     let (unfiltered, unfiltered_failure) = split(outcomes);
     let (filtered, filtered_failure) = split(narrowed);
-    let outputs = if (constrained || contextual)
-        && filtered.iter().any(|output| !sequences(output).is_empty())
-    {
-        filtered
-    } else {
-        unfiltered.into_iter().chain(filtered).collect()
-    };
+    let outputs = select_outputs(unfiltered, filtered, prefer_filtered);
     if let (true, Some(error)) = (outputs.is_empty(), unfiltered_failure.or(filtered_failure)) {
         return Err(error);
     }

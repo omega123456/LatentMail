@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { toggleInSet } from '@/lib/collections';
 
 type MultiSelectState = {
   selectedIds: Set<string>;
@@ -14,12 +15,10 @@ export const useMultiSelectStore = create<MultiSelectState>((set, get) => ({
   selectedIds: new Set(),
   anchorId: null,
   toggle: (id) =>
-    set((state) => {
-      const selectedIds = new Set(state.selectedIds);
-      if (selectedIds.has(id)) selectedIds.delete(id);
-      else selectedIds.add(id);
-      return { selectedIds: selectedIds, anchorId: id };
-    }),
+    set((state) => ({
+      selectedIds: toggleInSet(state.selectedIds, id),
+      anchorId: id,
+    })),
   selectRange: (orderedIds, targetId) => {
     const anchor = get().anchorId ?? targetId;
     const anchorIndex = orderedIds.indexOf(anchor);

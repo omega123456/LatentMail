@@ -1,9 +1,37 @@
-import { AlertCircle, Loader2, X } from 'lucide-react';
-import { createElement } from 'react';
+import { AlertCircle, Loader2, X, type LucideIcon } from 'lucide-react';
+import { createElement, type ReactNode } from 'react';
 import type { ComposeAttachment } from '@/stores/compose';
 import { formatFileSize } from '@/lib/format/file-size';
 import { resolveMimeIcon } from '@/lib/format/mime-icon';
 import { ICON_SIZE } from '@/components/shared/icon-size';
+
+const ERROR_WELL_CLASS =
+  'bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container';
+const NEUTRAL_WELL_CLASS =
+  'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant';
+
+function wellClass(
+  failed: boolean,
+  coloured: boolean,
+  wellClassName: string,
+  inkClassName: string,
+): string {
+  if (failed) return ERROR_WELL_CLASS;
+  if (coloured) return `${wellClassName} ${inkClassName}`;
+  return NEUTRAL_WELL_CLASS;
+}
+
+function wellGlyph(state: ComposeAttachment['state'], Icon: LucideIcon): ReactNode {
+  if (state === 'reading') return <Loader2 className="animate-spin" size={ICON_SIZE.base} />;
+  if (state === 'failed') return <AlertCircle size={ICON_SIZE.base} />;
+  return createElement(Icon, { size: ICON_SIZE.base });
+}
+
+function attachmentSubtitle(attachment: ComposeAttachment): string {
+  if (attachment.state === 'reading') return 'Reading…';
+  if (attachment.state === 'failed') return attachment.error ?? "Couldn't read";
+  return formatFileSize(attachment.size);
+}
 
 export function AttachmentChip({
   attachment,
@@ -26,21 +54,9 @@ export function AttachmentChip({
     >
       <div
         aria-hidden="true"
-        className={`grid size-7 shrink-0 place-items-center rounded ${
-          failed
-            ? 'bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container'
-            : coloured
-              ? `${wellClassName} ${inkClassName}`
-              : 'bg-surface-container-high text-on-surface-variant dark:bg-dark-surface-container-high dark:text-dark-on-surface-variant'
-        }`}
+        className={`grid size-7 shrink-0 place-items-center rounded ${wellClass(failed, coloured, wellClassName, inkClassName)}`}
       >
-        {reading ? (
-          <Loader2 className="animate-spin" size={ICON_SIZE.base} />
-        ) : failed ? (
-          <AlertCircle size={ICON_SIZE.base} />
-        ) : (
-          createElement(Icon, { size: 16 })
-        )}
+        {wellGlyph(attachment.state, Icon)}
       </div>
       <div className="min-w-0 flex-1">
         <p
@@ -54,11 +70,7 @@ export function AttachmentChip({
             failed ? 'text-error dark:text-dark-error' : 'text-outline dark:text-dark-outline'
           }`}
         >
-          {reading
-            ? 'Reading…'
-            : failed
-              ? (attachment.error ?? "Couldn't read")
-              : formatFileSize(attachment.size)}
+          {attachmentSubtitle(attachment)}
         </p>
       </div>
       <button

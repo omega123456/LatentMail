@@ -65,7 +65,7 @@ pub async fn run_backfill_step(
     let needs_mailbox_total = existing
         .as_ref()
         .is_none_or(|cursor| cursor.discovered_count <= cursor.persisted_count);
-    let (token, discovered, persisted) = match existing {
+    let (token, mut discovered, persisted) = match existing {
         Some(cursor) => (
             cursor.position,
             cursor.discovered_count,
@@ -74,11 +74,9 @@ pub async fn run_backfill_step(
         None => (None, 0, 0),
     };
 
-    let discovered = if needs_mailbox_total {
-        client.profile().await?.messages_total
-    } else {
-        discovered
-    };
+    if needs_mailbox_total {
+        discovered = client.profile().await?.messages_total;
+    }
 
     let options = ListOptions {
         include_spam_and_trash: true,
@@ -133,11 +131,7 @@ pub async fn run_backfill_step(
             discovered_count: discovered,
             persisted_count: persisted,
             completed: is_last_page,
-            state: if is_last_page {
-                TraversalState::Complete
-            } else {
-                TraversalState::Backfilling
-            },
+            state: backfill_state(is_last_page),
             last_advanced_at: to_millis(now),
             is_resumed: resumed,
         },
@@ -212,11 +206,7 @@ fn write_traversal_message(
         is_starred: message.label_ids.iter().any(|id| id == "STARRED"),
         history_id: message.history_id,
         truncated_body: truncated_body,
-        html_presence: if message.oversize {
-            HtmlPresence::TooLarge
-        } else {
-            HtmlPresence::NeverFetched
-        },
+        html_presence: traversal_html_presence(message.oversize),
     };
     let changed = MessageRepository::write_traversal_state(connection, &record)?;
     if changed {
@@ -242,4 +232,18 @@ fn write_traversal_message(
         crate::attachments::seed_cache(cache, account_id, &message.id, &message.attachment_parts);
     }
     Ok(())
+}
+
+fn backfill_state(is_last_page: bool) -> TraversalState {
+    if is_last_page {
+        return TraversalState::Complete;
+    }
+    TraversalState::Backfilling
+}
+
+fn traversal_html_presence(oversize: bool) -> HtmlPresence {
+    if oversize {
+        return HtmlPresence::TooLarge;
+    }
+    HtmlPresence::NeverFetched
 }

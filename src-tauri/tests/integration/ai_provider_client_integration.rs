@@ -97,20 +97,16 @@ async fn embedding_rate_limits_retry_inside_the_request_with_injected_backoff() 
 #[tokio::test]
 async fn provider_classifies_authentication_server_and_malformed_responses_without_secrets() {
     let server = MockServer::start().await;
-    for (endpoint, status, expected) in [
-        ("/v1/models", 401, ProviderError::Authentication),
-        ("/v1/embeddings", 503, ProviderError::Server),
-        ("/v1/chat/completions", 400, ProviderError::Response),
+    for (http_method, endpoint, status, expected) in [
+        ("GET", "/v1/models", 401, ProviderError::Authentication),
+        ("POST", "/v1/embeddings", 503, ProviderError::Server),
+        ("POST", "/v1/chat/completions", 400, ProviderError::Response),
     ] {
-        Mock::given(method(if endpoint == "/v1/models" {
-            "GET"
-        } else {
-            "POST"
-        }))
-        .and(path(endpoint))
-        .respond_with(refused(status, "rejected"))
-        .mount(&server)
-        .await;
+        Mock::given(method(http_method))
+            .and(path(endpoint))
+            .respond_with(refused(status, "rejected"))
+            .mount(&server)
+            .await;
         let provider =
             Provider::new(&format!("{}/v1", server.uri()), Some("secret".into())).unwrap();
         let error = match endpoint {

@@ -5,6 +5,13 @@ use latentmail_lib::storage::addresses::{
 use latentmail_lib::storage::{Account, AccountRepository, Storage, ThreadRepository};
 use latentmail_lib::sync::materialize;
 
+fn primary_label(sent_label: bool) -> String {
+    if sent_label {
+        return "SENT".into();
+    }
+    "INBOX".into()
+}
+
 fn message(
     id: &str,
     thread_id: &str,
@@ -17,11 +24,7 @@ fn message(
         id: id.into(),
         thread_id: thread_id.into(),
         history_id: sent_at,
-        label_ids: if sent_label {
-            vec!["SENT".into()]
-        } else {
-            vec!["INBOX".into()]
-        },
+        label_ids: vec![primary_label(sent_label)],
         snippet: String::new(),
         sent_at: sent_at,
         rfc_message_id: None,

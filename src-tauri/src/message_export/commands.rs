@@ -75,6 +75,13 @@ async fn write_file(destination: String, contents: Vec<u8>) -> Result<(), String
         .map_err(|error| error.to_string())
 }
 
+fn resolve_to_header(to: String, fallback_recipients: String) -> String {
+    if to.is_empty() {
+        return fallback_recipients;
+    }
+    to
+}
+
 #[tauri::command]
 pub async fn read_message_source<R: Runtime>(
     app: AppHandle<R>,
@@ -91,11 +98,7 @@ pub async fn read_message_source<R: Runtime>(
         message_id: message.rfc_message_id,
         sent_at: to_millis(message.sent_at),
         sender: message.sender,
-        to: if to.is_empty() {
-            message.recipients
-        } else {
-            to
-        },
+        to: resolve_to_header(to, message.recipients),
         cc: cc,
         subject: message.subject,
         authentication_results: authentication_results(&raw),

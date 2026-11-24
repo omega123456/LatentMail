@@ -85,10 +85,16 @@ export function expandUnmodifiedOverride(key: string): string[] {
   return [key];
 }
 
+function primaryModifier(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>): string {
+  if (event.metaKey) return 'Meta';
+  if (event.ctrlKey) return 'Control';
+  return '';
+}
+
 export function captureBinding(
   event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey'>,
 ): string[] {
-  const modifier = event.metaKey ? 'Meta' : event.ctrlKey ? 'Control' : '';
+  const modifier = primaryModifier(event);
   if (!modifier) return expandUnmodifiedOverride(event.key);
   const key = normalizeKey(event.key);
   return [`${modifier}${event.shiftKey ? '+Shift' : ''}+${key}`];

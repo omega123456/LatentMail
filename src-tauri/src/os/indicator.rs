@@ -18,36 +18,35 @@ impl IndicatorState {
 
     pub fn badge(&self) -> Option<String> {
         if self.needs_reauthentication {
-            Some("!".to_owned())
-        } else if self.unread_count == 0 {
-            None
-        } else if self.unread_count > MAX_EXACT_BADGE_COUNT {
-            Some(format!("{MAX_EXACT_BADGE_COUNT}+"))
-        } else {
-            Some(self.unread_count.to_string())
+            return Some("!".to_owned());
         }
+        if self.unread_count == 0 {
+            return None;
+        }
+        if self.unread_count > MAX_EXACT_BADGE_COUNT {
+            return Some(format!("{MAX_EXACT_BADGE_COUNT}+"));
+        }
+        Some(self.unread_count.to_string())
     }
 
     pub fn tooltip(&self) -> String {
         if self.needs_reauthentication {
-            format!(
+            return format!(
                 "LatentMail — {} unread — account needs re-authentication",
                 self.unread_count
-            )
-        } else {
-            format!("LatentMail — {} unread", self.unread_count)
+            );
         }
+        format!("LatentMail — {} unread", self.unread_count)
     }
 
     pub fn status_row(&self) -> String {
         if self.needs_reauthentication {
-            format!(
+            return format!(
                 "{} unread messages — account needs re-authentication",
                 self.unread_count
-            )
-        } else {
-            format!("{} unread messages", self.unread_count)
+            );
         }
+        format!("{} unread messages", self.unread_count)
     }
 }
 

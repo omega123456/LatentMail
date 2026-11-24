@@ -86,62 +86,80 @@ fn tokenize(text: &str) -> Vec<RawToken> {
         if index >= chars.len() {
             break;
         }
-        let negated = chars[index] == '-';
-        if negated {
-            index += 1;
-        }
-        let start = index;
-        while index < chars.len() && !chars[index].is_whitespace() && chars[index] != '"' {
-            index += 1;
-        }
-        let prefix: String = chars[start..index].iter().collect();
-        if index < chars.len() && chars[index] == '"' {
-            index += 1;
-            let value_start = index;
-            while index < chars.len() && chars[index] != '"' {
-                index += 1;
-            }
-            let value: String = chars[value_start..index].iter().collect();
-            if index < chars.len() {
-                index += 1;
-            }
-            if let Some(key) = prefix.strip_suffix(':') {
-                tokens.push(RawToken {
-                    negated: negated,
-                    key: Some(key.to_lowercase()),
-                    value: value,
-                });
-            } else if prefix.is_empty() {
-                tokens.push(RawToken {
-                    negated: negated,
-                    key: None,
-                    value: value,
-                });
-            } else {
-                let raw: String = chars[start..index].iter().collect();
-                tokens.push(RawToken {
-                    negated: negated,
-                    key: None,
-                    value: raw,
-                });
-            }
-        } else if let Some(colon_position) = prefix.find(':') {
-            let key = prefix[..colon_position].to_lowercase();
-            let value = prefix[colon_position + 1..].to_owned();
-            tokens.push(RawToken {
-                negated: negated,
-                key: Some(key),
-                value: value,
-            });
-        } else if !prefix.is_empty() {
-            tokens.push(RawToken {
-                negated: negated,
-                key: None,
-                value: prefix,
-            });
+        if let Some(token) = read_token(&chars, &mut index) {
+            tokens.push(token);
         }
     }
     tokens
+}
+
+fn read_token(chars: &[char], index: &mut usize) -> Option<RawToken> {
+    let negated = chars[*index] == '-';
+    if negated {
+        *index += 1;
+    }
+    let start = *index;
+    while *index < chars.len() && !chars[*index].is_whitespace() && chars[*index] != '"' {
+        *index += 1;
+    }
+    let prefix: String = chars[start..*index].iter().collect();
+    let starts_quote = *index < chars.len() && chars[*index] == '"';
+    if starts_quote {
+        return Some(read_quoted_token(chars, index, start, prefix, negated));
+    }
+    if let Some(colon_position) = prefix.find(':') {
+        return Some(RawToken {
+            negated: negated,
+            key: Some(prefix[..colon_position].to_lowercase()),
+            value: prefix[colon_position + 1..].to_owned(),
+        });
+    }
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(RawToken {
+        negated: negated,
+        key: None,
+        value: prefix,
+    })
+}
+
+fn read_quoted_token(
+    chars: &[char],
+    index: &mut usize,
+    start: usize,
+    prefix: String,
+    negated: bool,
+) -> RawToken {
+    *index += 1;
+    let value_start = *index;
+    while *index < chars.len() && chars[*index] != '"' {
+        *index += 1;
+    }
+    let value: String = chars[value_start..*index].iter().collect();
+    if *index < chars.len() {
+        *index += 1;
+    }
+    if let Some(key) = prefix.strip_suffix(':') {
+        return RawToken {
+            negated: negated,
+            key: Some(key.to_lowercase()),
+            value: value,
+        };
+    }
+    if prefix.is_empty() {
+        return RawToken {
+            negated: negated,
+            key: None,
+            value: value,
+        };
+    }
+    let raw: String = chars[start..*index].iter().collect();
+    RawToken {
+        negated: negated,
+        key: None,
+        value: raw,
+    }
 }
 
 pub(crate) fn fts_quote(value: &str) -> String {
@@ -162,10 +180,10 @@ impl TextTerms {
         if negated {
             self.excludes.push(raw);
             self.fts_negative.push(clause);
-        } else {
-            self.includes.push(raw);
-            self.fts_positive.push(clause);
+            return;
         }
+        self.includes.push(raw);
+        self.fts_positive.push(clause);
     }
 
     fn bind_field(
@@ -182,13 +200,15 @@ impl TextTerms {
         if negated {
             self.excludes.push(value);
             self.fts_negative.push(clause);
-        } else if field.is_none() {
+            return;
+        }
+        if field.is_none() {
             *field = Some(value);
             self.fts_positive.push(clause);
-        } else {
-            self.includes.push(value);
-            self.fts_positive.push(clause);
+            return;
         }
+        self.includes.push(value);
+        self.fts_positive.push(clause);
     }
 }
 
@@ -220,130 +240,205 @@ fn parse_duration_cutoff(now: DateTime<Utc>, value: &str) -> Option<i64> {
     Some(cutoff.timestamp())
 }
 
-fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
-    let mut from: Option<String> = None;
-    let mut to: Option<String> = None;
-    let mut subject: Option<String> = None;
-    let mut terms = TextTerms::default();
-    let mut predicates: Vec<Predicate> = Vec::new();
+struct QueryAccumulator {
+    now: DateTime<Utc>,
+    from: Option<String>,
+    to: Option<String>,
+    subject: Option<String>,
+    terms: TextTerms,
+    predicates: Vec<Predicate>,
+}
 
-    for token in tokens {
+type TokenHandler = fn(&mut QueryAccumulator, String, bool);
+
+const TOKEN_HANDLERS: &[(&str, TokenHandler)] = &[
+    ("from", handle_from),
+    ("to", handle_to),
+    ("subject", handle_subject),
+    ("label", handle_label),
+    ("in", handle_label),
+    ("is", handle_is),
+    ("has", handle_has),
+    ("before", handle_before),
+    ("after", handle_after),
+    ("newer_than", handle_newer_than),
+    ("older_than", handle_older_than),
+];
+
+impl QueryAccumulator {
+    fn new(now: DateTime<Utc>) -> Self {
+        Self {
+            now: now,
+            from: None,
+            to: None,
+            subject: None,
+            terms: TextTerms::default(),
+            predicates: Vec::new(),
+        }
+    }
+
+    fn apply_token(&mut self, token: RawToken) {
         let RawToken {
             negated,
             key,
             value,
         } = token;
-        match key.as_deref() {
-            None => {
-                if value.trim().is_empty() {
-                    continue;
-                }
-                terms.push_literal(value, negated);
+        let Some(key) = key else {
+            if !value.trim().is_empty() {
+                self.terms.push_literal(value, negated);
             }
-            Some("from") => terms.bind_field(&mut from, "sender", value, negated),
-            Some("to") => terms.bind_field(&mut to, "recipients", value, negated),
-            Some("subject") => terms.bind_field(&mut subject, "subject", value, negated),
-            Some("label") | Some("in") => {
-                if !value.trim().is_empty() {
-                    predicates.push(Predicate {
-                        kind: PredicateKind::Label(value),
-                        negated: negated,
-                    });
-                }
-            }
-            Some("is") => match value.to_lowercase().as_str() {
-                "unread" => predicates.push(Predicate {
-                    kind: PredicateKind::Unread,
-                    negated: negated,
-                }),
-                "read" => predicates.push(Predicate {
-                    kind: PredicateKind::Unread,
-                    negated: !negated,
-                }),
-                "starred" => predicates.push(Predicate {
-                    kind: PredicateKind::Starred,
-                    negated: negated,
-                }),
-                "unstarred" => predicates.push(Predicate {
-                    kind: PredicateKind::Starred,
-                    negated: !negated,
-                }),
-                _ => terms.push_literal(format!("is:{value}"), negated),
-            },
-            Some("has") => match value.to_lowercase().as_str() {
-                "attachment" => predicates.push(Predicate {
-                    kind: PredicateKind::HasAttachment,
-                    negated: negated,
-                }),
-                _ => terms.push_literal(format!("has:{value}"), negated),
-            },
-            Some("before") => match parse_absolute_cutoff(&value) {
-                Some(cutoff) => predicates.push(Predicate {
-                    kind: PredicateKind::SentBefore(cutoff),
-                    negated: negated,
-                }),
-                None => terms.push_literal(format!("before:{value}"), negated),
-            },
-            Some("after") => match parse_absolute_cutoff(&value) {
-                Some(cutoff) => predicates.push(Predicate {
-                    kind: PredicateKind::SentAfter(cutoff),
-                    negated: negated,
-                }),
-                None => terms.push_literal(format!("after:{value}"), negated),
-            },
-            Some("newer_than") => match parse_duration_cutoff(now, &value) {
-                Some(cutoff) => predicates.push(Predicate {
-                    kind: PredicateKind::SentAfter(cutoff),
-                    negated: negated,
-                }),
-                None => terms.push_literal(format!("newer_than:{value}"), negated),
-            },
-            Some("older_than") => match parse_duration_cutoff(now, &value) {
-                Some(cutoff) => predicates.push(Predicate {
-                    kind: PredicateKind::SentBefore(cutoff),
-                    negated: negated,
-                }),
-                None => terms.push_literal(format!("older_than:{value}"), negated),
-            },
-            Some(unknown) => terms.push_literal(format!("{unknown}:{value}"), negated),
+            return;
+        };
+        if let Some((_, handler)) = TOKEN_HANDLERS
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+        {
+            handler(self, value, negated);
+            return;
         }
+        self.terms.push_literal(format!("{key}:{value}"), negated);
     }
 
-    let TextTerms {
-        includes,
-        excludes,
-        fts_positive,
-        fts_negative,
-    } = terms;
-    let match_expression = if !fts_positive.is_empty() {
+    fn push_predicate(&mut self, kind: PredicateKind, negated: bool) {
+        self.predicates.push(Predicate {
+            kind: kind,
+            negated: negated,
+        });
+    }
+
+    fn finish(mut self) -> ParsedQuery {
+        let match_expression = finalize_match_expression(
+            &self.terms.fts_positive,
+            self.terms.fts_negative,
+            &mut self.predicates,
+        );
+        ParsedQuery {
+            has_text_term: match_expression.is_some(),
+            match_expression: match_expression,
+            from: self.from,
+            to: self.to,
+            subject: self.subject,
+            includes: self.terms.includes,
+            excludes: self.terms.excludes,
+            predicates: self.predicates,
+        }
+    }
+}
+
+fn handle_from(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    accumulator
+        .terms
+        .bind_field(&mut accumulator.from, "sender", value, negated);
+}
+
+fn handle_to(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    accumulator
+        .terms
+        .bind_field(&mut accumulator.to, "recipients", value, negated);
+}
+
+fn handle_subject(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    accumulator
+        .terms
+        .bind_field(&mut accumulator.subject, "subject", value, negated);
+}
+
+fn handle_label(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    if value.trim().is_empty() {
+        return;
+    }
+    accumulator.push_predicate(PredicateKind::Label(value), negated);
+}
+
+fn handle_is(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    match value.to_lowercase().as_str() {
+        "unread" => accumulator.push_predicate(PredicateKind::Unread, negated),
+        "read" => accumulator.push_predicate(PredicateKind::Unread, !negated),
+        "starred" => accumulator.push_predicate(PredicateKind::Starred, negated),
+        "unstarred" => accumulator.push_predicate(PredicateKind::Starred, !negated),
+        _ => accumulator
+            .terms
+            .push_literal(format!("is:{value}"), negated),
+    }
+}
+
+fn handle_has(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    if value.eq_ignore_ascii_case("attachment") {
+        accumulator.push_predicate(PredicateKind::HasAttachment, negated);
+        return;
+    }
+    accumulator
+        .terms
+        .push_literal(format!("has:{value}"), negated);
+}
+
+fn handle_before(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    let Some(cutoff) = parse_absolute_cutoff(&value) else {
+        accumulator
+            .terms
+            .push_literal(format!("before:{value}"), negated);
+        return;
+    };
+    accumulator.push_predicate(PredicateKind::SentBefore(cutoff), negated);
+}
+
+fn handle_after(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    let Some(cutoff) = parse_absolute_cutoff(&value) else {
+        accumulator
+            .terms
+            .push_literal(format!("after:{value}"), negated);
+        return;
+    };
+    accumulator.push_predicate(PredicateKind::SentAfter(cutoff), negated);
+}
+
+fn handle_newer_than(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    let Some(cutoff) = parse_duration_cutoff(accumulator.now, &value) else {
+        accumulator
+            .terms
+            .push_literal(format!("newer_than:{value}"), negated);
+        return;
+    };
+    accumulator.push_predicate(PredicateKind::SentAfter(cutoff), negated);
+}
+
+fn handle_older_than(accumulator: &mut QueryAccumulator, value: String, negated: bool) {
+    let Some(cutoff) = parse_duration_cutoff(accumulator.now, &value) else {
+        accumulator
+            .terms
+            .push_literal(format!("older_than:{value}"), negated);
+        return;
+    };
+    accumulator.push_predicate(PredicateKind::SentBefore(cutoff), negated);
+}
+
+fn finalize_match_expression(
+    fts_positive: &[String],
+    fts_negative: Vec<String>,
+    predicates: &mut Vec<Predicate>,
+) -> Option<String> {
+    if !fts_positive.is_empty() {
         let positive = fts_positive.join(" ");
         if fts_negative.is_empty() {
-            Some(positive)
-        } else {
-            Some(format!("{positive} NOT ({})", fts_negative.join(" OR ")))
+            return Some(positive);
         }
-    } else if !fts_negative.is_empty() {
-        for clause in fts_negative {
-            predicates.push(Predicate {
-                kind: PredicateKind::TextExcludes(clause),
-                negated: false,
-            });
-        }
-        None
-    } else {
-        None
-    };
-
-    ParsedQuery {
-        has_text_term: match_expression.is_some(),
-        match_expression: match_expression,
-        from: from,
-        to: to,
-        subject: subject,
-        includes: includes,
-        excludes: excludes,
-        predicates: predicates,
+        return Some(format!("{positive} NOT ({})", fts_negative.join(" OR ")));
     }
+    for clause in fts_negative {
+        predicates.push(Predicate {
+            kind: PredicateKind::TextExcludes(clause),
+            negated: false,
+        });
+    }
+    None
+}
+
+fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
+    let mut accumulator = QueryAccumulator::new(now);
+    for token in tokens {
+        accumulator.apply_token(token);
+    }
+    accumulator.finish()
 }
 
 pub fn parse(text: &str, now: DateTime<Utc>) -> Result<ParsedQuery, QueryError> {

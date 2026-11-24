@@ -20,16 +20,25 @@ import type { LabelMenuEntry, LabelMembership } from '@/components/actions/Label
 
 const FALLBACK_SWATCH = LABEL_COLOR_PALETTE[0];
 
+function threadSenderLabel(isSent: boolean, label: string | null): string {
+  if (isSent) return label ? `To: ${label}` : '(No recipient)';
+  return label ?? '(No sender)';
+}
+
+function membershipState(presentCount: number, totalCount: number): LabelMembership {
+  if (totalCount === 0 || presentCount === 0) return 'unchecked';
+  return presentCount === totalCount ? 'checked' : 'indeterminate';
+}
+
 export function mapThreadToRow(thread: MailThread): Conversation {
   const systemLabelIds = thread.systemLabelIds ?? [];
   const isSent = systemLabelIds.includes('SENT');
   const identity = isSent ? thread.sentRecipient : thread.sender;
   const label = identity?.display ?? null;
   const address = identity?.address ?? null;
-  const sender = isSent ? (label ? `To: ${label}` : '(No recipient)') : (label ?? '(No sender)');
   return {
     id: thread.id,
-    sender: sender,
+    sender: threadSenderLabel(isSent, label),
     identityLabel: label,
     avatarDomain: domainFor(address),
     subject: thread.subject || '(No subject)',
@@ -76,17 +85,11 @@ export function computeThreadLabelMembership(
     .filter((label) => label.kind === 'user')
     .map((label) => {
       const presentCount = messagesLabelIds.filter((ids) => ids.includes(label.id)).length;
-      const membership: LabelMembership =
-        messagesLabelIds.length === 0 || presentCount === 0
-          ? 'unchecked'
-          : presentCount === messagesLabelIds.length
-            ? 'checked'
-            : 'indeterminate';
       return {
         id: label.id,
         name: label.name,
         color: labelColorId(label),
-        membership: membership,
+        membership: membershipState(presentCount, messagesLabelIds.length),
       };
     });
 }

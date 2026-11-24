@@ -23,10 +23,19 @@ fn operation(id: &str) -> QueueOperation {
     }
 }
 
+fn expected_settling_seconds() -> i64 {
+    if cfg!(target_os = "macos") {
+        return 7;
+    }
+    15
+}
+
 #[test]
 fn production_settling_delay_matches_the_platform() {
-    let expected = if cfg!(target_os = "macos") { 7 } else { 15 };
-    assert_eq!(settling_delay(), Duration::seconds(expected));
+    assert_eq!(
+        settling_delay(),
+        Duration::seconds(expected_settling_seconds())
+    );
 }
 
 #[tokio::test(start_paused = true)]

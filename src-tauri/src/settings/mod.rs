@@ -242,35 +242,92 @@ impl SettingsService {
     }
 }
 
+type SettingApplier = fn(&mut Settings, Value) -> bool;
+
+const SETTING_APPLIERS: &[(&str, SettingApplier)] = &[
+    ("theme", |settings, value| {
+        set_value(&mut settings.theme, value)
+    }),
+    ("layout", |settings, value| {
+        set_value(&mut settings.layout, value)
+    }),
+    ("density", |settings, value| {
+        set_value(&mut settings.density, value)
+    }),
+    ("sidebarCollapsed", |settings, value| {
+        set_value(&mut settings.sidebar_collapsed, value)
+    }),
+    ("sidebarWidth", |settings, value| {
+        set_value(&mut settings.sidebar_width, value)
+    }),
+    ("listWidth", |settings, value| {
+        set_value(&mut settings.list_width, value)
+    }),
+    ("readerHeight", |settings, value| {
+        set_value(&mut settings.reader_height, value)
+    }),
+    ("assistantWidth", |settings, value| {
+        set_value(&mut settings.assistant_width, value)
+    }),
+    ("syncOnStartup", |settings, value| {
+        set_value(&mut settings.sync_on_startup, value)
+    }),
+    ("showUnreadCounts", |settings, value| {
+        set_value(&mut settings.show_unread_counts, value)
+    }),
+    (SYNC_INTERVAL_SECONDS_KEY, |settings, value| {
+        set_value(&mut settings.sync_interval_seconds, value)
+    }),
+    ("showSenderAvatars", |settings, value| {
+        set_value(&mut settings.show_sender_avatars, value)
+    }),
+    ("zoomPercent", |settings, value| {
+        set_value(&mut settings.zoom_percent, value)
+    }),
+    ("alwaysLoadRemoteImages", |settings, value| {
+        set_value(&mut settings.always_load_remote_images, value)
+    }),
+    ("allowedImageSenders", |settings, value| {
+        set_value(&mut settings.allowed_image_senders, value)
+    }),
+    ("commandOverrides", |settings, value| {
+        set_value(&mut settings.command_overrides, value)
+    }),
+    (LOG_LEVEL_KEY, |settings, value| {
+        set_value(&mut settings.log_level, value)
+    }),
+    ("prefetchImageAttachments", |settings, value| {
+        set_value(&mut settings.prefetch_image_attachments, value)
+    }),
+    (START_AT_LOGIN_KEY, |settings, value| {
+        set_value(&mut settings.start_at_login, value)
+    }),
+    (CLOSE_TO_TRAY_KEY, |settings, value| {
+        set_value(&mut settings.close_to_tray, value)
+    }),
+    (START_MINIMIZED_KEY, |settings, value| {
+        set_value(&mut settings.start_minimized, value)
+    }),
+    ("desktopNotifications", |settings, value| {
+        set_value(&mut settings.desktop_notifications, value)
+    }),
+    ("updateCheckInterval", |settings, value| {
+        set_value(&mut settings.update_check_interval, value)
+    }),
+    ("installUpdateOnQuit", |settings, value| {
+        set_value(&mut settings.install_update_on_quit, value)
+    }),
+];
+
 impl Settings {
     fn apply(&mut self, key: &str, value: Value) -> bool {
-        match key {
-            "theme" => set_value(&mut self.theme, value),
-            "layout" => set_value(&mut self.layout, value),
-            "density" => set_value(&mut self.density, value),
-            "sidebarCollapsed" => set_value(&mut self.sidebar_collapsed, value),
-            "sidebarWidth" => set_value(&mut self.sidebar_width, value),
-            "listWidth" => set_value(&mut self.list_width, value),
-            "readerHeight" => set_value(&mut self.reader_height, value),
-            "assistantWidth" => set_value(&mut self.assistant_width, value),
-            "syncOnStartup" => set_value(&mut self.sync_on_startup, value),
-            "showUnreadCounts" => set_value(&mut self.show_unread_counts, value),
-            SYNC_INTERVAL_SECONDS_KEY => set_value(&mut self.sync_interval_seconds, value),
-            "showSenderAvatars" => set_value(&mut self.show_sender_avatars, value),
-            "zoomPercent" => set_value(&mut self.zoom_percent, value),
-            "alwaysLoadRemoteImages" => set_value(&mut self.always_load_remote_images, value),
-            "allowedImageSenders" => set_value(&mut self.allowed_image_senders, value),
-            "commandOverrides" => set_value(&mut self.command_overrides, value),
-            LOG_LEVEL_KEY => set_value(&mut self.log_level, value),
-            "prefetchImageAttachments" => set_value(&mut self.prefetch_image_attachments, value),
-            START_AT_LOGIN_KEY => set_value(&mut self.start_at_login, value),
-            CLOSE_TO_TRAY_KEY => set_value(&mut self.close_to_tray, value),
-            START_MINIMIZED_KEY => set_value(&mut self.start_minimized, value),
-            "desktopNotifications" => set_value(&mut self.desktop_notifications, value),
-            "updateCheckInterval" => set_value(&mut self.update_check_interval, value),
-            "installUpdateOnQuit" => set_value(&mut self.install_update_on_quit, value),
-            _ => false,
-        }
+        let Some((_, applier)) = SETTING_APPLIERS
+            .iter()
+            .find(|(entry_key, _)| *entry_key == key)
+        else {
+            return false;
+        };
+        applier(self, value)
     }
 }
 
@@ -278,6 +335,56 @@ fn set_value<T: for<'a> Deserialize<'a>>(target: &mut T, value: Value) -> bool {
     serde_json::from_value(value)
         .map(|value| *target = value)
         .is_ok()
+}
+
+type PreWriteHandler<R> = fn(&AppHandle<R>, &Value) -> Result<(), String>;
+type LiveHandler<R> = fn(&AppHandle<R>, &Value);
+
+fn apply_start_at_login<R: Runtime>(app: &AppHandle<R>, value: &Value) -> Result<(), String> {
+    let enabled = value
+        .as_bool()
+        .ok_or_else(|| "Unknown or invalid setting: startAtLogin".to_owned())?;
+    crate::os::autostart::set_enabled(app, enabled)
+}
+
+fn apply_sync_interval<R: Runtime>(app: &AppHandle<R>, value: &Value) {
+    let (Some(seconds), Some(schedulers)) = (
+        value.as_u64().and_then(|value| u32::try_from(value).ok()),
+        app.try_state::<crate::sync::SyncSchedulers>(),
+    ) else {
+        return;
+    };
+    schedulers
+        .periodic
+        .set_interval(std::time::Duration::from_secs(
+            u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
+        ));
+}
+
+fn apply_log_level<R: Runtime>(app: &AppHandle<R>, value: &Value) {
+    let Ok(level) = serde_json::from_value::<LogLevel>(value.clone()) else {
+        return;
+    };
+    crate::logging::set_level(app, (&level).into());
+}
+
+fn pre_write_handler<R: Runtime>(key: &str) -> Option<PreWriteHandler<R>> {
+    let handlers: [(&str, PreWriteHandler<R>); 1] = [(START_AT_LOGIN_KEY, apply_start_at_login)];
+    handlers
+        .into_iter()
+        .find(|(entry_key, _)| *entry_key == key)
+        .map(|(_, handler)| handler)
+}
+
+fn live_handler<R: Runtime>(key: &str) -> Option<LiveHandler<R>> {
+    let handlers: [(&str, LiveHandler<R>); 2] = [
+        (SYNC_INTERVAL_SECONDS_KEY, apply_sync_interval),
+        (LOG_LEVEL_KEY, apply_log_level),
+    ];
+    handlers
+        .into_iter()
+        .find(|(entry_key, _)| *entry_key == key)
+        .map(|(_, handler)| handler)
 }
 
 #[tauri::command]
@@ -292,40 +399,14 @@ pub async fn write_setting<R: Runtime>(
     key: String,
     value: Value,
 ) -> Result<(), String> {
-    if key == START_AT_LOGIN_KEY {
-        let enabled = value
-            .as_bool()
-            .ok_or_else(|| "Unknown or invalid setting: startAtLogin".to_owned())?;
-        crate::os::autostart::set_enabled(&app, enabled)?;
+    if let Some(handler) = pre_write_handler::<R>(&key) {
+        handler(&app, &value)?;
     }
     service.write(key.clone(), value.clone()).await?;
-    apply_live(&app, &key, &value);
-    Ok(())
-}
-
-fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
-    match key {
-        SYNC_INTERVAL_SECONDS_KEY => {
-            let (Some(seconds), Some(schedulers)) = (
-                value.as_u64().and_then(|value| u32::try_from(value).ok()),
-                app.try_state::<crate::sync::SyncSchedulers>(),
-            ) else {
-                return;
-            };
-            schedulers
-                .periodic
-                .set_interval(std::time::Duration::from_secs(
-                    u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
-                ));
-        }
-        LOG_LEVEL_KEY => {
-            let Ok(level) = serde_json::from_value::<LogLevel>(value.clone()) else {
-                return;
-            };
-            crate::logging::set_level(app, (&level).into());
-        }
-        _ => {}
+    if let Some(handler) = live_handler::<R>(&key) {
+        handler(&app, &value);
     }
+    Ok(())
 }
 
 pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsService) {

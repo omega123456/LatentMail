@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { toggleInSet } from '@/lib/collections';
 import type { Lane } from '@/lib/types/ipc';
 
 export type SettingsSectionId =
@@ -25,13 +26,9 @@ export const useSettingsUiStore = create<SettingsUiState>((set, get) => ({
   expandedLanes: new Set(),
   isLaneExpanded: (accountId, lane) => get().expandedLanes.has(laneKey(accountId, lane)),
   toggleLaneExpanded: (accountId, lane) =>
-    set((state) => {
-      const key = laneKey(accountId, lane);
-      const next = new Set(state.expandedLanes);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return { expandedLanes: next };
-    }),
+    set((state) => ({
+      expandedLanes: toggleInSet(state.expandedLanes, laneKey(accountId, lane)),
+    })),
   queueStatusFilter: 'all',
   setQueueStatusFilter: (queueStatusFilter) => set({ queueStatusFilter }),
 }));

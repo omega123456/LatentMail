@@ -20,6 +20,69 @@ const emptyLeadClass = 'text-body-sm font-medium text-settings-ink dark:text-dar
 const pageButtonClass =
   'cursor-pointer rounded-chip px-1.75 py-1 text-settings-meta font-semibold tabular-nums text-settings-ink-mute hover:bg-settings-container-low hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary disabled:cursor-not-allowed disabled:opacity-35 aria-[current=true]:bg-settings-container aria-[current=true]:text-settings-on-primary-container dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container-low dark:hover:text-dark-settings-ink dark:aria-[current=true]:bg-dark-settings-container dark:aria-[current=true]:text-dark-settings-on-primary-container';
 
+function TrustedSendersBody({
+  sendersCount,
+  matchesCount,
+  visible,
+  filter,
+  needle,
+  onClearFilter,
+  onRemove,
+}: {
+  sendersCount: number;
+  matchesCount: number;
+  visible: string[];
+  filter: string;
+  needle: string;
+  onClearFilter: () => void;
+  onRemove: (address: string) => void;
+}) {
+  if (sendersCount === 0) {
+    return (
+      <div className={emptyStateClass}>
+        <ImageOff
+          aria-hidden="true"
+          size={ICON_SIZE.xl}
+          className="mb-0.5 text-settings-blocked dark:text-dark-settings-blocked"
+        />
+        <span className={emptyLeadClass}>No trusted senders yet</span>
+        <span>Choose Always allow from sender on a blocked message to add one.</span>
+      </div>
+    );
+  }
+  if (matchesCount === 0) {
+    return (
+      <div className={emptyStateClass}>
+        <span className={emptyLeadClass}>No senders match “{filter.trim()}”</span>
+        <button type="button" onClick={onClearFilter} className={settingsLinkPrimary}>
+          Clear filter
+        </button>
+      </div>
+    );
+  }
+  return visible.map((address) => (
+    <div
+      key={address}
+      className={`group flex items-center gap-2.5 rounded-b border-b ${cardLine} py-2.25 pl-3 pr-2 hover:bg-settings-container-low dark:hover:bg-dark-settings-container-low`}
+    >
+      <span className={blockedGlyphClass}>
+        <Mail aria-hidden="true" size={ICON_SIZE.xxs} />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-body-sm text-settings-ink dark:text-dark-settings-ink">
+        <HighlightedText text={address} needle={needle} caseInsensitive={false} />
+      </span>
+      <button
+        type="button"
+        aria-label={`Remove ${address}`}
+        onClick={() => onRemove(address)}
+        className={`${settingsDangerIconButton} opacity-0 focus-visible:opacity-100 group-hover:opacity-100`}
+      >
+        <Trash2 aria-hidden="true" size={ICON_SIZE.xs} />
+      </button>
+    </div>
+  ));
+}
+
 export function TrustedSendersList() {
   const alwaysLoad = useLayoutStore((layout) => layout.alwaysLoadRemoteImages);
   const senders = useLayoutStore((layout) => layout.allowedImageSenders);
@@ -76,53 +139,18 @@ export function TrustedSendersList() {
           </div>
         </div>
         <div className={`flex flex-col border-t ${cardLine}`}>
-          {senders.length === 0 ? (
-            <div className={emptyStateClass}>
-              <ImageOff
-                aria-hidden="true"
-                size={ICON_SIZE.xl}
-                className="mb-0.5 text-settings-blocked dark:text-dark-settings-blocked"
-              />
-              <span className={emptyLeadClass}>No trusted senders yet</span>
-              <span>Choose Always allow from sender on a blocked message to add one.</span>
-            </div>
-          ) : matches.length === 0 ? (
-            <div className={emptyStateClass}>
-              <span className={emptyLeadClass}>No senders match “{filter.trim()}”</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setFilter('');
-                  setRequestedPage(1);
-                }}
-                className={settingsLinkPrimary}
-              >
-                Clear filter
-              </button>
-            </div>
-          ) : (
-            visible.map((address) => (
-              <div
-                key={address}
-                className={`group flex items-center gap-2.5 rounded-b border-b ${cardLine} py-2.25 pl-3 pr-2 hover:bg-settings-container-low dark:hover:bg-dark-settings-container-low`}
-              >
-                <span className={blockedGlyphClass}>
-                  <Mail aria-hidden="true" size={ICON_SIZE.xxs} />
-                </span>
-                <span className="min-w-0 flex-1 truncate text-body-sm text-settings-ink dark:text-dark-settings-ink">
-                  <HighlightedText text={address} needle={needle} caseInsensitive={false} />
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${address}`}
-                  onClick={() => untrustImageSender(address)}
-                  className={`${settingsDangerIconButton} opacity-0 focus-visible:opacity-100 group-hover:opacity-100`}
-                >
-                  <Trash2 aria-hidden="true" size={ICON_SIZE.xs} />
-                </button>
-              </div>
-            ))
-          )}
+          <TrustedSendersBody
+            sendersCount={senders.length}
+            matchesCount={matches.length}
+            visible={visible}
+            filter={filter}
+            needle={needle}
+            onClearFilter={() => {
+              setFilter('');
+              setRequestedPage(1);
+            }}
+            onRemove={untrustImageSender}
+          />
         </div>
         {matches.length > 0 && (
           <div className="flex items-center justify-between gap-3 pt-2.5 text-settings-meta tabular-nums text-settings-ink-mute dark:text-dark-settings-ink-mute">

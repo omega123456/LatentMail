@@ -9,6 +9,9 @@ import { UpdateBanner } from '@/components/states/UpdateBanner';
 import { DelayedFallback, lazyWithDelayedFallback } from '@/components/states/DelayedFallback';
 import { LoadingState } from '@/components/states/LoadingState';
 
+import type { Account } from '@/lib/types/ipc';
+import type { Route } from '@/stores/layout';
+
 const SettingsShell = lazyWithDelayedFallback(() =>
   import('@/components/settings/SettingsShell').then(({ SettingsShell }) => ({
     default: SettingsShell,
@@ -17,6 +20,42 @@ const SettingsShell = lazyWithDelayedFallback(() =>
 
 function StartupSurface() {
   return <div data-testid="startup-surface" className="h-full bg-surface dark:bg-dark-surface" />;
+}
+
+function isRouteMismatched(route: Route, configured: boolean): boolean {
+  if (route === 'auth' && configured) return true;
+  return (route === 'mail' || route === 'settings') && !configured;
+}
+
+function WorkspaceSurface({ route, accounts }: { route: Route; accounts: Account[] }) {
+  if (route === 'auth') return <SignInScreen />;
+  const mailHidden = route !== 'mail';
+  return (
+    <div className="grid h-full">
+      <div
+        aria-hidden={mailHidden}
+        inert={mailHidden}
+        className={`col-start-1 row-start-1 min-h-0 min-w-0 ${mailHidden ? 'invisible pointer-events-none' : ''}`}
+      >
+        <MailLayout accounts={accounts} />
+      </div>
+      {route === 'settings' && (
+        <div className="col-start-1 row-start-1 min-h-0 min-w-0">
+          <Suspense
+            fallback={
+              <DelayedFallback>
+                <div className="h-full bg-settings-page dark:bg-dark-settings-page">
+                  <LoadingState />
+                </div>
+              </DelayedFallback>
+            }
+          >
+            <SettingsShell />
+          </Suspense>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AppShell() {
@@ -29,46 +68,14 @@ export function AppShell() {
     if (route === 'auth' && configured) setRoute('mail');
     if ((route === 'mail' || route === 'settings') && !configured) setRoute('auth');
   }, [configured, isPending, route, setRoute]);
-  if (isPending) return <StartupSurface />;
-  if (
-    (route === 'auth' && configured) ||
-    ((route === 'mail' || route === 'settings') && !configured)
-  )
-    return <StartupSurface />;
-  const content =
-    route === 'auth' ? (
-      <SignInScreen />
-    ) : (
-      <div className="grid h-full">
-        <div
-          aria-hidden={route !== 'mail'}
-          inert={route !== 'mail'}
-          className={`col-start-1 row-start-1 min-h-0 min-w-0 ${route === 'mail' ? '' : 'invisible pointer-events-none'}`}
-        >
-          <MailLayout accounts={accounts ?? []} />
-        </div>
-        {route === 'settings' && (
-          <div className="col-start-1 row-start-1 min-h-0 min-w-0">
-            <Suspense
-              fallback={
-                <DelayedFallback>
-                  <div className="h-full bg-settings-page dark:bg-dark-settings-page">
-                    <LoadingState />
-                  </div>
-                </DelayedFallback>
-              }
-            >
-              <SettingsShell />
-            </Suspense>
-          </div>
-        )}
-      </div>
-    );
+  if (isPending || isRouteMismatched(route, configured)) return <StartupSurface />;
   return (
     <CommandProvider>
       <div className="flex h-full flex-col">
         <UpdateBanner />
-        <div className="min-h-0 flex-1">{content}</div>
+        <div className="min-h-0 flex-1">
+          <WorkspaceSurface route={route} accounts={accounts ?? []} />
+        </div>
       </div>
       <Toast />
     </CommandProvider>

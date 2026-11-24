@@ -117,28 +117,34 @@ impl NotificationController {
     }
 }
 
+fn arrival_subject(subject: &str) -> String {
+    if subject.is_empty() {
+        return "(No subject)".to_owned();
+    }
+    subject.to_owned()
+}
+
+fn arrival_preview(subject: String, snippet: &str) -> String {
+    if snippet.is_empty() {
+        return subject;
+    }
+    format!("{subject}\n{snippet}")
+}
+
+fn arrival_body(preview: String, additional_count: usize) -> String {
+    if additional_count == 0 {
+        return preview;
+    }
+    format!("{preview} — and {additional_count} more")
+}
+
 pub fn content(arrivals: &[MailArrival]) -> Option<(String, String)> {
     let (first, rest) = arrivals.split_first()?;
-    let subject = if first.subject.is_empty() {
-        "(No subject)".to_owned()
-    } else {
-        first.subject.clone()
-    };
-    let preview = if first.snippet.is_empty() {
-        subject
-    } else {
-        format!("{subject}\n{}", first.snippet)
-    };
+    let subject = arrival_subject(&first.subject);
+    let preview = arrival_preview(subject, &first.snippet);
     let title = crate::storage::addresses::first_identity(&first.sender)
         .map_or_else(|| "(No sender)".to_owned(), |identity| identity.display);
-    Some((
-        title,
-        if rest.is_empty() {
-            preview
-        } else {
-            format!("{preview} — and {} more", rest.len())
-        },
-    ))
+    Some((title, arrival_body(preview, rest.len())))
 }
 
 pub fn click_intent(account_id: String, thread_id: Option<String>) -> serde_json::Value {

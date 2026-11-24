@@ -91,10 +91,10 @@ async fn discard_marks_queued_and_active_session_creates_for_cancellation() {
         },
     )
     .unwrap();
-    for (id, status) in [
-        ("queued", "queued"),
-        ("active", "active"),
-        ("other", "queued"),
+    for (id, status, entity_key) in [
+        ("queued", "queued", "session"),
+        ("active", "active", "session"),
+        ("other", "queued", "other"),
     ] {
         OperationRepository::upsert(
             &storage.connection().unwrap(),
@@ -103,11 +103,7 @@ async fn discard_marks_queued_and_active_session_creates_for_cancellation() {
                 account_id: "account".into(),
                 lane: "interactive".into(),
                 kind: "draft".into(),
-                entity_key: if id == "other" {
-                    "other".into()
-                } else {
-                    "session".into()
-                },
+                entity_key: entity_key.into(),
                 payload: "{}".into(),
                 status: status.into(),
                 attempts: 0,
@@ -1250,7 +1246,10 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
         .and(path("/gmail/v1/users/me/drafts/d1"))
         .respond_with(move |_: &wiremock::Request| {
             let call = hydrate_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let message_id = if call == 0 { "m1" } else { "m2" };
+            let message_id = match call {
+                0 => "m1",
+                _ => "m2",
+            };
             ResponseTemplate::new(200).set_body_json(draft_response("d1", message_id, "t1"))
         })
         .mount(&server)
@@ -1443,10 +1442,9 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         .and(path("/users/me/drafts/send"))
         .respond_with(move |_: &wiremock::Request| {
             send_order.lock().unwrap().push("send");
-            let message_id = if sent_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                "sent-1"
-            } else {
-                "sent-2"
+            let message_id = match sent_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => "sent-1",
+                _ => "sent-2",
             };
             ResponseTemplate::new(200)
                 .set_body_json(draft_response("ignored", message_id, "t1")["message"].clone())

@@ -105,19 +105,28 @@ export function normalizeKey(key: string): string {
   return key.length === 1 ? key.toUpperCase() : key;
 }
 
+function primaryModifier(event: KeyboardEvent): string {
+  if (event.metaKey) return 'Meta';
+  if (event.ctrlKey) return 'Control';
+  return '';
+}
+
+function formatEventBinding(event: KeyboardEvent, modifier: string): string {
+  if (modifier) {
+    const shift = event.shiftKey ? '+Shift' : '';
+    return `${modifier}${shift}+${normalizeKey(event.key)}`;
+  }
+  if (event.shiftKey) return `Shift+${event.key}`;
+  return event.key;
+}
+
 export function commandForEvent(
   event: KeyboardEvent,
   bindings: CommandBindings,
 ): CommandName | null {
   if (event.altKey) return null;
-  const modifier = event.metaKey ? 'Meta' : event.ctrlKey ? 'Control' : '';
-  const key = modifier ? normalizeKey(event.key) : event.key;
-  const binding = modifier
-    ? `${modifier}${event.shiftKey ? '+Shift' : ''}+${key}`
-    : event.shiftKey
-      ? `Shift+${key}`
-      : key;
-  const match = commandForKey(binding, bindings);
+  const modifier = primaryModifier(event);
+  const match = commandForKey(formatEventBinding(event, modifier), bindings);
   if (match) return match;
   return modifier ? null : commandForKey(event.key, bindings);
 }

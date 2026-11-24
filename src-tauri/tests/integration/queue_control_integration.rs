@@ -414,11 +414,10 @@ async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds(
         let calls = Arc::clone(&calls_for_executor);
         Box::pin(async move {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(latentmail_lib::queue::QueueError::Permanent)
-            } else {
-                let _ = operation;
-                Ok(())
+                return Err(latentmail_lib::queue::QueueError::Permanent);
             }
+            let _ = operation;
+            Ok(())
         })
     });
     let (events, mut events_receiver) = events_channel();

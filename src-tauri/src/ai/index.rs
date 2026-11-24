@@ -28,6 +28,51 @@ pub struct IndexStatus {
     pub error: Option<String>,
 }
 
+struct IndexStateInputs {
+    has_error: bool,
+    needs_rebuild: bool,
+    is_unavailable: bool,
+    is_paused: bool,
+    stored_state: Option<IndexState>,
+    indexed_messages: i64,
+    total_eligible_messages: i64,
+}
+
+fn fallback_index_state(indexed_messages: i64, total_eligible_messages: i64) -> IndexState {
+    if total_eligible_messages == 0 {
+        return IndexState::NotStarted;
+    }
+    if indexed_messages < total_eligible_messages {
+        return IndexState::Interrupted;
+    }
+    IndexState::Complete
+}
+
+fn resolve_index_state(inputs: IndexStateInputs) -> IndexState {
+    if inputs.has_error {
+        return IndexState::Interrupted;
+    }
+    if inputs.needs_rebuild {
+        return IndexState::NeedsRebuild;
+    }
+    if inputs.is_unavailable {
+        return IndexState::Unavailable;
+    }
+    if inputs.is_paused {
+        return IndexState::Paused;
+    }
+    inputs.stored_state.unwrap_or_else(|| {
+        fallback_index_state(inputs.indexed_messages, inputs.total_eligible_messages)
+    })
+}
+
+fn stalled_state(indexed: i64, total: i64) -> IndexState {
+    if indexed < total {
+        return IndexState::Partial;
+    }
+    IndexState::Complete
+}
+
 pub async fn status(service: &AiService, account_id: String) -> Result<IndexStatus, String> {
     let error = service.index_error(&account_id)?;
     let has_error = error.is_some();
@@ -39,6 +84,16 @@ pub async fn status(service: &AiService, account_id: String) -> Result<IndexStat
                 .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             let counts = EmbeddingRepository::counts(connection, &account_id)?;
             let needs_rebuild = EmbeddingRepository::needs_rebuild(connection, &account_id)?;
+            let is_unavailable = !config.enabled || config.embedding_model.is_none();
+            let resolved_state = resolve_index_state(IndexStateInputs {
+                has_error: has_error,
+                needs_rebuild: needs_rebuild,
+                is_unavailable: is_unavailable,
+                is_paused: config.index_paused,
+                stored_state: state,
+                indexed_messages: counts.indexed_messages,
+                total_eligible_messages: counts.total_eligible_messages,
+            });
             Ok(IndexStatus {
                 account_id: account_id.clone(),
                 indexed: counts.indexed_messages,
@@ -48,25 +103,7 @@ pub async fn status(service: &AiService, account_id: String) -> Result<IndexStat
                 indexed_passages: counts.indexed_passages,
                 paused: config.index_paused,
                 error: error,
-                state: if has_error {
-                    IndexState::Interrupted
-                } else if needs_rebuild {
-                    IndexState::NeedsRebuild
-                } else if !config.enabled || config.embedding_model.is_none() {
-                    IndexState::Unavailable
-                } else if config.index_paused {
-                    IndexState::Paused
-                } else {
-                    state.unwrap_or({
-                        if counts.total_eligible_messages == 0 {
-                            IndexState::NotStarted
-                        } else if counts.indexed_messages < counts.total_eligible_messages {
-                            IndexState::Interrupted
-                        } else {
-                            IndexState::Complete
-                        }
-                    })
-                },
+                state: resolved_state,
             })
         })
         .await
@@ -101,11 +138,7 @@ async fn stall<R: Runtime>(
         return Ok(());
     }
     let current = status(service, account_id.clone()).await?;
-    if current.indexed < current.total {
-        service.set_index_state(&account_id, IndexState::Partial)?;
-    } else {
-        service.set_index_state(&account_id, IndexState::Complete)?;
-    }
+    service.set_index_state(&account_id, stalled_state(current.indexed, current.total))?;
     emit_status(app, service, account_id).await
 }
 
@@ -124,11 +157,15 @@ async fn enqueue_inner<R: Runtime>(
     sync: std::sync::Arc<crate::sync::SyncEngine>,
     account_id: String,
 ) -> Result<(), String> {
-    if service.is_removing(&account_id)? || service.is_reconfiguring(&account_id)? {
+    let is_account_busy =
+        service.is_removing(&account_id)? || service.is_reconfiguring(&account_id)?;
+    if is_account_busy {
         return stall(&app, &service, account_id).await;
     }
     let config = service.config_for(&account_id).await?;
-    if !config.enabled || config.index_paused || config.embedding_model.is_none() {
+    let is_indexing_disabled =
+        !config.enabled || config.index_paused || config.embedding_model.is_none();
+    if is_indexing_disabled {
         return stall(&app, &service, account_id).await;
     }
     if !running(&service, &account_id)? {
@@ -164,16 +201,15 @@ async fn enqueue_inner<R: Runtime>(
                 return Ok(());
             }
             let current = status(&service, account_id.clone()).await?;
-            if !current.paused && current.indexed < current.total {
-                enqueue(app, queued_service, queued_sync, queued_account).await?;
-            } else if !current.paused {
-                service.set_index_state(&account_id, IndexState::Complete)?;
-                emit_status(&app, &service, account_id).await?;
-            } else {
+            if current.paused {
                 service.set_index_state(&account_id, IndexState::Paused)?;
-                emit_status(&app, &service, account_id).await?;
+                return emit_status(&app, &service, account_id).await;
             }
-            Ok(())
+            if current.indexed < current.total {
+                return enqueue(app, queued_service, queued_sync, queued_account).await;
+            }
+            service.set_index_state(&account_id, IndexState::Complete)?;
+            emit_status(&app, &service, account_id).await
         },
     )
     .await

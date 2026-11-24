@@ -224,17 +224,19 @@ impl AiService {
             .run(move |connection| AccountAiConfigRepository::set_enabled(connection, &id, enabled))
             .await
             .map_err(|error| error.to_string())?;
-        if enabled {
-            self.clear_index_state(&account_id)?;
-        } else {
-            self.clear_index_error(&account_id)?;
-            self.set_index_state(&account_id, IndexState::Unavailable)?;
-        }
+        self.sync_enabled_index_state(&account_id, enabled)?;
         app.emit(
             crate::events::AI_CONFIG,
             serde_json::json!({"accountId":account_id}),
         )
         .map_err(|error| error.to_string())
+    }
+    fn sync_enabled_index_state(&self, account_id: &str, enabled: bool) -> Result<(), String> {
+        if enabled {
+            return self.clear_index_state(account_id);
+        }
+        self.clear_index_error(account_id)?;
+        self.set_index_state(account_id, IndexState::Unavailable)
     }
     pub async fn set_base_url<R: Runtime>(
         &self,

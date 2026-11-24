@@ -9,10 +9,9 @@ pub struct ServedImage {
 
 pub fn proxy_url(scheme: &str, query: &str) -> String {
     if cfg!(windows) {
-        format!("http://{scheme}.localhost/?{query}")
-    } else {
-        format!("{scheme}://localhost/?{query}")
+        return format!("http://{scheme}.localhost/?{query}");
     }
+    format!("{scheme}://localhost/?{query}")
 }
 
 pub fn respond(scheme: &str, uri: &str, served: Result<ServedImage, String>) -> Response<Vec<u8>> {

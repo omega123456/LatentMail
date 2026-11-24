@@ -96,6 +96,123 @@ function IndexProgress({
   );
 }
 
+function statusDetail(
+  current: State,
+  started: boolean,
+  indexedMessages: number,
+  indexedPassages: number,
+): string {
+  if (current === 'needsRebuild') return REBUILD_MESSAGE;
+  if (started) return `${count(indexedMessages)} messages · ${count(indexedPassages)} passages`;
+  return 'No indexed messages yet';
+}
+
+function RebuildSection({
+  current,
+  confirming,
+  indexedPassages,
+  onStartConfirm,
+  onCancelConfirm,
+  onRebuild,
+}: {
+  current: State;
+  confirming: boolean;
+  indexedPassages: number;
+  onStartConfirm: () => void;
+  onCancelConfirm: () => void;
+  onRebuild: () => void;
+}) {
+  if (confirming) {
+    return (
+      <InlineConfirm
+        icon="rebuild"
+        title="Rebuild the whole index?"
+        body={`All ${count(indexedPassages)} passages will be deleted and re-embedded from the start. This sends every message to your endpoint again.`}
+        action="Rebuild"
+        onCancel={onCancelConfirm}
+        onConfirm={onRebuild}
+      />
+    );
+  }
+  if (current === 'preparing') return null;
+  return (
+    <div className="border-t border-settings-outline-variant dark:border-dark-settings-outline-variant">
+      <SettingRow
+        label="Rebuild index"
+        description="Clears this account's vectors and starts it again."
+      >
+        <button
+          type="button"
+          onClick={onStartConfirm}
+          className={`shrink-0 ${settingsQuietButton}`}
+        >
+          Rebuild
+        </button>
+      </SettingRow>
+    </div>
+  );
+}
+
+function IndexHeaderAction({
+  current,
+  resumable,
+  started,
+  cancelling,
+  cancelPending,
+  startPending,
+  onCancel,
+  onStart,
+}: {
+  current: State;
+  resumable: boolean;
+  started: boolean;
+  cancelling: boolean;
+  cancelPending: boolean;
+  startPending: boolean;
+  onCancel: () => void;
+  onStart: () => void;
+}) {
+  if (current === 'building') {
+    return (
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={cancelling || cancelPending}
+        className={`shrink-0 ${settingsQuietButton} disabled:cursor-not-allowed disabled:opacity-50`}
+      >
+        {cancelling ? 'Cancelling…' : 'Cancel'}
+      </button>
+    );
+  }
+  if (!resumable) return null;
+  return (
+    <button
+      type="button"
+      onClick={onStart}
+      disabled={startPending}
+      className={`shrink-0 ${settingsQuietButton} disabled:cursor-not-allowed disabled:opacity-50`}
+    >
+      {started ? 'Resume' : 'Start'}
+    </button>
+  );
+}
+
+function readStatusMetrics(status: AiIndexStatus | undefined) {
+  const current: State = status?.state ?? 'unavailable';
+  const indexedMessages = status?.indexedMessages ?? 0;
+  const totalEligibleMessages = status?.totalEligibleMessages ?? 0;
+  const indexedPassages = status?.indexedPassages ?? 0;
+  return {
+    current: current,
+    indexedMessages: indexedMessages,
+    totalEligibleMessages: totalEligibleMessages,
+    indexedPassages: indexedPassages,
+    percentage: Math.round(percentOf(indexedMessages, totalEligibleMessages)),
+    resumable: RESUMABLE.includes(current),
+    started: current !== 'notStarted' && current !== 'unavailable',
+  };
+}
+
 export function AiIndexSection({
   accountId,
   status,
@@ -108,45 +225,37 @@ export function AiIndexSection({
   const start = useStartAiIndexMutation();
   const cancel = useCancelAiIndexMutation();
   const rebuild = useRebuildAiIndexMutation();
-  const current = status?.state ?? 'unavailable';
-  const indexedMessages = status?.indexedMessages ?? 0;
-  const totalEligibleMessages = status?.totalEligibleMessages ?? 0;
-  const indexedPassages = status?.indexedPassages ?? 0;
-  const percentage = Math.round(percentOf(indexedMessages, totalEligibleMessages));
-  const resumable = RESUMABLE.includes(current);
-  const started = current !== 'notStarted' && current !== 'unavailable';
+  const metrics = readStatusMetrics(status);
 
-  const resume = resumable && (
-    <button
-      type="button"
-      onClick={() => start.mutate(accountId)}
-      disabled={start.isPending}
-      className={`shrink-0 ${settingsQuietButton} disabled:cursor-not-allowed disabled:opacity-50`}
-    >
-      {started ? 'Resume' : 'Start'}
-    </button>
-  );
+  const rebuildAction =
+    metrics.current === 'needsRebuild' && !confirming ? (
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        className={`shrink-0 ${settingsQuietButton}`}
+      >
+        Rebuild
+      </button>
+    ) : undefined;
 
   return (
     <SettingsSubsection
       title="Index"
       description="Indexing runs in the background queue and pauses when you pause the queue."
       action={
-        current === 'building' ? (
-          <button
-            type="button"
-            onClick={() => {
-              setCancelling(true);
-              cancel.mutate(accountId, { onSettled: () => setCancelling(false) });
-            }}
-            disabled={cancelling || cancel.isPending}
-            className={`shrink-0 ${settingsQuietButton} disabled:cursor-not-allowed disabled:opacity-50`}
-          >
-            {cancelling ? 'Cancelling…' : 'Cancel'}
-          </button>
-        ) : (
-          resume
-        )
+        <IndexHeaderAction
+          current={metrics.current}
+          resumable={metrics.resumable}
+          started={metrics.started}
+          cancelling={cancelling}
+          cancelPending={cancel.isPending}
+          startPending={start.isPending}
+          onCancel={() => {
+            setCancelling(true);
+            cancel.mutate(accountId, { onSettled: () => setCancelling(false) });
+          }}
+          onStart={() => start.mutate(accountId)}
+        />
       }
     >
       {status?.error && (
@@ -155,66 +264,36 @@ export function AiIndexSection({
         </div>
       )}
       <div aria-live="polite" className="flex flex-col gap-2.5">
-        {TRACKED.includes(current) ? (
+        {TRACKED.includes(metrics.current) ? (
           <IndexProgress
-            state={current}
-            indexed={indexedMessages}
-            total={totalEligibleMessages}
-            percentage={percentage}
+            state={metrics.current}
+            indexed={metrics.indexedMessages}
+            total={metrics.totalEligibleMessages}
+            percentage={metrics.percentage}
           />
         ) : (
           <AiStatusCard
-            tone={current === 'complete' ? 'success' : 'neutral'}
-            pip={pips[current]}
-            title={labels[current]}
-            detail={
-              current === 'needsRebuild'
-                ? REBUILD_MESSAGE
-                : started
-                  ? `${count(indexedMessages)} messages · ${count(indexedPassages)} passages`
-                  : 'No indexed messages yet'
-            }
-            action={
-              current === 'needsRebuild' && !confirming ? (
-                <button
-                  type="button"
-                  onClick={() => setConfirming(true)}
-                  className={`shrink-0 ${settingsQuietButton}`}
-                >
-                  Rebuild
-                </button>
-              ) : undefined
-            }
+            tone={metrics.current === 'complete' ? 'success' : 'neutral'}
+            pip={pips[metrics.current]}
+            title={labels[metrics.current]}
+            detail={statusDetail(
+              metrics.current,
+              metrics.started,
+              metrics.indexedMessages,
+              metrics.indexedPassages,
+            )}
+            action={rebuildAction}
           />
         )}
       </div>
-      {confirming ? (
-        <InlineConfirm
-          icon="rebuild"
-          title="Rebuild the whole index?"
-          body={`All ${count(indexedPassages)} passages will be deleted and re-embedded from the start. This sends every message to your endpoint again.`}
-          action="Rebuild"
-          onCancel={() => setConfirming(false)}
-          onConfirm={() => rebuild.mutate(accountId, { onSuccess: () => setConfirming(false) })}
-        />
-      ) : (
-        current !== 'preparing' && (
-          <div className="border-t border-settings-outline-variant dark:border-dark-settings-outline-variant">
-            <SettingRow
-              label="Rebuild index"
-              description="Clears this account's vectors and starts it again."
-            >
-              <button
-                type="button"
-                onClick={() => setConfirming(true)}
-                className={`shrink-0 ${settingsQuietButton}`}
-              >
-                Rebuild
-              </button>
-            </SettingRow>
-          </div>
-        )
-      )}
+      <RebuildSection
+        current={metrics.current}
+        confirming={confirming}
+        indexedPassages={metrics.indexedPassages}
+        onStartConfirm={() => setConfirming(true)}
+        onCancelConfirm={() => setConfirming(false)}
+        onRebuild={() => rebuild.mutate(accountId, { onSuccess: () => setConfirming(false) })}
+      />
     </SettingsSubsection>
   );
 }

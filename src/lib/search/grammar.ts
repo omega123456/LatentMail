@@ -101,6 +101,16 @@ export function serializeDateFilter(value: DateFilterValue): string[] {
     : [`after:${value.start}`];
 }
 
+function buildDateFilterValue(after: string | null, before: string | null): DateFilterValue {
+  if (after !== null && before !== null) {
+    const end = shiftIsoDay(before, -1);
+    return { mode: after === end ? 'on' : 'between', preset: '', start: after, end: end };
+  }
+  if (after !== null) return { ...BLANK_DATE_FILTER, mode: 'after', start: after };
+  if (before !== null) return { ...BLANK_DATE_FILTER, mode: 'before', start: before };
+  return BLANK_DATE_FILTER;
+}
+
 export function dateFilterFromPredicates(predicates: SearchPredicate[]): {
   value: DateFilterValue;
   remaining: SearchPredicate[];
@@ -119,18 +129,7 @@ export function dateFilterFromPredicates(predicates: SearchPredicate[]): {
     }
     remaining.push(predicate);
   }
-  if (after !== null && before !== null) {
-    const end = shiftIsoDay(before, -1);
-    return {
-      value: { mode: after === end ? 'on' : 'between', preset: '', start: after, end: end },
-      remaining: remaining,
-    };
-  }
-  if (after !== null)
-    return { value: { ...BLANK_DATE_FILTER, mode: 'after', start: after }, remaining: remaining };
-  if (before !== null)
-    return { value: { ...BLANK_DATE_FILTER, mode: 'before', start: before }, remaining: remaining };
-  return { value: BLANK_DATE_FILTER, remaining: remaining };
+  return { value: buildDateFilterValue(after, before), remaining: remaining };
 }
 
 export function summariseDateFilter(value: DateFilterValue): string {

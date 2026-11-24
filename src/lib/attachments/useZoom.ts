@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { isMacPlatform } from '@/lib/keyboard/format';
+import { dispatchKey } from '@/lib/keyboard/dispatch';
 import {
   anchoredScroll,
   clampZoom,
@@ -17,6 +18,17 @@ type GestureEventLike = Event & { scale: number; clientX: number; clientY: numbe
 
 export type ZoomPreset = FitMode | number;
 
+function resolveZoomLevel(
+  view: { mode: ZoomMode; zoom: number },
+  content: Size | null,
+  viewport: Size | null,
+  fitCap: number,
+): number {
+  if (view.mode === 'custom') return view.zoom;
+  if (!content || !viewport) return 1;
+  return fitZoom(view.mode, content, viewport, fitCap);
+}
+
 export function useZoom({
   scrollRef,
   content,
@@ -33,12 +45,7 @@ export function useZoom({
     zoom: 1,
   });
   const [viewport, setViewport] = useState<Size | null>(null);
-  const zoom =
-    view.mode === 'custom'
-      ? view.zoom
-      : content && viewport
-        ? fitZoom(view.mode, content, viewport, fitCap)
-        : 1;
+  const zoom = resolveZoomLevel(view, content, viewport, fitCap);
   const latest = useRef<{ zoom: number; content: Size | null; viewport: Size | null }>({
     zoom: 1,
     content: null,
@@ -160,19 +167,16 @@ export function useZoom({
 
   useEffect(() => {
     const isMac = isMacPlatform();
+    const handlers = {
+      '=': zoomIn,
+      '+': zoomIn,
+      '-': zoomOut,
+      '0': reset,
+    };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(isMac ? event.metaKey : event.ctrlKey) || event.altKey) return;
-      const action =
-        event.key === '=' || event.key === '+'
-          ? zoomIn
-          : event.key === '-'
-            ? zoomOut
-            : event.key === '0'
-              ? reset
-              : null;
-      if (!action) return;
-      event.preventDefault();
-      action();
+      const hasPrimaryModifier = isMac ? event.metaKey : event.ctrlKey;
+      if (!hasPrimaryModifier || event.altKey) return;
+      dispatchKey(event, handlers);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);

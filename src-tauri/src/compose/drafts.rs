@@ -199,6 +199,73 @@ pub fn build_executor<R: Runtime>(
     })
 }
 
+fn operation_kind_label(kind: OperationKind) -> &'static str {
+    if kind == OperationKind::Send {
+        return "send";
+    }
+    "draft"
+}
+
+fn completion_event(consumed: bool) -> &'static str {
+    if consumed {
+        return crate::events::SEND_COMPLETE;
+    }
+    crate::events::DRAFT_SAVED
+}
+
+async fn load_original_quote(
+    storage: &Storage,
+    account_id: &str,
+    original_message_id: Option<&str>,
+) -> (Option<String>, Vec<super::mime::Part>) {
+    let Some(original_id) = original_message_id else {
+        return (None, Vec::new());
+    };
+    let account_id = account_id.to_owned();
+    let original_id = original_id.to_owned();
+    let loaded = storage
+        .run(move |connection| {
+            let message = MessageRepository::get(connection, &account_id, &original_id)?;
+            let parts = MessageRepository::inline_parts(connection, &account_id, &original_id)?;
+            Ok::<_, rusqlite::Error>((message, parts))
+        })
+        .await
+        .ok();
+    let Some((Some(message), parts)) = loaded else {
+        return (None, Vec::new());
+    };
+    let mime_parts = parts
+        .into_iter()
+        .map(|part| super::mime::Part {
+            filename: part.content_id.clone(),
+            mime_type: part.mime_type,
+            bytes: part.bytes,
+            content_id: Some(part.content_id),
+        })
+        .collect();
+    (Some(super::context::outgoing_quote(&message)), mime_parts)
+}
+
+fn record_post_replace_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    account_id: &str,
+    message: &GmailMessage,
+    metadata: &ComposeDraftMetadata,
+    consumed: bool,
+) -> rusqlite::Result<()> {
+    if !consumed {
+        return ComposeDraftMetadataRepository::upsert(transaction, metadata);
+    }
+    crate::contacts::observe_now(transaction, account_id, &message.sender)?;
+    for mailbox in split_addresses(&message.to_recipients)
+        .into_iter()
+        .chain(split_addresses(&message.cc_recipients))
+    {
+        crate::contacts::observe_now(transaction, account_id, &mailbox)?;
+    }
+    Ok(())
+}
+
 async fn terminal_failed<R: Runtime>(
     app: &AppHandle<R>,
     storage: &Storage,
@@ -218,7 +285,7 @@ async fn terminal_failed<R: Runtime>(
         serde_json::json!({
             "accountId": operation.account_id,
             "sessionId": operation.entity_key,
-            "kind": if operation.kind == OperationKind::Send { "send" } else { "draft" },
+            "kind": operation_kind_label(operation.kind),
             "error": error,
         }),
     );
@@ -344,30 +411,13 @@ async fn run<R: Runtime>(
         }
     }
 
-    let (quote_html, original_inline) = if let Some(original_id) = &payload.original_message_id {
-        let account_id = operation.account_id.clone();
-        let original_id = original_id.clone();
-        storage
-            .run(move |connection| {
-                let message = MessageRepository::get(connection, &account_id, &original_id)?;
-                let parts = MessageRepository::inline_parts(connection, &account_id, &original_id)?;
-                Ok::<_, rusqlite::Error>((message, parts))
-            })
-            .await
-            .ok()
-            .and_then(|(message, parts)| {
-                message.map(|message| (Some(super::context::outgoing_quote(&message)), parts))
-            })
-            .unwrap_or((None, Vec::new()))
-    } else {
-        (None, Vec::new())
-    };
-    inline.extend(original_inline.into_iter().map(|part| super::mime::Part {
-        filename: part.content_id.clone(),
-        mime_type: part.mime_type,
-        bytes: part.bytes,
-        content_id: Some(part.content_id),
-    }));
+    let (quote_html, original_inline) = load_original_quote(
+        storage,
+        &operation.account_id,
+        payload.original_message_id.as_deref(),
+    )
+    .await;
+    inline.extend(original_inline);
 
     let outgoing = OutgoingMessage {
         from: payload.from.clone(),
@@ -493,17 +543,7 @@ async fn run<R: Runtime>(
                     &message,
                     consumed,
                 )?;
-                if !consumed {
-                    ComposeDraftMetadataRepository::upsert(&transaction, &metadata)?;
-                } else {
-                    crate::contacts::observe_now(&transaction, &account_id, &message.sender)?;
-                    for mailbox in split_addresses(&message.to_recipients)
-                        .into_iter()
-                        .chain(split_addresses(&message.cc_recipients))
-                    {
-                        crate::contacts::observe_now(&transaction, &account_id, &mailbox)?;
-                    }
-                }
+                record_post_replace_rows(&transaction, &account_id, &message, &metadata, consumed)?;
                 transaction.commit()
             })
             .await
@@ -540,11 +580,7 @@ async fn run<R: Runtime>(
             OperationRepository::mark_terminal(connection, &id_for_terminal, "done", None)
         })
         .await;
-    let event = if consumed {
-        crate::events::SEND_COMPLETE
-    } else {
-        crate::events::DRAFT_SAVED
-    };
+    let event = completion_event(consumed);
     let _ = app.emit(event, serde_json::json!({ "accountId": account_id, "sessionId": operation.entity_key, "draftId": draft_id }));
     Ok(())
 }

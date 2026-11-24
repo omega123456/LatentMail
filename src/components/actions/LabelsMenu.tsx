@@ -3,6 +3,8 @@ import { Check, Minus, Plus } from 'lucide-react';
 import { TextInput } from '@/components/shared/TextInput';
 import { LABEL_COLOR_BY_ID, type LabelColorId } from '@/lib/labels/palette';
 import { ICON_SIZE } from '@/components/shared/icon-size';
+import { wrapIndex } from '@/lib/collections';
+import { dispatchKey } from '@/lib/keyboard/dispatch';
 
 export type LabelMembership = 'checked' | 'unchecked' | 'indeterminate';
 
@@ -63,31 +65,7 @@ export function LabelsMenu(props: LabelsMenuProps) {
 
   const focusAt = (index: number) => {
     if (filtered.length === 0) return;
-    const wrapped = ((index % filtered.length) + filtered.length) % filtered.length;
-    itemRefs.current[wrapped]?.focus();
-  };
-
-  const toggle = (label: LabelMenuEntry) => {
-    if (props.variant === 'staged') {
-      const currentMembership: LabelMembership =
-        label.id in overrides ? (overrides[label.id] ? 'checked' : 'unchecked') : label.membership;
-      setOverrides((current) => ({ ...current, [label.id]: nextBooleanFor(currentMembership) }));
-    } else {
-      props.onToggle(label.id, label.membership !== 'checked');
-    }
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent, index: number, label: LabelMenuEntry) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      focusAt(index + 1);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      focusAt(index - 1);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggle(label);
-    }
+    itemRefs.current[wrapIndex(index, 0, filtered.length)]?.focus();
   };
 
   const renderMembership = (label: LabelMenuEntry): LabelMembership => {
@@ -96,19 +74,28 @@ export function LabelsMenu(props: LabelsMenuProps) {
     return overrides[label.id] ? 'checked' : 'unchecked';
   };
 
-  return (
-    <div className="flex w-full flex-col gap-1" data-testid="labels-menu">
-      <h3 className="px-2 pb-1 text-label-md text-secondary dark:text-dark-secondary">LABELS</h3>
-      {labels.length > FILTER_THRESHOLD && (
-        <TextInput
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter labels…"
-          aria-label="Filter labels"
-          className="mb-1"
-        />
-      )}
-      {labels.length === 0 ? (
+  const toggle = (label: LabelMenuEntry) => {
+    if (props.variant !== 'staged') {
+      props.onToggle(label.id, label.membership !== 'checked');
+      return;
+    }
+    const currentMembership = renderMembership(label);
+    setOverrides((current) => ({ ...current, [label.id]: nextBooleanFor(currentMembership) }));
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent, index: number, label: LabelMenuEntry) => {
+    const toggleCurrent = () => toggle(label);
+    dispatchKey(event, {
+      ArrowDown: () => focusAt(index + 1),
+      ArrowUp: () => focusAt(index - 1),
+      Enter: toggleCurrent,
+      ' ': toggleCurrent,
+    });
+  };
+
+  const renderListBody = () => {
+    if (labels.length === 0) {
+      return (
         <div className="flex flex-col items-start gap-2 px-2 py-2">
           <p className="text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
             No labels yet
@@ -124,53 +111,73 @@ export function LabelsMenu(props: LabelsMenuProps) {
             </button>
           )}
         </div>
-      ) : filtered.length === 0 ? (
+      );
+    }
+    if (filtered.length === 0) {
+      return (
         <p className="px-2 py-2 text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">
           No labels match &lsquo;{query}&rsquo;
         </p>
-      ) : (
-        <div
-          role="group"
-          aria-label="Labels"
-          className="flex max-h-64 flex-col gap-0.5 overflow-y-auto"
-        >
-          {filtered.map((label, index) => {
-            const membership = renderMembership(label);
-            const swatch = LABEL_COLOR_BY_ID[label.color];
-            return (
-              <div
-                key={label.id}
-                ref={(node) => {
-                  itemRefs.current[index] = node;
-                }}
-                role="menuitemcheckbox"
-                aria-checked={membership === 'indeterminate' ? 'mixed' : membership === 'checked'}
-                tabIndex={0}
-                onClick={() => toggle(label)}
-                onKeyDown={(event) => handleKeyDown(event, index, label)}
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-body-sm text-on-surface hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface dark:hover:bg-dark-surface-container"
+      );
+    }
+    return (
+      <div
+        role="group"
+        aria-label="Labels"
+        className="flex max-h-64 flex-col gap-0.5 overflow-y-auto"
+      >
+        {filtered.map((label, index) => {
+          const membership = renderMembership(label);
+          const swatch = LABEL_COLOR_BY_ID[label.color];
+          return (
+            <div
+              key={label.id}
+              ref={(node) => {
+                itemRefs.current[index] = node;
+              }}
+              role="menuitemcheckbox"
+              aria-checked={membership === 'indeterminate' ? 'mixed' : membership === 'checked'}
+              tabIndex={0}
+              onClick={() => toggle(label)}
+              onKeyDown={(event) => handleKeyDown(event, index, label)}
+              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-body-sm text-on-surface hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface dark:hover:bg-dark-surface-container"
+            >
+              <span
+                aria-hidden="true"
+                className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
+                  membership === 'unchecked'
+                    ? 'border-outline-variant dark:border-dark-outline-variant'
+                    : 'border-primary bg-primary text-on-primary dark:border-dark-primary dark:bg-dark-primary dark:text-dark-on-primary'
+                }`}
               >
-                <span
-                  aria-hidden="true"
-                  className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
-                    membership === 'unchecked'
-                      ? 'border-outline-variant dark:border-dark-outline-variant'
-                      : 'border-primary bg-primary text-on-primary dark:border-dark-primary dark:bg-dark-primary dark:text-dark-on-primary'
-                  }`}
-                >
-                  {membership === 'checked' && <Check size={ICON_SIZE.xxs} />}
-                  {membership === 'indeterminate' && <Minus size={ICON_SIZE.xxs} />}
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={`size-chip-dot rounded-full ${swatch.dotClass}`}
-                />
-                <span className="flex-1">{label.name}</span>
-              </div>
-            );
-          })}
-        </div>
+                {membership === 'checked' && <Check size={ICON_SIZE.xxs} />}
+                {membership === 'indeterminate' && <Minus size={ICON_SIZE.xxs} />}
+              </span>
+              <span
+                aria-hidden="true"
+                className={`size-chip-dot rounded-full ${swatch.dotClass}`}
+              />
+              <span className="flex-1">{label.name}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex w-full flex-col gap-1" data-testid="labels-menu">
+      <h3 className="px-2 pb-1 text-label-md text-secondary dark:text-dark-secondary">LABELS</h3>
+      {labels.length > FILTER_THRESHOLD && (
+        <TextInput
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter labels…"
+          aria-label="Filter labels"
+          className="mb-1"
+        />
       )}
+      {renderListBody()}
       {props.variant === 'staged' && labels.length > 0 && (
         <div className="mt-1 flex items-center justify-between gap-2 border-t border-outline-variant/40 pt-2 dark:border-dark-outline-variant">
           <span className="text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant">

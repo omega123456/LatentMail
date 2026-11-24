@@ -45,11 +45,11 @@ pub fn on_close<R: Runtime>(window: &Window<R>, _event: &tauri::WindowEvent) {
 }
 
 pub fn close_action(close_to_tray: bool, windows: bool, macos: bool) -> CloseAction {
-    if macos || (windows && close_to_tray) {
-        CloseAction::Hide
-    } else {
-        CloseAction::Terminate
+    let should_hide = macos || (windows && close_to_tray);
+    if should_hide {
+        return CloseAction::Hide;
     }
+    CloseAction::Terminate
 }
 
 pub fn on_reopen<R: Runtime>(app: &tauri::AppHandle<R>, has_visible_windows: bool) {

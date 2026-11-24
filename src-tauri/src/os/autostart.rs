@@ -47,11 +47,11 @@ fn set_platform_enabled<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result
     use tauri_plugin_autostart::ManagerExt;
 
     if enabled {
-        app.autolaunch().enable()
-    } else {
-        app.autolaunch().disable()
+        return app.autolaunch().enable().map_err(|error| error.to_string());
     }
-    .map_err(|error| error.to_string())
+    app.autolaunch()
+        .disable()
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(all(not(feature = "test-utils"), windows))]

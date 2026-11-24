@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Download, File, Loader2 } from 'lucide-react';
 import { sanitizeFilename } from '@/lib/attachments/filename';
 import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc } from '@/lib/ipc/dispatch';
 import { parseCsv } from '@/lib/attachments/csv';
-import { resolvePreviewKind } from '@/lib/attachments/kind';
+import { resolvePreviewKind, type PreviewKind } from '@/lib/attachments/kind';
 import { useAttachmentTextQuery, useCachedAttachmentQuery } from '@/lib/query/hooks';
 import { useToastStore } from '@/stores/toast';
 import type { MessageAttachment } from '@/lib/types/ipc';
@@ -21,6 +21,12 @@ import {
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
 type PdfPreviewComponent = (typeof import('./previews/PdfPreview'))['PdfPreview'];
+
+const TEXT_KINDS: ReadonlySet<PreviewKind> = new Set(['text', 'json', 'javascript', 'csv']);
+
+function isTextPreviewKind(kind: PreviewKind): boolean {
+  return TEXT_KINDS.has(kind);
+}
 
 function usePreviewBytes(
   accountId: string | null,
@@ -102,6 +108,112 @@ function useDocxHtml(bytes: ArrayBuffer | undefined) {
   return state.bytes === bytes ? state : { html: null, failed: false };
 }
 
+type PreviewResources = {
+  kind: PreviewKind;
+  filename: string;
+  imagePending: boolean;
+  imageError: boolean;
+  imageDisplayPath: string | undefined;
+  bytes: ArrayBuffer | null;
+  bytesFailed: boolean;
+  PdfPreview: PdfPreviewComponent | null;
+  pdfFailed: boolean;
+  textPending: boolean;
+  textError: boolean;
+  textData: string | undefined;
+  docxHtml: string | null;
+  docxFailed: boolean;
+};
+
+function isPdfLoading(resources: PreviewResources): boolean {
+  if (resources.bytesFailed || resources.pdfFailed) return false;
+  return !resources.bytes || !resources.PdfPreview;
+}
+
+function isDocxLoading(resources: PreviewResources): boolean {
+  if (resources.bytesFailed) return false;
+  return !resources.bytes || (!resources.docxHtml && !resources.docxFailed);
+}
+
+const LOADING_CHECKERS: Partial<Record<PreviewKind, (resources: PreviewResources) => boolean>> = {
+  image: (resources) => resources.imagePending,
+  pdf: isPdfLoading,
+  docx: isDocxLoading,
+  text: (resources) => resources.textPending,
+  json: (resources) => resources.textPending,
+  javascript: (resources) => resources.textPending,
+  csv: (resources) => resources.textPending,
+};
+
+function isPreviewLoading(resources: PreviewResources): boolean {
+  const check = LOADING_CHECKERS[resources.kind];
+  return check ? check(resources) : false;
+}
+
+function isPreviewFailed(resources: PreviewResources): boolean {
+  if (resources.kind === 'image') return resources.imageError;
+  if (isTextPreviewKind(resources.kind)) return resources.textError;
+  if (resources.kind === 'pdf') return resources.bytesFailed || resources.pdfFailed;
+  if (resources.kind === 'docx') return resources.bytesFailed || resources.docxFailed;
+  return false;
+}
+
+const PREVIEW_RENDERERS: Partial<
+  Record<PreviewKind, (resources: PreviewResources) => ReactNode | null>
+> = {
+  image: (resources) =>
+    resources.imageDisplayPath ? (
+      <ImagePreview
+        src={dispatchConvertFileSrc(resources.imageDisplayPath)}
+        filename={resources.filename}
+      />
+    ) : null,
+  pdf: (resources) => {
+    if (!resources.bytes || !resources.PdfPreview) return null;
+    const PdfComponent = resources.PdfPreview;
+    return <PdfComponent bytes={resources.bytes} />;
+  },
+  csv: (resources) =>
+    resources.textData !== undefined ? <CsvPreview rows={parseCsv(resources.textData)} /> : null,
+  text: (resources) =>
+    resources.textData !== undefined ? <TextPreview text={resources.textData} /> : null,
+  json: (resources) =>
+    resources.textData !== undefined ? <TextPreview text={resources.textData} /> : null,
+  javascript: (resources) =>
+    resources.textData !== undefined ? <TextPreview text={resources.textData} /> : null,
+  docx: (resources) =>
+    resources.docxHtml !== null ? <DocxPreview html={resources.docxHtml} /> : null,
+};
+
+function renderPreviewContent(resources: PreviewResources): ReactNode {
+  if (isPreviewLoading(resources)) {
+    return (
+      <ReaderDialogStatus>
+        <Loader2 className="animate-spin" size={ICON_SIZE.xl2} aria-hidden="true" />
+        <span>Loading preview…</span>
+      </ReaderDialogStatus>
+    );
+  }
+  if (isPreviewFailed(resources)) {
+    return (
+      <ReaderDialogStatus>
+        <File
+          size={ICON_SIZE.xl4}
+          aria-hidden="true"
+          className="text-outline dark:text-dark-outline"
+        />
+        <p>
+          Couldn&apos;t load preview.
+          <br />
+          Use Download to save the file.
+        </p>
+      </ReaderDialogStatus>
+    );
+  }
+  const rendered = PREVIEW_RENDERERS[resources.kind]?.(resources);
+  return rendered ?? <UnsupportedPreview />;
+}
+
 export function AttachmentPreviewDialog({
   accountId,
   messageId,
@@ -134,29 +246,9 @@ export function AttachmentPreviewDialog({
     accountId,
     messageId,
     attachment.id,
-    kind === 'text' || kind === 'json' || kind === 'javascript' || kind === 'csv',
+    isTextPreviewKind(kind),
   );
   const docx = useDocxHtml(kind === 'docx' ? (previewBytes.bytes ?? undefined) : undefined);
-  const PdfPreview = pdf.component;
-
-  const loading =
-    (kind === 'image' && imageQuery.isPending) ||
-    (kind === 'pdf' &&
-      (!previewBytes.bytes || !pdf.component) &&
-      !previewBytes.failed &&
-      !pdf.failed) ||
-    ((kind === 'text' || kind === 'json' || kind === 'javascript' || kind === 'csv') &&
-      textQuery.isPending) ||
-    (kind === 'docx' &&
-      (!previewBytes.bytes || (!docx.html && !docx.failed)) &&
-      !previewBytes.failed);
-
-  const failedAcquisition =
-    (kind === 'image' && imageQuery.isError) ||
-    (kind === 'pdf' && (previewBytes.failed || pdf.failed)) ||
-    ((kind === 'text' || kind === 'json' || kind === 'javascript' || kind === 'csv') &&
-      textQuery.isError) ||
-    (kind === 'docx' && (previewBytes.failed || docx.failed));
 
   const download = async () => {
     if (!accountId) return;
@@ -190,41 +282,22 @@ export function AttachmentPreviewDialog({
         </button>
       }
     >
-      {loading ? (
-        <ReaderDialogStatus>
-          <Loader2 className="animate-spin" size={ICON_SIZE.xl2} aria-hidden="true" />
-          <span>Loading preview…</span>
-        </ReaderDialogStatus>
-      ) : failedAcquisition ? (
-        <ReaderDialogStatus>
-          <File
-            size={ICON_SIZE.xl4}
-            aria-hidden="true"
-            className="text-outline dark:text-dark-outline"
-          />
-          <p>
-            Couldn&apos;t load preview.
-            <br />
-            Use Download to save the file.
-          </p>
-        </ReaderDialogStatus>
-      ) : kind === 'image' && imageQuery.data ? (
-        <ImagePreview
-          src={dispatchConvertFileSrc(imageQuery.data.displayPath)}
-          filename={attachment.filename}
-        />
-      ) : kind === 'pdf' && previewBytes.bytes && PdfPreview ? (
-        <PdfPreview bytes={previewBytes.bytes} />
-      ) : kind === 'csv' && textQuery.data !== undefined ? (
-        <CsvPreview rows={parseCsv(textQuery.data)} />
-      ) : (kind === 'text' || kind === 'json' || kind === 'javascript') &&
-        textQuery.data !== undefined ? (
-        <TextPreview text={textQuery.data} />
-      ) : kind === 'docx' && docx.html !== null ? (
-        <DocxPreview html={docx.html} />
-      ) : (
-        <UnsupportedPreview />
-      )}
+      {renderPreviewContent({
+        kind: kind,
+        filename: attachment.filename,
+        imagePending: imageQuery.isPending,
+        imageError: imageQuery.isError,
+        imageDisplayPath: imageQuery.data?.displayPath,
+        bytes: previewBytes.bytes,
+        bytesFailed: previewBytes.failed,
+        PdfPreview: pdf.component,
+        pdfFailed: pdf.failed,
+        textPending: textQuery.isPending,
+        textError: textQuery.isError,
+        textData: textQuery.data,
+        docxHtml: docx.html,
+        docxFailed: docx.failed,
+      })}
     </ReaderDialogFrame>
   );
 }

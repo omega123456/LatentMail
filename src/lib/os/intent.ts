@@ -11,35 +11,33 @@ async function activeAccount() {
   return (await invoke('list_accounts', {})).find((account) => account.id === accountId) ?? null;
 }
 
-export async function handleOsIntent(intent: OsIntent): Promise<void> {
-  if (intent.kind === 'openAccounts') {
+type OsIntentHandlers = {
+  [Kind in OsIntent['kind']]: (intent: Extract<OsIntent, { kind: Kind }>) => Promise<void> | void;
+};
+
+const OS_INTENT_HANDLERS: OsIntentHandlers = {
+  openAccounts: () => {
     useSettingsUiStore.getState().setActiveSection('accounts');
     useLayoutStore.getState().setRoute('settings');
-    return;
-  }
-  if (intent.kind === 'compose') {
+  },
+  compose: async () => {
     const account = await activeAccount();
-    if (account) {
-      useLayoutStore.getState().setRoute('mail');
-      openNewMessage(account.id, account.email);
-    }
-    return;
-  }
-  if (intent.kind === 'mailto') {
+    if (!account) return;
+    useLayoutStore.getState().setRoute('mail');
+    openNewMessage(account.id, account.email);
+  },
+  mailto: async (intent) => {
     const account = await activeAccount();
-    if (account) {
-      useLayoutStore.getState().setRoute('mail');
-      openNewMessage(account.id, account.email, intent.mailto);
-    }
-    return;
-  }
-  if (intent.kind === 'openFolder') {
+    if (!account) return;
+    useLayoutStore.getState().setRoute('mail');
+    openNewMessage(account.id, account.email, intent.mailto);
+  },
+  openFolder: (intent) => {
     useLayoutStore.getState().setRoute('mail');
     useSelectionStore.getState().setActiveAccountId(intent.accountId);
     useSelectionStore.getState().setActiveMailboxId('INBOX');
-    return;
-  }
-  if (intent.kind === 'openThread') {
+  },
+  openThread: async (intent) => {
     useLayoutStore.getState().setRoute('mail');
     const selection = useSelectionStore.getState();
     selection.setActiveAccountId(intent.accountId);
@@ -47,10 +45,15 @@ export async function handleOsIntent(intent: OsIntent): Promise<void> {
     selection.setActiveThreadId(intent.threadId);
     selection.setFlashThreadId(intent.threadId);
     await invoke('mark_thread_read', { accountId: intent.accountId, threadId: intent.threadId });
-    return;
-  }
-  if (intent.kind === 'syncNow') {
+  },
+  syncNow: async () => {
     const account = await activeAccount();
-    if (account) await invoke('trigger_sync', { accountId: account.id });
-  }
+    if (!account) return;
+    await invoke('trigger_sync', { accountId: account.id });
+  },
+};
+
+export async function handleOsIntent(intent: OsIntent): Promise<void> {
+  const handler = OS_INTENT_HANDLERS[intent.kind] as (payload: OsIntent) => Promise<void> | void;
+  await handler(intent);
 }

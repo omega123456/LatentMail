@@ -45,15 +45,12 @@ pub enum MimeError {
     TooLarge { actual: usize },
 }
 
-pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
-    let html = format!(
-        "{}{}",
-        outgoing.html,
-        outgoing.quote_html.as_deref().unwrap_or_default()
-    );
-    let plain = html2text::from_read(html.as_bytes(), crate::gmail::PLAIN_TEXT_WRAP_COLUMNS)?;
-    let alternative = MultiPart::alternative_plain_html(plain, html.clone());
-    let related = outgoing.inline.iter().fold(
+fn build_body_multipart(outgoing: &OutgoingMessage, plain: String, html: String) -> MultiPart {
+    let alternative = MultiPart::alternative_plain_html(plain, html);
+    if outgoing.inline.is_empty() {
+        return alternative;
+    }
+    outgoing.inline.iter().fold(
         MultiPart::related().multipart(alternative),
         |multipart, part| {
             let attachment = Attachment::new_inline_with_name(
@@ -68,15 +65,17 @@ pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
             );
             multipart.singlepart(attachment)
         },
+    )
+}
+
+pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
+    let html = format!(
+        "{}{}",
+        outgoing.html,
+        outgoing.quote_html.as_deref().unwrap_or_default()
     );
-    let body = if outgoing.inline.is_empty() {
-        MultiPart::alternative_plain_html(
-            html2text::from_read(html.as_bytes(), crate::gmail::PLAIN_TEXT_WRAP_COLUMNS)?,
-            html,
-        )
-    } else {
-        related
-    };
+    let plain = html2text::from_read(html.as_bytes(), crate::gmail::PLAIN_TEXT_WRAP_COLUMNS)?;
+    let body = build_body_multipart(outgoing, plain, html);
     let multipart =
         outgoing
             .attachments
@@ -118,8 +117,7 @@ pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
 
 pub fn validate_encoded_size(actual: usize) -> Result<(), MimeError> {
     if actual > MAX_RFC2822_BYTES {
-        Err(MimeError::TooLarge { actual })
-    } else {
-        Ok(())
+        return Err(MimeError::TooLarge { actual });
     }
+    Ok(())
 }

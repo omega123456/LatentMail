@@ -18,6 +18,17 @@ import { ICON_SIZE } from '@/components/shared/icon-size';
 const iconButtonClass =
   'grid size-9 shrink-0 cursor-pointer place-items-center rounded-full text-on-surface-variant hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
 
+const READY_INDEX_STATES: ReadonlySet<AiIndexStatus['state']> = new Set(['complete', 'partial']);
+
+function indexUnavailableCause(
+  status: AiIndexStatus | undefined,
+): AssistantUnavailableCause | null {
+  const state = status?.state;
+  if (state === 'needsRebuild') return 'needsRebuild';
+  if (state !== undefined && READY_INDEX_STATES.has(state)) return null;
+  return 'indexNotReady';
+}
+
 export function unavailableCause(
   config: AiConfig | undefined,
   status: AiIndexStatus | undefined,
@@ -26,10 +37,107 @@ export function unavailableCause(
   if (!config?.enabled) return 'disabled';
   if (config.baseUrl === null) return 'noApiRoot';
   if (config.chatModel === null) return 'noChatModel';
-  if (status?.state === 'needsRebuild') return 'needsRebuild';
-  if (status?.state !== 'complete' && status?.state !== 'partial') return 'indexNotReady';
-  if (!reachable) return 'unreachable';
-  return null;
+  const indexCause = indexUnavailableCause(status);
+  if (indexCause !== null) return indexCause;
+  return reachable ? null : 'unreachable';
+}
+
+function AssistantHeader({
+  available,
+  onNewChat,
+  onClose,
+}: {
+  available: boolean;
+  onNewChat: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-outline-variant pl-3.5 pr-2 dark:border-dark-outline-variant">
+      <span className="flex-1 text-body-sm font-semibold">AI Assistant</span>
+      {available && (
+        <button
+          type="button"
+          aria-label="New chat"
+          title="New chat"
+          onClick={onNewChat}
+          className={iconButtonClass}
+        >
+          <SquarePen aria-hidden="true" size={ICON_SIZE.base} />
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label="Close panel"
+        title="Close panel"
+        onClick={onClose}
+        className={iconButtonClass}
+      >
+        <X aria-hidden="true" size={ICON_SIZE.base} />
+      </button>
+    </div>
+  );
+}
+
+function AssistantBody({
+  messages,
+  available,
+  onSelectPrompt,
+  onSourceActivate,
+}: {
+  messages: ReturnType<typeof useAssistantStore.getState>['messages'];
+  available: boolean;
+  onSelectPrompt: (prompt: string) => void;
+  onSourceActivate: (source: AiChatSource) => void;
+}) {
+  if (messages.length > 0) {
+    return <AssistantTranscript messages={messages} onSourceActivate={onSourceActivate} />;
+  }
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
+      {available && <AssistantEmptyState onSelect={onSelectPrompt} />}
+    </div>
+  );
+}
+
+function useEscapeClose(containerRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
+  useEffect(() => {
+    const node = containerRef.current;
+    if (node === null) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    node.addEventListener('keydown', onEscape);
+    return () => node.removeEventListener('keydown', onEscape);
+  }, [containerRef, onClose]);
+}
+
+function AssistantNoticeBanner({
+  cause,
+  config,
+  status,
+  onAction,
+}: {
+  cause: AssistantUnavailableCause | null;
+  config: AiConfig | undefined;
+  status: AiIndexStatus | undefined;
+  onAction: (cause: AssistantUnavailableCause) => void;
+}) {
+  if (cause === null) return null;
+  return (
+    <div className="p-3.5">
+      <AssistantNotice
+        cause={cause}
+        accountEmail={config?.email ?? ''}
+        indexed={status?.indexedMessages ?? 0}
+        total={status?.totalEligibleMessages ?? 0}
+        endpoint={config?.baseUrl ?? null}
+        onAction={onAction}
+      />
+    </div>
+  );
 }
 
 export function AssistantPanel({
@@ -54,6 +162,7 @@ export function AssistantPanel({
   const config = configs.data?.find((entry) => entry.accountId === accountId);
   const status = statuses.data?.find((entry) => entry.accountId === accountId);
   const cause = unavailableCause(config, status, !connection.isError);
+  const available = cause === null;
 
   useEffect(() => {
     selectAccount(accountId);
@@ -61,18 +170,7 @@ export function AssistantPanel({
   useEffect(() => {
     prompt.current?.focus();
   }, [cause]);
-  useEffect(() => {
-    const node = container.current;
-    if (node === null) return;
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    node.addEventListener('keydown', onEscape);
-    return () => node.removeEventListener('keydown', onEscape);
-  }, [onClose]);
+  useEscapeClose(container, onClose);
 
   const openSource = useCallback((source: AiChatSource) => {
     useSelectionStore.getState().setActiveThreadId(source.threadId);
@@ -84,49 +182,20 @@ export function AssistantPanel({
       aria-label="AI assistant"
       className="flex min-h-0 min-w-0 flex-col bg-surface-container-lowest dark:bg-dark-surface-container-lowest"
     >
-      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-outline-variant pl-3.5 pr-2 dark:border-dark-outline-variant">
-        <span className="flex-1 text-body-sm font-semibold">AI Assistant</span>
-        {cause === null && (
-          <button
-            type="button"
-            aria-label="New chat"
-            title="New chat"
-            onClick={newChat}
-            className={iconButtonClass}
-          >
-            <SquarePen aria-hidden="true" size={ICON_SIZE.base} />
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label="Close panel"
-          title="Close panel"
-          onClick={onClose}
-          className={iconButtonClass}
-        >
-          <X aria-hidden="true" size={ICON_SIZE.base} />
-        </button>
-      </div>
-      {cause !== null && (
-        <div className="p-3.5">
-          <AssistantNotice
-            cause={cause}
-            accountEmail={config?.email ?? ''}
-            indexed={status?.indexedMessages ?? 0}
-            total={status?.totalEligibleMessages ?? 0}
-            endpoint={config?.baseUrl ?? null}
-            onAction={onOpenAiSettings}
-          />
-        </div>
-      )}
-      {messages.length === 0 ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
-          {cause === null && <AssistantEmptyState onSelect={ask} />}
-        </div>
-      ) : (
-        <AssistantTranscript messages={messages} onSourceActivate={openSource} />
-      )}
-      {cause === null && <AssistantComposer inputRef={prompt} />}
+      <AssistantHeader available={available} onNewChat={newChat} onClose={onClose} />
+      <AssistantNoticeBanner
+        cause={cause}
+        config={config}
+        status={status}
+        onAction={onOpenAiSettings}
+      />
+      <AssistantBody
+        messages={messages}
+        available={available}
+        onSelectPrompt={ask}
+        onSourceActivate={openSource}
+      />
+      {available && <AssistantComposer inputRef={prompt} />}
     </section>
   );
 }

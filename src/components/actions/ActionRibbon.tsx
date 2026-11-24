@@ -79,6 +79,121 @@ function useMeasuredOverflow() {
   return { containerRef: containerRef, probeRef: probeRef, narrow: requiredWidth > availableWidth };
 }
 
+type RibbonVisibility = ReturnType<typeof computeRibbonVisibility>;
+
+function buildSecondaryActions({
+  visibility,
+  starred,
+  labels,
+  moveToCurrentLabelIds,
+  systemLabelIds,
+  onToggleStar,
+  onCreateLabel,
+  onApplyLabels,
+  onMoveTo,
+  onToggleSpam,
+}: Pick<
+  ActionRibbonProps,
+  | 'starred'
+  | 'labels'
+  | 'moveToCurrentLabelIds'
+  | 'systemLabelIds'
+  | 'onToggleStar'
+  | 'onCreateLabel'
+  | 'onApplyLabels'
+  | 'onMoveTo'
+  | 'onToggleSpam'
+> & { visibility: RibbonVisibility }) {
+  const starButton = visibility.showStar && (
+    <RibbonStarButton key="star" theme={THEME} starred={starred} onToggleStar={onToggleStar} />
+  );
+  const labelsButton = visibility.showLabels && (
+    <RibbonLabelsPopover
+      key="labels"
+      theme={THEME}
+      labels={labels}
+      onCreateLabel={onCreateLabel}
+      onApplyLabels={onApplyLabels}
+    />
+  );
+  const moveToButton = visibility.showMoveTo && (
+    <RibbonMoveToPopover
+      key="move-to"
+      theme={THEME}
+      currentSystemLabelIds={moveToCurrentLabelIds ?? systemLabelIds}
+      onMoveTo={onMoveTo}
+    />
+  );
+  const spamButton = visibility.showSpamToggle && (
+    <RibbonSpamButton
+      key="spam"
+      theme={THEME}
+      spamMode={visibility.spamMode}
+      onToggleSpam={onToggleSpam}
+    />
+  );
+  const contiguousSecondary = [starButton, labelsButton, moveToButton].filter(Boolean);
+  const secondaryItems = [...contiguousSecondary, spamButton].filter(Boolean);
+  return {
+    contiguousSecondary: contiguousSecondary,
+    spamButton: spamButton,
+    secondaryItems: secondaryItems,
+  };
+}
+
+function RibbonSecondaryActions({
+  narrow,
+  overflowOpen,
+  onOverflowOpenChange,
+  contiguousSecondary,
+  spamButton,
+  secondaryItems,
+}: {
+  narrow: boolean;
+  overflowOpen: boolean;
+  onOverflowOpenChange: (open: boolean) => void;
+  contiguousSecondary: ReturnType<typeof buildSecondaryActions>['contiguousSecondary'];
+  spamButton: ReturnType<typeof buildSecondaryActions>['spamButton'];
+  secondaryItems: ReturnType<typeof buildSecondaryActions>['secondaryItems'];
+}) {
+  if (secondaryItems.length === 0) return null;
+  if (narrow) {
+    return (
+      <DropdownMenu.Root open={overflowOpen} onOpenChange={onOverflowOpenChange}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            aria-label="More actions"
+            title="More actions"
+            className={THEME.iconButtonClass}
+          >
+            <MoreHorizontal aria-hidden="true" size={ICON_SIZE.lg} />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="start"
+            className={`flex min-w-40 flex-col gap-1 ${POPOVER_SURFACE_CLASS}`}
+          >
+            {secondaryItems}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    );
+  }
+  return (
+    <>
+      {contiguousSecondary}
+      {spamButton && (
+        <>
+          <RibbonSeparator theme={THEME} />
+          {spamButton}
+        </>
+      )}
+    </>
+  );
+}
+
 export function ActionRibbon({
   systemLabelIds,
   moveToCurrentLabelIds,
@@ -115,40 +230,18 @@ export function ActionRibbon({
     <RibbonReadButton key="read-unread" theme={THEME} unread={unread} onToggleRead={onToggleRead} />
   );
 
-  const starButton = visibility.showStar && (
-    <RibbonStarButton key="star" theme={THEME} starred={starred} onToggleStar={onToggleStar} />
-  );
-
-  const labelsButton = visibility.showLabels && (
-    <RibbonLabelsPopover
-      key="labels"
-      theme={THEME}
-      labels={labels}
-      onCreateLabel={onCreateLabel}
-      onApplyLabels={onApplyLabels}
-    />
-  );
-
-  const moveToButton = visibility.showMoveTo && (
-    <RibbonMoveToPopover
-      key="move-to"
-      theme={THEME}
-      currentSystemLabelIds={moveToCurrentLabelIds ?? systemLabelIds}
-      onMoveTo={onMoveTo}
-    />
-  );
-
-  const spamButton = visibility.showSpamToggle && (
-    <RibbonSpamButton
-      key="spam"
-      theme={THEME}
-      spamMode={visibility.spamMode}
-      onToggleSpam={onToggleSpam}
-    />
-  );
-
-  const contiguousSecondary = [starButton, labelsButton, moveToButton].filter(Boolean);
-  const secondaryItems = [...contiguousSecondary, spamButton].filter(Boolean);
+  const { contiguousSecondary, spamButton, secondaryItems } = buildSecondaryActions({
+    visibility: visibility,
+    starred: starred,
+    labels: labels,
+    moveToCurrentLabelIds: moveToCurrentLabelIds,
+    systemLabelIds: systemLabelIds,
+    onToggleStar: onToggleStar,
+    onCreateLabel: onCreateLabel,
+    onApplyLabels: onApplyLabels,
+    onMoveTo: onMoveTo,
+    onToggleSpam: onToggleSpam,
+  });
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -172,39 +265,14 @@ export function ActionRibbon({
       >
         {composeGroup}
         {readUnreadButton}
-        {secondaryItems.length > 0 &&
-          (narrow ? (
-            <DropdownMenu.Root open={overflowOpen} onOpenChange={setOverflowOpen}>
-              <DropdownMenu.Trigger asChild>
-                <button
-                  type="button"
-                  aria-label="More actions"
-                  title="More actions"
-                  className={THEME.iconButtonClass}
-                >
-                  <MoreHorizontal aria-hidden="true" size={ICON_SIZE.lg} />
-                </button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  align="start"
-                  className={`flex min-w-40 flex-col gap-1 ${POPOVER_SURFACE_CLASS}`}
-                >
-                  {secondaryItems}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          ) : (
-            <>
-              {contiguousSecondary}
-              {spamButton && (
-                <>
-                  <RibbonSeparator theme={THEME} />
-                  {spamButton}
-                </>
-              )}
-            </>
-          ))}
+        <RibbonSecondaryActions
+          narrow={narrow}
+          overflowOpen={overflowOpen}
+          onOverflowOpenChange={setOverflowOpen}
+          contiguousSecondary={contiguousSecondary}
+          spamButton={spamButton}
+          secondaryItems={secondaryItems}
+        />
         {visibility.showDelete && (
           <>
             <RibbonSeparator theme={THEME} />

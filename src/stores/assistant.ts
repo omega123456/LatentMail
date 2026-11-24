@@ -88,6 +88,14 @@ function questions(messages: AssistantMessage[]) {
   return messages.filter((entry) => entry.role === 'user').map((entry) => entry.text);
 }
 
+function cancelInFlightRequest(activeRequestId: string | null, markPending: () => void) {
+  if (activeRequestId === null) {
+    markPending();
+    return;
+  }
+  void invoke('cancel_ai_chat', { requestId: activeRequestId });
+}
+
 export const useAssistantStore = create<AssistantState>((set, get) => ({
   ...emptySession(null),
   setDraft: (draft) => set({ draft }),
@@ -134,8 +142,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   stop: () => {
     const { activeRequestId, messages } = get();
     if (!isStreaming(messages)) return;
-    if (activeRequestId === null) set({ cancelPending: true });
-    else void invoke('cancel_ai_chat', { requestId: activeRequestId });
+    cancelInFlightRequest(activeRequestId, () => set({ cancelPending: true }));
     get().finish({ cancelled: true, error: null });
   },
   adoptRequest: (requestId) => set({ activeRequestId: requestId }),

@@ -168,6 +168,13 @@ impl RetrievalRepository {
         )
     }
 
+    fn recency_sql(ascending: bool) -> &'static str {
+        if ascending {
+            return Self::RECENCY_ASCENDING_SQL;
+        }
+        Self::RECENCY_DESCENDING_SQL
+    }
+
     pub fn recency(
         connection: &Connection,
         account_id: &str,
@@ -175,11 +182,7 @@ impl RetrievalRepository {
         filters: &RetrievalFilters,
         ascending: bool,
     ) -> Result<Vec<i64>> {
-        let sql = if ascending {
-            Self::RECENCY_ASCENDING_SQL
-        } else {
-            Self::RECENCY_DESCENDING_SQL
-        };
+        let sql = Self::recency_sql(ascending);
         let mut statement = connection.prepare_cached(sql)?;
         let sequences = statement
             .query_map(
@@ -237,10 +240,9 @@ impl RetrievalRepository {
     pub fn candidate_sql(table: &str, filtered: bool) -> String {
         let candidates = CANDIDATE_SQL.replace("{table}", table);
         if filtered {
-            FILTERED_CANDIDATE_SQL.replace("{candidates}", &candidates)
-        } else {
-            candidates
+            return FILTERED_CANDIDATE_SQL.replace("{candidates}", &candidates);
         }
+        candidates
     }
 
     pub fn candidates(

@@ -215,24 +215,23 @@ impl Bucket {
     async fn acquire(&self, cost: u32) {
         let cost = f64::from(cost);
         loop {
-            let wait = {
-                let mut state = self.state.lock().await;
-                let now = Instant::now();
-                state.0 = (state.0 + (now - state.1).as_secs_f64() * self.rate).min(self.capacity);
-                state.1 = now;
-                if state.0 >= cost {
-                    state.0 -= cost;
-                    None
-                } else {
-                    Some(Duration::from_secs_f64((cost - state.0) / self.rate))
-                }
-            };
-            if let Some(wait) = wait {
-                tokio::time::sleep(wait).await;
-            } else {
+            let Some(wait) = self.try_take_or_wait(cost).await else {
                 return;
-            }
+            };
+            tokio::time::sleep(wait).await;
         }
+    }
+
+    async fn try_take_or_wait(&self, cost: f64) -> Option<Duration> {
+        let mut state = self.state.lock().await;
+        let now = Instant::now();
+        state.0 = (state.0 + (now - state.1).as_secs_f64() * self.rate).min(self.capacity);
+        state.1 = now;
+        if state.0 >= cost {
+            state.0 -= cost;
+            return None;
+        }
+        Some(Duration::from_secs_f64((cost - state.0) / self.rate))
     }
 }
 
@@ -715,7 +714,7 @@ impl GmailClient {
                         return Err(GmailError::ResponseTooLarge);
                     }
                     let raw = response.bytes().await?;
-                    let body: &[u8] = if raw.is_empty() { b"null" } else { &raw };
+                    let body = response_json_bytes(&raw);
                     return Ok(serde_json::from_slice(body)?);
                 }
                 Ok(response) => {
@@ -723,19 +722,15 @@ impl GmailClient {
                     if history && status == StatusCode::NOT_FOUND {
                         return Err(GmailError::HistoryExpired);
                     }
-                    if crate::is_retryable_status(status.as_u16())
-                        && attempt < LAST_RETRYABLE_ATTEMPT
-                    {
+                    let can_retry = crate::is_retryable_status(status.as_u16())
+                        && attempt < LAST_RETRYABLE_ATTEMPT;
+                    if can_retry {
                         tokio::time::sleep(backoff(attempt + 1)).await;
                         continue;
                     }
 
                     let body = response.text().await.unwrap_or_default();
-                    if status == StatusCode::NOT_FOUND {
-                        tracing::debug!(target: "gmail", "{method} {path}: {status} {body}");
-                    } else {
-                        tracing::error!(target: "gmail", "{method} {path} failed: {status} {body}");
-                    }
+                    log_http_failure(&method, path, status, &body);
                     return Err(GmailError::Http(status.as_u16()));
                 }
                 Err(error)
@@ -797,6 +792,21 @@ impl GmailClient {
         let raw: RawId = response.json().await?;
         Ok(raw.id)
     }
+}
+
+fn response_json_bytes(raw: &[u8]) -> &[u8] {
+    if raw.is_empty() {
+        return b"null";
+    }
+    raw
+}
+
+fn log_http_failure(method: &reqwest::Method, path: &str, status: StatusCode, body: &str) {
+    if status == StatusCode::NOT_FOUND {
+        tracing::debug!(target: "gmail", "{method} {path}: {status} {body}");
+        return;
+    }
+    tracing::error!(target: "gmail", "{method} {path} failed: {status} {body}");
 }
 
 fn upload_base(base: &str) -> String {
@@ -1198,21 +1208,19 @@ fn synthesize_attachment_id(content_id: Option<&str>, position: usize) -> String
 }
 
 fn sanitize_path_segment(value: &str) -> String {
-    let sanitized: String = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let sanitized: String = value.chars().map(sanitize_path_char).collect();
     if sanitized.is_empty() {
-        "empty".to_owned()
-    } else {
-        sanitized
+        return "empty".to_owned();
     }
+    sanitized
+}
+
+fn sanitize_path_char(character: char) -> char {
+    let is_safe = character.is_ascii_alphanumeric() || character == '-' || character == '_';
+    if is_safe {
+        return character;
+    }
+    '_'
 }
 
 fn decode(value: &str) -> Option<Vec<u8>> {

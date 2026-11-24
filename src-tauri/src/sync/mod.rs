@@ -211,11 +211,10 @@ where
         Box::new(move || {
             Box::pin(async move {
                 let result = future.await;
-                let queue_outcome = if result.is_ok() {
-                    Ok(())
-                } else {
-                    Err(QueueError::Permanent)
-                };
+                let queue_outcome = result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|_| QueueError::Permanent);
                 let _ = sender.send(result);
                 queue_outcome
             })
@@ -229,26 +228,37 @@ where
     receiver.await.map_err(|_| SyncError::QueueStopped)?
 }
 
+#[derive(Clone, Copy)]
+enum LabelRuleSide {
+    Added,
+    Removed,
+}
+
+const OPERATION_KIND_RULES: &[(LabelRuleSide, &str, OperationKind)] = &[
+    (LabelRuleSide::Added, "STARRED", OperationKind::Star),
+    (LabelRuleSide::Removed, "STARRED", OperationKind::Unstar),
+    (LabelRuleSide::Removed, "UNREAD", OperationKind::MarkRead),
+    (LabelRuleSide::Added, "UNREAD", OperationKind::MarkUnread),
+    (LabelRuleSide::Added, "TRASH", OperationKind::Delete),
+    (LabelRuleSide::Added, "SPAM", OperationKind::Spam),
+    (LabelRuleSide::Removed, "SPAM", OperationKind::NotSpam),
+];
+
 fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> OperationKind {
-    if add.contains("STARRED") {
-        OperationKind::Star
-    } else if remove.contains("STARRED") {
-        OperationKind::Unstar
-    } else if remove.contains("UNREAD") {
-        OperationKind::MarkRead
-    } else if add.contains("UNREAD") {
-        OperationKind::MarkUnread
-    } else if add.contains("TRASH") {
-        OperationKind::Delete
-    } else if add.contains("SPAM") {
-        OperationKind::Spam
-    } else if remove.contains("SPAM") {
-        OperationKind::NotSpam
-    } else if !add.is_empty() && !remove.is_empty() {
-        OperationKind::Move
-    } else {
-        OperationKind::LabelMutation
+    for &(side, label, kind) in OPERATION_KIND_RULES {
+        let labels = match side {
+            LabelRuleSide::Added => add,
+            LabelRuleSide::Removed => remove,
+        };
+        if labels.contains(label) {
+            return kind;
+        }
     }
+    let is_move = !add.is_empty() && !remove.is_empty();
+    if is_move {
+        return OperationKind::Move;
+    }
+    OperationKind::LabelMutation
 }
 
 #[derive(Debug)]
@@ -902,23 +912,23 @@ fn enqueue_backfill_step(
                     };
                     if completed {
                         step_active_backfills.lock().await.remove(&step_account);
-                    } else {
-                        enqueue_backfill_step(
-                            BackfillHandles {
-                                queue: step_queue,
-                                registry: step_registry,
-                                storage: step_storage,
-                                events: step_events,
-                                operation_counter: step_operation_counter,
-                                active_backfills: step_active_backfills,
-                                attachment_cache: attachment_cache,
-                            },
-                            step_account,
-                            step_client,
-                            resumed,
-                        )
-                        .await;
+                        return Ok(());
                     }
+                    enqueue_backfill_step(
+                        BackfillHandles {
+                            queue: step_queue,
+                            registry: step_registry,
+                            storage: step_storage,
+                            events: step_events,
+                            operation_counter: step_operation_counter,
+                            active_backfills: step_active_backfills,
+                            attachment_cache: attachment_cache,
+                        },
+                        step_account,
+                        step_client,
+                        resumed,
+                    )
+                    .await;
                     Ok(())
                 })
             }),
@@ -1405,14 +1415,13 @@ pub(crate) fn sync_labels(
 }
 
 pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
-    let color = if label.kind == "user" {
-        label.color.as_ref().map(|pair| LabelColor {
+    let color = (label.kind == "user")
+        .then_some(label.color.as_ref())
+        .flatten()
+        .map(|pair| LabelColor {
             text: pair.text_color.clone(),
             background: pair.background_color.clone(),
-        })
-    } else {
-        None
-    };
+        });
     Label {
         account_id: account_id.to_owned(),
         id: label.id.clone(),
@@ -1550,9 +1559,9 @@ pub async fn run_periodic_cadence<R: Runtime>(
     for_each_cadence_account(app, auth, engine, |account_id, client| async move {
         if engine.run_sync(&account_id, client.clone()).await.is_ok() {
             engine.enqueue_backfill(&account_id, client).await;
-        } else {
-            auth.invalidate_access_token(&account_id);
+            return;
         }
+        auth.invalidate_access_token(&account_id);
     })
     .await;
 }
@@ -1607,11 +1616,11 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<()
         gmail_base_url(),
     );
     let executor: Executor = Arc::new(move |operation: QueueOperation| -> OperationFuture {
-        if matches!(operation.kind, OperationKind::Draft | OperationKind::Send) {
-            compose_exec(operation)
-        } else {
-            registry_exec(operation)
+        let is_compose = matches!(operation.kind, OperationKind::Draft | OperationKind::Send);
+        if is_compose {
+            return compose_exec(operation);
         }
+        registry_exec(operation)
     });
     let hook_registry = Arc::clone(&registry);
     let cancelled_ai = app

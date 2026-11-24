@@ -6,10 +6,9 @@ use tauri_plugin_prevent_default::Flags;
 pub fn prevent_default_flags(debug: bool) -> Flags {
     let flags = Flags::all().difference(Flags::FOCUS_MOVE);
     if debug {
-        flags.difference(Flags::DEV_TOOLS)
-    } else {
-        flags
+        return flags.difference(Flags::DEV_TOOLS);
     }
+    flags
 }
 
 pub fn prevent_default_plugin() -> TauriPlugin<Wry> {
