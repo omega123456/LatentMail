@@ -8,8 +8,8 @@ use crate::{
     gmail::labels::resolve_color,
     sanitize,
     storage::{
-        ConversationEntryScope, LabelColor, LabelRepository, MessageRepository, Storage,
-        ThreadRepository, TraversalCursorRepository, TraversalKind,
+        addresses::split_addresses, ConversationEntryScope, LabelColor, LabelRepository,
+        MessageRepository, Storage, ThreadRepository, TraversalCursorRepository, TraversalKind,
     },
 };
 
@@ -313,22 +313,14 @@ pub async fn hydrate_compose_draft<R: Runtime>(
     } else {
         remote_html.clone()
     };
-    let split = |value: &str| {
-        value
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect()
-    };
     Ok(HydratedComposeDraft {
         session_id: crate::compose::drafts::generate_id("compose"),
         account_id,
         draft_id,
         from: draft.message.sender,
-        to: split(&draft.message.to_recipients),
-        cc: split(&draft.message.cc_recipients),
-        bcc: split(&draft.message.bcc_recipients),
+        to: split_addresses(&draft.message.to_recipients),
+        cc: split_addresses(&draft.message.cc_recipients),
+        bcc: split_addresses(&draft.message.bcc_recipients),
         subject: draft.message.subject,
         html,
         quote_html: boundary_matches.then_some(quote_html).flatten(),
@@ -419,9 +411,7 @@ pub async fn reply_context(
     account_email: String,
     reply_all: bool,
     forward: bool,
-    owner: String,
 ) -> Result<crate::compose::context::ReplyContext, String> {
-    let _ = &owner;
     let context = string_try!(
         storage
             .run(move |connection| {

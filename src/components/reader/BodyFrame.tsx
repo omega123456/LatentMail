@@ -72,7 +72,7 @@ export function BodyFrame({
     return () => {
       watching = false;
     };
-  });
+  }, [html, allowRemoteImages, heightConstrained]);
   if (!html && !text)
     return (
       <p className="text-body-sm text-on-surface-variant dark:text-dark-on-surface-variant">

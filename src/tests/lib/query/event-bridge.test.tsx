@@ -504,6 +504,37 @@ describe('EventBridge', () => {
     vi.useRealTimers();
   });
 
+  it('refreshes the mailbox of the account named in a finished mutation event payload', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('queue://item', expect.any(Function)),
+    );
+    vi.useFakeTimers();
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() => {
+      ipc.emit('queue://item', {
+        id: 'mutation:operation-7',
+        status: 'done',
+        accountId: 'account-2',
+        lane: 'interactive',
+      });
+      vi.advanceTimersByTime(250);
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.threadsForAccount('account-2'),
+    });
+    expect(invalidate).not.toHaveBeenCalledWith({
+      queryKey: queryKeys.threadsForAccount('operation-7'),
+    });
+    vi.useRealTimers();
+  });
+
   it('coalesces a burst of queue item and summary events into one queue-snapshot invalidation', async () => {
     let client: ReturnType<typeof useQueryClient> | undefined;
     render(

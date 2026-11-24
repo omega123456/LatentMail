@@ -61,12 +61,7 @@ pub fn persist(
             &value.bcc_recipients,
             value.rfc_references.as_deref(),
         )?;
-        for label in &value.label_ids {
-            LabelRepository::ensure_placeholder(connection, account_id, label)?;
-            MessageRepository::set_label_membership(
-                connection, account_id, &value.id, label, true,
-            )?;
-        }
+        write_label_membership(connection, account_id, &value.id, &value.label_ids)?;
         let parts = value
             .inline_parts
             .iter()
@@ -86,6 +81,18 @@ pub fn persist(
         &attachment_records(value),
     )?;
     Ok(())
+}
+
+pub(crate) fn write_label_membership(
+    connection: &Connection,
+    account_id: &str,
+    message_id: &str,
+    label_ids: &[String],
+) -> rusqlite::Result<()> {
+    for label_id in label_ids {
+        LabelRepository::ensure_placeholder(connection, account_id, label_id)?;
+    }
+    MessageRepository::overwrite_membership(connection, account_id, message_id, label_ids)
 }
 
 pub fn replace_draft(

@@ -76,7 +76,6 @@ async fn forward_reply_context_returns_persisted_attachment_metadata_without_con
         "me@example.com".into(),
         false,
         true,
-        "owner".into(),
     )
     .await
     .unwrap();

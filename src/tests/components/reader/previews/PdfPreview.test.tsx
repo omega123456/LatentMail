@@ -4,10 +4,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PdfPreview } from '@/components/reader/previews/PdfPreview';
 
-const { getDocument, TextLayer, textLayerCancel } = vi.hoisted(() => {
+const { getDocument, destroyDocument, TextLayer, textLayerCancel } = vi.hoisted(() => {
   const textLayerCancel = vi.fn();
   return {
     getDocument: vi.fn(),
+    destroyDocument: vi.fn(() => Promise.resolve()),
     textLayerCancel,
     TextLayer: vi.fn(function (this: object, { container }: { container: HTMLElement }) {
       return {
@@ -50,7 +51,11 @@ function makeDocument(numPages: number) {
 
 function loads(numPages: number) {
   getDocument.mockReset();
-  getDocument.mockImplementation(() => ({ promise: Promise.resolve(makeDocument(numPages)) }));
+  destroyDocument.mockClear();
+  getDocument.mockImplementation(() => ({
+    promise: Promise.resolve(makeDocument(numPages)),
+    destroy: destroyDocument,
+  }));
 }
 
 vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({ default: 'worker-url' }));
@@ -223,7 +228,10 @@ describe('PdfPreview', () => {
 
   it('shows the fallback hint when the document fails to load', async () => {
     getDocument.mockReset();
-    getDocument.mockImplementation(() => ({ promise: Promise.reject(new Error('corrupt')) }));
+    getDocument.mockImplementation(() => ({
+      promise: Promise.reject(new Error('corrupt')),
+      destroy: destroyDocument,
+    }));
     render(<PdfPreview bytes={new ArrayBuffer(4)} />);
     expect(await screen.findByText(/Preview not available for this file type/)).toBeInTheDocument();
   });
@@ -231,10 +239,12 @@ describe('PdfPreview', () => {
   it('reuses a loading task when Strict Mode repeats the effect after transferring the buffer', async () => {
     getDocument.mockReset();
     getDocument.mockImplementation(({ data }: { data: ArrayBuffer }) => {
-      if (data.byteLength === 0) return { promise: Promise.reject(new Error('detached')) };
+      if (data.byteLength === 0)
+        return { promise: Promise.reject(new Error('detached')), destroy: destroyDocument };
       structuredClone(data, { transfer: [data] });
-      return { promise: Promise.resolve(makeDocument(1)) };
+      return { promise: Promise.resolve(makeDocument(1)), destroy: destroyDocument };
     });
+    destroyDocument.mockClear();
     render(
       <StrictMode>
         <PdfPreview bytes={new ArrayBuffer(4)} />
@@ -242,5 +252,22 @@ describe('PdfPreview', () => {
     );
     await waitFor(() => expect(screen.getByText('Page 1 of 1')).toBeInTheDocument());
     expect(getDocument).toHaveBeenCalledTimes(1);
+    expect(destroyDocument).not.toHaveBeenCalled();
+  });
+
+  it('destroys the pdf.js document when the preview closes', async () => {
+    const view = await openPreview(2);
+    expect(destroyDocument).not.toHaveBeenCalled();
+    view.unmount();
+    await waitFor(() => expect(destroyDocument).toHaveBeenCalledTimes(1));
+  });
+
+  it('destroys the previous document when the preview switches to new bytes', async () => {
+    loads(1);
+    const view = render(<PdfPreview bytes={new ArrayBuffer(4)} />);
+    await screen.findByText('Page 1 of 1');
+    view.rerender(<PdfPreview bytes={new ArrayBuffer(8)} />);
+    await waitFor(() => expect(destroyDocument).toHaveBeenCalledTimes(1));
+    expect(getDocument).toHaveBeenCalledTimes(2);
   });
 });

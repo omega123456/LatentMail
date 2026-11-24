@@ -26,6 +26,7 @@ import type {
   ThreadSearchPage,
 } from '@/lib/types/ipc';
 import { LABEL_COLOR_BY_ID } from '@/lib/labels/palette';
+import { compareLabelNames } from '@/lib/labels/order';
 
 const LOCAL_FIRST_STALE_TIME = 15_000;
 
@@ -461,17 +462,6 @@ export function useFetchMessageBodyMutation(accountId: string | null) {
   });
 }
 
-function updateThread(
-  page: ThreadPage,
-  threadId: string,
-  update: (thread: MailThread) => MailThread,
-): ThreadPage {
-  return {
-    ...page,
-    items: page.items.map((thread) => (thread.id === threadId ? update(thread) : thread)),
-  };
-}
-
 function useLabelLifecycleMutation<TArgs>(
   accountId: string | null,
   mutationFn: (args: TArgs) => Promise<unknown>,
@@ -501,10 +491,6 @@ function labelColorFor(colorId: string | null): MailLabelColor | null {
   return swatch ? { background: swatch.gmailBackground, text: swatch.gmailText } : null;
 }
 
-function byLabelName(left: MailLabel, right: MailLabel) {
-  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
-}
-
 export function useCreateLabelMutation(accountId: string | null) {
   return useLabelLifecycleMutation(
     accountId,
@@ -522,7 +508,7 @@ export function useCreateLabelMutation(accountId: string | null) {
           messageCount: 0,
           unreadCount: 0,
         },
-      ].sort(byLabelName),
+      ].sort(compareLabelNames),
   );
 }
 
@@ -535,7 +521,7 @@ export function useRenameLabelMutation(accountId: string | null) {
     (labels, args) =>
       labels
         .map((label) => (label.id === args.labelId ? { ...label, name: args.name } : label))
-        .sort(byLabelName),
+        .sort(compareLabelNames),
   );
 }
 
@@ -560,52 +546,6 @@ export function useDeleteLabelMutation(accountId: string | null) {
     { done: 'Label deleted.', failed: 'Couldn’t delete the label.' },
     (labels, args) => labels.filter((label) => label.id !== args.labelId),
   );
-}
-
-export function useThreadMutation(accountId: string | null) {
-  const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
-  return useMutation({
-    mutationFn: async ({
-      threadId,
-      kind,
-    }: {
-      threadId: string;
-      kind: 'star' | 'unstar' | 'read' | 'unread';
-    }) => {
-      if (!accountId) return;
-      const [add, remove] =
-        kind === 'star'
-          ? [['STARRED'], []]
-          : kind === 'unstar'
-            ? [[], ['STARRED']]
-            : kind === 'read'
-              ? [[], ['UNREAD']]
-              : [['UNREAD'], []];
-      await invoke('mutate_threads', { accountId, threadIds: [threadId], add, remove });
-    },
-    onMutate: async ({ threadId, kind }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') });
-      const property = kind === 'star' || kind === 'unstar' ? 'isStarred' : 'isUnread';
-      const value = kind === 'star' || kind === 'unread';
-      queryClient.setQueriesData(
-        { queryKey: queryKeys.threadsForAccount(accountId ?? '') },
-        (data: { pages: ThreadPage[] } | undefined) =>
-          data && {
-            ...data,
-            pages: data.pages.map((page) =>
-              updateThread(page, threadId, (thread) => ({ ...thread, [property]: value })),
-            ),
-          },
-      );
-      return undefined;
-    },
-    onError: () => {
-      showError('Couldn’t update conversation.');
-    },
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.threadsForAccount(accountId ?? '') }),
-  });
 }
 
 export type TriageChange = { threadIds: string[]; add: string[]; remove: string[] };

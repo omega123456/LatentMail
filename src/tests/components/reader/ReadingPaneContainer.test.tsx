@@ -261,6 +261,53 @@ describe('ReadingPaneContainer', () => {
     expect(await screen.findByRole('menuitem', { name: /Trash/ })).toBeEnabled();
   });
 
+  it('shows each label in its own colour in the bulk selection labels menu', async () => {
+    const user = userEvent.setup();
+    useSelectionStore.setState({
+      activeAccountId: 'account-1',
+      activeMailboxId: 'INBOX',
+      activeThreadId: null,
+      keyboardCursor: null,
+    });
+    useMultiSelectStore.setState({
+      selectedIds: new Set(['thread-one', 'thread-two']),
+      anchorId: null,
+    });
+    ipc.override('list_labels', [
+      {
+        id: 'Label_1',
+        name: 'Projects',
+        kind: 'user',
+        color: { background: '#434343', text: '#ffffff' },
+        messageCount: 2,
+        unreadCount: 0,
+      },
+    ]);
+    ipc.override('list_threads', {
+      items: ['thread-one', 'thread-two'].map((id) => ({
+        id,
+        subject: id,
+        sender: { display: 'Anna', address: 'anna@example.com' },
+        sentRecipient: null,
+        latestAt: Date.parse('2026-08-11T10:00:00Z'),
+        messageCount: 1,
+        isUnread: false,
+        isStarred: false,
+        hasAttachments: false,
+        hasDraft: false,
+        systemLabelIds: ['INBOX'],
+      })),
+      nextCursor: null,
+    });
+
+    renderWithClient();
+
+    const panel = await screen.findByTestId('bulk-selection-panel');
+    await user.click(within(panel).getByRole('button', { name: 'Labels' }));
+    const entry = await screen.findByRole('menuitemcheckbox', { name: /Projects/ });
+    expect(entry.querySelector('.size-chip-dot')).toHaveClass('bg-label-gmail-1');
+  });
+
   it('never removes a user label when moving a thread found through a user-label mailbox', async () => {
     const user = userEvent.setup();
     useSelectionStore.setState({

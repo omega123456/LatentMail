@@ -96,6 +96,8 @@ mod storage_schema_integration;
 mod storage_vacuum_integration;
 mod sync_cadence_integration;
 mod sync_concurrency_integration;
+mod sync_dto_recipients_integration;
+mod sync_event_log_integration;
 mod sync_history_integration;
 mod sync_initial_integration;
 mod sync_label_command_failures_integration;

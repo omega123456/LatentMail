@@ -20,23 +20,21 @@ export type LabelListProps = {
   labels: Label[];
   showUnreadCounts: boolean;
   onSelect: (id: string) => void;
-  onCreateLabel?: (input: { name: string; colorId: LabelColorId }) => Promise<unknown>;
-  onRenameLabel?: (input: { id: string; name: string }) => Promise<unknown>;
-  onRecolorLabel?: (input: { id: string; colorId: LabelColorId }) => Promise<unknown>;
-  onDeleteLabel?: (id: string) => Promise<unknown>;
+  onCreateLabel: (input: { name: string; colorId: LabelColorId }) => Promise<unknown>;
+  onRenameLabel: (input: { id: string; name: string }) => Promise<unknown>;
+  onRecolorLabel: (input: { id: string; colorId: LabelColorId }) => Promise<unknown>;
+  onDeleteLabel: (id: string) => Promise<unknown>;
 };
-
-const defaultAsync = async () => undefined;
 
 export function LabelList({
   activeMailboxId,
   labels,
   showUnreadCounts,
   onSelect,
-  onCreateLabel = defaultAsync,
-  onRenameLabel = defaultAsync,
-  onRecolorLabel = defaultAsync,
-  onDeleteLabel = defaultAsync,
+  onCreateLabel,
+  onRenameLabel,
+  onRecolorLabel,
+  onDeleteLabel,
 }: LabelListProps) {
   const [creating, setCreating] = useState(false);
   const [rowMode, setRowMode] = useState<RowMode>(null);

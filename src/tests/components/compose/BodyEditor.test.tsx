@@ -50,19 +50,20 @@ describe('BodyEditor', () => {
     await waitFor(() => expect(onSelectionChange).toHaveBeenCalled());
     onSelectionChange.mockClear();
     act(() => ref.current?.insertInlineImage('asset://inline-image'));
-    expect(ref.current?.html()).toContain('asset://inline-image');
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining('asset://inline-image'));
     expect(onSelectionChange).toHaveBeenCalled();
     unmount();
   });
 
   it('is inert without an onChange/onSelectionChange listener wired up', async () => {
     const ref = createRef<BodyEditorHandle>();
-    const { unmount } = render(<BodyEditor ref={ref} value="<p>Hi</p>" onChange={() => {}} />);
+    const { container, unmount } = render(
+      <BodyEditor ref={ref} value="<p>Hi</p>" onChange={() => {}} />,
+    );
 
-    await waitFor(() => expect(ref.current?.html()).toContain('Hi'));
+    expect(await screen.findByText('Hi')).toBeInTheDocument();
     act(() => ref.current?.insertInlineImage('asset://second-image'));
-    expect(ref.current?.html()).toContain('asset://second-image');
+    expect(container.querySelector('img[src="asset://second-image"]')).not.toBeNull();
     unmount();
   });
 
@@ -89,10 +90,11 @@ describe('BodyEditor', () => {
     async (label, expectedTag) => {
       const user = userEvent.setup();
       const ref = createRef<BodyEditorHandle>();
-      render(<ComposerHarness bodyRef={ref} />);
+      const editorRef = createRef<Editor>();
+      render(<ComposerHarness bodyRef={ref} editorRef={editorRef} />);
       await waitFor(() => expect(screen.getByRole('button', { name: label })).toBeEnabled());
       await user.click(screen.getByRole('button', { name: label }));
-      expect(ref.current?.html()).toContain(expectedTag);
+      expect(editorRef.current?.getHTML()).toContain(expectedTag);
     },
   );
 
@@ -109,7 +111,7 @@ describe('BodyEditor', () => {
     });
     await user.click(screen.getByRole('button', { name: 'Code Block' }));
 
-    const html = ref.current?.html() ?? '';
+    const html = editorRef.current?.getHTML() ?? '';
     expect(html.match(/<pre/g)).toHaveLength(1);
     expect(html).toContain('first\nsecond');
   });

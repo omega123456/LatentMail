@@ -68,3 +68,41 @@ fn draft_replacement_tracks_the_stable_draft_id_across_gmail_message_ids() {
         None
     );
 }
+
+#[test]
+fn a_newer_full_snapshot_removes_labels_the_message_lost_upstream() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "a".into(),
+            email: "me@example.com".into(),
+            display_name: "Me".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    let mut unread = message("m1", "t1");
+    unread.label_ids = vec!["INBOX".into(), "UNREAD".into()];
+    materialize::persist(&connection, "a", &unread).unwrap();
+
+    let mut read = message("m1", "t1");
+    read.history_id = 2;
+    read.label_ids = vec!["INBOX".into()];
+    materialize::persist(&connection, "a", &read).unwrap();
+
+    assert_eq!(
+        MessageRepository::label_ids(&connection, "a", "m1").unwrap(),
+        vec!["INBOX".to_owned()]
+    );
+    assert!(
+        !MessageRepository::get(&connection, "a", "m1")
+            .unwrap()
+            .unwrap()
+            .is_unread
+    );
+}

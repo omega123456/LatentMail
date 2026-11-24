@@ -63,9 +63,7 @@ it('keeps focus on the filter while the selected model mounts and unmounts from 
       ]}
     />,
   );
-  await user.click(
-    screen.getByRole('combobox', { name: 'Embedding model for ada@example.com' }),
-  );
+  await user.click(screen.getByRole('combobox', { name: 'Embedding model for ada@example.com' }));
   const input = await screen.findByLabelText('Filter Embedding models for ada@example.com');
   await user.type(input, 'new');
   expect(document.activeElement).toBe(input);
@@ -119,7 +117,9 @@ it('reveals models the name filter assigns to the other kind', async () => {
 
   await user.click(screen.getByRole('button', { name: 'Show all' }));
   await user.click(await screen.findByRole('option', { name: /bge-m3/ }));
-  expect(screen.getByRole('combobox', { name: 'Embedding model for ada@example.com' })).toBeTruthy();
+  expect(
+    screen.getByRole('combobox', { name: 'Embedding model for ada@example.com' }),
+  ).toBeTruthy();
 });
 
 it('leaves no highlight behind when the pointer moves between options', async () => {

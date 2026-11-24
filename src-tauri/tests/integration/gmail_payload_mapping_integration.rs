@@ -71,8 +71,7 @@ async fn committed_message_corpus_maps_payload_trees() {
 }
 
 #[tokio::test]
-async fn default_client_constructor_and_page_wrapper_map_server_data() {
-    drop(GmailClient::new("token"));
+async fn the_page_wrapper_maps_server_data() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/users/me/messages"))

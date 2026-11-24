@@ -102,6 +102,12 @@ pub struct QueueOperation {
     pub description: String,
 }
 
+impl QueueOperation {
+    pub fn will_retry(&self, error: QueueError) -> bool {
+        self.kind.retries() && error.retryable() && self.attempts + 1 < MAX_ATTEMPTS
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueueError {
     Network,
@@ -557,11 +563,7 @@ impl QueueEngine {
                     self.emit(&operation.id, &operation.account_id, operation.lane, "done");
                     return;
                 }
-                Err(error)
-                    if operation.kind.retries()
-                        && error.retryable()
-                        && operation.attempts + 1 < MAX_ATTEMPTS =>
-                {
+                Err(error) if operation.will_retry(error) => {
                     operation.attempts += 1;
                     self.counters.pending.fetch_add(1, Ordering::Relaxed);
                     self.registry.transition_retrying(&operation);

@@ -13,12 +13,8 @@ pub fn health_response() -> HealthCheck {
 }
 
 #[tauri::command]
-pub fn health_check<R: Runtime>(app: AppHandle<R>) -> Result<HealthCheck, String> {
-    let result = health_response();
-    if let Err(error) = app.emit("system://health", &result) {
-        return Err(error.to_string());
-    }
-    Ok(result)
+pub fn health_check() -> HealthCheck {
+    health_response()
 }
 
 #[tauri::command]

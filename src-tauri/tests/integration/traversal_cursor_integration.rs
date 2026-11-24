@@ -1357,3 +1357,39 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
          operations, not one operation looping internally over both pages: {distinct_traversal_ops:?}"
     );
 }
+
+#[tokio::test]
+async fn a_newer_traversal_snapshot_removes_labels_the_message_lost_upstream() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(message_json("m1", "t1", "10", "Hello")),
+        )
+        .mount(&server)
+        .await;
+    let (storage, _directory) = temp_storage();
+    let client = GmailClient::with_base_url("token", server.uri()).traversal_scoped();
+    let ids = ["m1".to_owned()];
+    latentmail_lib::sync::traversal::fetch_and_persist(&storage, &client, "account", &ids, None)
+        .await
+        .unwrap();
+
+    server.reset().await;
+    let mut newer = message_json("m1", "t1", "20", "Hello");
+    newer["labelIds"] = serde_json::json!(["INBOX"]);
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/m1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(newer))
+        .mount(&server)
+        .await;
+    latentmail_lib::sync::traversal::fetch_and_persist(&storage, &client, "account", &ids, None)
+        .await
+        .unwrap();
+
+    let connection = storage.connection().unwrap();
+    assert_eq!(
+        MessageRepository::label_ids(&connection, "account", "m1").unwrap(),
+        vec!["INBOX".to_owned()]
+    );
+}

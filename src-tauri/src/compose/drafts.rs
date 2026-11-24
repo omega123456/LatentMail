@@ -15,8 +15,8 @@ use crate::{
         QueueOperation,
     },
     storage::{
-        ComposeDraftMetadata, ComposeDraftMetadataRepository, MessageRepository,
-        OperationRepository, Storage, ThreadRepository,
+        addresses::split_addresses, ComposeDraftMetadata, ComposeDraftMetadataRepository,
+        MessageRepository, OperationRepository, Storage, ThreadRepository,
     },
     sync::materialize,
 };
@@ -210,6 +210,19 @@ async fn terminal_failed<R: Runtime>(
     );
 }
 
+async fn fail<R: Runtime>(
+    app: &AppHandle<R>,
+    storage: &Storage,
+    operation: &QueueOperation,
+    error: &str,
+    queue_error: QueueError,
+) -> Result<(), QueueError> {
+    if !operation.will_retry(queue_error) {
+        terminal_failed(app, storage, operation, error).await;
+    }
+    Err(queue_error)
+}
+
 fn classify(error: &GmailError) -> QueueError {
     match error {
         GmailError::Network(_) => QueueError::Network,
@@ -244,8 +257,14 @@ async fn run<R: Runtime>(
     let mut payload: DraftOperationPayload = match serde_json::from_str(&row.payload) {
         Ok(payload) => payload,
         Err(error) => {
-            terminal_failed(app, storage, &operation, &error.to_string()).await;
-            return Err(QueueError::Permanent);
+            return fail(
+                app,
+                storage,
+                &operation,
+                &error.to_string(),
+                QueueError::Permanent,
+            )
+            .await;
         }
     };
     {
@@ -280,8 +299,14 @@ async fn run<R: Runtime>(
     let manifest = match staging.snapshot_manifest(&id) {
         Ok(manifest) => manifest,
         Err(error) => {
-            terminal_failed(app, storage, &operation, &error.to_string()).await;
-            return Err(QueueError::Permanent);
+            return fail(
+                app,
+                storage,
+                &operation,
+                &error.to_string(),
+                QueueError::Permanent,
+            )
+            .await;
         }
     };
     let mut inline = Vec::new();
@@ -291,8 +316,14 @@ async fn run<R: Runtime>(
             Ok(read) if part.content_id.is_some() => inline.push(read),
             Ok(read) => attachments.push(read),
             Err(error) => {
-                terminal_failed(app, storage, &operation, &error.to_string()).await;
-                return Err(QueueError::Permanent);
+                return fail(
+                    app,
+                    storage,
+                    &operation,
+                    &error.to_string(),
+                    QueueError::Permanent,
+                )
+                .await;
             }
         }
     }
@@ -309,24 +340,7 @@ async fn run<R: Runtime>(
             .await
             .ok()
             .and_then(|(message, parts)| {
-                message.map(|message| {
-                    let body = message
-                        .html_body
-                        .or(message
-                            .plain_body
-                            .map(|plain| format!("<pre>{plain}</pre>")))
-                        .unwrap_or_default();
-                    let attribution = chrono::DateTime::from_timestamp(message.sent_at, 0)
-                        .map(|value| value.format("%b %-d, %Y at %H:%M").to_string())
-                        .unwrap_or_default();
-                    (
-                        Some(format!(
-                            "<p>On {attribution}, {} wrote:</p><blockquote>{body}</blockquote>",
-                            message.sender
-                        )),
-                        parts,
-                    )
-                })
+                message.map(|message| (Some(super::context::outgoing_quote(&message)), parts))
             })
             .unwrap_or((None, Vec::new()))
     } else {
@@ -355,8 +369,14 @@ async fn run<R: Runtime>(
     let raw = match mime::assemble(&outgoing) {
         Ok(raw) => raw,
         Err(error) => {
-            terminal_failed(app, storage, &operation, &error.to_string()).await;
-            return Err(QueueError::Permanent);
+            return fail(
+                app,
+                storage,
+                &operation,
+                &error.to_string(),
+                QueueError::Permanent,
+            )
+            .await;
         }
     };
 
@@ -364,8 +384,7 @@ async fn run<R: Runtime>(
     let token = match auth.refresh_access_token(app, &operation.account_id).await {
         Ok(token) => token,
         Err(error) => {
-            terminal_failed(app, storage, &operation, &error).await;
-            return Err(QueueError::Network);
+            return fail(app, storage, &operation, &error, QueueError::Network).await;
         }
     };
     let client = GmailClient::with_base_url(token, base_url.to_owned());
@@ -373,10 +392,14 @@ async fn run<R: Runtime>(
     let (message, consumed, draft_id) = match execute_gmail(&client, &payload, &raw).await {
         Ok(outcome) => outcome,
         Err(error) => {
-            let queue_error = classify(&error);
-
-            terminal_failed(app, storage, &operation, &error.to_string()).await;
-            return Err(queue_error);
+            return fail(
+                app,
+                storage,
+                &operation,
+                &error.to_string(),
+                classify(&error),
+            )
+            .await;
         }
     };
 
@@ -414,8 +437,14 @@ async fn run<R: Runtime>(
         if let Err(error) =
             staging.move_owner(&operation.account_id, &operation.entity_key, &draft_id)
         {
-            terminal_failed(app, storage, &operation, &error.to_string()).await;
-            return Err(QueueError::Permanent);
+            return fail(
+                app,
+                storage,
+                &operation,
+                &error.to_string(),
+                QueueError::Permanent,
+            )
+            .await;
         }
     }
 
@@ -452,14 +481,11 @@ async fn run<R: Runtime>(
                     ComposeDraftMetadataRepository::upsert(&transaction, &metadata)?;
                 } else {
                     crate::contacts::observe_now(&transaction, &account_id, &message.sender)?;
-                    for mailbox in message
-                        .to_recipients
-                        .split(',')
-                        .chain(message.cc_recipients.split(','))
-                        .map(str::trim)
-                        .filter(|mailbox| !mailbox.is_empty())
+                    for mailbox in split_addresses(&message.to_recipients)
+                        .into_iter()
+                        .chain(split_addresses(&message.cc_recipients))
                     {
-                        crate::contacts::observe_now(&transaction, &account_id, mailbox)?;
+                        crate::contacts::observe_now(&transaction, &account_id, &mailbox)?;
                     }
                 }
                 transaction.commit()
@@ -467,9 +493,21 @@ async fn run<R: Runtime>(
             .await
     };
     if let Err(error) = persisted {
-        terminal_failed(app, storage, &operation, &error.to_string()).await;
-
-        return Err(QueueError::Permanent);
+        if !consumed {
+            return fail(
+                app,
+                storage,
+                &operation,
+                &error.to_string(),
+                QueueError::Permanent,
+            )
+            .await;
+        }
+        tracing::warn!(
+            target: "compose",
+            "operation {} sent but its local copy was not written: {error}",
+            operation.id
+        );
     }
 
     let _ = staging.release_snapshot(&id);

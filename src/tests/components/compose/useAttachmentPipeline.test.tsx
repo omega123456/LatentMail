@@ -64,7 +64,7 @@ describe('useAttachmentPipeline', () => {
     });
     ipc.override('release_staged_attachment', release);
     const bodyRef = {
-      current: { html: () => '', focus: () => undefined, insertInlineImage },
+      current: { focus: () => undefined, insertInlineImage },
     } as RefObject<BodyEditorHandle>;
     const { result } = renderHook(() => useAttachmentPipeline(bodyRef));
 

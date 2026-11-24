@@ -202,10 +202,7 @@ fn parse_absolute_cutoff(value: &str) -> Option<i64> {
 
 fn parse_duration_cutoff(now: DateTime<Utc>, value: &str) -> Option<i64> {
     let value = value.trim();
-    if value.len() < 2 {
-        return None;
-    }
-    let split_at = value.len() - 1;
+    let (split_at, _) = value.char_indices().next_back()?;
     let (number_part, unit_part) = value.split_at(split_at);
     let amount: i64 = number_part.parse().ok()?;
     if amount < 0 {

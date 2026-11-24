@@ -7,6 +7,7 @@ use std::{
 use crate::{avatars::cache::hash_key, gmail::GmailClient};
 
 pub const CACHE_CEILING_BYTES: u64 = 512 * 1024 * 1024;
+const UNSAFE_PATH_CHARACTERS: [char; 4] = ['/', '\\', ':', '\0'];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedAttachment {
@@ -29,18 +30,32 @@ impl AttachmentCache {
         Ok(Self { root })
     }
 
-    fn message_dir(&self, account_id: &str, message_id: &str) -> PathBuf {
-        self.root.join(account_id).join(message_id)
+    fn message_dir(&self, account_id: &str, message_id: &str) -> io::Result<PathBuf> {
+        let account_component = path_component(account_id)?;
+        let message_component = path_component(message_id)?;
+        Ok(self.root.join(account_component).join(message_component))
     }
 
-    fn raw_path(&self, account_id: &str, message_id: &str, attachment_id: &str) -> PathBuf {
-        self.message_dir(account_id, message_id)
-            .join(hash_key(attachment_id))
+    fn raw_path(
+        &self,
+        account_id: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> io::Result<PathBuf> {
+        Ok(self
+            .message_dir(account_id, message_id)?
+            .join(hash_key(attachment_id)))
     }
 
-    fn raster_path(&self, account_id: &str, message_id: &str, attachment_id: &str) -> PathBuf {
-        self.message_dir(account_id, message_id)
-            .join(format!("{}.png", hash_key(attachment_id)))
+    fn raster_path(
+        &self,
+        account_id: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> io::Result<PathBuf> {
+        Ok(self
+            .message_dir(account_id, message_id)?
+            .join(format!("{}.png", hash_key(attachment_id))))
     }
 
     fn is_tiff(mime_type: &str) -> bool {
@@ -56,12 +71,12 @@ impl AttachmentCache {
         mime_type: &str,
         bytes: &[u8],
     ) -> io::Result<CachedAttachment> {
-        let dir = self.message_dir(account_id, message_id);
+        let dir = self.message_dir(account_id, message_id)?;
         fs::create_dir_all(&dir)?;
-        let raw = self.raw_path(account_id, message_id, attachment_id);
+        let raw = self.raw_path(account_id, message_id, attachment_id)?;
         fs::write(&raw, bytes)?;
         let display_path = if Self::is_tiff(mime_type) {
-            let raster = self.raster_path(account_id, message_id, attachment_id);
+            let raster = self.raster_path(account_id, message_id, attachment_id)?;
             match super::thumbnail::rasterize_tiff(bytes) {
                 Ok(png) => {
                     fs::write(&raster, &png)?;
@@ -89,11 +104,13 @@ impl AttachmentCache {
         filename: &str,
         mime_type: &str,
     ) -> Option<CachedAttachment> {
-        let raw = self.raw_path(account_id, message_id, attachment_id);
+        let raw = self.raw_path(account_id, message_id, attachment_id).ok()?;
         let metadata = fs::metadata(&raw).ok()?;
         let _ = touch(&raw);
         let display_path = if Self::is_tiff(mime_type) {
-            let raster = self.raster_path(account_id, message_id, attachment_id);
+            let raster = self
+                .raster_path(account_id, message_id, attachment_id)
+                .ok()?;
             if raster.exists() {
                 let _ = touch(&raster);
                 raster
@@ -186,6 +203,22 @@ impl AttachmentCache {
         }
         Ok(())
     }
+}
+
+fn path_component(identifier: &str) -> io::Result<&str> {
+    if is_single_path_component(identifier) {
+        return Ok(identifier);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "identifier is not a single path component",
+    ))
+}
+
+fn is_single_path_component(identifier: &str) -> bool {
+    let is_relative_marker = identifier == "." || identifier == "..";
+    let has_separator = identifier.contains(UNSAFE_PATH_CHARACTERS);
+    !identifier.is_empty() && !is_relative_marker && !has_separator
 }
 
 fn touch(path: &Path) -> io::Result<()> {

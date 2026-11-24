@@ -26,3 +26,16 @@ fn mailto_parsing_rejects_invalid_and_non_mailto_values() {
     assert!(parse("mailto://example.com").is_none());
     assert!(parse("mailto:bad%").is_none());
 }
+
+#[test]
+fn mailto_parsing_keeps_a_quoted_display_name_that_contains_a_comma_whole() {
+    let mailto =
+        parse("mailto:%22Doe,%20John%22%20%3Cjohn%40example.com%3E,other%40example.com").unwrap();
+    assert_eq!(
+        mailto.to,
+        vec![
+            r#""Doe, John" <john@example.com>"#.to_owned(),
+            "other@example.com".to_owned()
+        ]
+    );
+}

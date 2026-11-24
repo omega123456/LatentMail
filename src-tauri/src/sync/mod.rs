@@ -37,11 +37,11 @@ pub mod traversal;
 pub mod triage;
 
 pub use dto::{
-    to_millis, AttachmentDto, ContactSuggestionDto, ConversationDto, HtmlPresenceDto, ImagePolicy,
-    LabelColorDto, LabelDto, MessageBodyDto, MessageBodyFetchedDto, MessageDto, MutationOutcomeDto,
-    MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto, StagedAttachmentDto,
-    SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, ThreadSearchPage,
-    TraversalKind, TraversalState, TraversalStatusDto,
+    message_dto, to_millis, AttachmentDto, ContactSuggestionDto, ConversationDto, HtmlPresenceDto,
+    ImagePolicy, LabelColorDto, LabelDto, MessageBodyDto, MessageBodyFetchedDto, MessageDto,
+    MutationOutcomeDto, MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto,
+    StagedAttachmentDto, SyncStatusDto, ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection,
+    ThreadSearchPage, TraversalKind, TraversalState, TraversalStatusDto,
 };
 pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 
@@ -1528,6 +1528,18 @@ pub async fn run_periodic_cadence<R: Runtime>(
     }
 }
 
+pub fn emitting_event_sink<R: Runtime>(handle: AppHandle<R>) -> EventSink {
+    Arc::new(move |event, payload| {
+        if event != "queue://summary" {
+            let payload_bytes = payload.to_string().len();
+            tracing::info!(target: "events", "emit {event} ({payload_bytes} bytes)");
+        }
+        if let Err(error) = handle.emit(event, payload) {
+            tracing::error!(target: "events", "emit {event} failed: {error}");
+        }
+    })
+}
+
 pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {
     let directory = app
         .path()
@@ -1535,16 +1547,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<()
         .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let registry = WorkRegistry::new();
-    let handle_for_events = app.clone();
-
-    let events: EventSink = Arc::new(move |event, payload| {
-        if event != "queue://summary" {
-            tracing::info!(target: "events", "emit {event} {payload}");
-        }
-        if let Err(error) = handle_for_events.emit(event, payload) {
-            tracing::error!(target: "events", "emit {event} failed: {error}");
-        }
-    });
+    let events = emitting_event_sink(app.clone());
 
     let staging = Arc::new(crate::compose::staging::Staging::new(
         directory.join("compose-staging"),

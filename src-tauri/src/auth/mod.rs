@@ -7,8 +7,9 @@ use std::{
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use oauth2::{
-    basic::BasicClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
+    basic::{BasicClient, BasicErrorResponse, BasicErrorResponseType},
+    AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, TokenResponse, TokenUrl,
 };
 use oauth2_reqwest::ReqwestClient;
 use serde::{Deserialize, Serialize};
@@ -35,8 +36,14 @@ const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profil
 #[cfg(not(feature = "test-utils"))]
 const USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 
+#[cfg(feature = "test-utils")]
 fn oauth_endpoint(env_key: &str, default: &str) -> String {
     std::env::var(env_key).unwrap_or_else(|_| default.to_owned())
+}
+
+#[cfg(not(feature = "test-utils"))]
+fn oauth_endpoint(_env_key: &str, default: &str) -> String {
+    default.to_owned()
 }
 
 pub fn client_id() -> Result<String, String> {
@@ -60,6 +67,8 @@ const KEYCHAIN_SERVICE: &str = "com.latentmail.refresh-token";
 const KEYCHAIN_SERVICE: &str = "com.latentmail.desktop.dev.refresh-token";
 
 const ACCESS_TOKEN_EXPIRY_SKEW: ChronoDuration = ChronoDuration::minutes(5);
+const DEFAULT_ACCESS_TOKEN_LIFETIME: ChronoDuration = ChronoDuration::hours(1);
+const REAUTHENTICATION_STRIKES: u8 = 3;
 
 type AccessTokenCache = HashMap<String, (String, DateTime<Utc>)>;
 
@@ -302,54 +311,51 @@ impl AuthService {
                 }
             }
         }
-        let result = async {
-            let mut client = BasicClient::new(ClientId::new(client_id()?))
-                .set_auth_type(AuthType::RequestBody)
-                .set_token_uri(string_try!(TokenUrl::new(oauth_endpoint(
-                    "LATENTMAIL_GOOGLE_TOKEN_URL",
-                    TOKEN_URL
-                ))));
-            if let Some(secret) = client_secret() {
-                client = client.set_client_secret(secret);
-            }
-            let token = client
-                .exchange_refresh_token(&RefreshToken::new(load_refresh_token(account_id)?))
-                .request_async(&ReqwestClient::from(crate::http_client()))
-                .await
-                .map_err(|e| e.to_string())?;
-            let lifetime = token
-                .expires_in()
-                .and_then(|std_dur| ChronoDuration::from_std(std_dur).ok())
-                .unwrap_or(ChronoDuration::seconds(3600));
-            let expiry = Utc::now() + lifetime;
-            Ok((token.access_token().secret().to_owned(), expiry))
+        let failure = match exchange_refresh_token(account_id).await {
+            Ok(fresh) => return self.remember_access_token(account_id, fresh),
+            Err(failure) => failure,
+        };
+        if failure.rejects_grant() {
+            self.record_rejected_grant(app, account_id).await?;
         }
-        .await;
-        if let Ok((access, expiry)) = &result {
-            self.access_tokens
-                .lock()
-                .map_err(|_| "refresh lock poisoned".to_owned())?
-                .insert(account_id.to_owned(), (access.clone(), *expiry));
-            self.refresh_failures
-                .lock()
-                .map_err(|_| "refresh lock poisoned".to_owned())?
-                .remove(account_id);
-            return Ok(access.clone());
-        }
-        let failed = {
+        Err(failure.into_message())
+    }
+
+    fn remember_access_token(
+        &self,
+        account_id: &str,
+        fresh: FreshAccessToken,
+    ) -> Result<String, String> {
+        self.access_tokens
+            .lock()
+            .map_err(|_| "refresh lock poisoned".to_owned())?
+            .insert(account_id.to_owned(), (fresh.access.clone(), fresh.expiry));
+        self.refresh_failures
+            .lock()
+            .map_err(|_| "refresh lock poisoned".to_owned())?
+            .remove(account_id);
+        Ok(fresh.access)
+    }
+
+    async fn record_rejected_grant<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        account_id: &str,
+    ) -> Result<(), String> {
+        let strikes = {
             let mut failures = self
                 .refresh_failures
                 .lock()
                 .map_err(|_| "refresh lock poisoned".to_owned())?;
             let count = failures.entry(account_id.to_owned()).or_default();
-            *count += 1;
-            *count >= 3
+            *count = count.saturating_add(1);
+            *count
         };
-        if failed {
-            self.mark_needs_reauthentication(app, account_id.to_owned())
-                .await?;
+        if strikes < REAUTHENTICATION_STRIKES {
+            return Ok(());
         }
-        result.map(|(access, _)| access)
+        self.mark_needs_reauthentication(app, account_id.to_owned())
+            .await
     }
 
     pub async fn remove_account(
@@ -371,6 +377,71 @@ impl AuthService {
         self.invalidate_access_token(account_id);
         Ok(())
     }
+}
+
+struct FreshAccessToken {
+    access: String,
+    expiry: DateTime<Utc>,
+}
+
+enum RefreshFailure {
+    GrantRejected(String),
+    Other(String),
+}
+
+impl RefreshFailure {
+    fn from_token_error<E: std::error::Error + 'static>(
+        error: RequestTokenError<E, BasicErrorResponse>,
+    ) -> Self {
+        let message = error.to_string();
+        let RequestTokenError::ServerResponse(response) = &error else {
+            return Self::Other(message);
+        };
+        if *response.error() == BasicErrorResponseType::InvalidGrant {
+            return Self::GrantRejected(message);
+        }
+        Self::Other(message)
+    }
+
+    fn rejects_grant(&self) -> bool {
+        matches!(self, Self::GrantRejected(_))
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::GrantRejected(message) | Self::Other(message) => message,
+        }
+    }
+}
+
+impl From<String> for RefreshFailure {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+async fn exchange_refresh_token(account_id: &str) -> Result<FreshAccessToken, RefreshFailure> {
+    let token_url = TokenUrl::new(oauth_endpoint("LATENTMAIL_GOOGLE_TOKEN_URL", TOKEN_URL))
+        .map_err(|error| error.to_string())?;
+    let mut client = BasicClient::new(ClientId::new(client_id()?))
+        .set_auth_type(AuthType::RequestBody)
+        .set_token_uri(token_url);
+    if let Some(secret) = client_secret() {
+        client = client.set_client_secret(secret);
+    }
+    let token = client
+        .exchange_refresh_token(&RefreshToken::new(load_refresh_token(account_id)?))
+        .request_async(&ReqwestClient::from(crate::http_client()))
+        .await
+        .map_err(RefreshFailure::from_token_error)?;
+    let lifetime = token
+        .expires_in()
+        .and_then(|lifetime| ChronoDuration::from_std(lifetime).ok())
+        .unwrap_or(DEFAULT_ACCESS_TOKEN_LIFETIME);
+    Ok(FreshAccessToken {
+        access: token.access_token().secret().to_owned(),
+        expiry: Utc::now() + lifetime,
+    })
 }
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<(), String> {

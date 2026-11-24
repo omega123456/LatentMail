@@ -8,9 +8,26 @@ const labels: Label[] = [
   { id: 'Label_2', name: 'Invoices', unreadCount: 0, color: 'red' },
 ];
 
+function labelActions() {
+  return {
+    onCreateLabel: vi.fn(),
+    onRenameLabel: vi.fn(),
+    onRecolorLabel: vi.fn(),
+    onDeleteLabel: vi.fn(),
+  };
+}
+
 describe('LabelList', () => {
   it('renders the header and create affordance even at zero labels', () => {
-    render(<LabelList activeMailboxId={null} labels={[]} showUnreadCounts onSelect={vi.fn()} />);
+    render(
+      <LabelList
+        {...labelActions()}
+        activeMailboxId={null}
+        labels={[]}
+        showUnreadCounts
+        onSelect={vi.fn()}
+      />,
+    );
     expect(screen.getByText('LABELS')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create label' })).toBeInTheDocument();
     expect(screen.getByText('No labels yet')).toBeInTheDocument();
@@ -21,6 +38,7 @@ describe('LabelList', () => {
     const onCreateLabel = vi.fn().mockResolvedValue(undefined);
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={[]}
         showUnreadCounts
@@ -41,6 +59,7 @@ describe('LabelList', () => {
     const onCreateLabel = vi.fn(() => new Promise<never>(() => undefined));
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={[]}
         showUnreadCounts
@@ -62,6 +81,7 @@ describe('LabelList', () => {
     const onCreateLabel = vi.fn();
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={labels}
         showUnreadCounts
@@ -83,6 +103,7 @@ describe('LabelList', () => {
     const onCreateLabel = vi.fn().mockRejectedValue(new Error('Network unavailable'));
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={[]}
         showUnreadCounts
@@ -100,7 +121,13 @@ describe('LabelList', () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     render(
-      <LabelList activeMailboxId="Label_1" labels={labels} showUnreadCounts onSelect={onSelect} />,
+      <LabelList
+        {...labelActions()}
+        activeMailboxId="Label_1"
+        labels={labels}
+        showUnreadCounts
+        onSelect={onSelect}
+      />,
     );
     expect(screen.queryByText('No labels yet')).not.toBeInTheDocument();
     const clients = screen.getByText('Clients').closest('button');
@@ -115,6 +142,7 @@ describe('LabelList', () => {
   it('hides unread counts when showUnreadCounts is false', () => {
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={labels}
         showUnreadCounts={false}
@@ -129,6 +157,7 @@ describe('LabelList', () => {
     const onDeleteLabel = vi.fn().mockResolvedValue(undefined);
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={labels}
         showUnreadCounts
@@ -150,6 +179,7 @@ describe('LabelList', () => {
     const onRenameLabel = vi.fn().mockResolvedValue(undefined);
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={labels}
         showUnreadCounts
@@ -173,6 +203,7 @@ describe('LabelList', () => {
     const onRecolorLabel = vi.fn().mockResolvedValue(undefined);
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={labels}
         showUnreadCounts
@@ -196,6 +227,7 @@ describe('LabelList', () => {
     const onRecolorLabel = vi.fn().mockResolvedValue(undefined);
     render(
       <LabelList
+        {...labelActions()}
         activeMailboxId={null}
         labels={labels}
         showUnreadCounts

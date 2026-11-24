@@ -7,7 +7,6 @@ import { forwardRef, useImperativeHandle, useState } from 'react';
 
 export type BodyEditorHandle = {
   insertInlineImage: (previewUrl: string) => void;
-  html: () => string;
   focus: () => void;
 };
 type Props = {
@@ -57,7 +56,6 @@ export const BodyEditor = forwardRef<BodyEditorHandle, Props>(
         insertInlineImage: (previewUrl) => {
           editor?.chain().focus().setImage({ src: previewUrl }).run();
         },
-        html: () => editor?.getHTML() ?? '',
         focus: () => {
           editor?.commands.focus();
         },

@@ -8,6 +8,8 @@ import { AdvancedSearchPanel } from './AdvancedSearchPanel';
 import { KeywordSuggestions } from './KeywordSuggestions';
 import { applySuggestion, suggestionsFor, type SearchSuggestion } from './searchKeywords';
 import type { MailLabel } from '@/lib/types/ipc';
+import { formatBindingLabel, isMacPlatform, primaryBinding } from '@/lib/keyboard/format';
+import { useCommandBindings } from '@/providers/CommandProvider';
 
 export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>(
   function SearchField({ labels }, ref) {
@@ -26,6 +28,10 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
     const [dismissed, setDismissed] = useState(false);
     const [focused, setFocused] = useState(false);
     const listboxId = useId();
+    const isMac = isMacPlatform();
+    const searchBinding = primaryBinding(useCommandBindings().focusSearch, isMac);
+    const hasDraft = draft.length > 0;
+    const showShortcutHint = !hasDraft && searchBinding !== null;
 
     const suggestions = useMemo(() => suggestionsFor(draft, labels), [draft, labels]);
     const open = focused && !dismissed && !panelOpen && suggestions.length > 0;
@@ -139,7 +145,7 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
-          {draft.length > 0 ? (
+          {hasDraft && (
             <button
               type="button"
               aria-label="Clear search"
@@ -148,12 +154,13 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
             >
               <X aria-hidden="true" size={16} />
             </button>
-          ) : (
+          )}
+          {showShortcutHint && (
             <span
               aria-hidden="true"
               className="shrink-0 rounded border border-outline-variant px-1.5 py-0.5 text-label-sm text-on-surface-variant dark:border-dark-outline-variant dark:text-dark-on-surface-variant"
             >
-              ⌘F
+              {formatBindingLabel(searchBinding, isMac)}
             </span>
           )}
           <button

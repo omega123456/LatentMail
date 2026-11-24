@@ -93,3 +93,51 @@ fn observe_many_coalesces_repeated_addresses_without_losing_recency() {
     assert_eq!(contact[0].last_seen_at, 3);
     assert_eq!(contact[0].display_name.as_deref(), Some("New Name"));
 }
+
+#[test]
+fn a_mailbox_whose_closing_bracket_precedes_its_opening_bracket_is_not_learned() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "one".into(),
+            email: "one@example.com".into(),
+            display_name: "one".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    contacts::observe(&connection, "one", "Broken> name <", 1).unwrap();
+    contacts::observe_many(&connection, "one", &[("odd> <".to_owned(), 2)]).unwrap();
+    assert!(contacts::lookup(&connection, "one", "").unwrap().is_empty());
+}
+
+#[test]
+fn a_quoted_display_name_keeps_its_comma_and_lowercases_the_address() {
+    let connection = Storage::in_memory().unwrap();
+    AccountRepository::upsert(
+        &connection,
+        &Account {
+            id: "one".into(),
+            email: "one@example.com".into(),
+            display_name: "one".into(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    contacts::observe(&connection, "one", r#""Doe, John" <John@Example.com>"#, 1).unwrap();
+    contacts::observe(&connection, "one", "<bare@example.com>", 1).unwrap();
+    let doe = contacts::lookup(&connection, "one", "john").unwrap();
+    assert_eq!(doe[0].address, "john@example.com");
+    assert_eq!(doe[0].display_name.as_deref(), Some("Doe, John"));
+    let bare = contacts::lookup(&connection, "one", "bare").unwrap();
+    assert_eq!(bare[0].display_name, None);
+}

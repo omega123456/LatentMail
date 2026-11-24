@@ -1,10 +1,11 @@
 import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SearchField } from '@/components/search/SearchField';
 import { useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
+import { MAC_PLATFORM, setPlatform, WINDOWS_PLATFORM } from '@/tests/platform';
 
 beforeEach(() => {
   act(() => {
@@ -18,6 +19,8 @@ beforeEach(() => {
     useToastStore.setState({ toasts: [] });
   });
 });
+
+afterEach(() => setPlatform(''));
 
 describe('SearchField', () => {
   it('submits the trimmed draft on Enter', async () => {
@@ -40,11 +43,19 @@ describe('SearchField', () => {
 
   it('shows the clear control once there is text and hides the shortcut hint', async () => {
     const user = userEvent.setup();
+    setPlatform(MAC_PLATFORM);
     renderWithQueryClient(<SearchField labels={[]} />);
     expect(screen.getByText('⌘F')).toBeInTheDocument();
     await user.type(screen.getByLabelText('Search mail'), 'anna');
     expect(screen.queryByText('⌘F')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Clear search')).toBeInTheDocument();
+  });
+
+  it('shows the Windows search shortcut on Windows', () => {
+    setPlatform(WINDOWS_PLATFORM);
+    renderWithQueryClient(<SearchField labels={[]} />);
+    expect(screen.getByText('Ctrl+F')).toBeInTheDocument();
+    expect(screen.queryByText('⌘F')).not.toBeInTheDocument();
   });
 
   it('Escape with text clears search but keeps focus in the field', async () => {

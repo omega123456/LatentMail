@@ -1,6 +1,10 @@
 import { parseParticipant } from '@/lib/format/participants';
 import { domainFor } from '@/lib/avatars/identity';
-import { LABEL_COLOR_PALETTE, resolveLabelColorSwatch } from '@/lib/labels/palette';
+import {
+  LABEL_COLOR_PALETTE,
+  resolveLabelColorSwatch,
+  type LabelColorId,
+} from '@/lib/labels/palette';
 import type {
   Conversation as IpcConversation,
   LogEntryDto,
@@ -41,6 +45,10 @@ export function mapThreadToRow(thread: MailThread): Conversation {
   };
 }
 
+export function labelColorId(label: MailLabel): LabelColorId {
+  return (resolveLabelColorSwatch(label.color) ?? FALLBACK_SWATCH).id;
+}
+
 export function mapLabelsToMailboxes(labels: MailLabel[]): Mailbox[] {
   return labels.map((label) => ({
     id: label.id,
@@ -56,7 +64,7 @@ export function mapLabelsToUserLabels(labels: MailLabel[]): Label[] {
       id: label.id,
       name: label.name,
       unreadCount: label.unreadCount,
-      color: (resolveLabelColorSwatch(label.color) ?? FALLBACK_SWATCH).id,
+      color: labelColorId(label),
     }));
 }
 
@@ -77,7 +85,7 @@ export function computeThreadLabelMembership(
       return {
         id: label.id,
         name: label.name,
-        color: (resolveLabelColorSwatch(label.color) ?? FALLBACK_SWATCH).id,
+        color: labelColorId(label),
         membership,
       };
     });

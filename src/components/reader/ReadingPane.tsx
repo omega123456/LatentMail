@@ -21,7 +21,12 @@ import {
 import { buildGmailThreadWebUrl } from '@/lib/gmail/thread-url';
 import { messageBadges } from '@/lib/labels/badges';
 import { saveMessageAs } from '@/lib/messages/save';
-import { computeThreadLabelMembership, mapConversation, mapThreadToRow } from '@/lib/query/mappers';
+import {
+  computeThreadLabelMembership,
+  labelColorId,
+  mapConversation,
+  mapThreadToRow,
+} from '@/lib/query/mappers';
 import type { Conversation } from '@/lib/types/conversation';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useLayoutStore } from '@/stores/layout';
@@ -356,7 +361,7 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
             .map((label) => ({
               id: label.id,
               name: label.name,
-              color: 'black',
+              color: labelColorId(label),
               membership:
                 selectedThreads.length === 0
                   ? ('unchecked' as const)

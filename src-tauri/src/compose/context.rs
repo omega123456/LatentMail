@@ -1,5 +1,10 @@
-use crate::{sanitize, storage::Message};
+use crate::{
+    sanitize,
+    storage::{addresses::split_addresses, Message},
+};
 use std::collections::HashMap;
+
+const ATTRIBUTION_DATE_FORMAT: &str = "%b %-d, %Y at %H:%M";
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,35 +44,49 @@ pub fn display_quote(message: &Message) -> Option<DisplayQuote> {
             message
                 .plain_body
                 .as_ref()
-                .map(|text| format!("<p>{}</p>", html_escape(text)))
+                .map(|text| format!("<p>{}</p>", plain_text_html(text)))
         });
     html.map(|html| DisplayQuote {
         html,
-        attribution: format!(
-            "On {}, {} wrote:",
-            chrono::DateTime::from_timestamp(message.sent_at, 0)
-                .map(|value| value.format("%b %-d, %Y at %H:%M").to_string())
-                .unwrap_or_default(),
-            message.sender
-        ),
+        attribution: attribution(message),
     })
 }
-fn html_escape(value: &str) -> String {
+
+pub fn outgoing_quote(message: &Message) -> String {
+    let body = message
+        .html_body
+        .clone()
+        .or_else(|| {
+            message
+                .plain_body
+                .as_deref()
+                .map(|plain| format!("<pre>{}</pre>", escape_html(plain)))
+        })
+        .unwrap_or_default();
+    format!(
+        "<p>{}</p><blockquote>{body}</blockquote>",
+        escape_html(&attribution(message))
+    )
+}
+
+fn attribution(message: &Message) -> String {
+    let sent_at = chrono::DateTime::from_timestamp(message.sent_at, 0)
+        .map(|value| value.format(ATTRIBUTION_DATE_FORMAT).to_string())
+        .unwrap_or_default();
+    format!("On {sent_at}, {} wrote:", message.sender)
+}
+
+fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-        .replace('\n', "<br>")
 }
 
-fn addresses(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect()
+fn plain_text_html(value: &str) -> String {
+    escape_html(value).replace('\n', "<br>")
 }
+
 fn address_key(value: &str) -> String {
     value
         .rsplit_once('<')
@@ -114,15 +133,15 @@ pub fn reply(
 ) -> ReplyContext {
     let from_self = address_key(&message.sender) == account_email.to_ascii_lowercase();
     let mut recipients = if from_self {
-        addresses(to)
+        split_addresses(to)
     } else {
-        addresses(&message.sender)
+        split_addresses(&message.sender)
     };
     if all {
-        recipients.extend(addresses(to));
+        recipients.extend(split_addresses(to));
     }
-    let cc = if all { addresses(cc) } else { Vec::new() };
-    let mut chain = references.map(addresses).unwrap_or_default();
+    let cc = if all { split_addresses(cc) } else { Vec::new() };
+    let mut chain = references.map(split_addresses).unwrap_or_default();
     if let Some(id) = &message.rfc_message_id {
         chain.push(id.clone());
     }

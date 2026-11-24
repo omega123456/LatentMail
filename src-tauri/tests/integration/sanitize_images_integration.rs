@@ -201,3 +201,11 @@ fn reads_every_content_id_an_html_body_references() {
 fn reads_no_content_ids_from_a_body_without_any() {
     assert!(referenced_content_ids("<p>plain</p>").is_empty());
 }
+
+#[test]
+fn caps_html_without_splitting_a_multi_byte_character() {
+    let source = format!("<p>{}</p>", "é".repeat(MAX_SANITIZED_HTML_BYTES));
+    let result = sanitize(&source, &HashMap::new(), false);
+    assert!(result.truncated);
+    assert!(result.html.len() <= MAX_SANITIZED_HTML_BYTES);
+}

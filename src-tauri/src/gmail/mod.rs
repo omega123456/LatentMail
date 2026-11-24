@@ -287,9 +287,6 @@ pub struct GmailClient {
     quota_class: QuotaClass,
 }
 impl GmailClient {
-    pub fn new(access_token: impl Into<String>) -> Self {
-        Self::with_base_url(access_token, "https://gmail.googleapis.com/gmail/v1")
-    }
     pub fn with_base_url(access_token: impl Into<String>, base_url: impl Into<String>) -> Self {
         Self {
             http: HTTP_CLIENT.clone(),

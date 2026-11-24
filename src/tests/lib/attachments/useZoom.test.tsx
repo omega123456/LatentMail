@@ -2,10 +2,7 @@ import { act, fireEvent, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { useZoom } from '@/lib/attachments/useZoom';
 import type { FitMode, Size } from '@/lib/attachments/zoom';
-
-function setPlatform(platform: string) {
-  Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
-}
+import { setPlatform } from '@/tests/platform';
 
 function scrollElement(width = 400, height = 300) {
   const element = document.createElement('div');

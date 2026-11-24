@@ -1,4 +1,10 @@
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+
+type Orientation = 'vertical' | 'horizontal';
+
+function pointerOffset(orientation: Orientation, event: { clientX: number; clientY: number }) {
+  return orientation === 'vertical' ? event.clientX : event.clientY;
+}
 
 export function ResizeHandle({
   ariaLabel,
@@ -6,19 +12,28 @@ export function ResizeHandle({
   onResize,
 }: {
   ariaLabel: string;
-  orientation: 'vertical' | 'horizontal';
+  orientation: Orientation;
   onResize: (offset: number) => void;
 }) {
+  const stopDraggingRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => stopDraggingRef.current?.(), []);
+
   const start = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    const origin = orientation === 'vertical' ? event.clientX : event.clientY;
+    stopDraggingRef.current?.();
+    const origin = pointerOffset(orientation, event);
     const move = (moveEvent: PointerEvent) =>
-      onResize((orientation === 'vertical' ? moveEvent.clientX : moveEvent.clientY) - origin);
-    const up = () => {
+      onResize(pointerOffset(orientation, moveEvent) - origin);
+    const stop = () => {
       window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      stopDraggingRef.current = null;
     };
     window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+    stopDraggingRef.current = stop;
   };
   return (
     <button

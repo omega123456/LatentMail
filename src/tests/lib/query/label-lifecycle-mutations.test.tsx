@@ -85,6 +85,30 @@ describe('label lifecycle mutations', () => {
     );
   });
 
+  it('orders an optimistic label the same way message badges order label names', async () => {
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.labels('account-1'), [
+      {
+        id: 'Label_1',
+        name: 'Beta',
+        kind: 'user',
+        color: null,
+        messageCount: 0,
+        unreadCount: 0,
+      },
+    ]);
+    ipc.override('create_label', () => new Promise<never>(() => undefined));
+    const create = renderHook(() => useCreateLabelMutation('account-1'), {
+      wrapper: wrapper(client),
+    });
+    act(() => create.result.current.mutate({ name: 'alpha', colorId: null }));
+    await waitFor(() =>
+      expect(
+        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((label) => label.name),
+      ).toEqual(['alpha', 'Beta']),
+    );
+  });
+
   it('recolours the cached label before the request settles', async () => {
     const client = new QueryClient();
     client.setQueryData(queryKeys.labels('account-1'), [

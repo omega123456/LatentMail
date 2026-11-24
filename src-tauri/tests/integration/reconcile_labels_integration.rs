@@ -466,7 +466,7 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
         &connection,
         "account",
         "sent-1",
-        "First Recipient <first@example.com>",
+        r#""Recipient, First" <first@example.com>"#,
         "second@example.com",
         "",
         None,
@@ -513,7 +513,10 @@ async fn a_reconciled_sent_message_observes_its_recipients_as_contacts() {
     let contacts = latentmail_lib::contacts::lookup(&connection, "account", "first").unwrap();
     assert_eq!(contacts.len(), 1, "the `to` recipient must be observed");
     assert_eq!(contacts[0].address, "first@example.com");
-    assert_eq!(contacts[0].display_name.as_deref(), Some("First Recipient"));
+    assert_eq!(
+        contacts[0].display_name.as_deref(),
+        Some("Recipient, First")
+    );
 
     let cc_contacts = latentmail_lib::contacts::lookup(&connection, "account", "second").unwrap();
     assert_eq!(

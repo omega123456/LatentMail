@@ -32,31 +32,41 @@ fn push_trimmed(result: &mut Vec<String>, entry: &str) {
     }
 }
 
-pub fn parse_address(entry: &str) -> Option<AddressIdentity> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mailbox {
+    pub name: Option<String>,
+    pub address: String,
+}
+
+pub fn parse_mailbox(entry: &str) -> Option<Mailbox> {
     let entry = entry.trim();
     if entry.is_empty() {
         return None;
     }
-    if let Some(start) = entry.find('<') {
-        let end = entry[start..].find('>').map(|offset| start + offset)?;
-        let address = entry[start + 1..end].trim();
-        if address.is_empty() {
-            return None;
-        }
-        let name = unquote(entry[..start].trim());
-        let display = if name.is_empty() {
-            address.to_owned()
-        } else {
-            name
-        };
-        return Some(AddressIdentity {
-            display,
-            address: address.to_owned(),
+    let Some(start) = entry.find('<') else {
+        return Some(Mailbox {
+            name: None,
+            address: entry.to_owned(),
         });
+    };
+    let end = entry[start..].find('>').map(|offset| start + offset)?;
+    let address = entry[start + 1..end].trim();
+    if address.is_empty() {
+        return None;
     }
+    let name = unquote(entry[..start].trim());
+    Some(Mailbox {
+        name: (!name.is_empty()).then_some(name),
+        address: address.to_owned(),
+    })
+}
+
+pub fn parse_address(entry: &str) -> Option<AddressIdentity> {
+    let mailbox = parse_mailbox(entry)?;
+    let display = mailbox.name.unwrap_or_else(|| mailbox.address.clone());
     Some(AddressIdentity {
-        display: entry.to_owned(),
-        address: entry.to_owned(),
+        display,
+        address: mailbox.address,
     })
 }
 

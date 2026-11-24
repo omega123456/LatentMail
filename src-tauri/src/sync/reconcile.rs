@@ -4,8 +4,9 @@ use crate::{
     gmail::{GmailClient, GmailLabel, ListOptions, MAX_PAGE_SIZE},
     queue::QueueEngine,
     storage::{
-        reconcile_staging::ReconcileStagingRepository, MessageRepository, Storage,
-        ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+        addresses::split_addresses, reconcile_staging::ReconcileStagingRepository,
+        MessageRepository, Storage, ThreadRepository, TraversalCursor, TraversalCursorRepository,
+        TraversalKind,
     },
 };
 
@@ -501,14 +502,11 @@ async fn observe_contacts(storage: &Storage, account_id: &str) -> Result<(), Syn
                     {
                         observations.push((message.sender, message.sent_at));
                         if message.label_ids.iter().any(|label| label == "SENT") {
-                            for address in message
-                                .to_recipients
-                                .split(',')
-                                .chain(message.cc_recipients.split(','))
-                                .map(str::trim)
-                                .filter(|address| !address.is_empty())
+                            for address in split_addresses(&message.to_recipients)
+                                .into_iter()
+                                .chain(split_addresses(&message.cc_recipients))
                             {
-                                observations.push((address.to_owned(), message.sent_at));
+                                observations.push((address, message.sent_at));
                             }
                         }
                     }

@@ -347,3 +347,37 @@ fn tiny_tiff() -> Vec<u8> {
         .unwrap();
     bytes
 }
+
+#[test]
+fn cache_paths_refuse_identifiers_that_would_escape_the_cache_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
+    let escaping_identifiers = [
+        ("..", "m1"),
+        ("account", ".."),
+        ("../outside", "m1"),
+        ("account", "nested/m1"),
+        ("account", "nested\\m1"),
+        ("", "m1"),
+        ("account", "C:"),
+    ];
+    for (account_id, message_id) in escaping_identifiers {
+        let written = cache.write_bytes(
+            account_id,
+            message_id,
+            "a1",
+            "notes.txt",
+            "text/plain",
+            b"hello",
+        );
+        assert_eq!(
+            written.unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{account_id}/{message_id}"
+        );
+        assert!(cache
+            .lookup(account_id, message_id, "a1", "notes.txt", "text/plain")
+            .is_none());
+    }
+    assert!(!directory.path().join("outside").exists());
+}

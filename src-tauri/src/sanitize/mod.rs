@@ -200,12 +200,20 @@ fn cap(sanitized: SanitizedHtml) -> SanitizedHtml {
     if sanitized.html.len() <= MAX_SANITIZED_HTML_BYTES {
         return sanitized;
     }
-    let boundary = sanitized.html[..MAX_SANITIZED_HTML_BYTES]
+    let limit = char_boundary_at_or_before(&sanitized.html, MAX_SANITIZED_HTML_BYTES);
+    let boundary = sanitized.html[..limit]
         .rfind('>')
-        .map_or(MAX_SANITIZED_HTML_BYTES, |index| index + 1);
+        .map_or(limit, |index| index + 1);
     SanitizedHtml {
         html: sanitized.html[..boundary].to_owned(),
         truncated: true,
         ..sanitized
     }
+}
+
+fn char_boundary_at_or_before(text: &str, index: usize) -> usize {
+    (0..=index)
+        .rev()
+        .find(|candidate| text.is_char_boundary(*candidate))
+        .unwrap_or(0)
 }

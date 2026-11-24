@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expect, it } from 'vitest';
@@ -38,4 +38,40 @@ it('renders a resolved account photograph on the expanded trigger without a warn
   );
 
   expect(screen.getByRole('button', { name: /Alex Morgan/ })).toHaveTextContent('A');
+});
+
+it('lets the user add another account once the sign-in hand-off has finished', async () => {
+  const user = userEvent.setup();
+  ipc.override('begin_sign_in', undefined);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <AccountSwitcher
+        accounts={sidebarAccounts}
+        activeAccountId="account-1"
+        collapsed={false}
+        onSelect={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+  await user.click(screen.getByRole('button', { name: /Alex Morgan/ }));
+  await user.click(screen.getByRole('menuitem', { name: 'Add account' }));
+  await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Add account' })).toBeEnabled());
+});
+
+it('lets the user retry adding an account after the sign-in hand-off fails', async () => {
+  const user = userEvent.setup();
+  ipc.override('begin_sign_in', () => Promise.reject(new Error('browser unavailable')));
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <AccountSwitcher
+        accounts={sidebarAccounts}
+        activeAccountId="account-1"
+        collapsed={false}
+        onSelect={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+  await user.click(screen.getByRole('button', { name: /Alex Morgan/ }));
+  await user.click(screen.getByRole('menuitem', { name: 'Add account' }));
+  await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Add account' })).toBeEnabled());
 });

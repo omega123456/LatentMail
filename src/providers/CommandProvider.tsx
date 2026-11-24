@@ -41,6 +41,12 @@ function persistOverrides(overrides: CommandOverrides) {
   );
 }
 
+function withoutOverride(overrides: CommandOverrides, command: CommandName): CommandOverrides {
+  const remaining = { ...overrides };
+  delete remaining[command];
+  return remaining;
+}
+
 export function CommandProvider({ children }: PropsWithChildren) {
   const [overrides, setOverrides] = useState<CommandOverrides>({});
 
@@ -50,31 +56,20 @@ export function CommandProvider({ children }: PropsWithChildren) {
       .catch(() => undefined);
   }, []);
 
-  const value = useMemo<CommandContextValue>(
-    () => ({
+  const value = useMemo<CommandContextValue>(() => {
+    const applyOverrides = (next: CommandOverrides) => {
+      persistOverrides(next);
+      setOverrides(next);
+    };
+    return {
       bindings: resolveCommandBindings(overrides),
       overrides,
-      setOverride: (command, keys) =>
-        setOverrides((current) => {
-          const next = { ...current, [command]: keys };
-          persistOverrides(next);
-          return next;
-        }),
-      clearOverride: (command) =>
-        setOverrides((current) => {
-          const next = { ...current };
-          delete next[command];
-          persistOverrides(next);
-          return next;
-        }),
-      clearAllOverrides: () => {
-        persistOverrides({});
-        setOverrides({});
-      },
+      setOverride: (command, keys) => applyOverrides({ ...overrides, [command]: keys }),
+      clearOverride: (command) => applyOverrides(withoutOverride(overrides, command)),
+      clearAllOverrides: () => applyOverrides({}),
       hasAnyOverride: Object.keys(overrides).length > 0,
-    }),
-    [overrides],
-  );
+    };
+  }, [overrides]);
 
   return <CommandContext.Provider value={value}>{children}</CommandContext.Provider>;
 }

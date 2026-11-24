@@ -4,7 +4,11 @@ import { ListChecks, Loader2, Pause, Play, RefreshCw, Sparkles } from 'lucide-re
 import { exactTime } from '@/lib/format/relative-time';
 import { useNow } from '@/lib/format/use-now';
 import { invoke } from '@/lib/ipc/commands';
-import { useAiConfigsQuery, useAiIndexStatusesQuery, useTraversalStatusQuery } from '@/lib/query/hooks';
+import {
+  useAiConfigsQuery,
+  useAiIndexStatusesQuery,
+  useTraversalStatusQuery,
+} from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';

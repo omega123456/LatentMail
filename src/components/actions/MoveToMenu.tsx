@@ -21,6 +21,7 @@ export function MoveToMenu({ currentSystemLabelIds, onSelect }: MoveToMenuProps)
   );
 
   const focusSelectableAt = (index: number) => {
+    if (selectable.length === 0) return;
     const wrapped = ((index % selectable.length) + selectable.length) % selectable.length;
     const target = selectable[wrapped];
     const domIndex = DESTINATIONS.findIndex((destination) => destination.id === target.id);

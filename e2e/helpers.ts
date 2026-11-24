@@ -29,7 +29,6 @@ export async function installPlaywrightIpc(
       readerState: state,
       rejectedCommands,
       pendingCommands,
-      voidCommands,
       composeSession: session,
       platform,
     }) => {
@@ -46,8 +45,6 @@ export async function installPlaywrightIpc(
           if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (pendingCommands.includes(command)) return new Promise(() => undefined);
           if (command in responses) return responses[command];
-
-          if (voidCommands.includes(command)) return undefined;
           throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
         },
         listen: async (event, listener) => {
@@ -79,7 +76,6 @@ export async function installPlaywrightIpc(
       readerState,
       rejectedCommands,
       pendingCommands,
-      voidCommands: Object.keys(playwrightIpcFixtures),
       composeSession,
       platform,
     },

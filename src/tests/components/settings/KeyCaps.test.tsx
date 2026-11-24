@@ -1,10 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { KeyCaps } from '@/components/settings/KeyCaps';
-
-function setPlatform(platform: string) {
-  Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
-}
+import { setPlatform } from '@/tests/platform';
 
 describe('KeyCaps', () => {
   afterEach(() => setPlatform(''));

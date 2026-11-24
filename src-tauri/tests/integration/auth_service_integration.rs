@@ -248,7 +248,10 @@ async fn refresh_access_token_marks_reauthentication_after_three_consecutive_fai
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
-        .respond_with(ResponseTemplate::new(400))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(serde_json::json!({ "error": "invalid_grant" })),
+        )
         .mount(&server)
         .await;
     std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
@@ -287,6 +290,56 @@ async fn refresh_access_token_marks_reauthentication_after_three_consecutive_fai
         .await
         .is_err());
     assert!(service.accounts().await.unwrap()[0].needs_reauthentication);
+}
+
+async fn assert_three_failures_leave_reauthentication_unmarked(
+    token_url: String,
+    account_id: &str,
+) {
+    std::env::set_var("LATENTMAIL_GOOGLE_CLIENT_ID", "client");
+    std::env::set_var("LATENTMAIL_GOOGLE_TOKEN_URL", token_url);
+    let (service, _directory) = service_with_storage();
+    service
+        .save_account(account_id.into(), "stored-refresh-token".into(), None)
+        .await
+        .unwrap();
+    save_refresh_token(account_id, "stored-refresh-token").unwrap();
+    let application = app();
+    let handle = application.handle().clone();
+    for _ in 0..3 {
+        assert!(service
+            .refresh_access_token(&handle, account_id)
+            .await
+            .is_err());
+    }
+    assert!(!service.accounts().await.unwrap()[0].needs_reauthentication);
+}
+
+#[tokio::test]
+async fn refresh_failures_while_offline_never_mark_reauthentication() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    assert_three_failures_leave_reauthentication_unmarked(
+        format!("http://127.0.0.1:{dead_port}/token"),
+        "offline@example.com",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn refresh_failures_from_a_struggling_token_server_never_mark_reauthentication() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    assert_three_failures_leave_reauthentication_unmarked(
+        format!("{}/token", server.uri()),
+        "struggling@example.com",
+    )
+    .await;
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use latentmail_lib::{
-    compose::context::{display_quote, forward, reply, ReplyAttachment},
+    compose::context::{display_quote, forward, outgoing_quote, reply, ReplyAttachment},
     storage::{HtmlPresence, Message},
 };
 
@@ -98,4 +98,43 @@ fn forward_carries_the_originals_attachment_metadata() {
     }];
     let forwarded = forward(&original, attachments.clone());
     assert_eq!(forwarded.attachments, attachments);
+}
+
+#[test]
+fn reply_all_keeps_a_quoted_display_name_that_contains_a_comma_whole() {
+    let original = message(r#""Doe, John" <john@example.com>"#, "Hello");
+    let reply = reply(
+        &original,
+        r#""Roe, Jane" <jane@example.com>, me@example.com"#,
+        r#""Poe, Edgar" <edgar@example.com>"#,
+        "me@example.com",
+        true,
+        None,
+        Vec::new(),
+    );
+    assert_eq!(
+        reply.to,
+        vec![
+            r#""Doe, John" <john@example.com>"#.to_owned(),
+            r#""Roe, Jane" <jane@example.com>"#.to_owned()
+        ]
+    );
+    assert_eq!(
+        reply.cc,
+        vec![r#""Poe, Edgar" <edgar@example.com>"#.to_owned()]
+    );
+}
+
+#[test]
+fn the_outgoing_quote_escapes_the_sender_and_a_plain_text_original() {
+    let mut original = message("Alice <alice@example.com>", "Hello");
+    original.sent_at = DateTime::<Utc>::from_timestamp(0, 0).unwrap().timestamp();
+    original.plain_body = Some("1 < 2 & <b>bold</b>".into());
+    assert_eq!(
+        outgoing_quote(&original),
+        "<p>On Jan 1, 1970 at 00:00, Alice &lt;alice@example.com&gt; wrote:</p>\
+         <blockquote><pre>1 &lt; 2 &amp; &lt;b&gt;bold&lt;/b&gt;</pre></blockquote>"
+    );
+    original.html_body = Some("<p>rich</p>".into());
+    assert!(outgoing_quote(&original).ends_with("<blockquote><p>rich</p></blockquote>"));
 }

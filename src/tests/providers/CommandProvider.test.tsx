@@ -1,6 +1,7 @@
+import { StrictMode } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
 import { DEFAULT_COMMAND_BINDINGS } from '@/lib/keyboard/registry';
 import {
@@ -182,5 +183,32 @@ describe('CommandProvider', () => {
     await user.click(screen.getByText('set'));
 
     expect(screen.getByTestId('binding')).toHaveTextContent('Mod+K');
+  });
+});
+
+describe('CommandProvider persistence', () => {
+  it('writes each override change exactly once, even when StrictMode replays state updaters', async () => {
+    const user = userEvent.setup();
+    const writes = vi.fn();
+    ipc.override('write_setting', writes);
+    render(
+      <StrictMode>
+        <CommandProvider>
+          <Controls />
+        </CommandProvider>
+      </StrictMode>,
+    );
+    await user.click(screen.getByRole('button', { name: 'set' }));
+    await waitFor(() => expect(screen.getByTestId('binding')).toHaveTextContent('Mod+K'));
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes).toHaveBeenLastCalledWith({
+      key: 'commandOverrides',
+      value: { toggleStar: ['Mod+K'] },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'reset one' }));
+    await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('false'));
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes).toHaveBeenLastCalledWith({ key: 'commandOverrides', value: {} });
   });
 });

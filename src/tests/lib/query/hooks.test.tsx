@@ -22,7 +22,6 @@ import {
   useSearchThreadsQuery,
   useSenderAvatarQuery,
   useSetQueuePausedMutation,
-  useThreadMutation,
   useThreadsQuery,
   useTraversalStatusQuery,
   useTriageMutation,
@@ -185,33 +184,6 @@ describe('query hooks', () => {
     expect(
       client.getQueryState(queryKeys.conversationThread('account', 'thread-1'))?.isInvalidated,
     ).not.toBe(true);
-  });
-
-  it('optimistically updates a thread and reports a failed update', async () => {
-    const client = new QueryClient();
-    client.setQueryData(queryKeys.threads('account', 'INBOX'), {
-      pages: [{ items: [thread], nextCursor: null }],
-      pageParams: [null],
-    });
-    const { result } = renderHook(() => useThreadMutation('account'), { wrapper: wrapper(client) });
-    await act(async () => {
-      await result.current.mutateAsync({ threadId: 'thread-1', kind: 'star' });
-    });
-    expect(
-      (
-        client.getQueryData(queryKeys.threads('account', 'INBOX')) as {
-          pages: Array<{ items: (typeof thread)[] }>;
-        }
-      ).pages[0].items[0].isStarred,
-    ).toBe(true);
-    ipc.override('mutate_threads', () => Promise.reject(new Error('offline')));
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await expect(
-      act(() => result.current.mutateAsync({ threadId: 'thread-1', kind: 'unread' })),
-    ).rejects.toThrow('offline');
-    expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
-    expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
-    error.mockRestore();
   });
 
   it('applies triage to threads and messages and keeps the selection', async () => {

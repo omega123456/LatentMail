@@ -209,6 +209,10 @@ describe('compose entry actions', () => {
     expect(useComposeStore.getState().session?.attachments[0]).toMatchObject({
       localId: 'part',
       state: 'settled',
+      staged: {
+        path: '/stage/a.pdf',
+        assetUrl: `asset://localhost/${encodeURIComponent('/stage/a.pdf')}`,
+      },
     });
 
     act(() => useComposeStore.getState().close());

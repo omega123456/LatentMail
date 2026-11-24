@@ -63,7 +63,10 @@ pub fn run() {
                 let client = image_client.clone();
                 let uri = request.uri().to_string();
                 tauri::async_runtime::spawn(async move {
-                    responder.respond(remote_images::respond(&client, &uri).await);
+                    responder.respond(
+                        remote_images::respond(&client, &uri, remote_images::HostScope::PublicOnly)
+                            .await,
+                    );
                 });
             },
         )

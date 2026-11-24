@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { TextInput } from '@/components/shared/TextInput';
 import { LABEL_COLOR_PALETTE, type LabelColorId } from '@/lib/labels/palette';
 
@@ -61,6 +61,8 @@ export function LabelForm({
     ? validateLabelName(name, existingNames, mode === 'rename' ? initialName : undefined)
     : null;
 
+  const nameFieldId = useId();
+
   const submit = () => {
     setTouched(true);
     const validationError = validateLabelName(
@@ -81,11 +83,11 @@ export function LabelForm({
         submit();
       }}
     >
-      <label className="sr-only" htmlFor="label-form-name">
+      <label className="sr-only" htmlFor={nameFieldId}>
         Label name
       </label>
       <TextInput
-        id="label-form-name"
+        id={nameFieldId}
         value={name}
         onChange={(event) => setName(event.target.value)}
         onBlur={() => setTouched(true)}

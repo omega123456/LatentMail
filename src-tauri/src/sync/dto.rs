@@ -397,10 +397,10 @@ pub fn message_dto(
     MessageDto {
         id: message.id,
         sender: message.sender,
-        recipients: split_list(&message.recipients),
-        to_recipients: split_list(&recipient_roles.0),
-        cc_recipients: split_list(&recipient_roles.1),
-        bcc_recipients: split_list(&recipient_roles.2),
+        recipients: crate::storage::addresses::split_addresses(&message.recipients),
+        to_recipients: crate::storage::addresses::split_addresses(&recipient_roles.0),
+        cc_recipients: crate::storage::addresses::split_addresses(&recipient_roles.1),
+        bcc_recipients: crate::storage::addresses::split_addresses(&recipient_roles.2),
         subject: message.subject,
         sent_at: to_millis(message.sent_at),
         snippet: message.snippet,
@@ -530,13 +530,4 @@ impl From<crate::compose::staging::StagedPart> for StagedAttachmentDto {
 
 pub fn to_millis(seconds: i64) -> i64 {
     chrono::DateTime::from_timestamp(seconds, 0).map_or(0, |value| value.timestamp_millis())
-}
-
-fn split_list(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_owned)
-        .collect()
 }

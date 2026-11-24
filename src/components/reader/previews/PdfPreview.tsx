@@ -14,6 +14,33 @@ const MAX_CANVAS_PIXELS = 2 ** 25;
 
 type PageLayout = { tops: number[]; content: Size };
 
+type DocumentLoad = {
+  bytes: ArrayBuffer;
+  task: ReturnType<typeof pdfjsLib.getDocument>;
+  released: boolean;
+};
+
+function startDocumentLoad(bytes: ArrayBuffer): DocumentLoad {
+  return {
+    bytes,
+    task: pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }),
+    released: false,
+  };
+}
+
+function claimDocumentLoad(current: DocumentLoad | null, bytes: ArrayBuffer): DocumentLoad {
+  if (current?.bytes !== bytes) return startDocumentLoad(bytes);
+  current.released = false;
+  return current;
+}
+
+function releaseDocumentLoad(load: DocumentLoad) {
+  load.released = true;
+  queueMicrotask(() => {
+    if (load.released) void load.task.destroy();
+  });
+}
+
 function layoutPages(sizes: Size[]): PageLayout {
   const tops: number[] = [];
   let cursor = PREVIEW_PADDING;
@@ -183,10 +210,7 @@ function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
 
 export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const loadingRef = useRef<{
-    bytes: ArrayBuffer;
-    task: ReturnType<typeof pdfjsLib.getDocument>;
-  } | null>(null);
+  const loadingRef = useRef<DocumentLoad | null>(null);
   const [pdf, setPdf] = useState<{ pages: PDFPageProxy[]; sizes: Size[] } | null>(null);
   const [error, setError] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
@@ -195,13 +219,9 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
 
   useEffect(() => {
     let cancelled = false;
-    if (loadingRef.current?.bytes !== bytes) {
-      loadingRef.current = {
-        bytes,
-        task: pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }),
-      };
-    }
-    loadingRef.current.task.promise
+    const load = claimDocumentLoad(loadingRef.current, bytes);
+    loadingRef.current = load;
+    load.task.promise
       .then((doc) =>
         Promise.all(Array.from({ length: doc.numPages }, (_, index) => doc.getPage(index + 1))),
       )
@@ -220,6 +240,7 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
       });
     return () => {
       cancelled = true;
+      releaseDocumentLoad(load);
     };
   }, [bytes]);
 

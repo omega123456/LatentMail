@@ -41,10 +41,7 @@ export function ModelCardList({
   const filterRef = useRef<HTMLInputElement>(null);
   const firstItemRef = useRef<HTMLDivElement>(null);
   const navigatingRef = useRef(false);
-  const ofKind = useMemo(
-    () => modelsOfKind(models, kind, selectedId),
-    [kind, models, selectedId],
-  );
+  const ofKind = useMemo(() => modelsOfKind(models, kind, selectedId), [kind, models, selectedId]);
   const catalogue = showAll ? models : ofKind;
   const visible = useMemo(
     () => catalogue.filter((model) => model.id.toLowerCase().includes(filter.toLowerCase())),

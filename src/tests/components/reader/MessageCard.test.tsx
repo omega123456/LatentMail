@@ -354,11 +354,7 @@ describe('MessageCard', () => {
     );
     expect(screen.getByLabelText('Has attachment')).toBeInTheDocument();
     rerender(
-      <MessageCard
-        message={{ ...collapsed, attachments: [] }}
-        expanded={false}
-        newest={false}
-      />,
+      <MessageCard message={{ ...collapsed, attachments: [] }} expanded={false} newest={false} />,
     );
     expect(screen.queryByLabelText('Has attachment')).not.toBeInTheDocument();
   });

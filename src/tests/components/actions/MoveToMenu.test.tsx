@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MoveToMenu } from '@/components/actions/MoveToMenu';
@@ -65,5 +65,16 @@ describe('MoveToMenu', () => {
     screen.getByRole('menuitem', { name: /Trash/ }).focus();
     await user.keyboard('{Enter}');
     expect(onSelect).toHaveBeenCalledWith('TRASH');
+  });
+
+  it('ignores arrow keys when every destination is already carried', () => {
+    render(<MoveToMenu currentSystemLabelIds={['INBOX', 'SPAM', 'TRASH']} onSelect={vi.fn()} />);
+    const inbox = screen.getByRole('menuitem', { name: /Inbox/ });
+    const reportedErrors = vi.fn((event: ErrorEvent) => event.preventDefault());
+    window.addEventListener('error', reportedErrors);
+    fireEvent.keyDown(inbox, { key: 'ArrowDown' });
+    fireEvent.keyDown(inbox, { key: 'ArrowUp' });
+    window.removeEventListener('error', reportedErrors);
+    expect(reportedErrors).not.toHaveBeenCalled();
   });
 });

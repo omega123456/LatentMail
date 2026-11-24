@@ -18,7 +18,7 @@ import {
   Tag,
   Trash2,
 } from 'lucide-react';
-import { formatBindingParts, isMacPlatform, primaryBinding } from '@/lib/keyboard/format';
+import { formatBindingLabel, isMacPlatform, primaryBinding } from '@/lib/keyboard/format';
 import { useCommandBindings } from '@/providers/CommandProvider';
 import { computeRibbonVisibility } from './ActionRibbon';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
@@ -265,7 +265,7 @@ function MoreMessageActions({ actions }: { actions: MessageExportActions }) {
             Show original
             {binding && (
               <span className="ml-auto pl-4 text-label-sm text-secondary dark:text-dark-secondary">
-                {formatBindingParts(binding, isMac).join(isMac ? '' : '+')}
+                {formatBindingLabel(binding, isMac)}
               </span>
             )}
           </DropdownMenu.Item>

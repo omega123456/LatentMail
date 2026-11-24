@@ -3,10 +3,15 @@ import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ComposeFooter } from '@/components/compose/ComposeFooter';
 
+function footerDefaults() {
+  return { failed: false, onRetry: vi.fn(), onSend: vi.fn(), sending: false, blocked: true };
+}
+
 describe('ComposeFooter', () => {
   it('renders the toolbar, a reserved-width status region, enabled attach/image controls and a disabled Send', () => {
     render(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={() => {}}
@@ -32,6 +37,7 @@ describe('ComposeFooter', () => {
     const onInsertImage = vi.fn();
     render(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={onAttach}
@@ -49,6 +55,7 @@ describe('ComposeFooter', () => {
   it('derives recipient readiness onto the disabled Send control without enabling it', () => {
     const { rerender } = render(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={() => {}}
@@ -62,6 +69,7 @@ describe('ComposeFooter', () => {
     expect(send).toBeDisabled();
     rerender(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={() => {}}
@@ -77,6 +85,7 @@ describe('ComposeFooter', () => {
   it('reserves the status region width regardless of content length, so Send never moves', () => {
     const { rerender, container } = render(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={() => {}}
@@ -88,6 +97,7 @@ describe('ComposeFooter', () => {
     const statusClass = container.querySelector('[aria-live="polite"]')?.className;
     rerender(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={() => {}}
@@ -105,6 +115,7 @@ describe('ComposeFooter', () => {
     const onRetry = vi.fn();
     const { container } = render(
       <ComposeFooter
+        {...footerDefaults()}
         editor={null}
         onLink={() => {}}
         onAttach={() => {}}
@@ -120,22 +131,5 @@ describe('ComposeFooter', () => {
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('');
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
-  });
-
-  it('tolerates a failure rendered without a retry handler', async () => {
-    const user = userEvent.setup();
-    render(
-      <ComposeFooter
-        editor={null}
-        onLink={() => {}}
-        onAttach={() => {}}
-        onInsertImage={() => {}}
-        ready
-        status="Couldn’t save draft."
-        failed
-      />,
-    );
-    await user.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(screen.getByText('Couldn’t save draft.')).toBeInTheDocument();
   });
 });

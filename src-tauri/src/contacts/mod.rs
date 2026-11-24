@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use chrono::Utc;
 use rusqlite::{params, Connection, Result};
 
+use crate::storage::addresses::{self, Mailbox};
+
 const UPSERT_CONTACT: &str =
     "INSERT INTO contacts (account_id,address,display_name,frequency,last_seen_at) VALUES (?1,?2,?3,?4,?5)
      ON CONFLICT(account_id,address) DO UPDATE SET
@@ -25,13 +27,12 @@ pub fn observe(
     mailbox: &str,
     seen_at: i64,
 ) -> Result<()> {
-    let (display_name, address) = parse_mailbox(mailbox);
-    if address.is_empty() {
+    let Some(Mailbox { name, address }) = learnable_mailbox(mailbox) else {
         return Ok(());
-    }
+    };
     connection.execute(
         UPSERT_CONTACT,
-        params![account_id, address, display_name, 1, seen_at, seen_at],
+        params![account_id, address, name, 1, seen_at, seen_at],
     )?;
     Ok(())
 }
@@ -43,10 +44,13 @@ pub fn observe_many(
 ) -> Result<()> {
     let mut contacts: HashMap<String, (Option<String>, i64, i64, i64)> = HashMap::new();
     for (mailbox, seen_at) in observations {
-        let (display_name, address) = parse_mailbox(mailbox);
-        if address.is_empty() {
+        let Some(Mailbox {
+            name: display_name,
+            address,
+        }) = learnable_mailbox(mailbox)
+        else {
             continue;
-        }
+        };
         let contact = contacts
             .entry(address)
             .or_insert_with(|| (None, i64::MIN, 0, *seen_at));
@@ -96,18 +100,10 @@ pub fn lookup(connection: &Connection, account_id: &str, prefix: &str) -> Result
     contacts
 }
 
-fn parse_mailbox(value: &str) -> (Option<String>, String) {
-    let value = value.trim();
-    if let (Some(start), Some(end)) = (value.rfind('<'), value.rfind('>')) {
-        let name = value[..start].trim().trim_matches('"');
-        return (
-            (if name.is_empty() {
-                None
-            } else {
-                Some(name.to_owned())
-            }),
-            value[start + 1..end].trim().to_ascii_lowercase(),
-        );
-    }
-    (None, value.to_ascii_lowercase())
+fn learnable_mailbox(mailbox: &str) -> Option<Mailbox> {
+    let parsed = addresses::parse_mailbox(mailbox)?;
+    Some(Mailbox {
+        name: parsed.name,
+        address: parsed.address.to_ascii_lowercase(),
+    })
 }

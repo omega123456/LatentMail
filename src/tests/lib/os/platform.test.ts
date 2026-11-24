@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { isMacos, isWindows } from '@/lib/os/platform';
+import { isWindows } from '@/lib/os/platform';
 
 function setPlatform(platform: 'macos' | 'windows') {
   Object.assign(window, {
@@ -22,11 +22,9 @@ describe('platform', () => {
     setPlatform('windows');
 
     expect(isWindows()).toBe(true);
-    expect(isMacos()).toBe(false);
   });
 
   it('identifies macOS from the OS plugin global', () => {
-    expect(isMacos()).toBe(true);
     expect(isWindows()).toBe(false);
   });
 });

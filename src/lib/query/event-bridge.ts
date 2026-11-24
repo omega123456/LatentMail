@@ -192,10 +192,7 @@ export function EventBridge() {
       scheduleQueueSnapshotInvalidation();
       if (item.status !== 'done' && item.status !== 'failed') return;
       if (!item.id.startsWith('mutation:')) return;
-      const accountId = item.id.split(':')[1];
-      if (accountId) {
-        scheduleMailboxInvalidation(accountId);
-      }
+      scheduleMailboxInvalidation(item.accountId);
     });
 
     subscribe('avatar://resolved', (event) => {

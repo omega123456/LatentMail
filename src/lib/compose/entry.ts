@@ -40,7 +40,6 @@ export async function openReply(
     accountEmail,
     replyAll: mode === 'reply-all',
     forward: false,
-    owner: session.id,
   });
   openOrRetarget({
     ...session,
@@ -102,7 +101,6 @@ export async function openForward(
     accountEmail,
     replyAll: false,
     forward: true,
-    owner: session.id,
   });
   openOrRetarget({
     ...session,
@@ -167,7 +165,12 @@ export async function openEditDraft(
         mimeType: part.mimeType,
         size: part.size,
         state: 'settled',
-        staged: { id: part.id, path: part.path, assetUrl: part.path, size: part.size },
+        staged: {
+          id: part.id,
+          path: part.path,
+          assetUrl: dispatchConvertFileSrc(part.path),
+          size: part.size,
+        },
         contentId: part.contentId,
         error: null,
       })),

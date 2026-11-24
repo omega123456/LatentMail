@@ -45,6 +45,14 @@ export function formatBindingParts(binding: string, isMac: boolean = isMacPlatfo
     .map((part) => labels[part] ?? (part.length === 1 ? part.toUpperCase() : part));
 }
 
+const MAC_BINDING_JOINER = '';
+const WINDOWS_BINDING_JOINER = '+';
+
+export function formatBindingLabel(binding: string, isMac: boolean = isMacPlatform()): string {
+  const joiner = isMac ? MAC_BINDING_JOINER : WINDOWS_BINDING_JOINER;
+  return formatBindingParts(binding, isMac).join(joiner);
+}
+
 function isMacOnly(binding: string): boolean {
   return binding === 'Meta' || binding.startsWith('Meta+');
 }

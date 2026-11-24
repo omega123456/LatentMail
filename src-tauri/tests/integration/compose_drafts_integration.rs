@@ -407,7 +407,7 @@ async fn compose_and_mail_command_wrappers_dispatch_with_managed_test_state() {
         ),
         (
             "reply_context",
-            serde_json::json!({ "accountId": "account", "messageId": "missing", "accountEmail": "me@example.com", "replyAll": false, "forward": false, "owner": "owner" }),
+            serde_json::json!({ "accountId": "account", "messageId": "missing", "accountEmail": "me@example.com", "replyAll": false, "forward": false }),
         ),
         (
             "stage_attachment_from_path",
@@ -563,7 +563,6 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
     for (id, key) in [
         ("bad-payload", "draft:bad"),
         ("missing-manifest", "draft:missing"),
-        ("missing-token", "draft:token"),
         ("discarded", "draft:discarded"),
     ] {
         drafts::admit(
@@ -620,21 +619,19 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
     queue.resume();
 
     wait_for(|| {
-        ["bad-payload", "missing-manifest", "missing-token"]
-            .into_iter()
-            .all(|id| {
-                storage
-                    .connection()
-                    .unwrap()
-                    .query_row("SELECT status FROM operations WHERE id=?1", [id], |row| {
-                        row.get::<_, String>(0)
-                    })
-                    .unwrap()
-                    == "failed"
-            })
+        ["bad-payload", "missing-manifest"].into_iter().all(|id| {
+            storage
+                .connection()
+                .unwrap()
+                .query_row("SELECT status FROM operations WHERE id=?1", [id], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap()
+                == "failed"
+        })
     })
     .await;
-    wait_for(|| reported.lock().unwrap().len() == 3).await;
+    wait_for(|| reported.lock().unwrap().len() == 2).await;
     wait_for(|| staging.snapshot_manifest("discarded").is_err()).await;
     for event in reported.lock().unwrap().iter() {
         assert_eq!(event["accountId"], "account");
@@ -914,7 +911,7 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
         "mimeType": "text/html",
         "headers": [
             {"name": "Subject", "value": "Hello"},
-            {"name": "To", "value": "one@example.com, two@example.com"},
+            {"name": "To", "value": "\"Doe, John\" <one@example.com>, two@example.com"},
             {"name": "Cc", "value": "copy@example.com"}
         ],
         "body": {"data": "PHA+ZWRpdGFibGU8L3A+PHA+cXVvdGU8L3A+"},
@@ -1087,6 +1084,10 @@ async fn compose_hydration_restores_a_remote_draft_and_empty_discard_is_a_no_op(
     )
     .unwrap();
     assert_eq!(hydrated["draftId"], "d1");
+    assert_eq!(
+        hydrated["to"],
+        serde_json::json!(["\"Doe, John\" <one@example.com>", "two@example.com"])
+    );
     assert_eq!(hydrated["mode"], "draft");
     assert_eq!(hydrated["attachments"][0]["filename"], "notes.txt");
     assert!(ComposeDraftMetadataRepository::get(
@@ -2163,4 +2164,183 @@ async fn a_broken_metadata_table_fails_the_operation_after_a_successful_gmail_ex
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+fn failed_reports(
+    app: &tauri::App<tauri::test::MockRuntime>,
+) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
+    let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+    let sink = std::sync::Arc::clone(&reported);
+    app.handle().listen("compose://failed", move |event| {
+        sink.lock()
+            .unwrap()
+            .push(serde_json::from_str(event.payload()).unwrap());
+    });
+    reported
+}
+
+fn operation_status(storage: &Storage, id: &str) -> String {
+    OperationRepository::get(&storage.connection().unwrap(), id)
+        .unwrap()
+        .unwrap()
+        .status
+}
+
+#[tokio::test]
+async fn a_token_failure_is_reported_only_when_the_queue_will_not_retry_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::open(directory.path().join("mail.sqlite")).unwrap();
+    AccountRepository::upsert(
+        &storage.connection().unwrap(),
+        &Account {
+            id: "account".into(),
+            email: "me@example.com".into(),
+            display_name: String::new(),
+            avatar_url: None,
+            history_id: None,
+            needs_reauthentication: false,
+            created_at: 1,
+            updated_at: 1,
+        },
+    )
+    .unwrap();
+    let staging = std::sync::Arc::new(Staging::new(directory.path().join("staged")));
+    let coalescer = std::sync::Arc::new(SaveCoalescer::new());
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(AuthService::new(storage.clone()));
+    let executor = drafts::build_executor(
+        app.handle().clone(),
+        storage.clone(),
+        std::sync::Arc::clone(&staging),
+        std::sync::Arc::clone(&coalescer),
+        "http://not-contacted".into(),
+    );
+    let queue = QueueEngine::new(250, 250, std::sync::Arc::clone(&executor));
+    queue.pause();
+    let reported = failed_reports(&app);
+
+    for (id, key, mode) in [
+        ("draft-token", "draft:token", DraftOperationMode::Create),
+        ("send-token", "draft:send-token", DraftOperationMode::Send),
+    ] {
+        drafts::admit(
+            &queue,
+            &storage,
+            &staging,
+            &coalescer,
+            id.into(),
+            "account".into(),
+            key.into(),
+            base_payload(mode, None),
+            &[],
+        )
+        .await
+        .unwrap();
+    }
+
+    let retried_draft = executor(QueueOperation {
+        id: "draft-token".into(),
+        account_id: "account".into(),
+        lane: Lane::Interactive,
+        kind: OperationKind::Draft,
+        entity_key: "draft:token".into(),
+        cost: 0,
+        attempts: 0,
+        description: "Draft: Hello".into(),
+    })
+    .await;
+    assert_eq!(retried_draft, Err(QueueError::Network));
+    assert_ne!(operation_status(&storage, "draft-token"), "failed");
+    assert!(reported.lock().unwrap().is_empty());
+
+    let failed_send = executor(QueueOperation {
+        id: "send-token".into(),
+        account_id: "account".into(),
+        lane: Lane::Interactive,
+        kind: OperationKind::Send,
+        entity_key: "draft:send-token".into(),
+        cost: 0,
+        attempts: 0,
+        description: "Send: Hello".into(),
+    })
+    .await;
+    assert_eq!(failed_send, Err(QueueError::Network));
+    assert_eq!(operation_status(&storage, "send-token"), "failed");
+    let reports = reported.lock().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["kind"], "send");
+}
+
+#[tokio::test]
+async fn a_sent_message_whose_local_write_fails_is_still_reported_as_sent() {
+    let _environment = APP_ENV.lock().await;
+    let server = MockServer::start().await;
+    mock_token(&server).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/upload/gmail/v1/users/me/drafts"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(draft_response("d-sent", "m-sent", "t-sent")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/users/me/drafts/send"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            draft_response("ignored", "sent-local-fail", "t-sent")["message"].clone(),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages/sent-local-fail"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            draft_response("ignored", "sent-local-fail", "t-sent")["message"].clone(),
+        ))
+        .mount(&server)
+        .await;
+    let (app, _home) = boot(&server);
+    let handle = app.handle();
+    let directory = app.path().app_data_dir().unwrap();
+    let storage = Storage::open(directory.join("latentmail.sqlite")).unwrap();
+    storage
+        .connection()
+        .unwrap()
+        .execute("DROP TABLE contacts", [])
+        .unwrap();
+    let staging = handle.state::<std::sync::Arc<Staging>>().inner().clone();
+    let coalescer = handle
+        .state::<std::sync::Arc<SaveCoalescer>>()
+        .inner()
+        .clone();
+    let queue = handle
+        .state::<std::sync::Arc<QueueEngine>>()
+        .inner()
+        .clone();
+    let reported = failed_reports(&app);
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let completion = std::sync::Arc::clone(&completed);
+    handle.listen("send://complete", move |_| {
+        completion.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    drafts::admit(
+        &queue,
+        &storage,
+        &staging,
+        &coalescer,
+        "op-sent-local-fail".into(),
+        "account".into(),
+        "session-local-fail".into(),
+        base_payload(DraftOperationMode::Send, None),
+        &[],
+    )
+    .await
+    .unwrap();
+    wait_for(|| completed.load(std::sync::atomic::Ordering::SeqCst)).await;
+
+    assert_eq!(operation_status(&storage, "op-sent-local-fail"), "done");
+    assert!(reported.lock().unwrap().is_empty());
+    server.verify().await;
 }

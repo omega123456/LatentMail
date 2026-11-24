@@ -294,3 +294,10 @@ fn quoted_operator_values_may_contain_spaces() {
         Some("subject:\"quarterly report\"")
     );
 }
+
+#[test]
+fn a_relative_date_ending_in_a_multi_byte_character_is_ignored_rather_than_panicking() {
+    let parsed = parse("newer_than:5é", now());
+    let predicates = parsed.map(|query| query.predicates).unwrap_or_default();
+    assert!(predicates.is_empty());
+}

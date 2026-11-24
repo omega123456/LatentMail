@@ -6,7 +6,6 @@ The interface uses **React 19**, **TypeScript**, and **Tauri 2**. The project is
 
 [feature-tour.webm](https://github.com/user-attachments/assets/faf60e07-a782-4f62-8483-79c1f1d33a89)
 
-
 ## Contents
 
 - [How it works](#how-it-works)

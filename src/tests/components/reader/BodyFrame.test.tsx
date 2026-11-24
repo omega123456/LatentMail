@@ -84,4 +84,16 @@ describe('BodyFrame', () => {
 
     expect(frame.dataset.contextHref).toBe('https://example.com');
   });
+
+  it('schedules one frame-wiring loop per document rather than one per render', () => {
+    const scheduled = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
+    const { rerender } = render(<BodyFrame html="<p>Hello</p>" text={null} />);
+    const afterMount = scheduled.mock.calls.length;
+    rerender(<BodyFrame html="<p>Hello</p>" text={null} />);
+    rerender(<BodyFrame html="<p>Hello</p>" text={null} />);
+    expect(scheduled.mock.calls.length).toBe(afterMount);
+    rerender(<BodyFrame html="<p>Changed</p>" text={null} />);
+    expect(scheduled.mock.calls.length).toBe(afterMount + 1);
+    scheduled.mockRestore();
+  });
 });

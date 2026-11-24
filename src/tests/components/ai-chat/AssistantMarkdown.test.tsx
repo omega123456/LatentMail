@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { AssistantMarkdown } from '@/components/ai-chat/AssistantMarkdown';
+import { ipc } from '@/tests/ipc-mock';
 
 describe('AssistantMarkdown', () => {
   it('renders the supported constructs as elements rather than injected HTML', () => {
@@ -40,5 +42,37 @@ describe('AssistantMarkdown', () => {
   it('survives an unterminated code fence arriving mid-stream', () => {
     const { container } = render(<AssistantMarkdown text={'Here is the start\n\n```\nhalf'} />);
     expect(container).toHaveTextContent('half');
+  });
+
+  it('never renders an image from the answer, showing its alt text instead', () => {
+    const { container } = render(
+      <AssistantMarkdown
+        text={
+          'Look ![tracking pixel](https://tracker.example/p.gif) and <img src="https://tracker.example/q.gif" alt="raw">'
+        }
+      />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(container).toHaveTextContent('tracking pixel');
+  });
+
+  it('renders raw HTML from the answer as inert text', () => {
+    const { container } = render(
+      <AssistantMarkdown
+        text={'<b onclick="steal()">bold</b> <iframe src="https://x.example"></iframe>'}
+      />,
+    );
+    expect(container.querySelector('b')).toBeNull();
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container).toHaveTextContent('<b onclick="steal()">bold</b>');
+  });
+
+  it('opens a link from the answer in the system browser instead of navigating the app', async () => {
+    const user = userEvent.setup();
+    const opened = vi.fn();
+    ipc.override('open_external_url', opened);
+    render(<AssistantMarkdown text={'See [the policy](https://example.com/policy).'} />);
+    await user.click(screen.getByRole('link', { name: 'the policy' }));
+    expect(opened).toHaveBeenCalledWith({ url: 'https://example.com/policy' });
   });
 });

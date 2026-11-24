@@ -58,11 +58,11 @@ fn external_urls_are_limited_to_http_s() {
 }
 
 #[test]
-fn health_command_emits_and_external_opening_uses_the_test_safe_boundary() {
+fn health_command_answers_and_external_opening_uses_the_test_safe_boundary() {
     let app = app();
 
     assert_eq!(
-        serde_json::to_value(health_check(app.handle().clone()).unwrap()).unwrap()["status"],
+        serde_json::to_value(health_check()).unwrap()["status"],
         "ok"
     );
     assert!(open_external_url(app.handle().clone(), "https://example.com".to_owned()).is_err());
@@ -1128,7 +1128,7 @@ fn storage_backed_commands_return_database_errors_through_real_ipc() {
         ),
         (
             "reply_context",
-            serde_json::json!({ "accountId": "account", "messageId": "message", "accountEmail": "me@example.com", "replyAll": false, "forward": false, "owner": "owner" }),
+            serde_json::json!({ "accountId": "account", "messageId": "message", "accountEmail": "me@example.com", "replyAll": false, "forward": false }),
         ),
         (
             "stage_attachment_from_path",
@@ -2700,7 +2700,6 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
             "accountEmail": "me@example.com",
             "replyAll": true,
             "forward": false,
-            "owner": "reply-owner",
         }),
     )
     .unwrap();
@@ -2722,7 +2721,6 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
             "accountEmail": "me@example.com",
             "replyAll": false,
             "forward": true,
-            "owner": "forward-owner",
         }),
     )
     .unwrap();
@@ -2871,7 +2869,6 @@ async fn forwarding_a_message_whose_only_attachment_shaped_parts_are_inline_imag
             "accountEmail": "me@example.com",
             "replyAll": false,
             "forward": true,
-            "owner": "forward-owner",
         }),
     )
     .unwrap();

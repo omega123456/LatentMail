@@ -12,11 +12,11 @@ export function ComposeFooter({
   onInsertImage,
   ready,
   status,
-  failed = false,
-  onRetry = () => undefined,
-  onSend = () => undefined,
-  sending = false,
-  blocked = true,
+  failed,
+  onRetry,
+  onSend,
+  sending,
+  blocked,
 }: {
   editor: Editor | null;
   onLink: () => void;
@@ -24,11 +24,11 @@ export function ComposeFooter({
   onInsertImage: () => void;
   ready: boolean;
   status: string;
-  failed?: boolean;
-  onRetry?: () => void;
-  onSend?: () => void;
-  sending?: boolean;
-  blocked?: boolean;
+  failed: boolean;
+  onRetry: () => void;
+  onSend: () => void;
+  sending: boolean;
+  blocked: boolean;
 }) {
   return (
     <div className="flex shrink-0 flex-col gap-2 border-t border-outline-variant px-stack-gap-md pb-3.5 pt-2.5 dark:border-dark-outline-variant">

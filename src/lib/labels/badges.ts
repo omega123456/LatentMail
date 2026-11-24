@@ -1,5 +1,6 @@
 import { AlertTriangle, FileText, Inbox, Send, Star, Trash2, type LucideIcon } from 'lucide-react';
 import type { LabelColorId } from '@/lib/labels/palette';
+import { compareLabelNames } from '@/lib/labels/order';
 
 export type SystemBadgeId = 'INBOX' | 'SENT' | 'DRAFT' | 'STARRED' | 'TRASH' | 'SPAM';
 
@@ -53,10 +54,6 @@ export type MessageBadge =
   | { kind: 'system'; id: SystemBadgeId }
   | { kind: 'user'; id: string; name: string; color: LabelColorId };
 
-function byName(a: UserLabel, b: UserLabel) {
-  return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-}
-
 function toUserBadge(label: UserLabel): MessageBadge {
   return { kind: 'user', id: label.id, name: label.name, color: label.color };
 }
@@ -76,7 +73,7 @@ export function messageBadges(
     ...toSystemBadges(LEADING_BADGES, present),
     ...userLabels
       .filter((label) => labelIds.includes(label.id))
-      .sort(byName)
+      .sort(compareLabelNames)
       .map(toUserBadge),
     ...toSystemBadges(TRAILING_BADGES, present),
   ];
@@ -85,7 +82,7 @@ export function messageBadges(
 export function userBadgesByName(names: string[], userLabels: UserLabel[]): MessageBadge[] {
   return userLabels
     .filter((label) => names.includes(label.name))
-    .sort(byName)
+    .sort(compareLabelNames)
     .map(toUserBadge);
 }
 

@@ -42,7 +42,6 @@ export interface IpcCommandMap {
       accountEmail: string;
       replyAll: boolean;
       forward: boolean;
-      owner: string;
     };
     result: ReplyContext;
   };
@@ -731,7 +730,6 @@ export interface AvatarResolvedEvent {
 }
 
 export interface IpcEventMap {
-  'system://health': { status: 'ok' };
   'avatar://resolved': AvatarResolvedEvent;
   'queue://item': { id: string; status: string; accountId: string; lane: Lane };
   'ai://index': {

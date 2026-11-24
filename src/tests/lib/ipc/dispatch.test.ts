@@ -41,10 +41,14 @@ describe('IPC dispatch', () => {
     const { listen } = await import('@/lib/ipc/events');
     const received = vi.fn();
 
-    await listen('system://health', received);
-    ipc.emit('system://health', { status: 'ok' });
+    await listen('avatar://resolved', received);
+    ipc.emit('avatar://resolved', { pipeline: 'sender', key: 'anna@example.com', resolved: true });
 
-    expect(received).toHaveBeenCalledWith({ status: 'ok' });
+    expect(received).toHaveBeenCalledWith({
+      pipeline: 'sender',
+      key: 'anna@example.com',
+      resolved: true,
+    });
   });
 
   it('emits frontend readiness through the shared dispatch boundary', async () => {
@@ -71,8 +75,8 @@ describe('IPC dispatch', () => {
     const received = vi.fn();
 
     await expect(invoke('health_check', {})).resolves.toEqual({ status: 'ok' });
-    await listen('system://health', received);
-    expect(ipc.tauriListen).toHaveBeenCalledWith('system://health', expect.any(Function));
+    await listen('avatar://resolved', received);
+    expect(ipc.tauriListen).toHaveBeenCalledWith('avatar://resolved', expect.any(Function));
   });
 
   it('rejects commands without a fixture', async () => {

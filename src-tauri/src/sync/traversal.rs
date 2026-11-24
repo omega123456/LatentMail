@@ -6,12 +6,12 @@ use crate::{
     attachments::AttachmentCache,
     gmail::{GmailClient, GmailMessage, ListOptions, MAX_PAGE_SIZE},
     storage::{
-        AttachmentRepository, HtmlPresence, LabelRepository, Message, MessageRepository, Storage,
-        ThreadRepository, TraversalCursor, TraversalCursorRepository, TraversalKind,
+        AttachmentRepository, HtmlPresence, Message, MessageRepository, Storage, ThreadRepository,
+        TraversalCursor, TraversalCursorRepository, TraversalKind,
     },
 };
 
-use super::materialize::attachment_records;
+use super::materialize::{attachment_records, write_label_membership};
 
 use super::{concurrency, to_millis, EventSink, SyncError, TraversalState};
 
@@ -214,16 +214,7 @@ fn write_traversal_message(
             &message.bcc_recipients,
             message.rfc_references.as_deref(),
         )?;
-        for label_id in &message.label_ids {
-            LabelRepository::ensure_placeholder(connection, account_id, label_id)?;
-            MessageRepository::set_label_membership(
-                connection,
-                account_id,
-                &message.id,
-                label_id,
-                true,
-            )?;
-        }
+        write_label_membership(connection, account_id, &message.id, &message.label_ids)?;
     }
 
     AttachmentRepository::replace_for_message(

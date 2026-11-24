@@ -55,4 +55,16 @@ describe('LabelForm', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }));
     expect(onSubmit).toHaveBeenCalledWith({ name: 'Contracts', colorId: 'red' });
   });
+
+  it('labels each open form by its own field when two are open together', () => {
+    render(
+      <>
+        <LabelForm mode="create" existingNames={[]} onSubmit={vi.fn()} onCancel={vi.fn()} />
+        <LabelForm mode="create" existingNames={[]} onSubmit={vi.fn()} onCancel={vi.fn()} />
+      </>,
+    );
+    const fields = screen.getAllByRole('textbox');
+    expect(fields).toHaveLength(2);
+    expect(fields[0].id).not.toBe(fields[1].id);
+  });
 });

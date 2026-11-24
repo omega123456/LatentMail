@@ -1,5 +1,7 @@
 use url::Url;
 
+use crate::storage::addresses::split_addresses;
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Mailto {
@@ -24,12 +26,7 @@ pub fn parse(value: &str) -> Option<Mailto> {
                 .next()
                 .map(|(_, value)| value.into_owned())
                 .unwrap_or_default();
-        decoded
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .map(ToOwned::to_owned)
-            .collect()
+        split_addresses(&decoded)
     };
     let mut mailto = Mailto {
         to: recipients(url.path()),

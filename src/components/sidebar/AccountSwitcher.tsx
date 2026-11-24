@@ -22,11 +22,8 @@ export function AccountSwitcher({
   const { data: activeAvatarSrc } = useAccountAvatarQuery(active?.id ?? null);
   const addAccount = async () => {
     setAdding(true);
-    try {
-      await invoke('begin_sign_in', {});
-    } catch {
-      setAdding(false);
-    }
+    await invoke('begin_sign_in', {}).catch(() => undefined);
+    setAdding(false);
   };
   if (!active) return null;
   return (

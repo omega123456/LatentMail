@@ -12,7 +12,7 @@ import type { MessageAttachment } from '@/lib/types/ipc';
 vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({ default: 'worker-url' }));
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: {},
-  getDocument: () => ({ promise: new Promise(() => undefined) }),
+  getDocument: () => ({ promise: new Promise(() => undefined), destroy: () => Promise.resolve() }),
 }));
 vi.mock('mammoth', () => ({
   convertToHtml: () => Promise.resolve({ value: '<p>Converted document</p>', messages: [] }),
