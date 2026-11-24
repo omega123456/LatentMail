@@ -101,12 +101,12 @@ pub async fn run_backfill_step(
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            let mut touched = HashSet::new();
-            for message in &messages {
-                touched.insert(message.thread_id.clone());
-                write_traversal_message(&transaction, &account_owned, message, cache.as_ref())?;
-            }
-            ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
+            write_traversal_messages_and_recompute(
+                &transaction,
+                &account_owned,
+                &messages,
+                cache.as_ref(),
+            )?;
 
             TraversalCursorRepository::upsert(
                 &transaction,
@@ -158,17 +158,32 @@ pub async fn fetch_and_persist(
     let thread_ids = storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
-            let mut touched = HashSet::new();
-            for message in &messages {
-                touched.insert(message.thread_id.clone());
-                write_traversal_message(&transaction, &account_owned, message, cache.as_ref())?;
-            }
-            ThreadRepository::recompute_many(&transaction, &account_owned, &touched)?;
+            let touched = write_traversal_messages_and_recompute(
+                &transaction,
+                &account_owned,
+                &messages,
+                cache.as_ref(),
+            )?;
             transaction.commit()?;
             Ok(touched.into_iter().collect::<Vec<_>>())
         })
         .await?;
     Ok(thread_ids)
+}
+
+fn write_traversal_messages_and_recompute(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    messages: &[GmailMessage],
+    cache: Option<&AttachmentCache>,
+) -> rusqlite::Result<HashSet<String>> {
+    let mut touched = HashSet::new();
+    for message in messages {
+        touched.insert(message.thread_id.clone());
+        write_traversal_message(connection, account_id, message, cache)?;
+    }
+    ThreadRepository::recompute_many(connection, account_id, &touched)?;
+    Ok(touched)
 }
 
 fn write_traversal_message(

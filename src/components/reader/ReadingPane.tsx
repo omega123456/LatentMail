@@ -6,7 +6,9 @@ import type { MessageExportActions } from '@/components/actions/MessageActionRib
 import { EmptyState } from '@/components/states/EmptyState';
 import { ErrorState } from '@/components/states/ErrorState';
 import { LoadingState } from '@/components/states/LoadingState';
-import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
+import { openComposeAction, openNewMessage, type ComposeAction } from '@/lib/compose/entry';
+import { intersectAll } from '@/lib/collections';
+import { readToggleIntent, spamToggleIntent, starToggleIntent } from '@/lib/triage/intents';
 import {
   useAccountsQuery,
   useConversationQuery,
@@ -43,17 +45,11 @@ import { ReaderContextMenu } from './ReaderContextMenu';
 const MOVE_DESTINATION_IDS: MoveDestinationId[] = ['INBOX', 'SPAM', 'TRASH'];
 
 function intersectMessageLabelIds(messagesLabelIds: string[][]): string[] {
-  if (messagesLabelIds.length === 0) return [];
-  const [first, ...rest] = messagesLabelIds;
-  return first.filter((id) => rest.every((labelIds) => labelIds.includes(id)));
+  return intersectAll(messagesLabelIds);
 }
 
 function intersectThreadSystemLabelIds(threads: { systemLabelIds?: string[] }[]): string[] {
-  if (threads.length === 0) return [];
-  const [first, ...rest] = threads;
-  return (first.systemLabelIds ?? []).filter((id) =>
-    rest.every((thread) => (thread.systemLabelIds ?? []).includes(id)),
-  );
+  return intersectAll(threads.map((thread) => thread.systemLabelIds ?? []));
 }
 
 export type ReaderConversation = { id: string; subject: string; messages: ReaderMessage[] };
@@ -61,7 +57,7 @@ type TriageHandlers = Pick<
   ActionRibbonProps,
   'onToggleRead' | 'onToggleStar' | 'onApplyLabels' | 'onMoveTo' | 'onToggleSpam' | 'onDelete'
 >;
-export type ComposeAction = 'reply' | 'reply-all' | 'forward' | 'edit-draft';
+export type { ComposeAction };
 
 export const readerFixtures: Record<string, ReaderConversation> = {
   'thread-1': {
@@ -294,23 +290,13 @@ function triageHandlersFor(
   mutate: (threadIds: string[], intent: ThreadTriageIntent) => void,
 ) {
   return {
-    onToggleRead: () =>
-      mutate(threadIds, {
-        kind: 'label',
-        add: unread ? [] : ['UNREAD'],
-        remove: unread ? ['UNREAD'] : [],
-      }),
-    onToggleStar: () =>
-      mutate(threadIds, {
-        kind: 'label',
-        add: starred ? [] : ['STARRED'],
-        remove: starred ? ['STARRED'] : [],
-      }),
+    onToggleRead: () => mutate(threadIds, readToggleIntent(unread)),
+    onToggleStar: () => mutate(threadIds, starToggleIntent(starred)),
     onApplyLabels: ({ add, remove }: { add: string[]; remove: string[] }) =>
       mutate(threadIds, { kind: 'label', add: add, remove: remove }),
     onMoveTo: (destination: 'INBOX' | 'SPAM' | 'TRASH') =>
       mutate(threadIds, { kind: 'move', destination: destination }),
-    onToggleSpam: () => mutate(threadIds, { kind: 'move', destination: isSpam ? 'INBOX' : 'SPAM' }),
+    onToggleSpam: () => mutate(threadIds, spamToggleIntent(isSpam)),
     onDelete: () => mutate(threadIds, { kind: 'delete' }),
   };
 }
@@ -411,12 +397,13 @@ export function ReadingPaneContainer({ threadId }: { threadId: string | null }) 
       }
       onCompose={(action, messageId) => {
         if (!accountId) return;
-        const message = conversation?.messages.find((entry) => entry.id === messageId);
-        if (action === 'reply') void openReply('reply', accountId, accountEmail, message);
-        else if (action === 'reply-all')
-          void openReply('reply-all', accountId, accountEmail, message);
-        else if (action === 'forward') void openForward(accountId, accountEmail, message);
-        else openEditDraft(accountId, accountEmail, conversation?.subject ?? '', message);
+        void openComposeAction({
+          action: action,
+          accountId: accountId,
+          accountEmail: accountEmail,
+          subject: conversation?.subject ?? '',
+          message: conversation?.messages.find((entry) => entry.id === messageId),
+        });
       }}
       onComposeTo={(participant) => {
         if (accountId) openNewMessage(accountId, accountEmail, participant);

@@ -137,7 +137,7 @@ struct CreateLabelRequest<'a> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RawLabel {
+pub(super) struct RawLabel {
     id: String,
     name: String,
     #[serde(rename = "type")]
@@ -154,7 +154,7 @@ struct RawColor {
     background_color: Option<String>,
 }
 
-fn map_label(raw: RawLabel) -> GmailLabel {
+pub(super) fn map_label(raw: RawLabel) -> GmailLabel {
     GmailLabel {
         id: raw.id,
         name: raw.name,

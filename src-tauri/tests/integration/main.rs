@@ -1,3 +1,5 @@
+pub mod support;
+
 mod ai_chat_session_integration;
 mod ai_chat_streaming_integration;
 mod ai_chunker_integration;

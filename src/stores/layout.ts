@@ -4,12 +4,13 @@ import { invoke } from '@/lib/ipc/commands';
 import { hydrateSettings } from '@/lib/settings/hydrate';
 import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } from '@/lib/types/ipc';
 import { percentToFraction, WHOLE_PERCENT } from '@/lib/format/percent';
+import { clamp, wrapIndex } from '@/lib/collections';
 
 export type Route = 'auth' | 'mail' | 'settings';
 
 export const ASSISTANT_DOCK_MIN_SHELL_WIDTH = 1200;
 
-type LayoutState = Pick<
+type PersistedLayoutSettings = Pick<
   Settings,
   | 'layout'
   | 'density'
@@ -33,7 +34,9 @@ type LayoutState = Pick<
   | 'desktopNotifications'
   | 'updateCheckInterval'
   | 'installUpdateOnQuit'
-> & {
+>;
+
+type LayoutState = PersistedLayoutSettings & {
   route: Route;
   hydrated: boolean;
   assistantOpen: boolean;
@@ -74,19 +77,22 @@ const LIST_WIDTH_RANGE: SizeRange = { min: 240, max: 600 };
 const READER_HEIGHT_PERCENT_RANGE: SizeRange = { min: 20, max: 80 };
 const ASSISTANT_WIDTH_RANGE: SizeRange = { min: 280, max: 700 };
 
+const LAYOUT_MODES: LayoutMode[] = ['three-column', 'bottom-preview', 'list-only'];
+const DENSITY_MODES: Density[] = ['compact', 'comfortable', 'spacious'];
+
 function clampSize(size: number, range: SizeRange) {
-  return Math.round(Math.min(range.max, Math.max(range.min, size)));
+  return Math.round(clamp(size, range.min, range.max));
 }
 
 export function applyZoom(zoomPercent: number) {
   void dispatchSetZoom(percentToFraction(zoomPercent)).catch(() => undefined);
 }
 
-function persist<K extends keyof Settings>(key: K, value: Settings[K]) {
-  void invoke('write_setting', { key, value }).catch(() => undefined);
+function persist<Key extends keyof Settings>(key: Key, value: Settings[Key]) {
+  void invoke('write_setting', { key: key, value: value }).catch(() => undefined);
 }
 
-export const useLayoutStore = create<LayoutState>((set) => ({
+const DEFAULT_PERSISTED_SETTINGS: PersistedLayoutSettings = {
   layout: 'three-column',
   density: 'comfortable',
   sidebarCollapsed: false,
@@ -94,7 +100,6 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   listWidth: 350,
   readerHeight: 40,
   assistantWidth: 360,
-  assistantOpen: false,
   showUnreadCounts: true,
   showSenderAvatars: true,
   zoomPercent: 100,
@@ -110,157 +115,99 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   desktopNotifications: true,
   updateCheckInterval: '1d',
   installUpdateOnQuit: true,
-  route: 'mail',
-  hydrated: false,
-  hydrate: () => {
-    return hydrateSettings().then((settings) => {
-      applyZoom(settings.zoomPercent);
-      set({
-        layout: settings.layout,
-        density: settings.density,
-        sidebarCollapsed: settings.sidebarCollapsed,
-        sidebarWidth: settings.sidebarWidth,
-        listWidth: settings.listWidth,
-        readerHeight: settings.readerHeight,
-        assistantWidth: clampSize(settings.assistantWidth, ASSISTANT_WIDTH_RANGE),
-        showUnreadCounts: settings.showUnreadCounts,
-        showSenderAvatars: settings.showSenderAvatars,
-        zoomPercent: settings.zoomPercent,
-        syncOnStartup: settings.syncOnStartup,
-        syncIntervalSeconds: settings.syncIntervalSeconds,
-        alwaysLoadRemoteImages: settings.alwaysLoadRemoteImages,
-        allowedImageSenders: settings.allowedImageSenders,
-        logLevel: settings.logLevel,
-        prefetchImageAttachments: settings.prefetchImageAttachments,
-        startAtLogin: settings.startAtLogin,
-        closeToTray: settings.closeToTray,
-        startMinimized: settings.startMinimized,
-        desktopNotifications: settings.desktopNotifications,
-        updateCheckInterval: settings.updateCheckInterval,
-        installUpdateOnQuit: settings.installUpdateOnQuit,
-        hydrated: true,
-      });
-    });
-  },
-  setRoute: (route) => set({ route }),
-  setLayout: (layout) => {
-    set({ layout });
-    persist('layout', layout);
-  },
-  cycleLayout: () => {
-    const layouts: LayoutMode[] = ['three-column', 'bottom-preview', 'list-only'];
-    const layout =
-      layouts[(layouts.indexOf(useLayoutStore.getState().layout) + 1) % layouts.length];
-    useLayoutStore.getState().setLayout(layout);
-  },
-  setDensity: (density) => {
-    set({ density });
-    persist('density', density);
-  },
-  cycleDensity: () => {
-    const densities: Density[] = ['compact', 'comfortable', 'spacious'];
-    const density =
-      densities[(densities.indexOf(useLayoutStore.getState().density) + 1) % densities.length];
-    useLayoutStore.getState().setDensity(density);
-  },
-  setSidebarCollapsed: (sidebarCollapsed) => {
-    set({ sidebarCollapsed });
-    persist('sidebarCollapsed', sidebarCollapsed);
-  },
-  setSidebarWidth: (sidebarWidth) => {
-    sidebarWidth = clampSize(sidebarWidth, SIDEBAR_WIDTH_RANGE);
-    set({ sidebarWidth });
-    persist('sidebarWidth', sidebarWidth);
-  },
-  setListWidth: (listWidth) => {
-    listWidth = clampSize(listWidth, LIST_WIDTH_RANGE);
-    set({ listWidth });
-    persist('listWidth', listWidth);
-  },
-  setReaderHeight: (readerHeight) => {
-    readerHeight = clampSize(readerHeight, READER_HEIGHT_PERCENT_RANGE);
-    set({ readerHeight });
-    persist('readerHeight', readerHeight);
-  },
-  setAssistantOpen: (assistantOpen) => set({ assistantOpen }),
-  setAssistantWidth: (assistantWidth) => {
-    assistantWidth = clampSize(assistantWidth, ASSISTANT_WIDTH_RANGE);
-    set({ assistantWidth });
-    persist('assistantWidth', assistantWidth);
-  },
-  setShowUnreadCounts: (showUnreadCounts) => {
-    set({ showUnreadCounts });
-    persist('showUnreadCounts', showUnreadCounts);
-  },
-  setShowSenderAvatars: (showSenderAvatars) => {
-    set({ showSenderAvatars });
-    persist('showSenderAvatars', showSenderAvatars);
-  },
-  setZoomPercent: (zoomPercent) => {
-    applyZoom(zoomPercent);
-    set({ zoomPercent });
-    persist('zoomPercent', zoomPercent);
-  },
-  setSyncOnStartup: (syncOnStartup) => {
-    set({ syncOnStartup });
-    persist('syncOnStartup', syncOnStartup);
-  },
-  setSyncIntervalSeconds: (syncIntervalSeconds) => {
-    set({ syncIntervalSeconds });
-    persist('syncIntervalSeconds', syncIntervalSeconds);
-  },
-  setAlwaysLoadRemoteImages: (alwaysLoadRemoteImages) => {
-    set({ alwaysLoadRemoteImages });
-    persist('alwaysLoadRemoteImages', alwaysLoadRemoteImages);
-  },
-  setLogLevel: (logLevel) => {
-    set({ logLevel });
-    persist('logLevel', logLevel);
-  },
-  setPrefetchImageAttachments: (prefetchImageAttachments) => {
-    set({ prefetchImageAttachments });
-    persist('prefetchImageAttachments', prefetchImageAttachments);
-  },
-  setStartAtLogin: (startAtLogin) => {
-    set({ startAtLogin });
-    persist('startAtLogin', startAtLogin);
-  },
-  setCloseToTray: (closeToTray) => {
-    set({ closeToTray });
-    persist('closeToTray', closeToTray);
-  },
-  setStartMinimized: (startMinimized) => {
-    set({ startMinimized });
-    persist('startMinimized', startMinimized);
-  },
-  setDesktopNotifications: (desktopNotifications) => {
-    set({ desktopNotifications });
-    persist('desktopNotifications', desktopNotifications);
-  },
-  setUpdateCheckInterval: (updateCheckInterval) => {
-    set({ updateCheckInterval });
-    persist('updateCheckInterval', updateCheckInterval);
-  },
-  setInstallUpdateOnQuit: (installUpdateOnQuit) => {
-    set({ installUpdateOnQuit });
-    persist('installUpdateOnQuit', installUpdateOnQuit);
-  },
-  trustImageSender: (address) => {
-    const normalized = address.trim().toLowerCase();
-    const current = useLayoutStore.getState().allowedImageSenders;
-    if (!normalized || current.includes(normalized)) return;
-    const allowedImageSenders = [...current, normalized];
-    set({ allowedImageSenders });
-    persist('allowedImageSenders', allowedImageSenders);
-  },
-  untrustImageSender: (address) => {
-    const normalized = address.trim().toLowerCase();
-    const allowedImageSenders = useLayoutStore
-      .getState()
-      .allowedImageSenders.filter((entry) => entry !== normalized);
-    set({ allowedImageSenders });
-    persist('allowedImageSenders', allowedImageSenders);
-  },
-}));
+};
+
+const PERSISTED_KEYS = Object.keys(DEFAULT_PERSISTED_SETTINGS) as Array<
+  keyof PersistedLayoutSettings
+>;
+
+function pickPersistedSettings(settings: Settings): PersistedLayoutSettings {
+  const result = { ...DEFAULT_PERSISTED_SETTINGS };
+  for (const key of PERSISTED_KEYS) {
+    Object.assign(result, { [key]: settings[key] });
+  }
+  result.assistantWidth = clampSize(settings.assistantWidth, ASSISTANT_WIDTH_RANGE);
+  return result;
+}
+
+export const useLayoutStore = create<LayoutState>((set, get) => {
+  const persistedSetter =
+    <Key extends keyof PersistedLayoutSettings>(
+      key: Key,
+      transform?: (value: Settings[Key]) => Settings[Key],
+    ) =>
+    (incoming: Settings[Key]) => {
+      const next = transform ? transform(incoming) : incoming;
+      set({ [key]: next } as Partial<LayoutState>);
+      persist(key, next);
+    };
+
+  const setLayout = persistedSetter('layout');
+  const setDensity = persistedSetter('density');
+  const setAllowedImageSenders = persistedSetter('allowedImageSenders');
+
+  return {
+    ...DEFAULT_PERSISTED_SETTINGS,
+    assistantOpen: false,
+    route: 'mail',
+    hydrated: false,
+    hydrate: () =>
+      hydrateSettings().then((settings) => {
+        applyZoom(settings.zoomPercent);
+        set({ ...pickPersistedSettings(settings), hydrated: true });
+      }),
+    setRoute: (route) => set({ route }),
+    setLayout: setLayout,
+    cycleLayout: () => {
+      const currentIndex = LAYOUT_MODES.indexOf(get().layout);
+      setLayout(LAYOUT_MODES[wrapIndex(currentIndex, 1, LAYOUT_MODES.length)]);
+    },
+    setDensity: setDensity,
+    cycleDensity: () => {
+      const currentIndex = DENSITY_MODES.indexOf(get().density);
+      setDensity(DENSITY_MODES[wrapIndex(currentIndex, 1, DENSITY_MODES.length)]);
+    },
+    setSidebarCollapsed: persistedSetter('sidebarCollapsed'),
+    setSidebarWidth: persistedSetter('sidebarWidth', (size) =>
+      clampSize(size, SIDEBAR_WIDTH_RANGE),
+    ),
+    setListWidth: persistedSetter('listWidth', (size) => clampSize(size, LIST_WIDTH_RANGE)),
+    setReaderHeight: persistedSetter('readerHeight', (size) =>
+      clampSize(size, READER_HEIGHT_PERCENT_RANGE),
+    ),
+    setAssistantOpen: (assistantOpen) => set({ assistantOpen }),
+    setAssistantWidth: persistedSetter('assistantWidth', (size) =>
+      clampSize(size, ASSISTANT_WIDTH_RANGE),
+    ),
+    setShowUnreadCounts: persistedSetter('showUnreadCounts'),
+    setShowSenderAvatars: persistedSetter('showSenderAvatars'),
+    setZoomPercent: (zoomPercent) => {
+      applyZoom(zoomPercent);
+      set({ zoomPercent });
+      persist('zoomPercent', zoomPercent);
+    },
+    setSyncOnStartup: persistedSetter('syncOnStartup'),
+    setSyncIntervalSeconds: persistedSetter('syncIntervalSeconds'),
+    setAlwaysLoadRemoteImages: persistedSetter('alwaysLoadRemoteImages'),
+    setLogLevel: persistedSetter('logLevel'),
+    setPrefetchImageAttachments: persistedSetter('prefetchImageAttachments'),
+    setStartAtLogin: persistedSetter('startAtLogin'),
+    setCloseToTray: persistedSetter('closeToTray'),
+    setStartMinimized: persistedSetter('startMinimized'),
+    setDesktopNotifications: persistedSetter('desktopNotifications'),
+    setUpdateCheckInterval: persistedSetter('updateCheckInterval'),
+    setInstallUpdateOnQuit: persistedSetter('installUpdateOnQuit'),
+    trustImageSender: (address) => {
+      const normalized = address.trim().toLowerCase();
+      const current = get().allowedImageSenders;
+      if (!normalized || current.includes(normalized)) return;
+      setAllowedImageSenders([...current, normalized]);
+    },
+    untrustImageSender: (address) => {
+      const normalized = address.trim().toLowerCase();
+      setAllowedImageSenders(get().allowedImageSenders.filter((entry) => entry !== normalized));
+    },
+  };
+});
 
 applyZoom(WHOLE_PERCENT);

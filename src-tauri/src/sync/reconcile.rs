@@ -363,17 +363,13 @@ async fn apply_absent(storage: &Storage, account_id: &str) -> Result<(), SyncErr
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
                 let mut threads = std::collections::HashSet::new();
-                let mut delete_statement = transaction.prepare_cached(
-                    "DELETE FROM messages WHERE account_id=?1 AND id=?2 RETURNING thread_id",
-                )?;
                 for id in ids {
                     if let Some(thread_id) =
-                        MessageRepository::delete_with(&mut delete_statement, &account_id, &id)?
+                        MessageRepository::delete(&transaction, &account_id, &id)?
                     {
                         threads.insert(thread_id);
                     }
                 }
-                drop(delete_statement);
                 ThreadRepository::recompute_many(&transaction, &account_id, &threads)?;
                 transaction.commit()
             })
@@ -406,54 +402,25 @@ async fn apply_memberships(storage: &Storage, account_id: &str) -> Result<(), Sy
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
                 let mut threads = std::collections::HashSet::new();
-                let mut message_statement = transaction.prepare_cached(
-                    "SELECT thread_id,sender,sent_at,to_recipients,cc_recipients FROM messages WHERE account_id=?1 AND id=?2",
-                )?;
-                let mut message_labels_statement = transaction.prepare_cached(
-                    "SELECT label_id FROM message_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id",
-                )?;
-                let mut staged_labels_statement = transaction.prepare_cached(
-                    "SELECT label_id FROM reconcile_remote_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id",
-                )?;
-                let mut delete_membership_statement = transaction.prepare_cached(
-                    "DELETE FROM message_labels WHERE account_id=?1 AND message_id=?2",
-                )?;
-                let mut insert_membership_statement = transaction.prepare_cached(
-                    "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)",
-                )?;
-                let mut flags_statement = transaction.prepare_cached(
-                    "UPDATE messages SET is_unread=?1,is_starred=?2 WHERE account_id=?3 AND id=?4",
-                )?;
                 for id in ids {
-                    if let Some(message) = MessageRepository::reconciliation_message_with(
-                        &mut message_statement,
-                        &mut message_labels_statement,
+                    let Some(message) =
+                        MessageRepository::reconciliation_message(&transaction, &account_id, &id)?
+                    else {
+                        continue;
+                    };
+                    let labels = ReconcileStagingRepository::labels_for_message(
+                        &transaction,
                         &account_id,
                         &id,
-                    )?
-                    {
-                        let labels = ReconcileStagingRepository::labels_for_message_with(
-                            &mut staged_labels_statement,
-                            &account_id,
-                            &id,
-                        )?;
-                        MessageRepository::overwrite_membership_with(
-                            &mut delete_membership_statement,
-                            &mut insert_membership_statement,
-                            &mut flags_statement,
-                            &account_id,
-                            &id,
-                            &labels,
-                        )?;
-                        threads.insert(message.thread_id);
-                    }
+                    )?;
+                    MessageRepository::overwrite_membership(
+                        &transaction,
+                        &account_id,
+                        &id,
+                        &labels,
+                    )?;
+                    threads.insert(message.thread_id);
                 }
-                drop(flags_statement);
-                drop(insert_membership_statement);
-                drop(delete_membership_statement);
-                drop(staged_labels_statement);
-                drop(message_labels_statement);
-                drop(message_statement);
                 ThreadRepository::recompute_many(&transaction, &account_id, &threads)?;
                 transaction.commit()
             })
@@ -486,33 +453,22 @@ async fn observe_contacts(storage: &Storage, account_id: &str) -> Result<(), Syn
             .run(move |connection| {
                 let transaction = connection.unchecked_transaction()?;
                 let mut observations = Vec::new();
-                let mut message_statement = transaction.prepare_cached(
-                    "SELECT thread_id,sender,sent_at,to_recipients,cc_recipients FROM messages WHERE account_id=?1 AND id=?2",
-                )?;
-                let mut labels_statement = transaction.prepare_cached(
-                    "SELECT label_id FROM message_labels WHERE account_id=?1 AND message_id=?2 ORDER BY label_id",
-                )?;
                 for id in ids {
-                    if let Some(message) = MessageRepository::reconciliation_message_with(
-                        &mut message_statement,
-                        &mut labels_statement,
-                        &account_id,
-                        &id,
-                    )?
-                    {
-                        observations.push((message.sender, message.sent_at));
-                        if message.label_ids.iter().any(|label| label == "SENT") {
-                            for address in split_addresses(&message.to_recipients)
-                                .into_iter()
-                                .chain(split_addresses(&message.cc_recipients))
-                            {
-                                observations.push((address, message.sent_at));
-                            }
+                    let Some(message) =
+                        MessageRepository::reconciliation_message(&transaction, &account_id, &id)?
+                    else {
+                        continue;
+                    };
+                    observations.push((message.sender, message.sent_at));
+                    if message.label_ids.iter().any(|label| label == "SENT") {
+                        for address in split_addresses(&message.to_recipients)
+                            .into_iter()
+                            .chain(split_addresses(&message.cc_recipients))
+                        {
+                            observations.push((address, message.sent_at));
                         }
                     }
                 }
-                drop(labels_statement);
-                drop(message_statement);
                 contacts::observe_many(&transaction, &account_id, &observations)?;
                 transaction.commit()
             })

@@ -12,8 +12,6 @@ use crate::sync::{
 use query::{ParsedQuery, Predicate, PredicateKind};
 use scope::SearchScope;
 
-const DEFAULT_PAGE_SIZE: u32 = 50;
-
 impl From<&Predicate> for SearchPredicateDto {
     fn from(predicate: &Predicate) -> Self {
         let negated = predicate.negated;
@@ -74,7 +72,7 @@ pub async fn search_threads(
     }
 
     let scope_filter = scope::resolve(&scope.unwrap_or(SearchScope::Default));
-    let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).max(1);
+    let limit = crate::sync::thread_page_limit(limit);
     let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
     let has_cursor = cursor_pair.is_some();

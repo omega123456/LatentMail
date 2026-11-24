@@ -18,7 +18,7 @@ use crate::{
     gmail::{GmailClient, GmailError, GmailLabel, GmailMessage, GmailRateLimiters},
     queue::{
         Executor, Lane, OperationFuture, OperationKind, QueueEngine, QueueError, QueueEventSink,
-        QueueOperation,
+        QueueOperation, QueueRoute,
     },
     settings::SettingsService,
     storage::{
@@ -41,6 +41,7 @@ pub mod traversal;
 pub mod triage;
 
 pub use dto::{
+    thread_page_limit,
     message_dto, to_millis, AttachmentDto, ContactSuggestionDto, ConversationDto, HtmlPresenceDto,
     ImagePolicy, LabelColorDto, LabelDto, MessageBodyDto, MessageBodyFetchedDto, MessageDto,
     MutationOutcomeDto, MutationResultDto, ParsedSearchQueryDto, SearchPredicateDto,
@@ -52,11 +53,33 @@ pub use mutations::{MutationOutcome, BATCH_MODIFY_CHUNK_SIZE};
 type BoxFuture = Pin<Box<dyn Future<Output = Result<(), QueueError>> + Send>>;
 type OneShotWork = Box<dyn FnOnce() -> BoxFuture + Send>;
 
-struct QueueRoute {
-    lane: Lane,
-    kind: OperationKind,
-    entity_key: String,
-    description: String,
+impl QueueRoute {
+    fn sync(account_id: &str) -> Self {
+        Self {
+            lane: Lane::Background,
+            kind: OperationKind::Sync,
+            entity_key: format!("sync:{account_id}"),
+            description: "Sync mailbox".to_owned(),
+        }
+    }
+
+    fn traversal(account_id: &str, description: &str) -> Self {
+        Self {
+            lane: Lane::Traversal,
+            kind: OperationKind::Traversal,
+            entity_key: traversal::traversal_entity_key(account_id),
+            description: description.to_owned(),
+        }
+    }
+
+    fn embedding(account_id: &str, description: String) -> Self {
+        Self {
+            lane: Lane::Embedding,
+            kind: OperationKind::Embed,
+            entity_key: format!("embedding:{account_id}"),
+            description: description,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -142,12 +165,7 @@ where
         registry,
         account_id,
         operation_id,
-        QueueRoute {
-            lane: Lane::Background,
-            kind: OperationKind::Sync,
-            entity_key: format!("sync:{account_id}"),
-            description: "Sync mailbox".to_owned(),
-        },
+        QueueRoute::sync(account_id),
         future,
     )
     .await
@@ -169,12 +187,7 @@ where
         registry,
         account_id,
         operation_id,
-        QueueRoute {
-            lane: Lane::Traversal,
-            kind: OperationKind::Traversal,
-            entity_key: traversal::traversal_entity_key(account_id),
-            description: "Traverse mailbox history".to_owned(),
-        },
+        QueueRoute::traversal(account_id, "Traverse mailbox history"),
         future,
     )
     .await
@@ -208,17 +221,7 @@ where
             })
         }),
     );
-    let operation = QueueOperation {
-        id: operation_id,
-        account_id: account_id.to_owned(),
-        lane: route.lane,
-        kind: route.kind,
-        entity_key: route.entity_key,
-
-        cost: 0,
-        attempts: 0,
-        description: route.description,
-    };
+    let operation = QueueOperation::new(operation_id, account_id.to_owned(), route);
     queue
         .enqueue(operation)
         .await
@@ -494,16 +497,11 @@ impl SyncEngine {
             }),
         );
         self.queue
-            .enqueue(QueueOperation {
-                id: id,
-                account_id: account_id.to_owned(),
-                lane: Lane::Embedding,
-                kind: OperationKind::Embed,
-                entity_key: format!("embedding:{account_id}"),
-                cost: 0,
-                attempts: 0,
-                description: description,
-            })
+            .enqueue(QueueOperation::new(
+                id,
+                account_id.to_owned(),
+                QueueRoute::embedding(account_id, description),
+            ))
             .await
             .map_err(|_| SyncError::QueueStopped)
     }
@@ -926,16 +924,11 @@ fn enqueue_backfill_step(
             }),
         );
         let enqueue_result = queue
-            .enqueue(QueueOperation {
-                id: operation_id,
-                account_id: account_id.clone(),
-                lane: Lane::Traversal,
-                kind: OperationKind::Traversal,
-                entity_key: traversal::traversal_entity_key(&account_id),
-                cost: 0,
-                attempts: 0,
-                description: "Backfill mailbox history".to_owned(),
-            })
+            .enqueue(QueueOperation::new(
+                operation_id,
+                account_id.clone(),
+                QueueRoute::traversal(&account_id, "Backfill mailbox history"),
+            ))
             .await;
         if enqueue_result.is_err() {
             active_backfills.lock().await.remove(&account_id);
@@ -996,7 +989,6 @@ async fn full_sync_body(
         profile.history_id,
     );
     let account_owned = account_id.to_owned();
-    let thread_ids_for_write = thread_ids.clone();
     storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
@@ -1009,10 +1001,12 @@ async fn full_sync_body(
                 &gmail_labels,
                 &mut HashSet::new(),
             )?;
-            for message in &messages {
-                write_message(&transaction, &account_owned, message, cache.as_ref())?;
-            }
-            ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
+            write_messages_and_recompute(
+                &transaction,
+                &account_owned,
+                &messages,
+                cache.as_ref(),
+            )?;
             transaction.commit()
         })
         .await?;
@@ -1177,15 +1171,16 @@ async fn probe_only_body(
         .map(|message| message.thread_id.clone())
         .collect();
     let account_owned = account_id.to_owned();
-    let thread_ids_for_write = thread_ids.clone();
     let arrivals = storage
         .run(move |connection| {
             let transaction = connection.unchecked_transaction()?;
             let arrivals = compute_arrivals(&transaction, &account_owned, &messages, now)?;
-            for message in &messages {
-                write_message(&transaction, &account_owned, message, cache.as_ref())?;
-            }
-            ThreadRepository::recompute_many(&transaction, &account_owned, &thread_ids_for_write)?;
+            write_messages_and_recompute(
+                &transaction,
+                &account_owned,
+                &messages,
+                cache.as_ref(),
+            )?;
             transaction.commit()?;
             Ok(arrivals)
         })
@@ -1428,6 +1423,21 @@ pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
     }
 }
 
+fn write_messages_and_recompute(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    messages: &[GmailMessage],
+    cache: Option<&crate::attachments::AttachmentCache>,
+) -> rusqlite::Result<HashSet<String>> {
+    let mut touched = HashSet::new();
+    for message in messages {
+        touched.insert(message.thread_id.clone());
+        write_message(connection, account_id, message, cache)?;
+    }
+    ThreadRepository::recompute_many(connection, account_id, &touched)?;
+    Ok(touched)
+}
+
 fn write_message(
     connection: &rusqlite::Connection,
     account_id: &str,
@@ -1491,11 +1501,16 @@ pub struct SyncSchedulers {
     pub periodic: Arc<SyncScheduler>,
 }
 
-pub async fn run_fast_cadence<R: Runtime>(
+async fn for_each_cadence_account<R, Action, Output>(
     app: &AppHandle<R>,
     auth: &AuthService,
     engine: &Arc<SyncEngine>,
-) {
+    mut action: Action,
+) where
+    R: Runtime,
+    Action: FnMut(String, GmailClient) -> Output,
+    Output: std::future::Future<Output = ()>,
+{
     if engine.queue.suspended() {
         return;
     }
@@ -1506,17 +1521,25 @@ pub async fn run_fast_cadence<R: Runtime>(
         if engine.queue.suspended() || account.needs_reauthentication {
             continue;
         }
-        let Ok(token) = auth.refresh_access_token(app, &account.id).await else {
+        let Ok(client) = commands::gmail_client_for(app, auth, engine, &account.id).await else {
             continue;
         };
         if engine.queue.suspended() {
             continue;
         }
-        let client = engine
-            .gmail_client(&account.id, token, gmail_base_url())
-            .await;
-        let _ = engine.probe_only(&account.id, client).await;
+        action(account.id, client).await;
     }
+}
+
+pub async fn run_fast_cadence<R: Runtime>(
+    app: &AppHandle<R>,
+    auth: &AuthService,
+    engine: &Arc<SyncEngine>,
+) {
+    for_each_cadence_account(app, auth, engine, |account_id, client| async move {
+        let _ = engine.probe_only(&account_id, client).await;
+    })
+    .await;
 }
 
 pub async fn run_periodic_cadence<R: Runtime>(
@@ -1524,31 +1547,14 @@ pub async fn run_periodic_cadence<R: Runtime>(
     auth: &AuthService,
     engine: &Arc<SyncEngine>,
 ) {
-    if engine.queue.suspended() {
-        return;
-    }
-    let Ok(accounts) = auth.accounts().await else {
-        return;
-    };
-    for account in accounts {
-        if engine.queue.suspended() || account.needs_reauthentication {
-            continue;
-        }
-        let Ok(token) = auth.refresh_access_token(app, &account.id).await else {
-            continue;
-        };
-        if engine.queue.suspended() {
-            continue;
-        }
-        let client = engine
-            .gmail_client(&account.id, token, gmail_base_url())
-            .await;
-        if engine.run_sync(&account.id, client.clone()).await.is_ok() {
-            engine.enqueue_backfill(&account.id, client).await;
+    for_each_cadence_account(app, auth, engine, |account_id, client| async move {
+        if engine.run_sync(&account_id, client.clone()).await.is_ok() {
+            engine.enqueue_backfill(&account_id, client).await;
         } else {
-            auth.invalidate_access_token(&account.id);
+            auth.invalidate_access_token(&account_id);
         }
-    }
+    })
+    .await;
 }
 
 pub fn emitting_event_sink<R: Runtime>(handle: AppHandle<R>) -> EventSink {
@@ -1720,10 +1726,9 @@ fn spawn_startup_recovery<R: Runtime>(
                 serde_json::to_value(crate::queue::uncertain_send_event(account_id.clone()))
                     .expect("UncertainSendEvent serializes"),
             );
-            if let Ok(token) = auth.refresh_access_token(&app, &account_id).await {
-                let client = engine
-                    .gmail_client(&account_id, token, gmail_base_url())
-                    .await;
+            if let Ok(client) =
+                commands::gmail_client_for(&app, &auth, &engine, &account_id).await
+            {
                 let _ = engine.run_sync(&account_id, client).await;
             }
         }

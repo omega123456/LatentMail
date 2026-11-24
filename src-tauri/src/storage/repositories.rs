@@ -1,12 +1,61 @@
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, types::Value, Connection, OptionalExtension, Result, Statement};
+use rusqlite::{params, types::Value, Connection, OptionalExtension, Result, Row, Statement};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::addresses;
 
 const BIND_BATCH_SIZE: usize = 500;
+
+fn sql_placeholders(count: usize) -> String {
+    vec!["?"; count].join(",")
+}
+
+struct ChunkedAccountQuery<'a> {
+    connection: &'a Connection,
+    account_id: &'a str,
+}
+
+impl<'a> ChunkedAccountQuery<'a> {
+    fn new(connection: &'a Connection, account_id: &'a str) -> Self {
+        Self {
+            connection: connection,
+            account_id: account_id,
+        }
+    }
+
+    fn query<Item>(
+        &self,
+        ids: &[&str],
+        sql_for_placeholders: impl Fn(&str) -> String,
+        map_row: impl FnMut(&Row<'_>) -> Result<Item>,
+    ) -> Result<Vec<Item>> {
+        self.query_with_tail(ids, &[], sql_for_placeholders, map_row)
+    }
+
+    fn query_with_tail<Item>(
+        &self,
+        ids: &[&str],
+        tail: &[&str],
+        sql_for_placeholders: impl Fn(&str) -> String,
+        mut map_row: impl FnMut(&Row<'_>) -> Result<Item>,
+    ) -> Result<Vec<Item>> {
+        let mut results = Vec::new();
+        for chunk in ids.chunks(BIND_BATCH_SIZE) {
+            let placeholders = sql_placeholders(chunk.len());
+            let sql = sql_for_placeholders(&placeholders);
+            let mut statement = self.connection.prepare(&sql)?;
+            let parameters = std::iter::once(self.account_id)
+                .chain(chunk.iter().copied())
+                .chain(tail.iter().copied());
+            for row in statement.query_map(rusqlite::params_from_iter(parameters), &mut map_row)? {
+                results.push(row?);
+            }
+        }
+        Ok(results)
+    }
+}
 
 const INSERT_MESSAGE_LABEL: &str =
     "INSERT OR IGNORE INTO message_labels (account_id,message_id,label_id) VALUES (?1,?2,?3)";
@@ -556,22 +605,23 @@ impl MessageRepository {
             .iter()
             .map(|thread_id| (thread_id.clone(), Vec::new()))
             .collect();
-        for chunk in thread_ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence
-                 FROM messages WHERE account_id=? AND thread_id IN ({placeholders})
-                 ORDER BY thread_id,sent_at,id"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
-            for result in statement.query_map(rusqlite::params_from_iter(parameters), message)? {
-                let message = result?;
-                messages
-                    .entry(message.thread_id.clone())
-                    .or_default()
-                    .push(message);
-            }
+        let ids: Vec<&str> = thread_ids.iter().map(String::as_str).collect();
+        let rows = ChunkedAccountQuery::new(connection, account_id).query(
+            &ids,
+            |placeholders| {
+                format!(
+                    "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence
+                     FROM messages WHERE account_id=? AND thread_id IN ({placeholders})
+                     ORDER BY thread_id,sent_at,id"
+                )
+            },
+            message,
+        )?;
+        for entry in rows {
+            messages
+                .entry(entry.thread_id.clone())
+                .or_default()
+                .push(entry);
         }
         Ok(messages)
     }
@@ -580,47 +630,44 @@ impl MessageRepository {
         account_id: &str,
         ids: &[String],
     ) -> Result<HashMap<String, Message>> {
-        let mut messages = HashMap::new();
-        for chunk in ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence
-                 FROM messages WHERE account_id=? AND id IN ({placeholders})"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
-            for result in statement.query_map(rusqlite::params_from_iter(parameters), message)? {
-                let message = result?;
-                messages.insert(message.id.clone(), message);
-            }
-        }
-        Ok(messages)
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let rows = ChunkedAccountQuery::new(connection, account_id).query(
+            &id_refs,
+            |placeholders| {
+                format!(
+                    "SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence
+                     FROM messages WHERE account_id=? AND id IN ({placeholders})"
+                )
+            },
+            message,
+        )?;
+        Ok(rows
+            .into_iter()
+            .map(|entry| (entry.id.clone(), entry))
+            .collect())
     }
     pub fn draft_message_ids_by_thread(
         connection: &Connection,
         account_id: &str,
         thread_ids: &[String],
     ) -> Result<HashMap<String, Vec<String>>> {
+        let ids: Vec<&str> = thread_ids.iter().map(String::as_str).collect();
+        let rows = ChunkedAccountQuery::new(connection, account_id).query(
+            &ids,
+            |placeholders| {
+                format!(
+                    "SELECT m.thread_id,m.id
+                     FROM messages m CROSS JOIN message_labels ml
+                     WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                       AND ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'
+                     ORDER BY m.thread_id,m.sent_at,m.id"
+                )
+            },
+            string_pair_row,
+        )?;
         let mut drafts: HashMap<String, Vec<String>> = HashMap::new();
-        for chunk in thread_ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT m.thread_id,m.id
-                 FROM messages m CROSS JOIN message_labels ml
-                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
-                   AND ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'
-                 ORDER BY m.thread_id,m.sent_at,m.id"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
-            let rows = statement
-                .query_map(rusqlite::params_from_iter(parameters), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?;
-            for (thread_id, message_id) in rows {
-                drafts.entry(thread_id).or_default().push(message_id);
-            }
+        for (thread_id, message_id) in rows {
+            drafts.entry(thread_id).or_default().push(message_id);
         }
         Ok(drafts)
     }
@@ -629,25 +676,22 @@ impl MessageRepository {
         account_id: &str,
         thread_ids: &[String],
     ) -> Result<HashMap<String, HashSet<String>>> {
+        let ids: Vec<&str> = thread_ids.iter().map(String::as_str).collect();
+        let rows = ChunkedAccountQuery::new(connection, account_id).query(
+            &ids,
+            |placeholders| {
+                format!(
+                    "SELECT DISTINCT m.thread_id,ml.label_id
+                     FROM messages m CROSS JOIN message_labels ml
+                     WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                       AND ml.account_id=m.account_id AND ml.message_id=m.id"
+                )
+            },
+            string_pair_row,
+        )?;
         let mut membership: HashMap<String, HashSet<String>> = HashMap::new();
-        for chunk in thread_ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT DISTINCT m.thread_id,ml.label_id
-                 FROM messages m CROSS JOIN message_labels ml
-                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
-                   AND ml.account_id=m.account_id AND ml.message_id=m.id"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
-            let rows = statement
-                .query_map(rusqlite::params_from_iter(parameters), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?;
-            for (thread_id, label_id) in rows {
-                membership.entry(thread_id).or_default().insert(label_id);
-            }
+        for (thread_id, label_id) in rows {
+            membership.entry(thread_id).or_default().insert(label_id);
         }
         Ok(membership)
     }
@@ -657,23 +701,20 @@ impl MessageRepository {
         account_id: &str,
         message_ids: &[String],
     ) -> Result<HashMap<String, HashSet<String>>> {
+        let ids: Vec<&str> = message_ids.iter().map(String::as_str).collect();
+        let rows = ChunkedAccountQuery::new(connection, account_id).query(
+            &ids,
+            |placeholders| {
+                format!(
+                    "SELECT message_id,label_id FROM message_labels
+                     WHERE account_id=? AND message_id IN ({placeholders})"
+                )
+            },
+            string_pair_row,
+        )?;
         let mut membership: HashMap<String, HashSet<String>> = HashMap::new();
-        for chunk in message_ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT message_id,label_id FROM message_labels
-                 WHERE account_id=? AND message_id IN ({placeholders})"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
-            let rows = statement
-                .query_map(rusqlite::params_from_iter(parameters), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?;
-            for (message_id, label_id) in rows {
-                membership.entry(message_id).or_default().insert(label_id);
-            }
+        for (message_id, label_id) in rows {
+            membership.entry(message_id).or_default().insert(label_id);
         }
         Ok(membership)
     }
@@ -808,19 +849,17 @@ impl MessageRepository {
             .into_iter()
             .filter(|id| seen.insert(id.clone()))
             .collect();
-        let mut existing = HashSet::new();
-        for chunk in ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql =
-                format!("SELECT id FROM messages WHERE account_id=? AND id IN ({placeholders})");
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().map(String::as_str));
-            existing.extend(
-                statement
-                    .query_map(rusqlite::params_from_iter(parameters), |row| row.get(0))?
-                    .collect::<Result<Vec<String>>>()?,
-            );
-        }
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let existing: HashSet<String> = ChunkedAccountQuery::new(connection, account_id)
+            .query(
+                &id_refs,
+                |placeholders| {
+                    format!("SELECT id FROM messages WHERE account_id=? AND id IN ({placeholders})")
+                },
+                |row| row.get(0),
+            )?
+            .into_iter()
+            .collect();
         Ok(ids
             .into_iter()
             .filter(|id| !existing.contains(id))
@@ -1306,28 +1345,24 @@ impl ThreadRepository {
             .map(|thread_id| (thread_id.clone(), Vec::new()))
             .collect();
         let ids: Vec<&str> = thread_ids.iter().map(String::as_str).collect();
-        for chunk in ids.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT m.thread_id,m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
-                        EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'),
-                        m.to_recipients,
-                        EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='SENT')
-                 FROM messages m WHERE m.account_id=? AND m.thread_id IN ({placeholders})
-                 ORDER BY m.thread_id,m.sent_at,m.id"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters = std::iter::once(account_id).chain(chunk.iter().copied());
-            let results = statement
-                .query_map(rusqlite::params_from_iter(parameters), |row| {
-                    Ok((row.get::<_, String>(0)?, thread_message_row_offset(row, 1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?;
-            for (thread_id, row) in results {
-                rows.get_mut(&thread_id)
-                    .expect("summary query only returns requested threads")
-                    .push(row);
-            }
+        let results = ChunkedAccountQuery::new(connection, account_id).query(
+            &ids,
+            |placeholders| {
+                format!(
+                    "SELECT m.thread_id,m.sender,m.subject,m.sent_at,m.has_attachments,m.is_unread,m.is_starred,
+                            EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='DRAFT'),
+                            m.to_recipients,
+                            EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id='SENT')
+                     FROM messages m WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                     ORDER BY m.thread_id,m.sent_at,m.id"
+                )
+            },
+            |row| Ok((row.get::<_, String>(0)?, thread_message_row_offset(row, 1)?)),
+        )?;
+        for (thread_id, row) in results {
+            rows.get_mut(&thread_id)
+                .expect("summary query only returns requested threads")
+                .push(row);
         }
         for (thread_id, rows) in rows {
             Self::write_summary(connection, account_id, &thread_id, &rows)?;
@@ -1493,6 +1528,10 @@ impl ThreadRepository {
     }
 }
 
+fn string_pair_row(row: &Row<'_>) -> Result<(String, String)> {
+    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+}
+
 fn enrich_thread_rows(
     connection: &Connection,
     account_id: &str,
@@ -1508,59 +1547,48 @@ fn enrich_thread_rows(
         .enumerate()
         .map(|(index, row)| (row.thread.id.clone(), index))
         .collect();
+    let thread_ids: Vec<String> = rows.iter().map(|row| row.thread.id.clone()).collect();
+    let id_refs: Vec<&str> = thread_ids.iter().map(String::as_str).collect();
+    let chunked = ChunkedAccountQuery::new(connection, account_id);
+
     if !includes_trashed_and_spammed {
-        let mut counts = HashMap::new();
-        for chunk in rows.chunks(BIND_BATCH_SIZE) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT m.thread_id,COUNT(*)
-                 FROM messages m
-                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
-                   AND NOT EXISTS (
-                     SELECT 1 FROM message_labels ml
-                     WHERE ml.account_id=m.account_id AND ml.message_id=m.id
-                       AND ml.label_id IN ('TRASH','SPAM')
-                   )
-                 GROUP BY m.thread_id"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let parameters =
-                std::iter::once(account_id).chain(chunk.iter().map(|row| row.thread.id.as_str()));
-            counts.extend(
-                statement
-                    .query_map(rusqlite::params_from_iter(parameters), |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                    })?
-                    .collect::<Result<HashMap<_, _>>>()?,
-            );
-        }
+        let count_rows = chunked.query(
+            &id_refs,
+            |placeholders| {
+                format!(
+                    "SELECT m.thread_id,COUNT(*)
+                     FROM messages m
+                     WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                       AND NOT EXISTS (
+                         SELECT 1 FROM message_labels ml
+                         WHERE ml.account_id=m.account_id AND ml.message_id=m.id
+                           AND ml.label_id IN ('TRASH','SPAM')
+                       )
+                     GROUP BY m.thread_id"
+                )
+            },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let counts: HashMap<String, i64> = count_rows.into_iter().collect();
         for row in &mut rows {
             row.thread.message_count = counts.get(&row.thread.id).copied().unwrap_or_default();
         }
     }
-    let mut all_labels = Vec::new();
-    for chunk in rows.chunks(BIND_BATCH_SIZE) {
-        let placeholders = vec!["?"; chunk.len()].join(",");
-        let sql = format!(
-            "SELECT m.thread_id,l.name
-             FROM messages m
-             CROSS JOIN message_labels ml
-             CROSS JOIN labels l
-             WHERE m.account_id=? AND m.thread_id IN ({placeholders})
-               AND ml.account_id=m.account_id AND ml.message_id=m.id
-               AND l.account_id=ml.account_id AND l.id=ml.label_id AND l.kind='user'"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let parameters =
-            std::iter::once(account_id).chain(chunk.iter().map(|row| row.thread.id.as_str()));
-        all_labels.extend(
-            statement
-                .query_map(rusqlite::params_from_iter(parameters), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?,
-        );
-    }
+    let all_labels = chunked.query(
+        &id_refs,
+        |placeholders| {
+            format!(
+                "SELECT m.thread_id,l.name
+                 FROM messages m
+                 CROSS JOIN message_labels ml
+                 CROSS JOIN labels l
+                 WHERE m.account_id=? AND m.thread_id IN ({placeholders})
+                   AND ml.account_id=m.account_id AND ml.message_id=m.id
+                   AND l.account_id=ml.account_id AND l.id=ml.label_id AND l.kind='user'"
+            )
+        },
+        string_pair_row,
+    )?;
     let mut seen = HashSet::new();
     for (thread_id, label) in all_labels {
         if seen.insert((thread_id.clone(), label.clone())) {
@@ -1574,28 +1602,20 @@ fn enrich_thread_rows(
         row.label_indicators.sort();
     }
 
-    let mut all_system_labels = Vec::new();
-    for chunk in rows.chunks(BIND_BATCH_SIZE) {
-        let placeholders = vec!["?"; chunk.len()].join(",");
-        let system_placeholders = vec!["?"; SYSTEM_FOLDER_LABEL_IDS.len()].join(",");
-        let sql = format!(
-            "SELECT tl.thread_id,tl.label_id
-             FROM thread_labels tl
-             WHERE tl.account_id=? AND tl.thread_id IN ({placeholders})
-               AND tl.label_id IN ({system_placeholders})"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let parameters = std::iter::once(account_id)
-            .chain(chunk.iter().map(|row| row.thread.id.as_str()))
-            .chain(SYSTEM_FOLDER_LABEL_IDS.iter().copied());
-        all_system_labels.extend(
-            statement
-                .query_map(rusqlite::params_from_iter(parameters), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?,
-        );
-    }
+    let system_placeholders = sql_placeholders(SYSTEM_FOLDER_LABEL_IDS.len());
+    let all_system_labels = chunked.query_with_tail(
+        &id_refs,
+        &SYSTEM_FOLDER_LABEL_IDS,
+        |placeholders| {
+            format!(
+                "SELECT tl.thread_id,tl.label_id
+                 FROM thread_labels tl
+                 WHERE tl.account_id=? AND tl.thread_id IN ({placeholders})
+                   AND tl.label_id IN ({system_placeholders})"
+            )
+        },
+        string_pair_row,
+    )?;
     for (thread_id, label_id) in all_system_labels {
         let index = positions
             .get(&thread_id)

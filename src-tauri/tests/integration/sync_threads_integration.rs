@@ -10,27 +10,13 @@ use latentmail_lib::sync::commands::{
     fetch_message_body, list_labels, list_threads, load_conversation, load_message_body,
     read_sync_status, trigger_sync,
 };
-use latentmail_lib::sync::{
-    noop_event_sink, HtmlPresenceDto, SyncEngine, SyncState, ThreadCursor, ThreadPageDirection,
-    WorkRegistry,
-};
+use latentmail_lib::sync::{HtmlPresenceDto, SyncState, ThreadCursor, ThreadPageDirection};
+use crate::support::{app, sync_engine as engine};
 use tauri::{Listener, Manager};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
-
-fn engine(storage: &Storage) -> Arc<SyncEngine> {
-    let registry = WorkRegistry::new();
-    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    SyncEngine::new(storage.clone(), queue, registry, noop_event_sink())
-}
 
 fn seed_account(connection: &rusqlite::Connection) {
     AccountRepository::upsert(

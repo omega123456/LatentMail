@@ -1,36 +1,18 @@
 use latentmail_lib::storage::{
-    Account, AccountRepository, ConversationEntryScope, HtmlPresence, LabelRepository, Message,
+    AccountRepository, ConversationEntryScope, HtmlPresence, LabelRepository, Message,
     MessageRepository, Storage, Thread, ThreadIdentity, ThreadRepository,
 };
 use latentmail_lib::sync::commands::load_message_body;
 use latentmail_lib::sync::ImagePolicy;
+use crate::support::{account, app};
 use tauri::Manager;
 
 const REMOTE_IMAGE: &str = r#"<img src="https://tracker.example/pixel.png">"#;
 
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
-
 fn seeded_storage(directory: &std::path::Path) -> Storage {
     let storage = Storage::open(directory.join("mail.sqlite")).unwrap();
     let connection = storage.connection().unwrap();
-    AccountRepository::upsert(
-        &connection,
-        &Account {
-            id: "account".into(),
-            email: "me@example.com".into(),
-            display_name: "Me".into(),
-            history_id: None,
-            avatar_url: None,
-            needs_reauthentication: false,
-            created_at: 1,
-            updated_at: 1,
-        },
-    )
-    .unwrap();
+    AccountRepository::upsert(&connection, &account("account", "me@example.com", "Me")).unwrap();
     ThreadRepository::upsert(
         &connection,
         &Thread {

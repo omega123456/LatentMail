@@ -18,12 +18,82 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 #[derive(Clone)]
+struct AccountSet {
+    entries: Arc<Mutex<HashSet<String>>>,
+    label: &'static str,
+}
+
+impl AccountSet {
+    fn new(label: &'static str) -> Self {
+        Self {
+            entries: Arc::default(),
+            label: label,
+        }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashSet<String>>, String> {
+        self.entries
+            .lock()
+            .map_err(|_| format!("{} lock poisoned", self.label))
+    }
+
+    fn insert(&self, account_id: &str) -> Result<(), String> {
+        self.lock()?.insert(account_id.to_owned());
+        Ok(())
+    }
+
+    fn remove(&self, account_id: &str) -> Result<(), String> {
+        self.lock()?.remove(account_id);
+        Ok(())
+    }
+
+    fn contains(&self, account_id: &str) -> Result<bool, String> {
+        Ok(self.lock()?.contains(account_id))
+    }
+}
+
+#[derive(Clone)]
+struct AccountMap<Value> {
+    entries: Arc<Mutex<HashMap<String, Value>>>,
+    label: &'static str,
+}
+
+impl<Value: Clone> AccountMap<Value> {
+    fn new(label: &'static str) -> Self {
+        Self {
+            entries: Arc::default(),
+            label: label,
+        }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, Value>>, String> {
+        self.entries
+            .lock()
+            .map_err(|_| format!("{} lock poisoned", self.label))
+    }
+
+    fn get(&self, account_id: &str) -> Result<Option<Value>, String> {
+        Ok(self.lock()?.get(account_id).cloned())
+    }
+
+    fn insert(&self, account_id: &str, value: Value) -> Result<(), String> {
+        self.lock()?.insert(account_id.to_owned(), value);
+        Ok(())
+    }
+
+    fn remove(&self, account_id: &str) -> Result<(), String> {
+        self.lock()?.remove(account_id);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 pub struct AiService {
     storage: Storage,
-    removing: Arc<Mutex<HashSet<String>>>,
-    reconfiguring: Arc<Mutex<HashSet<String>>>,
-    index_errors: Arc<Mutex<HashMap<String, String>>>,
-    index_states: Arc<Mutex<HashMap<String, IndexState>>>,
+    removing: AccountSet,
+    reconfiguring: AccountSet,
+    index_errors: AccountMap<String>,
+    index_states: AccountMap<IndexState>,
     chat: chat::ChatRegistry,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -58,10 +128,10 @@ impl AiService {
     pub fn new(storage: Storage) -> Self {
         Self {
             storage: storage,
-            removing: Arc::default(),
-            reconfiguring: Arc::default(),
-            index_errors: Arc::default(),
-            index_states: Arc::default(),
+            removing: AccountSet::new("AI removal"),
+            reconfiguring: AccountSet::new("AI reconfiguration"),
+            index_errors: AccountMap::new("AI index error"),
+            index_states: AccountMap::new("AI index state"),
             chat: chat::ChatRegistry::default(),
         }
     }
@@ -240,84 +310,38 @@ impl AiService {
         self.storage.clone()
     }
     pub fn begin_removal(&self, account_id: &str) -> Result<(), String> {
-        self.removing
-            .lock()
-            .map_err(|_| "AI removal lock poisoned".to_owned())?
-            .insert(account_id.to_owned());
-        Ok(())
+        self.removing.insert(account_id)
     }
     pub fn is_removing(&self, account_id: &str) -> Result<bool, String> {
-        Ok(self
-            .removing
-            .lock()
-            .map_err(|_| "AI removal lock poisoned".to_owned())?
-            .contains(account_id))
+        self.removing.contains(account_id)
     }
     pub fn begin_reconfiguration(&self, account_id: &str) -> Result<(), String> {
-        self.reconfiguring
-            .lock()
-            .map_err(|_| "AI reconfiguration lock poisoned".to_owned())?
-            .insert(account_id.to_owned());
-        Ok(())
+        self.reconfiguring.insert(account_id)
     }
     pub fn finish_reconfiguration(&self, account_id: &str) -> Result<(), String> {
-        self.reconfiguring
-            .lock()
-            .map_err(|_| "AI reconfiguration lock poisoned".to_owned())?
-            .remove(account_id);
-        Ok(())
+        self.reconfiguring.remove(account_id)
     }
     pub fn is_reconfiguring(&self, account_id: &str) -> Result<bool, String> {
-        Ok(self
-            .reconfiguring
-            .lock()
-            .map_err(|_| "AI reconfiguration lock poisoned".to_owned())?
-            .contains(account_id))
+        self.reconfiguring.contains(account_id)
     }
     pub fn index_error(&self, account_id: &str) -> Result<Option<String>, String> {
-        Ok(self
-            .index_errors
-            .lock()
-            .map_err(|_| "AI index error lock poisoned".to_owned())?
-            .get(account_id)
-            .cloned())
+        self.index_errors.get(account_id)
     }
     pub fn set_index_error(&self, account_id: &str, error: String) -> Result<(), String> {
-        self.index_errors
-            .lock()
-            .map_err(|_| "AI index error lock poisoned".to_owned())?
-            .insert(account_id.to_owned(), error);
-        self.set_index_state(account_id, IndexState::Interrupted)?;
-        Ok(())
+        self.index_errors.insert(account_id, error)?;
+        self.set_index_state(account_id, IndexState::Interrupted)
     }
     pub fn clear_index_error(&self, account_id: &str) -> Result<(), String> {
-        self.index_errors
-            .lock()
-            .map_err(|_| "AI index error lock poisoned")?
-            .remove(account_id);
-        Ok(())
+        self.index_errors.remove(account_id)
     }
     pub fn index_state(&self, account_id: &str) -> Result<Option<IndexState>, String> {
-        Ok(self
-            .index_states
-            .lock()
-            .map_err(|_| "AI index state lock poisoned".to_owned())?
-            .get(account_id)
-            .copied())
+        self.index_states.get(account_id)
     }
     pub fn set_index_state(&self, account_id: &str, state: IndexState) -> Result<(), String> {
-        self.index_states
-            .lock()
-            .map_err(|_| "AI index state lock poisoned".to_owned())?
-            .insert(account_id.to_owned(), state);
-        Ok(())
+        self.index_states.insert(account_id, state)
     }
     pub fn clear_index_state(&self, account_id: &str) -> Result<(), String> {
-        self.index_states
-            .lock()
-            .map_err(|_| "AI index state lock poisoned".to_owned())?
-            .remove(account_id);
-        Ok(())
+        self.index_states.remove(account_id)
     }
     pub async fn index_ready(&self, account_id: &str) -> Result<bool, String> {
         if self.is_removing(account_id)? || self.is_reconfiguring(account_id)? {

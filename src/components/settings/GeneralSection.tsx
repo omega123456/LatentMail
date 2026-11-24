@@ -1,4 +1,3 @@
-import { Switch } from 'radix-ui';
 import { minutesToSeconds, secondsToMinutes } from 'date-fns';
 import { useLayoutStore } from '@/stores/layout';
 import { useThemeStore } from '@/stores/theme';
@@ -11,6 +10,10 @@ import { settingsTriggerClass } from './styles';
 import { SettingsSection } from './SettingsSection';
 import { TrustedSendersList } from './TrustedSendersList';
 import { isWindows } from '@/lib/os/platform';
+import { formatCount } from '@/lib/format/strings';
+import { SettingsDivider, SettingSwitch, SubsectionHeading } from './primitives';
+
+export { SettingSwitch, SubsectionHeading };
 
 const themeOptions: { value: ThemePreference; label: string }[] = [
   { value: 'light', label: 'Light' },
@@ -33,38 +36,6 @@ const densityOptions: { value: Density; label: string }[] = [
   { value: 'comfortable', label: 'Comfortable' },
   { value: 'spacious', label: 'Spacious' },
 ];
-
-export function SettingSwitch({
-  checked,
-  onChange,
-  label,
-  disabled = false,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  label: string;
-  disabled?: boolean;
-}) {
-  return (
-    <Switch.Root
-      checked={checked}
-      onCheckedChange={onChange}
-      aria-label={label}
-      disabled={disabled}
-      className="relative h-5.5 w-9.5 shrink-0 cursor-pointer rounded-full bg-settings-outline-variant transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary data-[state=checked]:bg-settings-primary dark:bg-dark-settings-outline-variant dark:data-[state=checked]:bg-dark-settings-primary"
-    >
-      <Switch.Thumb className="absolute left-0.75 top-0.75 block size-4 rounded-full bg-white transition-transform data-[state=checked]:translate-x-4" />
-    </Switch.Root>
-  );
-}
-
-export function SubsectionHeading({ children }: { children: string }) {
-  return (
-    <h3 className="mb-1.5 text-label-md uppercase text-settings-ink-mute dark:text-dark-settings-ink-mute">
-      {children}
-    </h3>
-  );
-}
 
 export function GeneralSection() {
   const theme = useThemeStore((themeState) => themeState.theme);
@@ -172,10 +143,7 @@ export function GeneralSection() {
           />
         </SettingRow>
       </div>
-      <div
-        aria-hidden="true"
-        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
-      />
+      <SettingsDivider />
       <div className="flex flex-col">
         <SubsectionHeading>Remote images</SubsectionHeading>
         <SettingRow
@@ -188,16 +156,10 @@ export function GeneralSection() {
             label="Always load remote images"
           />
         </SettingRow>
-        <div
-          aria-hidden="true"
-          className="mb-4.5 mt-1.5 h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
-        />
+        <SettingsDivider className="mb-4.5 mt-1.5" />
         <TrustedSendersList />
       </div>
-      <div
-        aria-hidden="true"
-        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
-      />
+      <SettingsDivider />
       <div className="flex flex-col">
         <SubsectionHeading>Attachments</SubsectionHeading>
         <SettingRow
@@ -211,10 +173,7 @@ export function GeneralSection() {
           />
         </SettingRow>
       </div>
-      <div
-        aria-hidden="true"
-        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
-      />
+      <SettingsDivider />
       <div className="flex flex-col">
         <SubsectionHeading>Synchronisation</SubsectionHeading>
         <SettingRow
@@ -237,16 +196,13 @@ export function GeneralSection() {
             onChange={(next) => setSyncIntervalSeconds(minutesToSeconds(Number(next)))}
             options={intervalOptionsMinutes.map((minutes) => ({
               value: String(minutes),
-              label: `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`,
+              label: formatCount(minutes, 'minute'),
             }))}
             className={settingsTriggerClass}
           />
         </SettingRow>
       </div>
-      <div
-        aria-hidden="true"
-        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
-      />
+      <SettingsDivider />
       <div className="flex flex-col">
         <SubsectionHeading>System</SubsectionHeading>
         {isWindows() && (

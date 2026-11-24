@@ -109,7 +109,27 @@ pub struct QueueOperation {
     pub description: String,
 }
 
+pub struct QueueRoute {
+    pub lane: Lane,
+    pub kind: OperationKind,
+    pub entity_key: String,
+    pub description: String,
+}
+
 impl QueueOperation {
+    pub fn new(id: String, account_id: String, route: QueueRoute) -> Self {
+        Self {
+            id: id,
+            account_id: account_id,
+            lane: route.lane,
+            kind: route.kind,
+            entity_key: route.entity_key,
+            cost: 0,
+            attempts: 0,
+            description: route.description,
+        }
+    }
+
     pub fn will_retry(&self, error: QueueError) -> bool {
         self.kind.retries() && error.retryable() && self.attempts + 1 < MAX_ATTEMPTS
     }
@@ -124,7 +144,11 @@ pub enum QueueError {
 
 impl QueueError {
     fn retryable(self) -> bool {
-        matches!(self, Self::Network | Self::Http(429 | 500..=599))
+        match self {
+            Self::Network => true,
+            Self::Http(status) => crate::is_retryable_status(status),
+            Self::Permanent => false,
+        }
     }
 }
 

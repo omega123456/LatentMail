@@ -40,7 +40,7 @@ import { ResizeHandle } from './ResizeHandle';
 import { MessageSourceDialog } from '@/components/reader/MessageSourceDialog';
 import { ReadingPaneContainer } from '@/components/reader/ReadingPane';
 import { StatusBar } from '@/components/statusbar/StatusBar';
-import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
+import { openComposeAction, openNewMessage, type ComposeAction } from '@/lib/compose/entry';
 import { useCommands } from '@/lib/keyboard/useCommands';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useComposeStore } from '@/stores/compose';
@@ -167,23 +167,16 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   }, [activeAccount]);
   const composeOpen = useComposeStore((composeState) => composeState.session !== null);
   const composeTarget = useCallback(
-    (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => {
+    (action: ComposeAction) => {
       if (!activeAccount || keyboardMultiSelect || !keyboardConversation.data) return;
-      const message = mapConversation(keyboardConversation.data).messages.at(-1);
-      if (!message) return;
-      if (action === 'reply')
-        void openReply('reply', activeAccount.id, activeAccount.email, message);
-      else if (action === 'reply-all')
-        void openReply('reply-all', activeAccount.id, activeAccount.email, message);
-      else if (action === 'forward')
-        void openForward(activeAccount.id, activeAccount.email, message);
-      else if (message.isDraft)
-        void openEditDraft(
-          activeAccount.id,
-          activeAccount.email,
-          keyboardConversation.data.subject,
-          message,
-        );
+      void openComposeAction({
+        action: action,
+        accountId: activeAccount.id,
+        accountEmail: activeAccount.email,
+        subject: keyboardConversation.data.subject,
+        message: mapConversation(keyboardConversation.data).messages.at(-1),
+        requireDraftFlag: true,
+      });
     },
     [activeAccount, keyboardConversation.data, keyboardMultiSelect],
   );

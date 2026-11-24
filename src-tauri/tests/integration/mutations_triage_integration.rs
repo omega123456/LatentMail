@@ -77,11 +77,7 @@ fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
     )
 }
 
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
+use crate::support::app;
 
 #[tokio::test(start_paused = true)]
 async fn triage_label_deltas_cover_thread_and_bulk_actions() {

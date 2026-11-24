@@ -5,6 +5,29 @@ import type { Participant } from '@/lib/format/participants';
 import type { ReaderMessage } from '@/components/reader/MessageCard';
 import type { ReplyContextAttachment } from '@/lib/types/ipc';
 import { useComposeStore, type ComposeMode, type OpenComposeArgs } from '@/stores/compose';
+import { errorMessageOr } from '@/lib/format/strings';
+
+export type ComposeAction = 'reply' | 'reply-all' | 'forward' | 'edit-draft';
+
+export type ComposeActionRequest = {
+  action: ComposeAction;
+  accountId: string;
+  accountEmail: string;
+  subject: string;
+  message: ReaderMessage | undefined;
+  requireDraftFlag?: boolean;
+};
+
+export function openComposeAction(request: ComposeActionRequest): Promise<void> {
+  const { action, accountId, accountEmail, subject, message, requireDraftFlag } = request;
+  if (!message) return Promise.resolve();
+  if (action === 'reply' || action === 'reply-all') {
+    return openReply(action, accountId, accountEmail, message);
+  }
+  if (action === 'forward') return openForward(accountId, accountEmail, message);
+  if (requireDraftFlag && !message.isDraft) return Promise.resolve();
+  return openEditDraft(accountId, accountEmail, subject, message);
+}
 
 function formatRaw(participant: Participant): string {
   return participant.name ? `${participant.name} <${participant.address}>` : participant.address;
@@ -82,9 +105,7 @@ async function stageForwardAttachment(
       size: staged.size,
     });
   } catch (error) {
-    useComposeStore
-      .getState()
-      .failAttachment(localId, error instanceof Error ? error.message : "Couldn't read");
+    useComposeStore.getState().failAttachment(localId, errorMessageOr(error, "Couldn't read"));
   }
 }
 

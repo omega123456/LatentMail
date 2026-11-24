@@ -4,20 +4,11 @@ use std::{
     time::Duration,
 };
 
-macro_rules! string_try {
-    ($result:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(error) => return Err(error.to_string()),
-        }
-    };
-}
-
 use tokio::sync::oneshot;
 
 use crate::{
     gmail::GmailClient,
-    queue::{Lane, OperationKind, QueueError, QueueOperation},
+    queue::{Lane, OperationKind, QueueError, QueueOperation, QueueRoute},
     storage::{Message, MessageRepository, Storage, ThreadRepository},
 };
 
@@ -288,16 +279,16 @@ impl SyncEngine {
             Box::new(move || Box::pin(execute_flush(storage, client, account_owned, surviving))),
         );
         self.queue
-            .enqueue(QueueOperation {
-                id: operation_id,
-                account_id: account_id.to_owned(),
-                lane: Lane::Interactive,
-                kind: kind,
-                entity_key: format!("mutation-batch:{account_id}"),
-                cost: 0,
-                attempts: 0,
-                description: mutation_description(kind),
-            })
+            .enqueue(QueueOperation::new(
+                operation_id,
+                account_id.to_owned(),
+                QueueRoute {
+                    lane: Lane::Interactive,
+                    kind: kind,
+                    entity_key: format!("mutation-batch:{account_id}"),
+                    description: mutation_description(kind),
+                },
+            ))
             .await
             .map_err(|_| SyncError::QueueStopped)?;
         reply_receiver.await.map_err(|_| SyncError::QueueStopped)?

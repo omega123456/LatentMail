@@ -348,11 +348,7 @@ fn message_level_delete_and_move_follow_the_messages_own_membership() {
     assert_eq!(m2_remove, HashSet::from(["SPAM".to_owned()]));
 }
 
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
+use crate::support::app;
 
 fn seeded_intent_engine(account_id: &str) -> (Arc<SyncEngine>, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();

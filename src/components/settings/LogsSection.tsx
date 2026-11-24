@@ -1,18 +1,15 @@
 import { useMemo, useState } from 'react';
 import { differenceInCalendarDays, format, isToday, isYesterday } from 'date-fns';
-import {
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-  RefreshCw,
-  Search,
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RefreshCw } from 'lucide-react';
 import { Select } from '@/components/shared/Select';
-import { TextInput } from '@/components/shared/TextInput';
 import { SettingRow } from '@/components/settings/SettingRow';
 import { SettingsSection } from '@/components/settings/SettingsSection';
 import { settingsQuietButton, settingsTriggerClass } from '@/components/settings/styles';
+import {
+  HighlightedText,
+  SettingsSearchInput,
+  SettingsStateText,
+} from '@/components/settings/primitives';
 import { QueueStateChip } from '@/components/queue/QueueStateChip';
 import { useLogEntriesQuery } from '@/lib/query/hooks';
 import type { LogEntry } from '@/lib/query/mappers';
@@ -82,21 +79,6 @@ function timeLabel(date: Date) {
 
 function entryLine(entry: LogEntry) {
   return `${timeLabel(entry.timestamp)} ${entry.level.toUpperCase()} ${entry.message}`;
-}
-
-function Highlighted({ text, needle }: { text: string; needle: string }) {
-  if (!needle) return <>{text}</>;
-  const index = text.toLowerCase().indexOf(needle);
-  if (index < 0) return <>{text}</>;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark className="rounded-sm bg-settings-primary-container px-px text-settings-on-primary-container dark:bg-dark-settings-primary-container dark:text-dark-settings-on-primary-container">
-        {text.slice(index, index + needle.length)}
-      </mark>
-      {text.slice(index + needle.length)}
-    </>
-  );
 }
 
 export function LogsSection() {
@@ -172,21 +154,16 @@ export function LogsSection() {
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-settings-card-line bg-settings-card dark:border-dark-settings-card-line dark:bg-dark-settings-card">
         <div className="flex flex-wrap items-center gap-2.5 border-b border-settings-card-line p-3.5 dark:border-dark-settings-card-line">
-          <label className="flex h-8.5 min-w-45 flex-1 items-center gap-1.75 rounded-control border border-transparent bg-settings-container-low px-2.5 text-settings-ink-mute focus-within:border-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute dark:focus-within:border-dark-settings-primary">
-            <Search aria-hidden="true" size={ICON_SIZE.sm} className="shrink-0" />
-            <TextInput
-              type="search"
-              value={search}
-              aria-label="Search log entries"
-              placeholder="Search"
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setRequestedPage(1);
-              }}
-              variant="bare"
-              className="w-full text-settings-desc text-settings-ink placeholder:text-settings-ink-mute dark:text-dark-settings-ink dark:placeholder:text-dark-settings-ink-mute"
-            />
-          </label>
+          <SettingsSearchInput
+            value={search}
+            ariaLabel="Search log entries"
+            placeholder="Search"
+            onChange={(next) => {
+              setSearch(next);
+              setRequestedPage(1);
+            }}
+            className="min-w-45 flex-1"
+          />
           <Select
             ariaLabel="Filter by level"
             value={levelFilter}
@@ -206,28 +183,17 @@ export function LogsSection() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {isLoading && (
-            <p className="px-4 py-8 text-center text-body-sm text-settings-ink-mute dark:text-dark-settings-ink-mute">
-              Loading log entries…
-            </p>
-          )}
+          {isLoading && <SettingsStateText>Loading log entries…</SettingsStateText>}
           {isError && (
-            <p
-              role="alert"
-              className="px-4 py-8 text-center text-body-sm text-settings-error dark:text-dark-settings-error"
-            >
+            <SettingsStateText tone="error" role="alert">
               Couldn&apos;t read the log files.
-            </p>
+            </SettingsStateText>
           )}
           {!isLoading && !isError && entries?.length === 0 && (
-            <p className="px-4 py-8 text-center text-body-sm text-settings-ink-mute dark:text-dark-settings-ink-mute">
-              No log entries found.
-            </p>
+            <SettingsStateText>No log entries found.</SettingsStateText>
           )}
           {!isLoading && !isError && entries && entries.length > 0 && visible.length === 0 && (
-            <p className="px-4 py-8 text-center text-body-sm text-settings-ink-mute dark:text-dark-settings-ink-mute">
-              No entries match your search.
-            </p>
+            <SettingsStateText>No entries match your search.</SettingsStateText>
           )}
           {pageEntries.map((entry, index) => {
             const previous = pageEntries[index - 1];
@@ -264,7 +230,7 @@ export function LogsSection() {
                     }`}
                   />
                   <span className="min-w-0 flex-1 break-words whitespace-pre-wrap font-mono text-body-sm text-settings-ink dark:text-dark-settings-ink">
-                    <Highlighted text={entry.message} needle={needle} />
+                    <HighlightedText text={entry.message} needle={needle} />
                   </span>
                 </button>
               </div>

@@ -1,12 +1,14 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, type QueryKey } from '@tanstack/react-query';
 import { invoke } from '@/lib/ipc/commands';
 import { dispatchConvertFileSrc, dispatchInvoke } from '@/lib/ipc/dispatch';
 import type {
   ImagePolicy,
   ConversationEntryScope,
+  IpcCommandMap,
   PauseScope,
   SearchScope,
+  ThreadCursor,
   ThreadPageParam,
 } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
@@ -20,6 +22,34 @@ import { minutesToMilliseconds } from 'date-fns';
 
 const LOCAL_FIRST_STALE_TIME = 15_000;
 const LOG_AUTO_REFRESH_INTERVAL_MS = 5_000;
+
+function useCommandMutation<Request = void, Result = unknown>(
+  mutationFn: (request: Request) => Promise<Result>,
+  errorMessage: string,
+  onSuccess?: (result: Result, request: Request) => void,
+) {
+  const showError = useToastStore((toaster) => toaster.showError);
+  return useMutation({
+    mutationFn: mutationFn,
+    onSuccess: onSuccess,
+    onError: () => showError(errorMessage),
+  });
+}
+
+type CursorPage = {
+  nextCursor?: ThreadCursor | null;
+  previousCursor?: ThreadCursor | null;
+};
+
+function nextThreadPageParam(lastPage: CursorPage): ThreadPageParam | undefined {
+  return lastPage.nextCursor ? { cursor: lastPage.nextCursor, direction: 'forward' } : undefined;
+}
+
+function previousThreadPageParam(firstPage: CursorPage): ThreadPageParam | undefined {
+  return firstPage.previousCursor
+    ? { cursor: firstPage.previousCursor, direction: 'backward' }
+    : undefined;
+}
 
 export function useAccountsQuery() {
   return useQuery({
@@ -102,13 +132,11 @@ export function useRebuildAiIndexMutation() {
 }
 
 export function useRemoveAccountMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (accountId: string) => invoke('remove_account', { accountId }),
-    onSuccess: (_result, accountId) =>
-      useSelectionStore.getState().clearStateForRemovedAccount(accountId),
-    onError: () => showError('Couldn’t remove that account.'),
-  });
+  return useCommandMutation(
+    (accountId: string) => invoke('remove_account', { accountId }),
+    'Couldn’t remove that account.',
+    (_result, accountId) => useSelectionStore.getState().clearStateForRemovedAccount(accountId),
+  );
 }
 
 export function useQueueOperationsQuery() {
@@ -120,46 +148,38 @@ export function useQueueOperationsQuery() {
 }
 
 export function useCancelQueueOperationMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (operationId: string) => invoke('cancel_queue_operation', { operationId }),
-    onError: () => showError('Couldn’t cancel that operation.'),
-  });
+  return useCommandMutation(
+    (operationId: string) => invoke('cancel_queue_operation', { operationId }),
+    'Couldn’t cancel that operation.',
+  );
 }
 
 export function useRetryQueueOperationMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (operationId: string) => invoke('retry_queue_operation', { operationId }),
-    onError: () => showError('Couldn’t retry that operation.'),
-  });
+  return useCommandMutation(
+    (operationId: string) => invoke('retry_queue_operation', { operationId }),
+    'Couldn’t retry that operation.',
+  );
 }
 
 export function useRetryFailedOperationsMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (accountId?: string) =>
-      invoke('retry_failed_operations', { accountId: accountId ?? null }),
-    onError: () => showError('Couldn’t retry the failed operations.'),
-  });
+  return useCommandMutation(
+    (accountId?: string) => invoke('retry_failed_operations', { accountId: accountId ?? null }),
+    'Couldn’t retry the failed operations.',
+  );
 }
 
 export function useClearQueueHistoryMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (accountId?: string) =>
-      invoke('clear_queue_history', { accountId: accountId ?? null }),
-    onError: () => showError('Couldn’t clear the queue history.'),
-  });
+  return useCommandMutation(
+    (accountId?: string) => invoke('clear_queue_history', { accountId: accountId ?? null }),
+    'Couldn’t clear the queue history.',
+  );
 }
 
 export function useSetQueuePausedMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (request: { scope: PauseScope; paused: boolean }) =>
-      invoke('set_queue_paused', request),
-    onError: () => showError('Couldn’t update the pause state.'),
-  });
+  return useCommandMutation(
+    (request: { scope: PauseScope; paused: boolean }) => invoke('set_queue_paused', request),
+    'Couldn’t update the pause state.',
+  );
 }
 
 export function useLogEntriesQuery() {
@@ -186,11 +206,10 @@ export function useAppUpdateQuery() {
 }
 
 export function useInstallUpdateMutation() {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: () => invoke('install_update', {}),
-    onError: () => showError('Couldn’t install the update.'),
-  });
+  return useCommandMutation<void>(
+    () => invoke('install_update', {}),
+    'Couldn’t install the update.',
+  );
 }
 
 export function useLabelsQuery(accountId: string | null) {
@@ -223,14 +242,8 @@ export function useThreadsQuery(accountId: string | null, mailboxId: string | nu
         limit: THREAD_PAGE_SIZE,
       }),
     initialPageParam: null as ThreadPageParam | null,
-    getNextPageParam: (lastPage) =>
-      lastPage.nextCursor
-        ? { cursor: lastPage.nextCursor, direction: 'forward' as const }
-        : undefined,
-    getPreviousPageParam: (firstPage) =>
-      firstPage.previousCursor
-        ? { cursor: firstPage.previousCursor, direction: 'backward' as const }
-        : undefined,
+    getNextPageParam: nextThreadPageParam,
+    getPreviousPageParam: previousThreadPageParam,
     maxPages: RETAINED_THREAD_PAGES,
     enabled: accountId !== null && mailboxId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
@@ -250,14 +263,8 @@ export function useSearchThreadsQuery(accountId: string | null, query: string, s
         limit: THREAD_PAGE_SIZE,
       }),
     initialPageParam: null as ThreadPageParam | null,
-    getNextPageParam: (lastPage) =>
-      lastPage.nextCursor
-        ? { cursor: lastPage.nextCursor, direction: 'forward' as const }
-        : undefined,
-    getPreviousPageParam: (firstPage) =>
-      firstPage.previousCursor
-        ? { cursor: firstPage.previousCursor, direction: 'backward' as const }
-        : undefined,
+    getNextPageParam: nextThreadPageParam,
+    getPreviousPageParam: previousThreadPageParam,
     maxPages: RETAINED_THREAD_PAGES,
     enabled: accountId !== null && query.trim().length > 0,
     staleTime: LOCAL_FIRST_STALE_TIME,
@@ -412,48 +419,50 @@ export function useTraversalStatusQuery(accountId: string | null) {
   });
 }
 
-export function useSenderAvatarQuery(domain: string | null) {
-  const showSenderAvatars = useLayoutStore((layout) => layout.showSenderAvatars);
+function useAvatarQuery<Command extends 'read_sender_avatar' | 'read_account_avatar'>(
+  queryKey: QueryKey,
+  command: Command,
+  payload: IpcCommandMap[Command]['args'],
+  enabled: boolean,
+) {
   return useQuery({
-    queryKey: queryKeys.senderAvatar(domain ?? ''),
+    queryKey: queryKey,
     queryFn: async () => {
       try {
-        const result = await dispatchInvoke<string | null>('read_sender_avatar', {
-          domain: domain as string,
-        });
+        const result = await dispatchInvoke<string | null>(command, payload);
         return result ? dispatchConvertFileSrc(result) : null;
       } catch {
         return null;
       }
     },
-    enabled: domain !== null && showSenderAvatars,
+    enabled: enabled,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
+}
+
+export function useSenderAvatarQuery(domain: string | null) {
+  const showSenderAvatars = useLayoutStore((layout) => layout.showSenderAvatars);
+  return useAvatarQuery(
+    queryKeys.senderAvatar(domain ?? ''),
+    'read_sender_avatar',
+    { domain: domain as string },
+    domain !== null && showSenderAvatars,
+  );
 }
 
 export function useAccountAvatarQuery(accountId: string | null) {
-  return useQuery({
-    queryKey: queryKeys.accountAvatar(accountId ?? ''),
-    queryFn: async () => {
-      try {
-        const result = await dispatchInvoke<string | null>('read_account_avatar', {
-          accountId: accountId as string,
-        });
-        return result ? dispatchConvertFileSrc(result) : null;
-      } catch {
-        return null;
-      }
-    },
-    enabled: accountId !== null,
-    staleTime: LOCAL_FIRST_STALE_TIME,
-  });
+  return useAvatarQuery(
+    queryKeys.accountAvatar(accountId ?? ''),
+    'read_account_avatar',
+    { accountId: accountId as string },
+    accountId !== null,
+  );
 }
 
 export function useFetchMessageBodyMutation(accountId: string | null) {
-  const showError = useToastStore((toaster) => toaster.showError);
-  return useMutation({
-    mutationFn: (messageId: string) =>
+  return useCommandMutation(
+    (messageId: string) =>
       invoke('fetch_message_body', { accountId: accountId as string, messageId: messageId }),
-    onError: () => showError('Couldn’t load this message.'),
-  });
+    'Couldn’t load this message.',
+  );
 }

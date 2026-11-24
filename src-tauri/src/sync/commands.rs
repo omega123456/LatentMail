@@ -15,12 +15,11 @@ use crate::{
 
 use super::{
     announce::MailChangeAnnouncer,
+    triage::{self, LabelChange},
     dto::{message_body_dto, message_dto, ImagePolicy, MessageBodyDto, MessageBodyFetchedDto},
     gmail_base_url, ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
     ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
 };
-
-const DEFAULT_PAGE_SIZE: u32 = 50;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -348,15 +347,6 @@ pub async fn hydrate_compose_draft<R: Runtime>(
     })
 }
 
-macro_rules! string_try {
-    ($result:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(error) => return Err(error.to_string()),
-        }
-    };
-}
-
 #[tauri::command]
 pub async fn list_labels(
     storage: tauri::State<'_, Storage>,
@@ -512,7 +502,7 @@ pub async fn list_threads(
     direction: Option<ThreadPageDirection>,
     limit: Option<u32>,
 ) -> Result<ThreadPage, String> {
-    let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).max(1);
+    let limit = crate::sync::thread_page_limit(limit);
     let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
     let has_cursor = cursor_pair.is_some();
@@ -837,9 +827,7 @@ async fn mutate_thread<R: Runtime>(
     label_id: &'static str,
     present: bool,
 ) -> Result<(), String> {
-    let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = gmail_base_url();
-    let client = engine.gmail_client(&account_id, token, base_url).await;
+    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
 
     let (add, remove) = if present {
         (HashSet::from([label_id.to_owned()]), HashSet::new())
@@ -901,10 +889,7 @@ pub async fn trigger_sync<R: Runtime>(
     engine: tauri::State<'_, Arc<SyncEngine>>,
     account_id: String,
 ) -> Result<SyncStatusDto, String> {
-    let token = auth.refresh_access_token(&app, &account_id).await?;
-
-    let base_url = gmail_base_url();
-    let client = engine.gmail_client(&account_id, token, base_url).await;
+    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
     let engine = Arc::clone(&engine);
     tracing::info!(target: "sync", "{account_id}: manual sync requested");
     let result = engine.run_sync(&account_id, client).await;
@@ -949,58 +934,8 @@ async fn apply_mutate_threads<R: Runtime>(
     add: Vec<String>,
     remove: Vec<String>,
 ) -> Result<Vec<MutationResultDto>, String> {
-    reject_protected_label_mutation(&add, &remove)?;
-    let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = gmail_base_url();
-    let client = engine.gmail_client(&account_id, token, base_url).await;
-    let add: HashSet<String> = add.into_iter().collect();
-    let remove: HashSet<String> = remove.into_iter().collect();
-    let drafts_by_thread =
-        super::mutations::draft_message_ids(engine.storage(), &account_id, &thread_ids).await?;
-
-    let mut results = Vec::with_capacity(thread_ids.len());
-    let mut tasks = tokio::task::JoinSet::new();
-    for thread_id in thread_ids {
-        let drafts = drafts_by_thread
-            .get(&thread_id)
-            .cloned()
-            .unwrap_or_default();
-        if !drafts.is_empty() {
-            if add != HashSet::from([crate::gmail::system_labels::TRASH.to_owned()])
-                || !remove.is_empty()
-            {
-                return Err("Draft messages cannot be modified; delete them instead.".into());
-            }
-            for message_id in drafts {
-                super::mutations::delete_draft(engine.storage(), &client, &account_id, &message_id)
-                    .await?;
-            }
-            results.push(MutationResultDto {
-                thread_id: thread_id,
-                outcome: super::MutationOutcome::Applied.into(),
-            });
-            continue;
-        }
-        let engine = Arc::clone(&engine);
-        let client = client.clone();
-        let account_id = account_id.clone();
-        let (add, remove) = (add.clone(), remove.clone());
-        tasks.spawn(async move {
-            let outcome = engine
-                .mutate(&account_id, client, thread_id.clone(), add, remove)
-                .await;
-            (thread_id, outcome)
-        });
-    }
-    while let Some(outcome) = tasks.join_next().await {
-        let (thread_id, outcome) = outcome.map_err(|error| error.to_string())?;
-        let outcome = outcome.map_err(|error| error.to_string())?;
-        results.push(MutationResultDto {
-            thread_id: thread_id,
-            outcome: outcome.into(),
-        });
-    }
-    Ok(results)
+    let change = LabelChange::explicit(add, remove)?;
+    triage::apply_to_threads(app, auth, engine, account_id, thread_ids, change).await
 }
 
 #[tauri::command]
@@ -1028,39 +963,8 @@ async fn apply_mutate_messages<R: Runtime>(
     add: Vec<String>,
     remove: Vec<String>,
 ) -> Result<(), String> {
-    reject_protected_label_mutation(&add, &remove)?;
-    let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = gmail_base_url();
-    let client = engine.gmail_client(&account_id, token, base_url).await;
-    let (add, remove): (HashSet<_>, HashSet<_>) =
-        (add.into_iter().collect(), remove.into_iter().collect());
-    for message_id in message_ids {
-        engine
-            .mutate_message(
-                &account_id,
-                client.clone(),
-                message_id,
-                add.clone(),
-                remove.clone(),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-pub(super) fn reject_protected_label_mutation(
-    add: &[String],
-    remove: &[String],
-) -> Result<(), String> {
-    if add
-        .iter()
-        .chain(remove)
-        .any(|label| matches!(label.as_str(), "DRAFT" | "SENT"))
-    {
-        return Err("Draft and Sent labels cannot be modified.".into());
-    }
-    Ok(())
+    let change = LabelChange::explicit(add, remove)?;
+    triage::apply_to_messages(app, auth, engine, account_id, message_ids, change).await
 }
 
 #[tauri::command]
@@ -1072,16 +976,14 @@ pub async fn delete_draft<R: Runtime>(
     account_id: String,
     message_id: String,
 ) -> Result<(), String> {
-    let token = auth.refresh_access_token(&app, &account_id).await?;
-    let base_url = gmail_base_url();
-    let client = engine.gmail_client(&account_id, token, base_url).await;
+    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
     super::mutations::delete_draft(&storage, &client, &account_id, &message_id).await
 }
 
 pub(crate) async fn gmail_client_for<R: Runtime>(
     app: &AppHandle<R>,
-    auth: &tauri::State<'_, AuthService>,
-    engine: &tauri::State<'_, Arc<SyncEngine>>,
+    auth: &AuthService,
+    engine: &SyncEngine,
     account_id: &str,
 ) -> Result<crate::gmail::GmailClient, String> {
     let token = auth.refresh_access_token(app, account_id).await?;

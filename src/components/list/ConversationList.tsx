@@ -24,7 +24,9 @@ import {
 } from '@/lib/query/hooks';
 import { useThreadTriageIntentMutation, type ThreadTriageIntent } from '@/lib/query/mutations';
 import { mapConversation, mapLabelsToUserLabels, mapThreadToRow } from '@/lib/query/mappers';
-import { openEditDraft, openForward, openReply } from '@/lib/compose/entry';
+import { openComposeAction, type ComposeAction } from '@/lib/compose/entry';
+import { intersectAll } from '@/lib/collections';
+import { selectedRowIds, starToggleIntent } from '@/lib/triage/intents';
 import { useLayoutStore } from '@/stores/layout';
 import { selectIsMultiSelectActive, useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
@@ -50,11 +52,7 @@ const emptyCopy: Record<string, string> = {
 };
 
 function intersectSystemLabelIds(conversations: Conversation[]): string[] {
-  if (conversations.length === 0) return [];
-  const [first, ...rest] = conversations;
-  return (first.systemLabelIds ?? []).filter((id) =>
-    rest.every((conversation) => (conversation.systemLabelIds ?? []).includes(id)),
-  );
+  return intersectAll(conversations.map((conversation) => conversation.systemLabelIds ?? []));
 }
 
 export function ConversationList({
@@ -83,7 +81,7 @@ export function ConversationList({
   allLabels?: LabelMenuEntry[];
   onTriage?: (threadIds: string[], intent: ThreadTriageIntent) => void;
   syncProgress?: { persistedCount: number; discoveredCount: number };
-  onCompose?: (threadId: string, action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => void;
+  onCompose?: (threadId: string, action: ComposeAction) => void;
   composeTargetThreadId?: string | null;
   searchQueryText?: string;
   searchIncomplete?: boolean;
@@ -222,11 +220,7 @@ export function ConversationList({
       const ids = commandTargetIds();
       if (!ids.length) return;
       const starred = rows.some((row) => ids.includes(row.id) && row.starred);
-      onTriage?.(ids, {
-        kind: 'label',
-        add: starred ? [] : ['STARRED'],
-        remove: starred ? ['STARRED'] : [],
-      });
+      onTriage?.(ids, starToggleIntent(starred));
     },
     markRead: () => onTriage?.(commandTargetIds(), { kind: 'label', add: [], remove: ['UNREAD'] }),
     markUnread: () =>
@@ -332,22 +326,14 @@ export function ConversationList({
                 onOpen={(event) => handleRowClick(event, item.index)}
                 onStar={() => {
                   const row = rows[item.index];
-                  const ids =
-                    selectedIds.has(row.id) && multiSelectActive ? [...selectedIds] : [row.id];
+                  const ids = selectedRowIds(row.id, selectedIds, multiSelectActive);
                   const starred = rows.some(
                     (candidate) => ids.includes(candidate.id) && candidate.starred,
                   );
-                  onTriage?.(ids, {
-                    kind: 'label',
-                    add: starred ? [] : ['STARRED'],
-                    remove: starred ? ['STARRED'] : [],
-                  });
+                  onTriage?.(ids, starToggleIntent(starred));
                 }}
                 onTriage={(intent) => {
-                  const ids =
-                    selectedIds.has(rows[item.index].id) && multiSelectActive
-                      ? [...selectedIds]
-                      : [rows[item.index].id];
+                  const ids = selectedRowIds(rows[item.index].id, selectedIds, multiSelectActive);
                   onTriage?.(ids, intent);
                 }}
                 onCompose={
@@ -460,12 +446,13 @@ export function ConversationListContainer() {
       onCompose={(targetThreadId, action) => {
         if (!accountId || targetThreadId !== activeThreadId || !activeConversation.data) return;
         const conversation = mapConversation(activeConversation.data);
-        const message = conversation.messages.at(-1);
-        if (action === 'reply') void openReply('reply', accountId, accountEmail, message);
-        else if (action === 'reply-all')
-          void openReply('reply-all', accountId, accountEmail, message);
-        else if (action === 'forward') void openForward(accountId, accountEmail, message);
-        else void openEditDraft(accountId, accountEmail, conversation.subject, message);
+        void openComposeAction({
+          action: action,
+          accountId: accountId,
+          accountEmail: accountEmail,
+          subject: conversation.subject,
+          message: conversation.messages.at(-1),
+        });
       }}
       composeTargetThreadId={activeThreadId}
       syncProgress={

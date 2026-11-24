@@ -7,13 +7,8 @@ use latentmail_lib::avatars::{
 };
 use latentmail_lib::settings::SettingsService;
 use latentmail_lib::storage::{Account, AccountRepository, AvatarCacheRepository, Storage};
+use crate::support::app;
 use tauri::Manager;
-
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
 
 fn avatar_dispatch_builder() -> tauri::Builder<tauri::test::MockRuntime> {
     tauri::test::mock_builder().invoke_handler(tauri::generate_handler![

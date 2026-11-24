@@ -3,8 +3,10 @@ use std::{
     time::Duration,
 };
 
-use tauri::http::{Response, StatusCode};
+use tauri::http::Response;
 use url::{form_urlencoded, Host, Url};
+
+use crate::image_scheme::{self, ServedImage};
 
 pub const SCHEME: &str = "remoteimg";
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
@@ -63,11 +65,7 @@ pub fn proxy_url(target: &str) -> String {
     let query = form_urlencoded::Serializer::new(String::new())
         .append_pair("url", target)
         .finish();
-    if cfg!(windows) {
-        format!("http://{SCHEME}.localhost/?{query}")
-    } else {
-        format!("{SCHEME}://localhost/?{query}")
-    }
+    image_scheme::proxy_url(SCHEME, &query)
 }
 
 pub fn target(uri: &str) -> Option<Url> {
@@ -81,26 +79,14 @@ pub fn target(uri: &str) -> Option<Url> {
 }
 
 pub async fn respond(client: &reqwest::Client, uri: &str, hosts: HostScope) -> Response<Vec<u8>> {
-    let builder = Response::builder().header("access-control-allow-origin", "*");
-    match fetch(client, uri, hosts).await {
-        Ok((content_type, bytes)) => builder
-            .status(StatusCode::OK)
-            .header("content-type", content_type)
-            .header("cache-control", crate::inline_images::IMAGE_CACHE_CONTROL)
-            .body(bytes),
-        Err(reason) => {
-            tracing::debug!("remote image refused ({reason}): {uri}");
-            builder.status(StatusCode::NOT_FOUND).body(Vec::new())
-        }
-    }
-    .expect("remote image response builds")
+    image_scheme::respond(SCHEME, uri, fetch(client, uri, hosts).await)
 }
 
 async fn fetch(
     client: &reqwest::Client,
     uri: &str,
     hosts: HostScope,
-) -> Result<(String, Vec<u8>), String> {
+) -> Result<ServedImage, String> {
     let target = target(uri).ok_or_else(|| "not an http target".to_owned())?;
     if !hosts.permits(&target) {
         return Err("a private or loopback host".to_owned());
@@ -122,7 +108,7 @@ async fn send(client: &reqwest::Client, target: Url) -> Result<reqwest::Response
     client.get(target).timeout(TIMEOUT).send().await
 }
 
-async fn read(response: reqwest::Response) -> Result<(String, Vec<u8>), String> {
+async fn read(response: reqwest::Response) -> Result<ServedImage, String> {
     if !response.status().is_success() {
         return Err(format!("status {}", response.status()));
     }
@@ -149,5 +135,8 @@ async fn read(response: reqwest::Response) -> Result<(String, Vec<u8>), String> 
                 .map(|format| format.to_mime_type().to_owned())
         })
         .ok_or_else(|| "not an image".to_owned())?;
-    Ok((content_type, bytes.to_vec()))
+    Ok(ServedImage {
+        content_type: content_type,
+        bytes: bytes.to_vec(),
+    })
 }

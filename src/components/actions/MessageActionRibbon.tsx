@@ -1,29 +1,22 @@
-import { useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
-import {
-  Download,
-  EllipsisVertical,
-  FileCode,
-  FolderInput,
-  Forward,
-  Globe,
-  Mail,
-  MailOpen,
-  PenSquare,
-  Reply,
-  ReplyAll,
-  ShieldAlert,
-  ShieldOff,
-  Star,
-  Tag,
-  Trash2,
-} from 'lucide-react';
+import { Download, EllipsisVertical, FileCode, Globe } from 'lucide-react';
 import { formatBindingLabel, isMacPlatform, primaryBinding } from '@/lib/keyboard/format';
 import { useCommandBindings } from '@/providers/CommandProvider';
-import { computeRibbonVisibility } from './ActionRibbon';
-import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
-import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
+import type { LabelMenuEntry } from './LabelsMenu';
+import type { MoveDestinationId } from './MoveToMenu';
 import { itemClass, menuContentClass } from './RowContextMenu';
+import {
+  computeRibbonVisibility,
+  RIBBON_THEMES,
+  RibbonComposeGroup,
+  RibbonDeleteButton,
+  RibbonLabelsPopover,
+  RibbonMoveToPopover,
+  RibbonReadButton,
+  RibbonSeparator,
+  RibbonSpamButton,
+  RibbonStarButton,
+} from './RibbonControls';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 import { MENU_COLLISION_PADDING_PX } from '@/components/shared/floating-offsets';
 
@@ -52,8 +45,7 @@ export type MessageActionRibbonProps = {
   exportActions?: MessageExportActions;
 };
 
-const iconButtonClass =
-  'inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface cursor-pointer';
+const THEME = RIBBON_THEMES.sm;
 
 export function MessageActionRibbon({
   systemLabelIds,
@@ -73,8 +65,6 @@ export function MessageActionRibbon({
   onEditDraft,
   exportActions,
 }: MessageActionRibbonProps) {
-  const [labelsOpen, setLabelsOpen] = useState(false);
-  const [moveOpen, setMoveOpen] = useState(false);
   const visibility = computeRibbonVisibility(systemLabelIds);
 
   return (
@@ -84,159 +74,48 @@ export function MessageActionRibbon({
       aria-label="Message actions"
       className="flex items-center gap-1"
     >
-      <button
-        type="button"
-        aria-label="Reply"
-        title="Reply"
-        onClick={onReply}
-        className={iconButtonClass}
-      >
-        <Reply aria-hidden="true" size={ICON_SIZE.sm} />
-      </button>
-      <button
-        type="button"
-        aria-label="Reply all"
-        title="Reply all"
-        onClick={onReplyAll}
-        className={iconButtonClass}
-      >
-        <ReplyAll aria-hidden="true" size={ICON_SIZE.sm} />
-      </button>
-      <button
-        type="button"
-        aria-label="Forward"
-        title="Forward"
-        onClick={onForward}
-        className={iconButtonClass}
-      >
-        <Forward aria-hidden="true" size={ICON_SIZE.sm} />
-      </button>
-      {onEditDraft && (
-        <button
-          type="button"
-          aria-label="Edit draft"
-          title="Edit draft"
-          onClick={onEditDraft}
-          className={iconButtonClass}
-        >
-          <PenSquare aria-hidden="true" size={ICON_SIZE.sm} />
-        </button>
-      )}
-      <span
-        aria-hidden="true"
-        className="mx-0.5 h-4 w-px bg-outline-variant/50 dark:bg-dark-outline-variant/50"
+      <RibbonComposeGroup
+        theme={THEME}
+        onReply={onReply}
+        onReplyAll={onReplyAll}
+        onForward={onForward}
+        onEditDraft={onEditDraft}
       />
       {visibility.showReadToggle && (
-        <button
-          type="button"
-          aria-label={unread ? 'Mark read' : 'Mark unread'}
-          title={unread ? 'Mark read' : 'Mark unread'}
-          onClick={onToggleRead}
-          className={iconButtonClass}
-        >
-          {unread ? (
-            <Mail aria-hidden="true" size={ICON_SIZE.sm} />
-          ) : (
-            <MailOpen aria-hidden="true" size={ICON_SIZE.sm} />
-          )}
-        </button>
+        <RibbonReadButton theme={THEME} unread={unread} onToggleRead={onToggleRead} />
       )}
       {visibility.showStar && (
-        <button
-          type="button"
-          aria-label={starred ? 'Unstar' : 'Star'}
-          title={starred ? 'Unstar' : 'Star'}
-          onClick={onToggleStar}
-          className={`${iconButtonClass} ${starred ? 'text-star dark:text-dark-star' : ''}`}
-        >
-          <Star aria-hidden="true" size={ICON_SIZE.sm} fill={starred ? 'currentColor' : 'none'} />
-        </button>
+        <RibbonStarButton theme={THEME} starred={starred} onToggleStar={onToggleStar} />
       )}
       {visibility.showLabels && (
-        <DropdownMenu.Root open={labelsOpen} onOpenChange={setLabelsOpen}>
-          <DropdownMenu.Trigger asChild>
-            <button type="button" aria-label="Labels" title="Labels" className={iconButtonClass}>
-              <Tag aria-hidden="true" size={ICON_SIZE.sm} />
-            </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              align="end"
-              className="z-50 min-w-64 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-2 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
-            >
-              <LabelsMenu
-                variant="staged"
-                labels={labels}
-                onCreateLabel={onCreateLabel}
-                onApply={(changes) => {
-                  onApplyLabels(changes);
-                  setLabelsOpen(false);
-                }}
-                onCancel={() => setLabelsOpen(false)}
-              />
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        <RibbonLabelsPopover
+          theme={THEME}
+          labels={labels}
+          onCreateLabel={onCreateLabel}
+          onApplyLabels={onApplyLabels}
+        />
       )}
       {visibility.showMoveTo && (
-        <DropdownMenu.Root open={moveOpen} onOpenChange={setMoveOpen}>
-          <DropdownMenu.Trigger asChild>
-            <button type="button" aria-label="Move to" title="Move to" className={iconButtonClass}>
-              <FolderInput aria-hidden="true" size={ICON_SIZE.sm} />
-            </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              align="end"
-              className="z-50 min-w-52 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-2 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
-            >
-              <MoveToMenu
-                currentSystemLabelIds={systemLabelIds}
-                onSelect={(destination) => {
-                  onMoveTo(destination);
-                  setMoveOpen(false);
-                }}
-              />
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        <RibbonMoveToPopover
+          theme={THEME}
+          currentSystemLabelIds={systemLabelIds}
+          onMoveTo={onMoveTo}
+        />
       )}
       {visibility.showSpamToggle && (
         <>
-          <span
-            aria-hidden="true"
-            className="mx-0.5 h-4 w-px bg-outline-variant/50 dark:bg-dark-outline-variant/50"
+          <RibbonSeparator theme={THEME} />
+          <RibbonSpamButton
+            theme={THEME}
+            spamMode={visibility.spamMode}
+            onToggleSpam={onToggleSpam}
           />
-          <button
-            type="button"
-            aria-label={visibility.spamMode === 'notSpam' ? 'Not spam' : 'Mark as spam'}
-            title={visibility.spamMode === 'notSpam' ? 'Not spam' : 'Mark as spam'}
-            onClick={onToggleSpam}
-            className={iconButtonClass}
-          >
-            {visibility.spamMode === 'notSpam' ? (
-              <ShieldOff aria-hidden="true" size={ICON_SIZE.sm} />
-            ) : (
-              <ShieldAlert aria-hidden="true" size={ICON_SIZE.sm} />
-            )}
-          </button>
         </>
       )}
       {visibility.showDelete && (
         <>
-          <span
-            aria-hidden="true"
-            className="mx-0.5 h-4 w-px bg-outline-variant/50 dark:bg-dark-outline-variant/50"
-          />
-          <button
-            type="button"
-            aria-label="Delete"
-            title="Delete"
-            onClick={onDelete}
-            className="inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error cursor-pointer"
-          >
-            <Trash2 aria-hidden="true" size={ICON_SIZE.sm} />
-          </button>
+          <RibbonSeparator theme={THEME} />
+          <RibbonDeleteButton theme={THEME} onDelete={onDelete} />
         </>
       )}
       {exportActions && <MoreMessageActions actions={exportActions} />}
@@ -255,7 +134,7 @@ function MoreMessageActions({ actions }: { actions: MessageExportActions }) {
           type="button"
           aria-label="More message actions"
           title="More message actions"
-          className={iconButtonClass}
+          className={THEME.iconButtonClass}
         >
           <EllipsisVertical aria-hidden="true" size={ICON_SIZE.sm} />
         </button>

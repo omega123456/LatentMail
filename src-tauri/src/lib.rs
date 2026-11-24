@@ -1,3 +1,12 @@
+macro_rules! string_try {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+}
+
 pub mod ai;
 pub mod attachments;
 pub mod auth;
@@ -8,8 +17,11 @@ pub mod contacts;
 pub mod date_formats;
 pub mod events;
 pub mod gmail;
+pub mod http;
+pub mod image_scheme;
 pub mod inline_images;
 pub mod ipc;
+pub mod keychain;
 pub mod logging;
 pub mod message_export;
 pub mod os;
@@ -23,16 +35,7 @@ pub mod storage;
 pub mod sync;
 pub mod updater;
 
-pub fn http_client() -> reqwest::Client {
-    static TLS_PROVIDER: std::sync::Once = std::sync::Once::new();
-    TLS_PROVIDER.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-    let builder = reqwest::Client::builder();
-    #[cfg(feature = "test-utils")]
-    let builder = builder.no_proxy();
-    builder.build().expect("http client")
-}
+pub use http::{http_client, is_retryable_status};
 
 #[cfg(not(coverage))]
 use tauri::Manager;

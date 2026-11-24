@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::gmail::GmailClient;
-use latentmail_lib::queue::{Executor, Lane, OperationKind, QueueEngine, QueueOperation};
+use latentmail_lib::queue::{Lane, OperationKind, QueueEngine, QueueOperation};
 use latentmail_lib::storage::{
     Account, AccountRepository, ComposeDraftMetadata, ComposeDraftMetadataRepository, HtmlPresence,
     Label, LabelRepository, Message, MessageRepository, Operation, OperationRepository, Storage,
@@ -13,7 +13,6 @@ use latentmail_lib::storage::{
 use latentmail_lib::sync::{
     create_queue_engine_with_events, noop_event_sink, SyncEngine, WorkRegistry,
 };
-use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 fn seed_message(account_id: &str, id: &str, thread_id: &str) -> Message {
@@ -399,23 +398,6 @@ async fn removing_an_unknown_account_reports_an_error_and_leaves_nothing_to_clea
     assert!(auth.remove_account(&queue, "missing").await.is_err());
 }
 
-fn controllable_executor() -> (
-    Executor,
-    mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
-) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let sender = sender.clone();
-        Box::pin(async move {
-            let (release_sender, release_receiver) = oneshot::channel();
-            let _ = sender.send((operation.id, release_sender));
-            let _ = release_receiver.await;
-            Ok(())
-        })
-    });
-    (executor, receiver)
-}
-
 fn operation(id: &str, account_id: &str, entity_key: &str) -> QueueOperation {
     QueueOperation {
         id: id.into(),
@@ -439,7 +421,7 @@ async fn removing_an_account_with_pending_queued_work_cancels_it_and_no_operatio
     }
     latentmail_lib::auth::save_refresh_token("removed", "token").unwrap();
 
-    let (executor, mut dispatched) = controllable_executor();
+    let (executor, mut dispatched) = crate::support::controllable_executor();
     let queue = QueueEngine::new(250, 250, executor);
 
     queue

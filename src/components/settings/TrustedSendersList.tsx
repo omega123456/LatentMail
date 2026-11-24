@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { ImageOff, Info, Mail, Search, Trash2 } from 'lucide-react';
+import { ImageOff, Info, Mail, Trash2 } from 'lucide-react';
 import { Select } from '@/components/shared/Select';
-import { TextInput } from '@/components/shared/TextInput';
 import { useLayoutStore } from '@/stores/layout';
 import { settingsDangerIconButton, settingsLinkPrimary, settingsTriggerClass } from './styles';
+import { HighlightedText, SettingsSearchInput } from './primitives';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const rowsPerPageOptions = ['5', '10', '25'];
@@ -19,20 +19,6 @@ const emptyLeadClass = 'text-body-sm font-medium text-settings-ink dark:text-dar
 
 const pageButtonClass =
   'cursor-pointer rounded-chip px-1.75 py-1 text-settings-meta font-semibold tabular-nums text-settings-ink-mute hover:bg-settings-container-low hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary disabled:cursor-not-allowed disabled:opacity-35 aria-[current=true]:bg-settings-container aria-[current=true]:text-settings-on-primary-container dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container-low dark:hover:text-dark-settings-ink dark:aria-[current=true]:bg-dark-settings-container dark:aria-[current=true]:text-dark-settings-on-primary-container';
-
-function HighlightedAddress({ address, needle }: { address: string; needle: string }) {
-  const index = needle ? address.indexOf(needle) : -1;
-  if (index < 0) return <>{address}</>;
-  return (
-    <>
-      {address.slice(0, index)}
-      <mark className="rounded-sm bg-settings-primary-container px-px text-settings-on-primary-container dark:bg-dark-settings-primary-container dark:text-dark-settings-on-primary-container">
-        {address.slice(index, index + needle.length)}
-      </mark>
-      {address.slice(index + needle.length)}
-    </>
-  );
-}
 
 export function TrustedSendersList() {
   const alwaysLoad = useLayoutStore((layout) => layout.alwaysLoadRemoteImages);
@@ -68,21 +54,15 @@ export function TrustedSendersList() {
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <label className="flex h-8.5 w-52.5 items-center gap-1.75 rounded-control border border-transparent bg-settings-container-low px-2.5 text-settings-ink-mute focus-within:border-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute dark:focus-within:border-dark-settings-primary">
-              <Search aria-hidden="true" size={ICON_SIZE.sm} className="shrink-0" />
-              <TextInput
-                type="search"
-                value={filter}
-                aria-label="Filter trusted senders"
-                placeholder="Filter senders"
-                onChange={(event) => {
-                  setFilter(event.target.value);
-                  setRequestedPage(1);
-                }}
-                variant="bare"
-                className="w-full text-settings-desc text-settings-ink placeholder:text-settings-ink-mute dark:text-dark-settings-ink dark:placeholder:text-dark-settings-ink-mute"
-              />
-            </label>
+            <SettingsSearchInput
+              value={filter}
+              ariaLabel="Filter trusted senders"
+              placeholder="Filter senders"
+              onChange={(next) => {
+                setFilter(next);
+                setRequestedPage(1);
+              }}
+            />
             <Select
               ariaLabel="Rows per page"
               value={rowsPerPage}
@@ -130,7 +110,7 @@ export function TrustedSendersList() {
                   <Mail aria-hidden="true" size={ICON_SIZE.xxs} />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-body-sm text-settings-ink dark:text-dark-settings-ink">
-                  <HighlightedAddress address={address} needle={needle} />
+                  <HighlightedText text={address} needle={needle} caseInsensitive={false} />
                 </span>
                 <button
                   type="button"

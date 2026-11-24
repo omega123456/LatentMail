@@ -50,6 +50,12 @@ pub struct AvatarService {
     settings: SettingsService,
 }
 
+struct AvatarTarget {
+    pipeline: AvatarPipeline,
+    domain: CacheDomain,
+    key: String,
+}
+
 impl AvatarService {
     pub fn new(cache: AvatarCache, storage: Storage, settings: SettingsService) -> Self {
         Self {
@@ -77,50 +83,15 @@ impl AvatarService {
         if !settings.show_sender_avatars {
             return Ok(None);
         }
-        let cache_key = hash_key(&domain);
-        match self.cache.answer(&cache_key, CacheDomain::Sender).await {
-            CacheAnswer::Fresh(path) => Ok(path.map(path_to_string)),
-            CacheAnswer::Stale => {
-                self.schedule_sender_resolution(app, domain, cache_key);
-                Ok(None)
-            }
-        }
-    }
-
-    fn schedule_sender_resolution(
-        &self,
-        app: Arc<dyn AvatarEmitter>,
-        domain: String,
-        cache_key: String,
-    ) {
-        let cache = self.cache.clone();
-        let scheduler = Arc::clone(&self.scheduler);
-        tokio::spawn(async move {
-            let _key_guard = scheduler.key_guard(&cache_key).await;
-
-            if matches!(
-                cache.answer(&cache_key, CacheDomain::Sender).await,
-                CacheAnswer::Fresh(_)
-            ) {
-                return;
-            }
-            let _permit = scheduler.acquire_permit().await;
-            let resolved = match bimi::resolve_logo(&cache, &domain).await {
-                Some(png) => cache
-                    .store_hit(&cache_key, CacheDomain::Sender, &png)
-                    .await
-                    .is_ok(),
-                None => {
-                    let _ = cache.store_miss(&cache_key).await;
-                    false
-                }
-            };
-            app.emit_resolved(AvatarResolvedEvent {
-                pipeline: AvatarPipeline::Sender,
-                key: domain,
-                resolved: resolved,
-            });
-        });
+        let target = AvatarTarget {
+            pipeline: AvatarPipeline::Sender,
+            domain: CacheDomain::Sender,
+            key: domain,
+        };
+        self.read_or_schedule(app, target, |cache, domain| async move {
+            bimi::resolve_logo(&cache, &domain).await
+        })
+        .await
     }
 
     pub async fn read_account_avatar(
@@ -132,66 +103,86 @@ impl AvatarService {
         if account_id.is_empty() {
             return Ok(None);
         }
-        let cache_key = hash_key(&account_id);
-        match self.cache.answer(&cache_key, CacheDomain::Account).await {
+        let storage = self.storage.clone();
+        let target = AvatarTarget {
+            pipeline: AvatarPipeline::Account,
+            domain: CacheDomain::Account,
+            key: account_id,
+        };
+        self.read_or_schedule(app, target, move |_cache, account_id| async move {
+            resolve_account_photo(&storage, account_id).await
+        })
+        .await
+    }
+
+    async fn read_or_schedule<Resolve, Output>(
+        &self,
+        app: Arc<dyn AvatarEmitter>,
+        target: AvatarTarget,
+        resolve: Resolve,
+    ) -> Result<Option<String>, String>
+    where
+        Resolve: FnOnce(AvatarCache, String) -> Output + Send + 'static,
+        Output: std::future::Future<Output = Option<Vec<u8>>> + Send + 'static,
+    {
+        let cache_key = hash_key(&target.key);
+        match self.cache.answer(&cache_key, target.domain).await {
             CacheAnswer::Fresh(path) => Ok(path.map(path_to_string)),
             CacheAnswer::Stale => {
-                self.schedule_account_resolution(app, account_id, cache_key);
+                self.schedule_resolution(app, target, cache_key, resolve);
                 Ok(None)
             }
         }
     }
 
-    fn schedule_account_resolution(
+    fn schedule_resolution<Resolve, Output>(
         &self,
         app: Arc<dyn AvatarEmitter>,
-        account_id: String,
+        target: AvatarTarget,
         cache_key: String,
-    ) {
+        resolve: Resolve,
+    ) where
+        Resolve: FnOnce(AvatarCache, String) -> Output + Send + 'static,
+        Output: std::future::Future<Output = Option<Vec<u8>>> + Send + 'static,
+    {
         let cache = self.cache.clone();
         let scheduler = Arc::clone(&self.scheduler);
-        let storage = self.storage.clone();
         tokio::spawn(async move {
             let _key_guard = scheduler.key_guard(&cache_key).await;
             if matches!(
-                cache.answer(&cache_key, CacheDomain::Account).await,
+                cache.answer(&cache_key, target.domain).await,
                 CacheAnswer::Fresh(_)
             ) {
                 return;
             }
             let _permit = scheduler.acquire_permit().await;
-            let avatar_url = storage
-                .run({
-                    let account_id = account_id.clone();
-                    move |connection| AccountRepository::get(connection, &account_id)
-                })
-                .await
-                .ok()
-                .flatten()
-                .and_then(|account| account.avatar_url);
-            let resolved = match avatar_url {
-                Some(url) => match profile::acquire_photo(&url).await {
-                    Some(png) => cache
-                        .store_hit(&cache_key, CacheDomain::Account, &png)
-                        .await
-                        .is_ok(),
-                    None => {
-                        let _ = cache.store_miss(&cache_key).await;
-                        false
-                    }
-                },
+            let resolved = match resolve(cache.clone(), target.key.clone()).await {
+                Some(png) => cache
+                    .store_hit(&cache_key, target.domain, &png)
+                    .await
+                    .is_ok(),
                 None => {
                     let _ = cache.store_miss(&cache_key).await;
                     false
                 }
             };
             app.emit_resolved(AvatarResolvedEvent {
-                pipeline: AvatarPipeline::Account,
-                key: account_id,
+                pipeline: target.pipeline,
+                key: target.key,
                 resolved: resolved,
             });
         });
     }
+}
+
+async fn resolve_account_photo(storage: &Storage, account_id: String) -> Option<Vec<u8>> {
+    let avatar_url = storage
+        .run(move |connection| AccountRepository::get(connection, &account_id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|account| account.avatar_url)?;
+    profile::acquire_photo(&avatar_url).await
 }
 
 fn path_to_string(path: std::path::PathBuf) -> String {

@@ -1,10 +1,10 @@
-use tauri::http::{Response, StatusCode};
+use tauri::http::Response;
 use url::{form_urlencoded, Url};
 
+use crate::image_scheme::{self, ServedImage};
 use crate::storage::{MessageRepository, Storage};
 
 pub const SCHEME: &str = "inlineimg";
-pub const IMAGE_CACHE_CONTROL: &str = "max-age=86400";
 
 pub fn proxy_url(account_id: &str, message_id: &str, content_id: &str) -> String {
     let query = form_urlencoded::Serializer::new(String::new())
@@ -12,11 +12,7 @@ pub fn proxy_url(account_id: &str, message_id: &str, content_id: &str) -> String
         .append_pair("message", message_id)
         .append_pair("cid", content_id)
         .finish();
-    if cfg!(windows) {
-        format!("http://{SCHEME}.localhost/?{query}")
-    } else {
-        format!("{SCHEME}://localhost/?{query}")
-    }
+    image_scheme::proxy_url(SCHEME, &query)
 }
 
 pub fn target(uri: &str) -> Option<(String, String, String)> {
@@ -36,22 +32,10 @@ pub fn target(uri: &str) -> Option<(String, String, String)> {
 }
 
 pub async fn respond(storage: &Storage, uri: &str) -> Response<Vec<u8>> {
-    let builder = Response::builder().header("access-control-allow-origin", "*");
-    match read(storage, uri).await {
-        Ok((mime_type, bytes)) => builder
-            .status(StatusCode::OK)
-            .header("content-type", mime_type)
-            .header("cache-control", IMAGE_CACHE_CONTROL)
-            .body(bytes),
-        Err(reason) => {
-            tracing::debug!("inline image refused ({reason}): {uri}");
-            builder.status(StatusCode::NOT_FOUND).body(Vec::new())
-        }
-    }
-    .expect("inline image response builds")
+    image_scheme::respond(SCHEME, uri, read(storage, uri).await)
 }
 
-async fn read(storage: &Storage, uri: &str) -> Result<(String, Vec<u8>), String> {
+async fn read(storage: &Storage, uri: &str) -> Result<ServedImage, String> {
     let (account_id, message_id, content_id) =
         target(uri).ok_or_else(|| "incomplete request".to_owned())?;
     storage
@@ -60,5 +44,9 @@ async fn read(storage: &Storage, uri: &str) -> Result<(String, Vec<u8>), String>
         })
         .await
         .map_err(|error| error.to_string())?
+        .map(|(content_type, bytes)| ServedImage {
+            content_type: content_type,
+            bytes: bytes,
+        })
         .ok_or_else(|| "no such inline part".to_owned())
 }

@@ -9,7 +9,6 @@ import {
   endOfMonth,
   endOfWeek,
   format,
-  fromUnixTime,
   isAfter,
   isBefore,
   isSameDay,
@@ -20,38 +19,29 @@ import {
   startOfMonth,
   startOfWeek,
 } from 'date-fns';
-import type { SearchPredicate } from '@/lib/types/ipc';
 import { ICON_SIZE } from '@/components/shared/icon-size';
 import { DATE_FORMAT } from '@/lib/format/date-formats';
+import {
+  BLANK_DATE_FILTER,
+  PRESETS,
+  dateFilterFromPredicates,
+  serializeDateFilter,
+  summariseDateFilter,
+  type DateFilterMode,
+  type DateFilterValue,
+} from '@/lib/search/grammar';
 
-export type DateFilterMode = 'preset' | 'before' | 'after' | 'on' | 'between';
-
-export type DateFilterValue = {
-  mode: DateFilterMode;
-  preset: string;
-  start: string;
-  end: string;
-};
-
-export const BLANK_DATE_FILTER: DateFilterValue = {
-  mode: 'preset',
-  preset: '',
-  start: '',
-  end: '',
+export {
+  BLANK_DATE_FILTER,
+  PRESETS,
+  dateFilterFromPredicates,
+  serializeDateFilter,
+  summariseDateFilter,
+  type DateFilterMode,
+  type DateFilterValue,
 };
 
 const WEEK_OPTIONS = { weekStartsOn: 1 } as const;
-
-export const PRESETS: { value: string; label: string; summary: string }[] = [
-  { value: '', label: 'Any time', summary: 'Any time' },
-  { value: '1d', label: '1 day', summary: 'Last 24 hours' },
-  { value: '7d', label: '1 week', summary: 'Last 7 days' },
-  { value: '14d', label: '2 weeks', summary: 'Last 14 days' },
-  { value: '1m', label: '1 month', summary: 'Last 30 days' },
-  { value: '3m', label: '3 months', summary: 'Last 3 months' },
-  { value: '6m', label: '6 months', summary: 'Last 6 months' },
-  { value: '1y', label: '1 year', summary: 'Last year' },
-];
 
 const MODES: { value: DateFilterMode; label: string }[] = [
   { value: 'before', label: 'Before' },
@@ -61,78 +51,6 @@ const MODES: { value: DateFilterMode; label: string }[] = [
 ];
 
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-function toIsoDay(atSeconds: number): string {
-  return format(fromUnixTime(atSeconds), DATE_FORMAT.isoDate);
-}
-
-function shiftIsoDay(iso: string, days: number): string {
-  return format(addDays(parseISO(iso), days), DATE_FORMAT.isoDate);
-}
-
-export function serializeDateFilter(value: DateFilterValue): string[] {
-  if (value.mode === 'preset') return value.preset ? [`newer_than:${value.preset}`] : [];
-  if (!value.start) return [];
-  switch (value.mode) {
-    case 'before':
-      return [`before:${value.start}`];
-    case 'after':
-      return [`after:${value.start}`];
-    case 'on':
-      return [`after:${value.start}`, `before:${shiftIsoDay(value.start, 1)}`];
-    default:
-      return value.end
-        ? [`after:${value.start}`, `before:${shiftIsoDay(value.end, 1)}`]
-        : [`after:${value.start}`];
-  }
-}
-
-export function dateFilterFromPredicates(predicates: SearchPredicate[]): {
-  value: DateFilterValue;
-  remaining: SearchPredicate[];
-} {
-  const remaining: SearchPredicate[] = [];
-  let after: string | null = null;
-  let before: string | null = null;
-  for (const predicate of predicates) {
-    if (predicate.kind === 'sentAfter' && !predicate.negated && after === null)
-      after = toIsoDay(predicate.atSeconds);
-    else if (predicate.kind === 'sentBefore' && !predicate.negated && before === null)
-      before = toIsoDay(predicate.atSeconds);
-    else remaining.push(predicate);
-  }
-  if (after !== null && before !== null) {
-    const end = shiftIsoDay(before, -1);
-    return {
-      value: { mode: after === end ? 'on' : 'between', preset: '', start: after, end: end },
-      remaining: remaining,
-    };
-  }
-  if (after !== null)
-    return { value: { ...BLANK_DATE_FILTER, mode: 'after', start: after }, remaining: remaining };
-  if (before !== null)
-    return { value: { ...BLANK_DATE_FILTER, mode: 'before', start: before }, remaining: remaining };
-  return { value: BLANK_DATE_FILTER, remaining: remaining };
-}
-
-export function summariseDateFilter(value: DateFilterValue): string {
-  if (value.mode === 'preset')
-    return PRESETS.find((preset) => preset.value === value.preset)?.summary ?? 'Any time';
-  if (!value.start) return 'Pick a date';
-  const readable = (iso: string) => format(parseISO(iso), DATE_FORMAT.dayMonthYear);
-  switch (value.mode) {
-    case 'before':
-      return `Before ${readable(value.start)}`;
-    case 'after':
-      return `After ${readable(value.start)}`;
-    case 'on':
-      return `On ${readable(value.start)}`;
-    default:
-      return value.end
-        ? `${readable(value.start)} – ${readable(value.end)}`
-        : `From ${readable(value.start)}`;
-  }
-}
 
 export function nextFocusedDay(key: string, shiftKey: boolean, day: Date): Date | null {
   switch (key) {

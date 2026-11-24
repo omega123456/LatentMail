@@ -8,16 +8,11 @@ use latentmail_lib::auth::{load_refresh_token, parse_callback};
 use latentmail_lib::storage::{Account, AccountRepository, Storage};
 use tauri::Manager;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::support::app;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
 
 fn service_with_storage() -> (AuthService, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();

@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { toDate } from 'date-fns';
 import { useQueryClient } from '@tanstack/react-query';
-import { emitFrontendReady, listen } from '@/lib/ipc/events';
+import { emitFrontendReady } from '@/lib/ipc/events';
+import { listenUntilDisposed } from '@/lib/ipc/listen-managed';
+import { createDebouncedFlush, createDebouncedTrigger } from '@/lib/debounced-flush';
 import { useSyncStore } from '@/stores/sync';
 import type { AiIndexStatus, IpcEventMap } from '@/lib/types/ipc';
 import { queryKeys } from './keys';
@@ -18,25 +20,14 @@ export function EventBridge() {
   const queryClient = useQueryClient();
   useEffect(() => {
     void emitFrontendReady();
-    let disposed = false;
-    const unlistens: Array<() => void | Promise<void>> = [];
-    const traversalAccounts = new Set<string>();
-    let traversalTimer: number | undefined;
-    const mailboxInvalidationAccounts = new Set<string>();
-    let mailboxInvalidationTimer: number | undefined;
-    let queueSnapshotTimer: number | undefined;
-    const scheduleQueueSnapshotInvalidation = () => {
-      if (queueSnapshotTimer !== undefined) return;
-      queueSnapshotTimer = window.setTimeout(() => {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
-        queueSnapshotTimer = undefined;
-      }, QUEUE_SNAPSHOT_DEBOUNCE_MS);
-    };
-    const scheduleMailboxInvalidation = (accountId: string) => {
-      mailboxInvalidationAccounts.add(accountId);
-      if (mailboxInvalidationTimer !== undefined) return;
-      mailboxInvalidationTimer = window.setTimeout(() => {
-        mailboxInvalidationAccounts.forEach((pendingAccountId) => {
+    const disposers: Array<() => void> = [];
+    const queueSnapshot = createDebouncedTrigger(QUEUE_SNAPSHOT_DEBOUNCE_MS, () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
+    });
+    const mailboxInvalidation = createDebouncedFlush<string>(
+      MAILBOX_INVALIDATION_DEBOUNCE_MS,
+      (accountIds) => {
+        accountIds.forEach((pendingAccountId) => {
           void queryClient.invalidateQueries({
             queryKey: queryKeys.threadsForAccount(pendingAccountId),
           });
@@ -48,27 +39,34 @@ export function EventBridge() {
           });
           void queryClient.invalidateQueries({ queryKey: queryKeys.labels(pendingAccountId) });
         });
-        mailboxInvalidationAccounts.clear();
-        mailboxInvalidationTimer = undefined;
-      }, MAILBOX_INVALIDATION_DEBOUNCE_MS);
-    };
-    const subscribe = <E extends keyof IpcEventMap>(
-      event: E,
-      handler: (payload: IpcEventMap[E]) => void,
+      },
+    );
+    const traversalInvalidation = createDebouncedFlush<string>(
+      TRAVERSAL_INVALIDATION_DEBOUNCE_MS,
+      (accountIds) => {
+        accountIds.forEach((accountId) => {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.threadsForAccount(accountId),
+            refetchType: 'none',
+          });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+        });
+      },
+    );
+    const subscribe = <Event extends keyof IpcEventMap>(
+      event: Event,
+      handler: (payload: IpcEventMap[Event]) => void,
     ) => {
-      const logged = (payload: IpcEventMap[E]) => {
+      const logged = (payload: IpcEventMap[Event]) => {
         if (event !== 'queue://summary') appLog.info(`event ${event} ${JSON.stringify(payload)}`);
         handler(payload);
       };
-      void listen(event, logged).then((remove) => {
-        if (disposed) void remove();
-        else unlistens.push(remove);
-      });
+      disposers.push(listenUntilDisposed(event, logged));
     };
 
     subscribe('queue://summary', (summary) => {
       useSyncStore.getState().setQueue(summary);
-      scheduleQueueSnapshotInvalidation();
+      queueSnapshot.trigger();
     });
     subscribe('ai://config', (event) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.aiConfigs });
@@ -122,19 +120,7 @@ export function EventBridge() {
         lastAdvancedAt: progress.lastAdvancedAt,
         isResumed: progress.isResumed,
       });
-      traversalAccounts.add(progress.accountId);
-      if (traversalTimer !== undefined) return;
-      traversalTimer = window.setTimeout(() => {
-        traversalAccounts.forEach((accountId) => {
-          void queryClient.invalidateQueries({
-            queryKey: queryKeys.threadsForAccount(accountId),
-            refetchType: 'none',
-          });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
-        });
-        traversalAccounts.clear();
-        traversalTimer = undefined;
-      }, TRAVERSAL_INVALIDATION_DEBOUNCE_MS);
+      traversalInvalidation.add(progress.accountId);
     });
 
     subscribe('sync://complete', (event) => {
@@ -145,11 +131,11 @@ export function EventBridge() {
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
       if (!event.changed) return;
-      scheduleMailboxInvalidation(event.accountId);
+      mailboxInvalidation.add(event.accountId);
     });
 
     subscribe('mail://new', (event) => {
-      scheduleMailboxInvalidation(event.accountId);
+      mailboxInvalidation.add(event.accountId);
     });
 
     subscribe('mail://changed', (event) => {
@@ -212,10 +198,10 @@ export function EventBridge() {
     });
 
     subscribe('queue://item', (item) => {
-      scheduleQueueSnapshotInvalidation();
+      queueSnapshot.trigger();
       if (item.status !== 'done' && item.status !== 'failed') return;
       if (!item.id.startsWith('mutation:')) return;
-      scheduleMailboxInvalidation(item.accountId);
+      mailboxInvalidation.add(item.accountId);
     });
 
     subscribe('avatar://resolved', (event) => {
@@ -236,11 +222,10 @@ export function EventBridge() {
     });
 
     return () => {
-      disposed = true;
-      if (traversalTimer !== undefined) window.clearTimeout(traversalTimer);
-      if (mailboxInvalidationTimer !== undefined) window.clearTimeout(mailboxInvalidationTimer);
-      if (queueSnapshotTimer !== undefined) window.clearTimeout(queueSnapshotTimer);
-      unlistens.forEach((remove) => void remove());
+      traversalInvalidation.cancel();
+      mailboxInvalidation.cancel();
+      queueSnapshot.cancel();
+      disposers.forEach((dispose) => dispose());
     };
   }, [queryClient]);
   return null;

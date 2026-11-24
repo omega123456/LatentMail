@@ -1,107 +1,20 @@
 import { useMemo, useState } from 'react';
-import { format, fromUnixTime } from 'date-fns';
-import type { MailLabel, ParsedSearchQuery, SearchPredicate, SearchScope } from '@/lib/types/ipc';
+import type { MailLabel, SearchScope } from '@/lib/types/ipc';
 import { useParseSearchQueryQuery } from '@/lib/query/hooks';
 import { Select, type SelectOption } from '@/components/shared/Select';
 import { TextInput } from '@/components/shared/TextInput';
+import { DateFilter } from './DateFilter';
 import {
-  BLANK_DATE_FILTER,
-  DateFilter,
-  dateFilterFromPredicates,
-  serializeDateFilter,
-  type DateFilterValue,
-} from './DateFilter';
-import { DATE_FORMAT } from '@/lib/format/date-formats';
+  BLANK_FIELDS,
+  fieldsFromParsedQuery,
+  predicateToToken,
+  quoteIfNeeded,
+  serializeFields,
+  type PanelFields,
+} from '@/lib/search/grammar';
+import { primaryActionButtonClass, secondaryActionButtonClass } from '@/components/shared/styles';
 
-type PanelFields = {
-  from: string;
-  to: string;
-  subject: string;
-  includesText: string;
-  excludesText: string;
-  date: DateFilterValue;
-  hasAttachment: boolean;
-  unreadOnly: boolean;
-};
-
-const BLANK_FIELDS: PanelFields = {
-  from: '',
-  to: '',
-  subject: '',
-  includesText: '',
-  excludesText: '',
-  date: BLANK_DATE_FILTER,
-  hasAttachment: false,
-  unreadOnly: false,
-};
-
-export function quoteIfNeeded(value: string): string {
-  return /\s/.test(value) ? `"${value}"` : value;
-}
-
-export function predicateToToken(predicate: SearchPredicate): string | null {
-  const prefix = predicate.negated ? '-' : '';
-  switch (predicate.kind) {
-    case 'label':
-      return `${prefix}label:${quoteIfNeeded(predicate.value)}`;
-    case 'starred':
-      return `${prefix}is:starred`;
-    case 'hasAttachment':
-      return `${prefix}has:attachment`;
-    case 'unread':
-      return `${prefix}is:unread`;
-    case 'sentBefore':
-      return `${prefix}before:${format(fromUnixTime(predicate.atSeconds), DATE_FORMAT.isoDate)}`;
-    case 'sentAfter':
-      return `${prefix}after:${format(fromUnixTime(predicate.atSeconds), DATE_FORMAT.isoDate)}`;
-    case 'textExcludes':
-      return null;
-  }
-}
-
-export function fieldsFromParsedQuery(parsed: ParsedSearchQuery): PanelFields {
-  const { value: date, remaining } = dateFilterFromPredicates(parsed.predicates);
-  let hasAttachment = false;
-  let unreadOnly = false;
-  const leftover: string[] = [];
-  for (const predicate of remaining) {
-    if (predicate.kind === 'hasAttachment' && !predicate.negated) hasAttachment = true;
-    else if (predicate.kind === 'unread' && !predicate.negated) unreadOnly = true;
-    else {
-      const token = predicateToToken(predicate);
-      if (token) leftover.push(token);
-    }
-  }
-  return {
-    from: parsed.from ?? '',
-    to: parsed.to ?? '',
-    subject: parsed.subject ?? '',
-    includesText: [...parsed.includes, ...leftover].join(' '),
-    excludesText: parsed.excludes.join(' '),
-    date: date,
-    hasAttachment: hasAttachment,
-    unreadOnly: unreadOnly,
-  };
-}
-
-export function serializeFields(fields: PanelFields): string {
-  const parts: string[] = [];
-  if (fields.from.trim()) parts.push(`from:${quoteIfNeeded(fields.from.trim())}`);
-  if (fields.to.trim()) parts.push(`to:${quoteIfNeeded(fields.to.trim())}`);
-  if (fields.subject.trim()) parts.push(`subject:${quoteIfNeeded(fields.subject.trim())}`);
-  if (fields.includesText.trim()) parts.push(fields.includesText.trim());
-  if (fields.excludesText.trim())
-    parts.push(
-      ...fields.excludesText
-        .trim()
-        .split(/\s+/)
-        .map((word) => (word.startsWith('-') ? word : `-${word}`)),
-    );
-  parts.push(...serializeDateFilter(fields.date));
-  if (fields.hasAttachment) parts.push('has:attachment');
-  if (fields.unreadOnly) parts.push('is:unread');
-  return parts.join(' ');
-}
+export { fieldsFromParsedQuery, predicateToToken, quoteIfNeeded, serializeFields };
 
 const selectClass =
   'select-text cursor-pointer rounded border border-outline-variant/50 bg-surface-container-lowest px-2 py-1.5 text-body-sm text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest dark:text-dark-on-surface';
@@ -275,7 +188,7 @@ export function AdvancedSearchPanel({
           <button
             type="button"
             onClick={() => setOverrides(BLANK_FIELDS)}
-            className="cursor-pointer rounded px-3 py-1.5 text-label-md text-secondary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
+            className={secondaryActionButtonClass}
           >
             Reset
           </button>
@@ -286,7 +199,7 @@ export function AdvancedSearchPanel({
               if (serialized.trim().length === 0) return;
               onSubmit(serialized);
             }}
-            className="cursor-pointer rounded bg-primary px-3 py-1.5 text-label-md text-on-primary focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
+            className={primaryActionButtonClass}
           >
             Search
           </button>

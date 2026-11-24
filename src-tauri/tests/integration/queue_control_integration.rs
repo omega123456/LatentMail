@@ -3,6 +3,7 @@ use std::sync::{
     Arc,
 };
 
+use crate::support::{app, controllable_executor, events_channel, wait_for_item_status};
 use latentmail_lib::{
     queue::{
         admit_durable,
@@ -11,45 +12,12 @@ use latentmail_lib::{
             retry_queue_operation, set_queue_paused,
         },
         registry::PauseScope,
-        Executor, Lane, LaneState, OperationKind, QueueEngine, QueueEventSink, QueueOperation,
+        Executor, Lane, LaneState, OperationKind, QueueEngine, QueueOperation,
     },
     storage::{Account, AccountRepository, Operation, OperationRepository, Storage},
 };
 use tauri::Manager;
 use tokio::sync::{mpsc, oneshot};
-
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
-
-fn events_channel() -> (
-    QueueEventSink,
-    mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
-) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let sink: QueueEventSink = Arc::new(move |event, payload| {
-        let _ = sender.send((event, payload));
-    });
-    (sink, receiver)
-}
-
-async fn wait_for_item_status(
-    receiver: &mut mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
-    id: &str,
-    status: &str,
-) {
-    loop {
-        let (event, payload) = receiver.recv().await.expect("event stream stays open");
-        if event == latentmail_lib::events::QUEUE_ITEM
-            && payload["id"] == id
-            && payload["status"] == status
-        {
-            return;
-        }
-    }
-}
 
 fn drained_contains_summary(
     receiver: &mut mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
@@ -61,23 +29,6 @@ fn drained_contains_summary(
         }
     }
     found
-}
-
-fn controllable_executor() -> (
-    Executor,
-    mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
-) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let sender = sender.clone();
-        Box::pin(async move {
-            let (release_sender, release_receiver) = oneshot::channel();
-            let _ = sender.send((operation.id, release_sender));
-            let _ = release_receiver.await;
-            Ok(())
-        })
-    });
-    (executor, receiver)
 }
 
 fn operation(id: &str, account_id: &str, lane: Lane, entity_key: &str) -> QueueOperation {

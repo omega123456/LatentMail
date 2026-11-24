@@ -1,54 +1,10 @@
 use std::sync::Arc;
 
+use crate::support::{controllable_executor, events_channel, wait_for_item_status};
 use latentmail_lib::queue::{
     registry::{LaneState, OperationStatus, QueueRegistry},
-    Executor, Lane, OperationKind, QueueEngine, QueueEventSink, QueueOperation,
+    Executor, Lane, OperationKind, QueueEngine, QueueOperation,
 };
-use tokio::sync::{mpsc, oneshot};
-
-fn events_channel() -> (
-    QueueEventSink,
-    mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
-) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let sink: QueueEventSink = Arc::new(move |event, payload| {
-        let _ = sender.send((event, payload));
-    });
-    (sink, receiver)
-}
-
-async fn wait_for_item_status(
-    receiver: &mut mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
-    id: &str,
-    status: &str,
-) {
-    loop {
-        let (event, payload) = receiver.recv().await.expect("event stream stays open");
-        if event == latentmail_lib::events::QUEUE_ITEM
-            && payload["id"] == id
-            && payload["status"] == status
-        {
-            return;
-        }
-    }
-}
-
-fn controllable_executor() -> (
-    Executor,
-    mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
-) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let sender = sender.clone();
-        Box::pin(async move {
-            let (release_sender, release_receiver) = oneshot::channel();
-            let _ = sender.send((operation.id, release_sender));
-            let _ = release_receiver.await;
-            Ok(())
-        })
-    });
-    (executor, receiver)
-}
 
 fn operation(
     id: &str,

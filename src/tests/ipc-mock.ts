@@ -86,6 +86,19 @@ export const ipc = {
   override<C extends keyof IpcCommandMap>(command: C, response: Override<C>) {
     overrides.set(command, response as Override<keyof IpcCommandMap>);
   },
+  recordCalls<C extends keyof IpcCommandMap>(
+    command: C,
+    response?: Override<C>,
+  ): IpcCommandMap[C]['args'][] {
+    const calls: IpcCommandMap[C]['args'][] = [];
+    const fallback = command in ipcFixtures ? ipcFixtures[command] : undefined;
+    overrides.set(command, ((request: IpcCommandMap[C]['args']) => {
+      calls.push(request);
+      if (typeof response === 'function') return response(request);
+      return response !== undefined ? response : fallback;
+    }) as Override<keyof IpcCommandMap>);
+    return calls;
+  },
   emit<E extends keyof IpcEventMap>(event: E, payload: IpcEventMap[E]) {
     listeners.get(event)?.forEach((listener) => listener(payload));
   },

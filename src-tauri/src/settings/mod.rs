@@ -16,15 +16,6 @@ const SYNC_INTERVAL_SECONDS_KEY: &str = "syncIntervalSeconds";
 
 pub const MIN_SYNC_INTERVAL_SECS: u64 = 15;
 
-macro_rules! string_try {
-    ($result:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(error) => return Err(error.to_string()),
-        }
-    };
-}
-
 #[derive(Clone)]
 pub struct SettingsService {
     storage: Storage,

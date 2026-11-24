@@ -1,4 +1,3 @@
-import { Switch } from 'radix-ui';
 import { format, formatDistanceToNow } from 'date-fns';
 import { useAppUpdateQuery, useInstallUpdateMutation } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
@@ -7,37 +6,9 @@ import { Select } from '@/components/shared/Select';
 import { SettingRow } from './SettingRow';
 import { settingsButton, settingsTriggerClass } from './styles';
 import { SettingsSection } from './SettingsSection';
+import { SettingsDivider, SettingSwitch, StatusPip, SubsectionHeading } from './primitives';
 import { UPDATE_INTERVAL_OPTIONS } from '@/lib/update-intervals';
 import { DATE_FORMAT } from '@/lib/format/date-formats';
-
-function SettingSwitch({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  label: string;
-}) {
-  return (
-    <Switch.Root
-      checked={checked}
-      onCheckedChange={onChange}
-      aria-label={label}
-      className="relative h-5.5 w-9.5 shrink-0 cursor-pointer rounded-full bg-settings-outline-variant transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary data-[state=checked]:bg-settings-primary dark:bg-dark-settings-outline-variant dark:data-[state=checked]:bg-dark-settings-primary"
-    >
-      <Switch.Thumb className="absolute left-0.75 top-0.75 block size-4 rounded-full bg-white transition-transform data-[state=checked]:translate-x-4" />
-    </Switch.Root>
-  );
-}
-
-function SubsectionHeading({ children }: { children: string }) {
-  return (
-    <h3 className="mb-1.5 text-label-md uppercase text-settings-ink-mute dark:text-dark-settings-ink-mute">
-      {children}
-    </h3>
-  );
-}
 
 export function UpdatesSection() {
   const { data, dataUpdatedAt, isFetching, refetch } = useAppUpdateQuery();
@@ -68,12 +39,7 @@ export function UpdatesSection() {
       >
         <div className="flex flex-col gap-0.5">
           <span className="flex items-center gap-2 text-body-sm font-semibold text-settings-ink dark:text-dark-settings-ink">
-            {!available && (
-              <span
-                aria-hidden="true"
-                className="size-1.75 rounded-full bg-success dark:bg-dark-success"
-              />
-            )}
+            {!available && <StatusPip className="bg-success dark:bg-dark-success" />}
             {available
               ? `LatentMail ${available.version} is available`
               : `LatentMail ${currentVersion}`}
@@ -160,10 +126,7 @@ export function UpdatesSection() {
           />
         </SettingRow>
       </div>
-      <div
-        aria-hidden="true"
-        className="h-px bg-settings-outline-variant opacity-70 dark:bg-dark-settings-outline-variant"
-      />
+      <SettingsDivider />
       <div className="flex flex-col">
         <SubsectionHeading>This build</SubsectionHeading>
         <dl className="flex flex-col">

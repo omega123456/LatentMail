@@ -346,25 +346,7 @@ impl GmailClient {
         Ok(raw
             .labels
             .into_iter()
-            .map(|label| GmailLabel {
-                id: label.id,
-                name: label.name,
-                kind: label
-                    .kind
-                    .unwrap_or_else(|| "user".into())
-                    .to_ascii_lowercase(),
-                message_count: label.messages_total.unwrap_or(0),
-                unread_count: label.messages_unread.unwrap_or(0),
-                color: label.color.and_then(|value| {
-                    match (value.text_color, value.background_color) {
-                        (Some(text_color), Some(background_color)) => Some(LabelColorPair {
-                            text_color,
-                            background_color,
-                        }),
-                        _ => None,
-                    }
-                }),
-            })
+            .map(labels::map_label)
             .collect())
     }
     pub async fn list_messages_page(
@@ -741,7 +723,7 @@ impl GmailClient {
                     if history && status == StatusCode::NOT_FOUND {
                         return Err(GmailError::HistoryExpired);
                     }
-                    if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
+                    if crate::is_retryable_status(status.as_u16())
                         && attempt < LAST_RETRYABLE_ATTEMPT
                     {
                         tokio::time::sleep(backoff(attempt + 1)).await;
@@ -838,24 +820,7 @@ struct RawProfile {
 }
 #[derive(Deserialize)]
 struct RawLabels {
-    labels: Vec<RawLabel>,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawLabel {
-    id: String,
-    name: String,
-    #[serde(rename = "type")]
-    kind: Option<String>,
-    messages_total: Option<i64>,
-    messages_unread: Option<i64>,
-    color: Option<RawColor>,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawColor {
-    text_color: Option<String>,
-    background_color: Option<String>,
+    labels: Vec<labels::RawLabel>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -18,15 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-macro_rules! string_try {
-    ($result:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(error) => return Err(error.to_string()),
-        }
-    };
-}
-
+use crate::keychain::Keychain;
 use crate::queue::QueueEngine;
 use crate::storage::{Account, AccountRepository, Storage};
 
@@ -61,10 +53,11 @@ pub fn client_secret() -> Option<ClientSecret> {
         .filter(|secret| !secret.is_empty())
         .map(ClientSecret::new)
 }
-#[cfg(all(not(feature = "test-utils"), not(debug_assertions)))]
+#[cfg(not(debug_assertions))]
 const KEYCHAIN_SERVICE: &str = "com.latentmail.refresh-token";
-#[cfg(all(not(feature = "test-utils"), debug_assertions))]
+#[cfg(debug_assertions)]
 const KEYCHAIN_SERVICE: &str = "com.latentmail.desktop.dev.refresh-token";
+const REFRESH_TOKENS: Keychain = Keychain::new(KEYCHAIN_SERVICE);
 
 const ACCESS_TOKEN_EXPIRY_SKEW: ChronoDuration = ChronoDuration::minutes(5);
 const DEFAULT_ACCESS_TOKEN_LIFETIME: ChronoDuration = ChronoDuration::hours(1);
@@ -635,66 +628,26 @@ fn open_consent<R: Runtime>(_app: &AppHandle<R>, _url: &str) -> Result<(), Strin
     Err("System-browser access is disabled in tests".to_owned())
 }
 
-#[cfg(feature = "test-utils")]
-fn fake_keychain() -> &'static Mutex<HashMap<String, String>> {
-    static STORE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+pub fn save_refresh_token(account_id: &str, refresh_token: &str) -> Result<(), String> {
+    REFRESH_TOKENS.save(account_id, refresh_token)
 }
-#[cfg(feature = "test-utils")]
-pub fn save_refresh_token(account_id: &str, value: &str) -> Result<(), String> {
-    fake_keychain()
-        .lock()
-        .map_err(|_| "keychain lock poisoned".to_owned())?
-        .insert(account_id.to_owned(), value.to_owned());
-    Ok(())
-}
-#[cfg(feature = "test-utils")]
+
 pub fn load_refresh_token(account_id: &str) -> Result<String, String> {
-    fake_keychain()
-        .lock()
-        .map_err(|_| "keychain lock poisoned".to_owned())?
-        .get(account_id)
-        .cloned()
+    REFRESH_TOKENS
+        .load(account_id)?
         .ok_or_else(|| "missing refresh token".to_owned())
 }
-#[cfg(feature = "test-utils")]
+
 pub fn delete_refresh_token(account_id: &str) -> Result<(), String> {
-    fake_keychain()
-        .lock()
-        .map_err(|_| "keychain lock poisoned".to_owned())?
-        .remove(account_id);
-    Ok(())
+    REFRESH_TOKENS.clear(account_id)
 }
+
 #[cfg(feature = "test-utils")]
 pub fn has_refresh_token(account_id: &str) -> bool {
-    fake_keychain()
-        .lock()
+    REFRESH_TOKENS
+        .load(account_id)
         .expect("keychain lock poisoned")
-        .contains_key(account_id)
-}
-#[cfg(not(feature = "test-utils"))]
-pub fn save_refresh_token(account_id: &str, value: &str) -> Result<(), String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
-        .map_err(|error| error.to_string())?
-        .set_password(value)
-        .map_err(|error| error.to_string())
-}
-#[cfg(not(feature = "test-utils"))]
-pub fn load_refresh_token(account_id: &str) -> Result<String, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
-        .map_err(|error| error.to_string())?
-        .get_password()
-        .map_err(|error| error.to_string())
-}
-#[cfg(not(feature = "test-utils"))]
-pub fn delete_refresh_token(account_id: &str) -> Result<(), String> {
-    match keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
-        .map_err(|error| error.to_string())?
-        .delete_credential()
-    {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+        .is_some()
 }
 
 #[tauri::command]

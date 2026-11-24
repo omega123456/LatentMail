@@ -239,6 +239,12 @@ pub enum ThreadPageDirection {
     Backward,
 }
 
+const DEFAULT_THREAD_PAGE_SIZE: u32 = 50;
+
+pub fn thread_page_limit(requested: Option<u32>) -> u32 {
+    requested.unwrap_or(DEFAULT_THREAD_PAGE_SIZE).max(1)
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadPage {

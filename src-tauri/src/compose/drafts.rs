@@ -12,7 +12,7 @@ use crate::{
     gmail::{GmailClient, GmailError, GmailMessage},
     queue::{
         self, Executor, Lane, OperationFuture, OperationKind, QueueEngine, QueueError,
-        QueueOperation,
+        QueueOperation, QueueRoute,
     },
     storage::{
         addresses::split_addresses, ComposeDraftMetadata, ComposeDraftMetadataRepository,
@@ -136,16 +136,16 @@ pub async fn admit(
     queue::admit_durable(
         services.queue,
         services.storage,
-        QueueOperation {
-            id: id,
-            account_id: account_id,
-            lane: Lane::Interactive,
-            kind: kind,
-            entity_key: entity_key,
-            cost: 0,
-            attempts: 0,
-            description: description,
-        },
+        QueueOperation::new(
+            id,
+            account_id,
+            QueueRoute {
+                lane: Lane::Interactive,
+                kind: kind,
+                entity_key: entity_key,
+                description: description,
+            },
+        ),
         payload_json,
     )
     .await
@@ -240,7 +240,9 @@ async fn fail<R: Runtime>(
 fn classify(error: &GmailError) -> QueueError {
     match error {
         GmailError::Network(_) => QueueError::Network,
-        GmailError::Http(code @ (429 | 500..=599)) => QueueError::Http(*code),
+        GmailError::Http(status) if crate::is_retryable_status(*status) => {
+            QueueError::Http(*status)
+        }
         _ => QueueError::Permanent,
     }
 }

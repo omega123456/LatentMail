@@ -1,49 +1,20 @@
-use std::sync::Arc;
-
 use latentmail_lib::auth::AuthService;
 use latentmail_lib::storage::{
     Account, AccountRepository, AttachmentRepository, HtmlPresence, Message, MessageRepository,
     Storage,
 };
 use latentmail_lib::sync::commands::fetch_message_body;
-use latentmail_lib::sync::{noop_event_sink, SyncEngine, WorkRegistry};
+use crate::support::{app, sync_engine as engine};
 use tauri::Manager;
 use wiremock::{
     matchers::{method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
 
-fn app() -> tauri::App<tauri::test::MockRuntime> {
-    tauri::test::mock_builder()
-        .build(tauri::test::mock_context(tauri::test::noop_assets()))
-        .unwrap()
-}
-
-fn engine(storage: &Storage) -> Arc<SyncEngine> {
-    let registry = WorkRegistry::new();
-    let queue = latentmail_lib::sync::create_queue_engine(250, 250, registry.clone());
-    SyncEngine::new(storage.clone(), queue, registry, noop_event_sink())
-}
-
 fn message(presence: HtmlPresence) -> Message {
     Message {
-        account_id: "account".into(),
-        id: "message".into(),
-        thread_id: "thread".into(),
-        rfc_message_id: None,
-        sender: "sender@example.com".into(),
-        recipients: String::new(),
-        subject: "Subject".into(),
-        sent_at: 1,
-        snippet: "snippet".into(),
-        html_body: None,
-        plain_body: None,
-        has_attachments: false,
-        is_unread: false,
-        is_starred: false,
-        history_id: 1,
         truncated_body: Some("cut off embedding text".into()),
-        html_presence: presence,
+        ..crate::support::message("account", "message", "thread", presence)
     }
 }
 
