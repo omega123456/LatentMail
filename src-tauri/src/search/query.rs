@@ -147,48 +147,47 @@ pub(crate) fn fts_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn push_literal(
-    includes: &mut Vec<String>,
-    excludes: &mut Vec<String>,
-    fts_positive: &mut Vec<String>,
-    fts_negative: &mut Vec<String>,
-    raw: String,
-    negated: bool,
-) {
-    let clause = fts_quote(&raw);
-    if negated {
-        excludes.push(raw);
-        fts_negative.push(clause);
-    } else {
-        includes.push(raw);
-        fts_positive.push(clause);
-    }
+#[derive(Default)]
+struct TextTerms {
+    includes: Vec<String>,
+    excludes: Vec<String>,
+    fts_positive: Vec<String>,
+    fts_negative: Vec<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn bind_field(
-    field: &mut Option<String>,
-    includes: &mut Vec<String>,
-    excludes: &mut Vec<String>,
-    fts_positive: &mut Vec<String>,
-    fts_negative: &mut Vec<String>,
-    column: &str,
-    value: String,
-    negated: bool,
-) {
-    if value.trim().is_empty() {
-        return;
+impl TextTerms {
+    fn push_literal(&mut self, raw: String, negated: bool) {
+        let clause = fts_quote(&raw);
+        if negated {
+            self.excludes.push(raw);
+            self.fts_negative.push(clause);
+        } else {
+            self.includes.push(raw);
+            self.fts_positive.push(clause);
+        }
     }
-    let clause = format!("{column}:{}", fts_quote(&value));
-    if negated {
-        excludes.push(value);
-        fts_negative.push(clause);
-    } else if field.is_none() {
-        *field = Some(value);
-        fts_positive.push(clause);
-    } else {
-        includes.push(value);
-        fts_positive.push(clause);
+
+    fn bind_field(
+        &mut self,
+        field: &mut Option<String>,
+        column: &str,
+        value: String,
+        negated: bool,
+    ) {
+        if value.trim().is_empty() {
+            return;
+        }
+        let clause = format!("{column}:{}", fts_quote(&value));
+        if negated {
+            self.excludes.push(value);
+            self.fts_negative.push(clause);
+        } else if field.is_none() {
+            *field = Some(value);
+            self.fts_positive.push(clause);
+        } else {
+            self.includes.push(value);
+            self.fts_positive.push(clause);
+        }
     }
 }
 
@@ -224,11 +223,8 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
     let mut from: Option<String> = None;
     let mut to: Option<String> = None;
     let mut subject: Option<String> = None;
-    let mut includes: Vec<String> = Vec::new();
-    let mut excludes: Vec<String> = Vec::new();
+    let mut terms = TextTerms::default();
     let mut predicates: Vec<Predicate> = Vec::new();
-    let mut fts_positive: Vec<String> = Vec::new();
-    let mut fts_negative: Vec<String> = Vec::new();
 
     for token in tokens {
         let RawToken {
@@ -241,45 +237,11 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
                 if value.trim().is_empty() {
                     continue;
                 }
-                push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    value,
-                    negated,
-                );
+                terms.push_literal(value, negated);
             }
-            Some("from") => bind_field(
-                &mut from,
-                &mut includes,
-                &mut excludes,
-                &mut fts_positive,
-                &mut fts_negative,
-                "sender",
-                value,
-                negated,
-            ),
-            Some("to") => bind_field(
-                &mut to,
-                &mut includes,
-                &mut excludes,
-                &mut fts_positive,
-                &mut fts_negative,
-                "recipients",
-                value,
-                negated,
-            ),
-            Some("subject") => bind_field(
-                &mut subject,
-                &mut includes,
-                &mut excludes,
-                &mut fts_positive,
-                &mut fts_negative,
-                "subject",
-                value,
-                negated,
-            ),
+            Some("from") => terms.bind_field(&mut from, "sender", value, negated),
+            Some("to") => terms.bind_field(&mut to, "recipients", value, negated),
+            Some("subject") => terms.bind_field(&mut subject, "subject", value, negated),
             Some("label") | Some("in") => {
                 if !value.trim().is_empty() {
                     predicates.push(Predicate {
@@ -305,96 +267,53 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
                     kind: PredicateKind::Starred,
                     negated: !negated,
                 }),
-                _ => push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    format!("is:{value}"),
-                    negated,
-                ),
+                _ => terms.push_literal(format!("is:{value}"), negated),
             },
             Some("has") => match value.to_lowercase().as_str() {
                 "attachment" => predicates.push(Predicate {
                     kind: PredicateKind::HasAttachment,
                     negated,
                 }),
-                _ => push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    format!("has:{value}"),
-                    negated,
-                ),
+                _ => terms.push_literal(format!("has:{value}"), negated),
             },
             Some("before") => match parse_absolute_cutoff(&value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentBefore(cutoff),
                     negated,
                 }),
-                None => push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    format!("before:{value}"),
-                    negated,
-                ),
+                None => terms.push_literal(format!("before:{value}"), negated),
             },
             Some("after") => match parse_absolute_cutoff(&value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentAfter(cutoff),
                     negated,
                 }),
-                None => push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    format!("after:{value}"),
-                    negated,
-                ),
+                None => terms.push_literal(format!("after:{value}"), negated),
             },
             Some("newer_than") => match parse_duration_cutoff(now, &value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentAfter(cutoff),
                     negated,
                 }),
-                None => push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    format!("newer_than:{value}"),
-                    negated,
-                ),
+                None => terms.push_literal(format!("newer_than:{value}"), negated),
             },
             Some("older_than") => match parse_duration_cutoff(now, &value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentBefore(cutoff),
                     negated,
                 }),
-                None => push_literal(
-                    &mut includes,
-                    &mut excludes,
-                    &mut fts_positive,
-                    &mut fts_negative,
-                    format!("older_than:{value}"),
-                    negated,
-                ),
+                None => terms.push_literal(format!("older_than:{value}"), negated),
             },
-            Some(unknown) => push_literal(
-                &mut includes,
-                &mut excludes,
-                &mut fts_positive,
-                &mut fts_negative,
-                format!("{unknown}:{value}"),
-                negated,
-            ),
+            Some(unknown) => terms.push_literal(format!("{unknown}:{value}"), negated),
         }
     }
 
+    let TextTerms {
+        includes,
+        excludes,
+        fts_positive,
+        fts_negative,
+    } = terms;
     let match_expression = if !fts_positive.is_empty() {
         let positive = fts_positive.join(" ");
         if fts_negative.is_empty() {

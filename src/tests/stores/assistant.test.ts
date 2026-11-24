@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { ipc } from '@/tests/ipc-mock';
 import { isStreaming, QUESTION_LIMIT, useAssistantStore } from '@/stores/assistant';
+import { captureConsole } from '@/tests/console';
 
 function reset() {
   useAssistantStore.setState({
@@ -48,6 +49,7 @@ describe('assistant store', () => {
   });
 
   it('reports a failed start as the answer error and ends the stream', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('start_ai_chat', () => {
       throw new Error('The index must be rebuilt');
     });
@@ -56,6 +58,9 @@ describe('assistant store', () => {
       expect(useAssistantStore.getState().messages[1].error).toContain('The index must be rebuilt'),
     );
     expect(isStreaming(useAssistantStore.getState().messages)).toBe(false);
+    expect(consoleError).toHaveBeenCalledWith(
+      'ipc start_ai_chat failed: The index must be rebuilt',
+    );
   });
 
   it('streams deltas, keeps sources on completion, and drops them on cancellation', async () => {
@@ -121,6 +126,7 @@ describe('assistant store', () => {
   });
 
   it('reports a start failure for a replaced session against nothing', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('start_ai_chat', () => {
       throw new Error('gone');
     });
@@ -129,6 +135,7 @@ describe('assistant store', () => {
     useAssistantStore.getState().newChat();
     await waitFor(() => expect(useAssistantStore.getState().sessionId).not.toBe(sessionId));
     expect(useAssistantStore.getState().messages).toHaveLength(0);
+    expect(consoleError).toHaveBeenCalledWith('ipc start_ai_chat failed: gone');
   });
 
   it('starts a new session for a new account and keeps one for the same account', async () => {

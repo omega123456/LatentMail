@@ -14,6 +14,7 @@ use crate::{
 };
 
 use super::{
+    announce::MailChangeAnnouncer,
     dto::{message_body_dto, message_dto, ImagePolicy, MessageBodyDto, MessageBodyFetchedDto},
     gmail_base_url, ConversationDto, LabelDto, MutationResultDto, SyncEngine, SyncStatusDto,
     ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
@@ -138,21 +139,22 @@ async fn admit_compose(
         quote_plain: request.quote_plain,
         coalescing_generation: 0,
     };
-    crate::compose::drafts::admit(
+    let services = crate::compose::drafts::AdmissionServices {
         queue,
         storage,
         staging,
         coalescer,
-        operation_id.clone(),
-        request.account_id,
-        request
+    };
+    let admission = crate::compose::drafts::DraftAdmission {
+        id: operation_id.clone(),
+        account_id: request.account_id,
+        entity_key: request
             .draft_id
             .clone()
             .unwrap_or(request.session_id.clone()),
         payload,
-        &parts,
-    )
-    .await?;
+    };
+    crate::compose::drafts::admit(&services, admission, &parts).await?;
     Ok(ComposeQueueAcceptance {
         operation_id,
         draft_id: request.draft_id,
@@ -181,19 +183,16 @@ pub async fn send_compose_draft(
     admit_compose(&queue, &storage, &staging, &coalescer, draft, true).await
 }
 
-#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn discard_compose_draft<R: Runtime>(
-    app: AppHandle<R>,
-    auth: tauri::State<'_, AuthService>,
-    engine: tauri::State<'_, Arc<SyncEngine>>,
-    storage: tauri::State<'_, Storage>,
+    services: super::services::GmailServices<'_, R>,
     staging: tauri::State<'_, Arc<crate::compose::staging::Staging>>,
     account_id: String,
     draft_id: Option<String>,
     session_id: String,
 ) -> Result<(), String> {
-    storage
+    services
+        .storage
         .run({
             let account_id = account_id.clone();
             let session_id = session_id.clone();
@@ -211,8 +210,8 @@ pub async fn discard_compose_draft<R: Runtime>(
         let _ = staging.release_owner(&account_id, &session_id);
         return Ok(());
     };
-    let client = gmail_client_for(&app, &auth, &engine, &account_id).await?;
-    crate::compose::drafts::delete(&client, &storage, &account_id, &draft_id).await?;
+    let client = services.client(&account_id).await?;
+    crate::compose::drafts::delete(&client, &services.storage, &account_id, &draft_id).await?;
     let _ = staging.release_owner(&account_id, &draft_id);
     let _ = staging.release_owner(&account_id, &session_id);
     Ok(())
@@ -934,6 +933,21 @@ pub async fn mutate_threads<R: Runtime>(
     add: Vec<String>,
     remove: Vec<String>,
 ) -> Result<Vec<MutationResultDto>, String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome =
+        apply_mutate_threads(app, auth, engine, account_id, thread_ids, add, remove).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_mutate_threads<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    account_id: String,
+    thread_ids: Vec<String>,
+    add: Vec<String>,
+    remove: Vec<String>,
+) -> Result<Vec<MutationResultDto>, String> {
     reject_protected_label_mutation(&add, &remove)?;
     let token = auth.refresh_access_token(&app, &account_id).await?;
     let base_url = gmail_base_url();
@@ -988,6 +1002,21 @@ pub async fn mutate_threads<R: Runtime>(
 
 #[tauri::command]
 pub async fn mutate_messages<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    account_id: String,
+    message_ids: Vec<String>,
+    add: Vec<String>,
+    remove: Vec<String>,
+) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome =
+        apply_mutate_messages(app, auth, engine, account_id, message_ids, add, remove).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_mutate_messages<R: Runtime>(
     app: AppHandle<R>,
     auth: tauri::State<'_, AuthService>,
     engine: tauri::State<'_, Arc<SyncEngine>>,
@@ -1100,6 +1129,20 @@ pub async fn create_label<R: Runtime>(
     name: String,
     color_id: Option<String>,
 ) -> Result<LabelDto, String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome = apply_create_label(app, auth, engine, storage, account_id, name, color_id).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_create_label<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    name: String,
+    color_id: Option<String>,
+) -> Result<LabelDto, String> {
     let color = resolve_color_or_error(color_id.as_deref())?;
     let account = account_id.clone();
     let trimmed = storage
@@ -1134,6 +1177,20 @@ pub async fn create_label<R: Runtime>(
 
 #[tauri::command]
 pub async fn rename_label<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    label_id: String,
+    name: String,
+) -> Result<LabelDto, String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome = apply_rename_label(app, auth, engine, storage, account_id, label_id, name).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_rename_label<R: Runtime>(
     app: AppHandle<R>,
     auth: tauri::State<'_, AuthService>,
     engine: tauri::State<'_, Arc<SyncEngine>>,
@@ -1182,6 +1239,21 @@ pub async fn recolor_label<R: Runtime>(
     label_id: String,
     color_id: String,
 ) -> Result<LabelDto, String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome =
+        apply_recolor_label(app, auth, engine, storage, account_id, label_id, color_id).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_recolor_label<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    label_id: String,
+    color_id: String,
+) -> Result<LabelDto, String> {
     let color = resolve_color(&color_id)
         .map(|pair| LabelColor {
             text: pair.text_color,
@@ -1213,6 +1285,19 @@ pub async fn recolor_label<R: Runtime>(
 
 #[tauri::command]
 pub async fn delete_label<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    storage: tauri::State<'_, Storage>,
+    account_id: String,
+    label_id: String,
+) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome = apply_delete_label(app, auth, engine, storage, account_id, label_id).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_delete_label<R: Runtime>(
     app: AppHandle<R>,
     auth: tauri::State<'_, AuthService>,
     engine: tauri::State<'_, Arc<SyncEngine>>,

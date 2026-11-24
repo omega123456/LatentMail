@@ -1,7 +1,7 @@
 use std::{io, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 use crate::queue::{PauseScope, QueueEngine};
 
@@ -68,7 +68,16 @@ pub fn run_client(args: &[String]) -> Option<(String, i32)> {
     })
 }
 
-pub fn start<R: Runtime>(app: &AppHandle<R>) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ControlSocket {
+    Spawned,
+    Unsupported,
+}
+
+#[cfg(not(feature = "test-utils"))]
+pub fn start<R: Runtime>(app: &AppHandle<R>) -> ControlSocket {
+    use tauri::Manager;
+
     let queue = app.state::<Arc<QueueEngine>>().inner().clone();
     let path = socket_path();
     tauri::async_runtime::spawn(async move {
@@ -76,6 +85,12 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
             tracing::warn!(target: "cli", "terminal sync control unavailable: {error}");
         }
     });
+    ControlSocket::Spawned
+}
+
+#[cfg(feature = "test-utils")]
+pub fn start<R: Runtime>(_app: &AppHandle<R>) -> ControlSocket {
+    ControlSocket::Unsupported
 }
 
 #[cfg(unix)]

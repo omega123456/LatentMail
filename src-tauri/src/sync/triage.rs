@@ -11,7 +11,10 @@ use crate::{
     storage::{MessageRepository, Storage},
 };
 
-use super::{dto::MutationResultDto, gmail_base_url, MutationOutcome, SyncEngine};
+use super::{
+    announce::MailChangeAnnouncer, dto::MutationResultDto, gmail_base_url, MutationOutcome,
+    SyncEngine,
+};
 
 pub const REMOVABLE_SYSTEM_FOLDER_LABELS: [&str; 3] = ["INBOX", "SPAM", "TRASH"];
 pub const MOVE_DESTINATIONS: [&str; 3] = ["INBOX", "SPAM", "TRASH"];
@@ -238,11 +241,36 @@ pub async fn delete_threads<R: Runtime>(
     account_id: String,
     thread_ids: Vec<String>,
 ) -> Result<Vec<MutationResultDto>, String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome = apply_delete_threads(app, auth, engine, account_id, thread_ids).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_delete_threads<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    account_id: String,
+    thread_ids: Vec<String>,
+) -> Result<Vec<MutationResultDto>, String> {
     apply_thread_intent(app, auth, engine, account_id, thread_ids, Intent::Delete).await
 }
 
 #[tauri::command]
 pub async fn move_threads<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    account_id: String,
+    thread_ids: Vec<String>,
+    destination: String,
+) -> Result<Vec<MutationResultDto>, String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome = apply_move_threads(app, auth, engine, account_id, thread_ids, destination).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_move_threads<R: Runtime>(
     app: AppHandle<R>,
     auth: tauri::State<'_, AuthService>,
     engine: tauri::State<'_, Arc<SyncEngine>>,
@@ -270,11 +298,37 @@ pub async fn delete_messages<R: Runtime>(
     account_id: String,
     message_ids: Vec<String>,
 ) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome = apply_delete_messages(app, auth, engine, account_id, message_ids).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_delete_messages<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    account_id: String,
+    message_ids: Vec<String>,
+) -> Result<(), String> {
     apply_message_intent(app, auth, engine, account_id, message_ids, Intent::Delete).await
 }
 
 #[tauri::command]
 pub async fn move_messages<R: Runtime>(
+    app: AppHandle<R>,
+    auth: tauri::State<'_, AuthService>,
+    engine: tauri::State<'_, Arc<SyncEngine>>,
+    account_id: String,
+    message_ids: Vec<String>,
+    destination: String,
+) -> Result<(), String> {
+    let announcer = MailChangeAnnouncer::new(&app, &account_id);
+    let outcome =
+        apply_move_messages(app, auth, engine, account_id, message_ids, destination).await;
+    announcer.announce(outcome)
+}
+
+async fn apply_move_messages<R: Runtime>(
     app: AppHandle<R>,
     auth: tauri::State<'_, AuthService>,
     engine: tauri::State<'_, Arc<SyncEngine>>,

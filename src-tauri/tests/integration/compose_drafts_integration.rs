@@ -206,15 +206,21 @@ async fn admitting_a_draft_requires_all_staged_parts_to_exist() {
     let staging = Staging::new(directory.path().join("staged"));
     let coalescer = SaveCoalescer::new();
 
+    let services = drafts::AdmissionServices {
+        queue: &queue,
+        storage: &storage,
+        staging: &staging,
+        coalescer: &coalescer,
+    };
+    let admission = drafts::DraftAdmission {
+        id: "operation".into(),
+        account_id: "account".into(),
+        entity_key: "session".into(),
+        payload: base_payload(DraftOperationMode::Create, None),
+    };
     let error = drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "operation".into(),
-        "account".into(),
-        "session".into(),
-        base_payload(DraftOperationMode::Create, None),
+        &services,
+        admission,
         &[StagedPart {
             id: "missing".into(),
             filename: "missing.txt".into(),
@@ -566,14 +572,18 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
         ("discarded", "draft:discarded"),
     ] {
         drafts::admit(
-            &queue,
-            &storage,
-            &staging,
-            &coalescer,
-            id.into(),
-            "account".into(),
-            key.into(),
-            base_payload(DraftOperationMode::Create, None),
+            &drafts::AdmissionServices {
+                queue: &queue,
+                storage: &storage,
+                staging: &staging,
+                coalescer: &coalescer,
+            },
+            drafts::DraftAdmission {
+                id: id.into(),
+                account_id: "account".into(),
+                entity_key: key.into(),
+                payload: base_payload(DraftOperationMode::Create, None),
+            },
             &[],
         )
         .await
@@ -1299,14 +1309,18 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
         .unwrap();
 
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-1".into(),
-        "account".into(),
-        "draft:local-session".into(),
-        base_payload(DraftOperationMode::Create, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-1".into(),
+            account_id: "account".into(),
+            entity_key: "draft:local-session".into(),
+            payload: base_payload(DraftOperationMode::Create, None),
+        },
         std::slice::from_ref(&part),
     )
     .await
@@ -1330,14 +1344,18 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
     assert!(part.path.exists(), "canonical draft-owned data survives");
 
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-coalesced-create".into(),
-        "account".into(),
-        "draft:local-session".into(),
-        base_payload(DraftOperationMode::Create, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-coalesced-create".into(),
+            account_id: "account".into(),
+            entity_key: "draft:local-session".into(),
+            payload: base_payload(DraftOperationMode::Create, None),
+        },
         std::slice::from_ref(&part),
     )
     .await
@@ -1355,14 +1373,18 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
 
     for (op_id, message_id) in [("op-2", "m2"), ("op-3", "m2")] {
         drafts::admit(
-            &queue,
-            &storage,
-            &staging,
-            &coalescer,
-            op_id.into(),
-            "account".into(),
-            "draft:d1".into(),
-            base_payload(DraftOperationMode::Update, Some("d1")),
+            &drafts::AdmissionServices {
+                queue: &queue,
+                storage: &storage,
+                staging: &staging,
+                coalescer: &coalescer,
+            },
+            drafts::DraftAdmission {
+                id: op_id.into(),
+                account_id: "account".into(),
+                entity_key: "draft:d1".into(),
+                payload: base_payload(DraftOperationMode::Update, Some("d1")),
+            },
             std::slice::from_ref(&part),
         )
         .await
@@ -1480,14 +1502,18 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         .unwrap();
 
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-send".into(),
-        "account".into(),
-        "draft:d1".into(),
-        base_payload(DraftOperationMode::Send, Some("d1")),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-send".into(),
+            account_id: "account".into(),
+            entity_key: "draft:d1".into(),
+            payload: base_payload(DraftOperationMode::Send, Some("d1")),
+        },
         std::slice::from_ref(&part),
     )
     .await
@@ -1527,14 +1553,18 @@ async fn send_consumes_the_draft_and_releases_canonical_staging() {
         )
         .unwrap();
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-first-send".into(),
-        "account".into(),
-        "session-2".into(),
-        base_payload(DraftOperationMode::Send, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-first-send".into(),
+            account_id: "account".into(),
+            entity_key: "session-2".into(),
+            payload: base_payload(DraftOperationMode::Send, None),
+        },
         std::slice::from_ref(&first_click_part),
     )
     .await
@@ -1595,14 +1625,18 @@ async fn discard_racing_an_active_create_deletes_the_returned_draft() {
         .await;
 
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-race".into(),
-        "account".into(),
-        "session-race".into(),
-        base_payload(DraftOperationMode::Create, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-race".into(),
+            account_id: "account".into(),
+            entity_key: "session-race".into(),
+            payload: base_payload(DraftOperationMode::Create, None),
+        },
         &[],
     )
     .await
@@ -1638,14 +1672,18 @@ async fn a_save_superseded_before_it_runs_is_coalesced_rather_than_uploaded() {
 
     queue.pause();
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-stale".into(),
-        "account".into(),
-        "draft:local-session".into(),
-        base_payload(DraftOperationMode::Create, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-stale".into(),
+            account_id: "account".into(),
+            entity_key: "draft:local-session".into(),
+            payload: base_payload(DraftOperationMode::Create, None),
+        },
         &[],
     )
     .await
@@ -1661,14 +1699,18 @@ async fn a_save_superseded_before_it_runs_is_coalesced_rather_than_uploaded() {
         .mount(&server)
         .await;
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-fresh".into(),
-        "account".into(),
-        "draft:local-session".into(),
-        base_payload(DraftOperationMode::Create, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-fresh".into(),
+            account_id: "account".into(),
+            entity_key: "draft:local-session".into(),
+            payload: base_payload(DraftOperationMode::Create, None),
+        },
         &[],
     )
     .await
@@ -2226,14 +2268,18 @@ async fn a_token_failure_is_reported_only_when_the_queue_will_not_retry_it() {
         ("send-token", "draft:send-token", DraftOperationMode::Send),
     ] {
         drafts::admit(
-            &queue,
-            &storage,
-            &staging,
-            &coalescer,
-            id.into(),
-            "account".into(),
-            key.into(),
-            base_payload(mode, None),
+            &drafts::AdmissionServices {
+                queue: &queue,
+                storage: &storage,
+                staging: &staging,
+                coalescer: &coalescer,
+            },
+            drafts::DraftAdmission {
+                id: id.into(),
+                account_id: "account".into(),
+                entity_key: key.into(),
+                payload: base_payload(mode, None),
+            },
             &[],
         )
         .await
@@ -2326,14 +2372,18 @@ async fn a_sent_message_whose_local_write_fails_is_still_reported_as_sent() {
     });
 
     drafts::admit(
-        &queue,
-        &storage,
-        &staging,
-        &coalescer,
-        "op-sent-local-fail".into(),
-        "account".into(),
-        "session-local-fail".into(),
-        base_payload(DraftOperationMode::Send, None),
+        &drafts::AdmissionServices {
+            queue: &queue,
+            storage: &storage,
+            staging: &staging,
+            coalescer: &coalescer,
+        },
+        drafts::DraftAdmission {
+            id: "op-sent-local-fail".into(),
+            account_id: "account".into(),
+            entity_key: "session-local-fail".into(),
+            payload: base_payload(DraftOperationMode::Send, None),
+        },
         &[],
     )
     .await

@@ -12,6 +12,7 @@ import {
   useHasAnyCommandOverride,
   useSetCommandOverride,
 } from '@/providers/CommandProvider';
+import { captureConsole } from '@/tests/console';
 
 describe('CommandProvider fallback no-ops', () => {
   it('is a harmless no-op to clear a single override or all overrides without a provider ancestor', () => {
@@ -152,6 +153,7 @@ describe('CommandProvider', () => {
   });
 
   it('swallows a failed hydration read, leaving the defaults in place', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('read_settings', () => {
       throw new Error('boom');
     });
@@ -165,9 +167,11 @@ describe('CommandProvider', () => {
     await waitFor(() =>
       expect(screen.getByText(JSON.stringify(DEFAULT_COMMAND_BINDINGS))).toBeInTheDocument(),
     );
+    expect(consoleError).toHaveBeenCalledWith('ipc read_settings failed: boom');
   });
 
   it('swallows a failed persist without throwing', async () => {
+    const consoleError = captureConsole('error');
     const user = userEvent.setup();
     ipc.override('write_setting', () => {
       throw new Error('boom');
@@ -183,6 +187,7 @@ describe('CommandProvider', () => {
     await user.click(screen.getByText('set'));
 
     expect(screen.getByTestId('binding')).toHaveTextContent('Mod+K');
+    expect(consoleError).toHaveBeenCalledWith('ipc write_setting failed: boom');
   });
 });
 

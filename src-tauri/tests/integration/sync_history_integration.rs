@@ -216,6 +216,12 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
         complete.and_then(|payload| payload.get("changed")),
         Some(&serde_json::json!(true))
     );
+    let completed_at = complete
+        .and_then(|payload| payload.get("completedAt"))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap();
+    assert!(chrono::DateTime::from_timestamp_millis(completed_at)
+        .is_some_and(|moment| moment > chrono::DateTime::UNIX_EPOCH));
 }
 
 #[tokio::test]

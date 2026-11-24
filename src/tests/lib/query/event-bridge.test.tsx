@@ -1,3 +1,4 @@
+import { getTime, parseISO, toDate } from 'date-fns';
 import { act, render, waitFor } from '@testing-library/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,9 @@ import { useToastStore } from '@/stores/toast';
 import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
+
+const RUST_COMPLETED_AT = getTime(parseISO('2026-08-11T10:00:00Z'));
 
 function SpyClient({ onReady }: { onReady: (client: ReturnType<typeof useQueryClient>) => void }) {
   onReady(useQueryClient());
@@ -200,6 +204,7 @@ describe('EventBridge', () => {
         historyId: 42,
         addedCount: 3,
         changed: true,
+        completedAt: RUST_COMPLETED_AT,
       }),
     );
     expect(useSyncStore.getState().syncState).toBe('idle');
@@ -224,10 +229,11 @@ describe('EventBridge', () => {
         historyId: 42,
         addedCount: 0,
         changed: false,
+        completedAt: RUST_COMPLETED_AT,
       }),
     );
     expect(useSyncStore.getState().syncState).toBe('idle');
-    expect(useSyncStore.getState().lastSynced).toBeInstanceOf(Date);
+    expect(useSyncStore.getState().lastSynced).toEqual(toDate(RUST_COMPLETED_AT));
     expect(useSyncStore.getState().error).toBeUndefined();
     expect(invalidate).toHaveBeenCalledExactlyOnceWith({
       queryKey: queryKeys.syncStatus('account-1'),
@@ -253,6 +259,7 @@ describe('EventBridge', () => {
         historyId: 42,
         addedCount: 3,
         changed: true,
+        completedAt: RUST_COMPLETED_AT,
       });
       ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-1'], arrivals: [] });
       vi.advanceTimersByTime(250);
@@ -295,6 +302,44 @@ describe('EventBridge', () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.accounts });
+  });
+
+  it('invalidates the accounts query when Rust announces a removed account', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('account://removed', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() => ipc.emit('account://removed', { accountId: 'account-1' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.accounts });
+  });
+
+  it('re-reads every mail view of the account at once when Rust announces a local mail change', async () => {
+    let client: ReturnType<typeof useQueryClient> | undefined;
+    render(
+      <QueryProvider>
+        <SpyClient onReady={(value) => (client = value)} />
+        <EventBridge />
+      </QueryProvider>,
+    );
+    await waitFor(() =>
+      expect(ipc.tauriListen).toHaveBeenCalledWith('mail://changed', expect.any(Function)),
+    );
+    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    act(() => ipc.emit('mail://changed', { accountId: 'account-1' }));
+    expect(invalidate.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: queryKeys.threadsForAccount('account-1') },
+      { queryKey: queryKeys.conversationsForAccount('account-1') },
+      { queryKey: queryKeys.searchForAccount('account-1') },
+      { queryKey: queryKeys.searchTotalsForAccount('account-1') },
+      { queryKey: queryKeys.labels('account-1') },
+    ]);
   });
 
   it('invalidates only the matching message-body family after a body fetch', async () => {
@@ -603,6 +648,7 @@ describe('EventBridge', () => {
   });
 
   it('handles compose delivery events and ignores unrelated queue items through the shared IPC harness', async () => {
+    const consoleError = captureConsole('error');
     let client: ReturnType<typeof useQueryClient> | undefined;
     render(
       <QueryProvider>
@@ -717,5 +763,8 @@ describe('EventBridge', () => {
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.labels('account-1') });
     vi.useRealTimers();
+    expect(consoleError).toHaveBeenCalledWith(
+      'compose send failed: Gmail request failed with status 400',
+    );
   });
 });

@@ -174,3 +174,8 @@ export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operat
     ],
   },
 ];
+
+export const playwrightPendingQueueSummary: IpcCommandMap['read_queue_summary']['result'] = {
+  ...playwrightQueueSummary,
+  pending: 2,
+};

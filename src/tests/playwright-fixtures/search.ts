@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import type { IpcCommandMap, MailThread } from '@/lib/types/ipc';
 
 export const playwrightSearchThreads: MailThread[] = [
@@ -6,7 +7,7 @@ export const playwrightSearchThreads: MailThread[] = [
     subject: 'Q3 invoice attached',
     sender: { display: 'Anna Whitfield', address: 'anna@example.com' },
     sentRecipient: null,
-    latestAt: Date.parse('2026-08-11T09:42:00Z'),
+    latestAt: getTime(parseISO('2026-08-11T09:42:00Z')),
     messageCount: 1,
     isUnread: false,
     isStarred: false,
@@ -21,7 +22,7 @@ export const playwrightSearchThreads: MailThread[] = [
     subject: 'Re: Q3 invoice',
     sender: { display: 'Anna Whitfield', address: 'anna@example.com' },
     sentRecipient: { display: 'Anna Whitfield', address: 'anna@example.com' },
-    latestAt: Date.parse('2026-08-10T14:05:00Z'),
+    latestAt: getTime(parseISO('2026-08-10T14:05:00Z')),
     messageCount: 2,
     isUnread: false,
     isStarred: false,
@@ -47,6 +48,24 @@ export const playwrightParsedSearchQuery: IpcCommandMap['parse_search_query']['r
   to: null,
   subject: null,
   includes: ['quarterly'],
+  excludes: [],
+  predicates: [],
+};
+
+export const playwrightEmptySearchPage: IpcCommandMap['search_threads']['result'] = {
+  items: [],
+  nextCursor: null,
+  previousCursor: null,
+};
+
+export const playwrightZeroSearchTotal: IpcCommandMap['search_total']['result'] = 0;
+
+export const playwrightEmptyParsedSearchQuery: IpcCommandMap['parse_search_query']['result'] = {
+  hasTextTerm: false,
+  from: null,
+  to: null,
+  subject: null,
+  includes: [],
   excludes: [],
   predicates: [],
 };

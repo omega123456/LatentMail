@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -9,11 +10,13 @@ import { useSelectionStore } from '@/stores/selection';
 import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSearchStore } from '@/stores/search';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
-function renderWithClient() {
+function renderWithClient({ bridged }: { bridged: boolean } = { bridged: false }) {
   const client = new QueryClient();
   return render(
     <QueryClientProvider client={client}>
+      {bridged && <EventBridge />}
       <ReadingPaneContainer threadId="thread-1" />
     </QueryClientProvider>,
   );
@@ -29,7 +32,7 @@ function conversationFor(htmlPresence: 'neverFetched' | 'present' | 'tooLarge') 
         sender: 'Alex <alex@example.com>',
         recipients: ['me@example.com'],
         subject: 'Subject',
-        sentAt: Date.parse('2026-08-10T09:00:00Z'),
+        sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
         snippet: 'Preview',
         htmlBody: null,
         htmlPresence,
@@ -132,6 +135,7 @@ describe('ReadingPaneContainer', () => {
   });
 
   it('renders a never-fetched body once the fetch event refreshes the cached body', async () => {
+    const consoleInfo = captureConsole('info');
     selectAccount();
     let stored: MessageBody = {
       htmlBody: null,
@@ -163,6 +167,9 @@ describe('ReadingPaneContainer', () => {
     );
     await screen.findByLabelText('Message body');
     expect(screen.queryByText('Loading message…')).not.toBeInTheDocument();
+    expect(consoleInfo).toHaveBeenCalledWith(
+      'event message://body-fetched {"accountId":"account-1","messageId":"message-1"}',
+    );
   });
 
   it('resolves bulk selection state from the search results list while search is active, not the mailbox listing', async () => {
@@ -188,7 +195,7 @@ describe('ReadingPaneContainer', () => {
           subject: 'Found via search',
           sender: { display: 'Anna', address: 'anna@example.com' },
           sentRecipient: null,
-          latestAt: Date.parse('2026-08-11T10:00:00Z'),
+          latestAt: getTime(parseISO('2026-08-11T10:00:00Z')),
           messageCount: 1,
           isUnread: true,
           isStarred: true,
@@ -229,7 +236,7 @@ describe('ReadingPaneContainer', () => {
           subject: 'In trash',
           sender: { display: 'Anna', address: 'anna@example.com' },
           sentRecipient: null,
-          latestAt: Date.parse('2026-08-11T10:00:00Z'),
+          latestAt: getTime(parseISO('2026-08-11T10:00:00Z')),
           messageCount: 1,
           isUnread: false,
           isStarred: false,
@@ -242,7 +249,7 @@ describe('ReadingPaneContainer', () => {
           subject: 'In inbox',
           sender: { display: 'Bob', address: 'bob@example.com' },
           sentRecipient: null,
-          latestAt: Date.parse('2026-08-10T10:00:00Z'),
+          latestAt: getTime(parseISO('2026-08-10T10:00:00Z')),
           messageCount: 1,
           isUnread: false,
           isStarred: false,
@@ -289,7 +296,7 @@ describe('ReadingPaneContainer', () => {
         subject: id,
         sender: { display: 'Anna', address: 'anna@example.com' },
         sentRecipient: null,
-        latestAt: Date.parse('2026-08-11T10:00:00Z'),
+        latestAt: getTime(parseISO('2026-08-11T10:00:00Z')),
         messageCount: 1,
         isUnread: false,
         isStarred: false,
@@ -336,7 +343,7 @@ describe('ReadingPaneContainer', () => {
           sender: 'Elena Rodriguez <elena.r@example.com>',
           recipients: ['you@example.com'],
           subject: 'Q3 Marketing Strategy Review',
-          sentAt: Date.parse('2026-08-10T09:00:00Z'),
+          sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
           snippet: 'Attached the slides.',
           htmlBody: '<p>Attached the slides.</p>',
           htmlPresence: 'present',
@@ -422,6 +429,7 @@ describe('ReadingPaneContainer', () => {
   });
 
   it('wires per-message spam and delete actions to the message-scoped intent commands', async () => {
+    const consoleInfo = captureConsole('info');
     const user = userEvent.setup();
     useSelectionStore.setState({
       activeAccountId: 'account-1',
@@ -439,7 +447,7 @@ describe('ReadingPaneContainer', () => {
           sender: 'Elena Rodriguez <elena.r@example.com>',
           recipients: ['you@example.com'],
           subject: 'Q3 Marketing Strategy Review',
-          sentAt: Date.parse('2026-08-10T09:00:00Z'),
+          sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
           snippet: 'Attached the slides.',
           htmlBody: '<p>Attached the slides.</p>',
           htmlPresence: 'present',
@@ -460,13 +468,15 @@ describe('ReadingPaneContainer', () => {
     const deleteMessageChanges: unknown[] = [];
     ipc.override('move_messages', (args) => {
       moveMessageChanges.push(args);
+      ipc.emit('mail://changed', { accountId: 'account-1' });
       return undefined;
     });
     ipc.override('delete_messages', (args) => {
       deleteMessageChanges.push(args);
+      ipc.emit('mail://changed', { accountId: 'account-1' });
       return undefined;
     });
-    renderWithClient();
+    renderWithClient({ bridged: true });
     const ribbon = within(await screen.findByTestId('message-action-ribbon'));
     await user.click(ribbon.getByRole('button', { name: 'Mark as spam' }));
     await user.click(ribbon.getByRole('button', { name: 'Delete' }));
@@ -476,6 +486,7 @@ describe('ReadingPaneContainer', () => {
       expect.objectContaining({ messageIds: ['message-1'], destination: 'SPAM' }),
     ]);
     expect(deleteMessageChanges).toEqual([expect.objectContaining({ messageIds: ['message-1'] })]);
+    expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account-1"}');
   });
 
   it('keeps the bulk selection after a bulk action so more actions can follow', async () => {
@@ -497,7 +508,7 @@ describe('ReadingPaneContainer', () => {
         subject: `Subject ${id}`,
         sender: { display: `Sender ${id}`, address: `${id}@example.com` },
         sentRecipient: null,
-        latestAt: Date.parse('2026-08-11T10:00:00Z') - index,
+        latestAt: getTime(parseISO('2026-08-11T10:00:00Z')) - index,
         messageCount: 1,
         isUnread: false,
         isStarred: false,

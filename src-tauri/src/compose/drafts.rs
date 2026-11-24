@@ -93,22 +93,36 @@ impl SaveCoalescer {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct AdmissionServices<'a> {
+    pub queue: &'a Arc<QueueEngine>,
+    pub storage: &'a Storage,
+    pub staging: &'a Staging,
+    pub coalescer: &'a SaveCoalescer,
+}
+
+pub struct DraftAdmission {
+    pub id: String,
+    pub account_id: String,
+    pub entity_key: String,
+    pub payload: DraftOperationPayload,
+}
+
 pub async fn admit(
-    engine: &Arc<QueueEngine>,
-    storage: &Storage,
-    staging: &Staging,
-    coalescer: &SaveCoalescer,
-    id: String,
-    account_id: String,
-    entity_key: String,
-    mut payload: DraftOperationPayload,
+    services: &AdmissionServices<'_>,
+    admission: DraftAdmission,
     parts: &[super::staging::StagedPart],
 ) -> Result<u64, String> {
-    staging
+    let DraftAdmission {
+        id,
+        account_id,
+        entity_key,
+        mut payload,
+    } = admission;
+    services
+        .staging
         .snapshot(&id, parts)
         .map_err(|error| error.to_string())?;
-    let generation = coalescer.schedule(&entity_key).await;
+    let generation = services.coalescer.schedule(&entity_key).await;
     payload.coalescing_generation = generation;
     let kind = match payload.mode {
         DraftOperationMode::Send => OperationKind::Send,
@@ -120,8 +134,8 @@ pub async fn admit(
     };
     let payload_json = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     queue::admit_durable(
-        engine,
-        storage,
+        services.queue,
+        services.storage,
         QueueOperation {
             id,
             account_id,

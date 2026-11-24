@@ -15,15 +15,17 @@ import { ListHeader } from '@/components/list/ListHeader';
 import {
   useAiConfigsQuery,
   useAiConnectionQuery,
-  useCreateLabelMutation,
-  useDeleteLabelMutation,
   useLabelsQuery,
-  useRecolorLabelMutation,
-  useRenameLabelMutation,
   useConversationQuery,
   useSearchTotalQuery,
   useSearchThreadsQuery,
 } from '@/lib/query/hooks';
+import {
+  useCreateLabelMutation,
+  useDeleteLabelMutation,
+  useRecolorLabelMutation,
+  useRenameLabelMutation,
+} from '@/lib/query/mutations';
 import { mapConversation, mapLabelsToMailboxes, mapLabelsToUserLabels } from '@/lib/query/mappers';
 import { ASSISTANT_DOCK_MIN_SHELL_WIDTH, useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
@@ -249,11 +251,6 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     const activeAccountStillExists = accounts.some((account) => account.id === activeAccountId);
     if (activeAccountId === null || !activeAccountStillExists) selectAccount(accounts[0].id);
   }, [accounts, activeAccountId, selectAccount]);
-  useEffect(() => {
-    if (!window.__LATENTMAIL_PLAYWRIGHT_IPC__) return;
-    const session = window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__;
-    if (session) useComposeStore.getState().open(session);
-  }, []);
   const openSettings = () => useLayoutStore.getState().setRoute('settings');
   const sidebar = sidebarCollapsed ? (
     <CollapsedRail

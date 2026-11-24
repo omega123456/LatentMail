@@ -815,8 +815,11 @@ async fn thread_and_message_timestamps_cross_ipc_in_milliseconds() {
     .await
     .unwrap();
 
-    assert_eq!(page.items[0].latest_at, seconds * 1000);
-    assert_eq!(conversation.messages[0].sent_at, seconds * 1000);
+    let expected_millis = chrono::DateTime::from_timestamp(seconds, 0)
+        .unwrap()
+        .timestamp_millis();
+    assert_eq!(page.items[0].latest_at, expected_millis);
+    assert_eq!(conversation.messages[0].sent_at, expected_millis);
 
     assert_eq!(page.next_cursor.map(|cursor| cursor.latest_at), None);
 }

@@ -1368,6 +1368,8 @@ async fn every_phase_3_command_is_reachable_through_real_ipc_dispatch() {
     .unwrap();
     MessageRepository::set_label_membership(&connection, &account_id, "message-2", "INBOX", true)
         .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-2").unwrap();
     drop(connection);
 
     Mock::given(method("GET"))
@@ -1831,6 +1833,7 @@ async fn mail_read_and_single_thread_triage_commands_are_reachable_through_real_
         .unwrap();
     MessageRepository::set_label_membership(&connection, &account_id, "message-1", "UNREAD", true)
         .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     drop(connection);
 
     Mock::given(method("GET"))
@@ -2044,6 +2047,7 @@ async fn message_level_mutation_and_lazy_body_fetch_commands_are_reachable_throu
     .unwrap();
     MessageRepository::set_label_membership(&connection, &account_id, "message-1", "INBOX", true)
         .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     drop(connection);
 
     Mock::given(method("GET"))
@@ -2221,6 +2225,7 @@ async fn mail_commands_surface_validation_storage_and_gmail_failures() {
         },
     )
     .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     drop(connection);
 
     let server = MockServer::start().await;
@@ -2411,6 +2416,7 @@ async fn mutate_threads_rejects_a_non_trash_delta_on_a_thread_holding_a_draft() 
         true,
     )
     .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-draft").unwrap();
     drop(connection);
 
     let server = MockServer::start().await;
@@ -2678,6 +2684,7 @@ async fn reply_contacts_html_conversation_and_traversal_status_round_trip_throug
         },
     )
     .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-1").unwrap();
     drop(connection);
 
     let registry = WorkRegistry::new();
@@ -2852,6 +2859,7 @@ async fn forwarding_a_message_whose_only_attachment_shaped_parts_are_inline_imag
     .unwrap();
     AttachmentRepository::replace_for_message(&connection, &account_id, "message-inline", &[])
         .unwrap();
+    ThreadRepository::recompute(&connection, &account_id, "thread-inline").unwrap();
     drop(connection);
 
     let app = app();

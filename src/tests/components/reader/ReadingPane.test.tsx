@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { waitForBodyFramesToSettle } from '@/tests/body-frame';
 import { ReadingPane, readerFixtures } from '@/components/reader/ReadingPane';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
@@ -222,8 +223,9 @@ describe('ReadingPane', () => {
     act(() => useMessageSourceStore.setState({ target: null }));
   });
 
-  it('offers no export actions without an account', () => {
+  it('offers no export actions without an account', async () => {
     renderWithQueryClient(<ReadingPane threadId="thread-1" />);
     expect(screen.queryByRole('button', { name: 'More message actions' })).not.toBeInTheDocument();
+    await waitForBodyFramesToSettle();
   });
 });

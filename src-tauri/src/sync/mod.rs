@@ -27,12 +27,14 @@ use crate::{
     },
 };
 
+pub mod announce;
 pub mod commands;
 pub mod concurrency;
 mod dto;
 pub mod materialize;
 mod mutations;
 mod reconcile;
+pub mod services;
 pub mod traversal;
 pub mod triage;
 
@@ -319,6 +321,7 @@ pub struct SyncCompleteEvent {
     pub history_id: i64,
     pub added_count: u32,
     pub changed: bool,
+    pub completed_at: i64,
 }
 
 pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
@@ -579,6 +582,7 @@ impl SyncEngine {
                 history_id,
                 added_count,
                 changed,
+                completed_at: dto::to_millis(now),
             },
         );
     }

@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import type { IpcCommandMap, MailThread } from '@/lib/types/ipc';
 
 export const playwrightThreads: MailThread[] = [
@@ -6,7 +7,7 @@ export const playwrightThreads: MailThread[] = [
     subject: 'Q3 Marketing Strategy Review',
     sender: { display: 'Elena Rodriguez', address: 'elena.r@example.com' },
     sentRecipient: null,
-    latestAt: Date.parse('2026-08-11T10:42:00Z'),
+    latestAt: getTime(parseISO('2026-08-11T10:42:00Z')),
     messageCount: 3,
     isUnread: true,
     isStarred: true,
@@ -20,7 +21,7 @@ export const playwrightThreads: MailThread[] = [
     subject: 'Updates to Color Tokens',
     sender: { display: 'Design Systems Guild', address: 'design-systems@example.com' },
     sentRecipient: null,
-    latestAt: Date.parse('2026-08-10T09:00:00Z'),
+    latestAt: getTime(parseISO('2026-08-10T09:00:00Z')),
     messageCount: 1,
     isUnread: false,
     isStarred: false,
@@ -34,7 +35,7 @@ export const playwrightThreads: MailThread[] = [
     subject: 'Action Required: 2FA Setup',
     sender: { display: 'Security Team', address: 'security@example.com' },
     sentRecipient: null,
-    latestAt: Date.parse('2026-08-07T12:00:00Z'),
+    latestAt: getTime(parseISO('2026-08-07T12:00:00Z')),
     messageCount: 1,
     isUnread: false,
     isStarred: false,
@@ -48,7 +49,7 @@ export const playwrightThreads: MailThread[] = [
     subject: 'Lunch next week?',
     sender: { display: 'Alex Chen', address: 'alex.chen@example.com' },
     sentRecipient: null,
-    latestAt: Date.parse('2026-07-31T15:30:00Z'),
+    latestAt: getTime(parseISO('2026-07-31T15:30:00Z')),
     messageCount: 1,
     isUnread: false,
     isStarred: false,

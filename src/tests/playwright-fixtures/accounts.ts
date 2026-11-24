@@ -24,3 +24,9 @@ export const playwrightMailAccount = {
   id: 'mail-account',
   needsReauthentication: false,
 } satisfies IpcCommandMap['list_accounts']['result'][number];
+
+export const playwrightQueueAccounts = [
+  { ...playwrightMailAccount, displayName: 'Running Account' },
+  { ...playwrightReauthAccount, id: 'reauth-account', displayName: 'Paused Account' },
+  { ...playwrightSidebarAccounts[0], displayName: 'Idle Account' },
+] satisfies IpcCommandMap['list_accounts']['result'];

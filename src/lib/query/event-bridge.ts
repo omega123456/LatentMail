@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { toDate } from 'date-fns';
 import { useQueryClient } from '@tanstack/react-query';
 import { emitFrontendReady, listen } from '@/lib/ipc/events';
 import { useSyncStore } from '@/stores/sync';
@@ -133,7 +134,11 @@ export function EventBridge() {
     });
 
     subscribe('sync://complete', (event) => {
-      useSyncStore.setState({ syncState: 'idle', lastSynced: new Date(), error: undefined });
+      useSyncStore.setState({
+        syncState: 'idle',
+        lastSynced: toDate(event.completedAt),
+        error: undefined,
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.syncStatus(event.accountId) });
       if (!event.changed) return;
       scheduleMailboxInvalidation(event.accountId);
@@ -141,6 +146,20 @@ export function EventBridge() {
 
     subscribe('mail://new', (event) => {
       scheduleMailboxInvalidation(event.accountId);
+    });
+
+    subscribe('mail://changed', (event) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.threadsForAccount(event.accountId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationsForAccount(event.accountId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.searchForAccount(event.accountId) });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.searchTotalsForAccount(event.accountId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels(event.accountId) });
     });
 
     subscribe('message://body-fetched', (event) => {
@@ -205,6 +224,10 @@ export function EventBridge() {
     });
 
     subscribe('account://state', () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
+    });
+
+    subscribe('account://removed', () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
     });
 

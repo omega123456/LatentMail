@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { expect, it } from 'vitest';
 import { ApiKeyField } from '@/components/settings/ApiKeyField';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
 it('opens confirmation before clearing a saved key', async () => {
   const user = userEvent.setup();
@@ -26,6 +27,7 @@ it('focuses the password editor and reveals only a replacement draft', async () 
 });
 
 it('keeps a saved key when clearing it fails', async () => {
+  const consoleError = captureConsole('error');
   const user = userEvent.setup();
   ipc.override('clear_ai_api_key', () => {
     throw new Error('Keychain unavailable');
@@ -35,4 +37,5 @@ it('keeps a saved key when clearing it fails', async () => {
   await user.click(screen.getByRole('button', { name: 'Clear' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Keychain unavailable');
   expect(screen.getByRole('button', { name: 'Replace' })).toBeInTheDocument();
+  expect(consoleError).toHaveBeenCalledWith('ipc clear_ai_api_key failed: Keychain unavailable');
 });

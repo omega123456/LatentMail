@@ -1,3 +1,4 @@
+import { parseISO } from 'date-fns';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -23,7 +24,7 @@ function thread(id: string, overrides: Partial<Conversation> = {}): Conversation
     sender: `Sender ${id}`,
     subject: `Subject ${id}`,
     snippet: `Snippet ${id}`,
-    date: new Date('2026-08-10T09:00:00Z'),
+    date: parseISO('2026-08-10T09:00:00Z'),
     unread: false,
     starred: false,
     ...overrides,

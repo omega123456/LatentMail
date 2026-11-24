@@ -70,11 +70,14 @@ async fn pause_halts_work_and_resume_dispatches_all_three_lanes() {
 #[tokio::test]
 async fn same_entity_serializes_while_other_entities_start() {
     let (started, mut receiver) = mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let gate = Arc::clone(&release);
     let executor: Executor = Arc::new(move |operation| {
         let started = started.clone();
+        let gate = Arc::clone(&gate);
         Box::pin(async move {
             started.send(operation.id).unwrap();
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            gate.notified().await;
             Ok(())
         })
     });
@@ -97,4 +100,6 @@ async fn same_entity_serializes_while_other_entities_start() {
     ];
     assert!(first_two.contains(&"first".to_owned()));
     assert!(first_two.contains(&"other".to_owned()));
+    assert!(receiver.try_recv().is_err());
+    release.notify_waiters();
 }

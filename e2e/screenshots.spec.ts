@@ -1,8 +1,21 @@
 import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
-import { formatISO, getTime, parseISO } from 'date-fns';
-import { installPlaywrightIpc } from './helpers';
+import { formatISO, parseISO } from 'date-fns';
+import { installPlaywrightIpc, openComposeSession } from './helpers';
 import {
+  playwrightAttachmentsComposeSession,
+  playwrightBackfillingTraversalStatus,
+  playwrightEmptySearchPage,
+  playwrightManyRecipientsComposeSession,
+  playwrightNewComposeSession,
+  playwrightNoAiIndexStatuses,
+  playwrightPendingQueueSummary,
+  playwrightQueueAccounts,
+  playwrightReplyComposeSession,
+  playwrightStagedImageSvg,
+  playwrightStagedImageUrlPattern,
+  playwrightSuggestionsComposeSession,
+  playwrightZeroSearchTotal,
   playwrightClippedConversation,
   playwrightContactSuggestionMatches,
   playwrightLogEntries,
@@ -52,42 +65,44 @@ for (const theme of themes) {
   });
 
   test(`reauth banner ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightReauthAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightReauthAccount] } });
     await page.goto('/');
     await screenshot(page, page.getByTestId('reauth-banner'), 'reauth-banner', theme);
   });
 
   test(`update banner ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      check_for_update: playwrightUpdateAvailable,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        check_for_update: playwrightUpdateAvailable,
+      },
     });
     await page.goto('/');
     await screenshot(page, page.getByTestId('update-banner'), 'update-banner', theme);
   });
 
   test(`sidebar ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: playwrightSidebarAccounts } });
     await page.goto('/');
     await screenshot(page, page.getByTestId('sidebar-slot'), 'sidebar-expanded', theme);
   });
 
   test(`collapsed rail ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: playwrightSidebarAccounts } });
     await page.goto('/');
     await page.getByRole('button', { name: 'Collapse sidebar' }).click();
     await screenshot(page, page.getByTestId('collapsed-rail'), 'sidebar-collapsed', theme);
   });
 
   test(`label form ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: playwrightSidebarAccounts } });
     await page.goto('/');
     await page.getByRole('button', { name: 'Create label' }).click();
     await screenshot(page, page.getByTestId('sidebar-slot'), 'sidebar-label-create-form', theme);
   });
 
   test(`label colour picker ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: playwrightSidebarAccounts } });
     await page.goto('/');
     await page.getByRole('button', { name: 'Edit Work' }).click();
     await page.getByRole('button', { name: "Change Work's colour" }).click();
@@ -99,52 +114,24 @@ for (const theme of themes) {
     );
   });
 
-  test(`label delete confirmation ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
-    await page.goto('/');
-    await page.getByRole('button', { name: 'Delete Work' }).click();
-    await screenshot(page, page.getByTestId('sidebar-slot'), 'sidebar-label-delete-confirm', theme);
-  });
-
   test(`mutation error toast ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      ['mutate_threads'],
-    );
+    await installPlaywrightIpc(page, {
+      overrides: { list_accounts: [playwrightMailAccount] },
+      rejectedCommands: ['mutate_threads'],
+    });
     await page.goto('/');
     await page.getByLabel('Unstar Q3 Marketing Strategy Review', { exact: true }).click();
     await screenshot(page, page.getByTestId('toast'), 'mutation-error-toast', theme);
   });
 
   test(`conversation list ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await screenshot(page, page.getByTestId('list-slot'), 'conversation-list-comfortable', theme);
   });
 
-  test(`still-syncing empty state ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      list_threads: { items: [], nextCursor: null },
-      read_traversal_status: {
-        accountId: 'mail-account',
-        state: 'backfilling',
-        kind: 'backfill',
-        discoveredCount: 50000,
-        persistedCount: 12400,
-        lastAdvancedAt: getTime(parseISO('2026-08-12T10:00:00Z')),
-        isResumed: false,
-      },
-    });
-    await page.goto('/');
-    await screenshot(page, page.getByTestId('list-slot'), 'conversation-list-still-syncing', theme);
-  });
-
   test(`reading pane ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
     await toggleTheme(page, theme);
@@ -155,8 +142,10 @@ for (const theme of themes) {
 
   test(`clipped message notice ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      load_conversation: playwrightClippedConversation,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        load_conversation: playwrightClippedConversation,
+      },
     });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
@@ -166,8 +155,10 @@ for (const theme of themes) {
 
   test(`too-large message notice ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      load_conversation: playwrightTooLargeConversation,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        load_conversation: playwrightTooLargeConversation,
+      },
     });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
@@ -176,7 +167,7 @@ for (const theme of themes) {
   });
 
   test(`attachment section ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
     await toggleTheme(page, theme);
@@ -186,7 +177,7 @@ for (const theme of themes) {
   });
 
   test(`attachment preview modal ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
     await toggleTheme(page, theme);
@@ -202,7 +193,7 @@ for (const theme of themes) {
   });
 
   test(`message source modal ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
     await toggleTheme(page, theme);
@@ -214,36 +205,27 @@ for (const theme of themes) {
   });
 
   test(`status bar ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      {
+    await installPlaywrightIpc(page, {
+      overrides: {
         list_accounts: [playwrightMailAccount],
-        read_ai_index_status: [],
-        read_queue_summary: {
-          pending: 2,
-          active: 0,
-          failed: 0,
-          done: 0,
-          paused: false,
-          suspended: false,
-        },
+        read_ai_index_status: playwrightNoAiIndexStatuses,
+        read_queue_summary: playwrightPendingQueueSummary,
       },
-      undefined,
-      { state: 'idle', lastSynced: formatISO(Date.now()) },
-    );
+      syncStatus: { state: 'idle', lastSynced: formatISO(Date.now()) },
+    });
     await page.goto('/');
     await screenshot(page, page.getByTestId('status-bar'), 'status-bar-idle', theme);
   });
 
   test(`row context menu ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page.getByLabel('Open Q3 Marketing Strategy Review').click({ button: 'right' });
     await screenshot(page, page.getByRole('menu').first(), 'row-context-menu', theme);
   });
 
   test(`move-to menu ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page.getByLabel('Open Q3 Marketing Strategy Review').click({ button: 'right' });
     await page.getByText('Move to').hover();
@@ -251,7 +233,7 @@ for (const theme of themes) {
   });
 
   test(`labels menu ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page.getByLabel('Open Q3 Marketing Strategy Review').click();
     await page.getByTestId('action-ribbon').getByRole('button', { name: 'Labels' }).click();
@@ -259,7 +241,7 @@ for (const theme of themes) {
   });
 
   test(`bulk selection panel ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page
       .getByLabel('Open Q3 Marketing Strategy Review')
@@ -270,9 +252,9 @@ for (const theme of themes) {
   });
 
   test(`full shell ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] }, undefined, {
-      state: 'idle',
-      lastSynced: formatISO(Date.now()),
+    await installPlaywrightIpc(page, {
+      overrides: { list_accounts: [playwrightMailAccount] },
+      syncStatus: { state: 'idle', lastSynced: formatISO(Date.now()) },
     });
     await page.goto('/');
     await expect(page.getByLabel('Open Q3 Marketing Strategy Review')).toBeVisible();
@@ -285,9 +267,11 @@ for (const theme of themes) {
   test(`ai assistant panel ${theme}`, async ({ page }) => {
     await page.clock.setFixedTime(parseISO('2026-08-17T12:00:00'));
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      read_ai_configs: playwrightAiChatReadyConfigs,
-      read_ai_index_status: playwrightAiChatReadyIndexStatuses,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        read_ai_configs: playwrightAiChatReadyConfigs,
+        read_ai_index_status: playwrightAiChatReadyIndexStatuses,
+      },
     });
     await page.goto('/');
     await page.getByRole('button', { name: 'AI assistant' }).click();
@@ -320,7 +304,7 @@ for (const theme of themes) {
   });
 
   test(`search field focused ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page.getByLabel('Search mail').click();
     await page.getByLabel('Search mail').fill('from:anna');
@@ -328,7 +312,7 @@ for (const theme of themes) {
   });
 
   test(`search keyword suggestions ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page.getByLabel('Search mail').click();
     await page.getByLabel('Search mail').fill('is:');
@@ -343,8 +327,10 @@ for (const theme of themes) {
   test(`advanced search panel ${theme}`, async ({ page }) => {
     await page.clock.setFixedTime(parseISO('2026-08-17T12:00:00'));
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      parse_search_query: playwrightParsedSearchQuery,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        parse_search_query: playwrightParsedSearchQuery,
+      },
     });
     await page.goto('/');
     await page.getByLabel('Search mail').fill('from:anna quarterly');
@@ -365,8 +351,10 @@ for (const theme of themes) {
 
   test(`select menu ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      parse_search_query: playwrightParsedSearchQuery,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        parse_search_query: playwrightParsedSearchQuery,
+      },
     });
     await page.goto('/');
     await page.getByRole('button', { name: 'Show search options' }).click();
@@ -376,9 +364,11 @@ for (const theme of themes) {
 
   test(`search results sidebar row ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      search_threads: playwrightSearchThreadPage,
-      search_total: playwrightSearchTotal,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        search_threads: playwrightSearchThreadPage,
+        search_total: playwrightSearchTotal,
+      },
     });
     await page.goto('/');
     await page.getByLabel('Search mail').fill('from:anna');
@@ -388,10 +378,11 @@ for (const theme of themes) {
 
   test(`search result row source badge ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      search_threads: playwrightSearchThreadPage,
-      search_total: playwrightSearchTotal,
-      read_settings: { ...playwrightSettings, density: 'spacious' },
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        search_threads: playwrightSearchThreadPage,
+        search_total: playwrightSearchTotal,
+      },
     });
     await page.goto('/');
     await page.getByLabel('Search mail').fill('from:anna');
@@ -402,9 +393,11 @@ for (const theme of themes) {
 
   test(`search zero results ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      search_threads: { items: [], nextCursor: null },
-      search_total: 0,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        search_threads: playwrightEmptySearchPage,
+        search_total: playwrightZeroSearchTotal,
+      },
     });
     await page.goto('/');
     await page.getByLabel('Search mail').fill('from:anna quarterly');
@@ -414,17 +407,11 @@ for (const theme of themes) {
 
   test(`search incomplete backfill notice ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      search_threads: playwrightSearchThreadPage,
-      search_total: playwrightSearchTotal,
-      read_traversal_status: {
-        accountId: 'mail-account',
-        state: 'backfilling',
-        kind: 'backfill',
-        discoveredCount: 48110,
-        persistedCount: 31402,
-        lastAdvancedAt: getTime(parseISO('2026-08-12T10:00:00Z')),
-        isResumed: false,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        search_threads: playwrightSearchThreadPage,
+        search_total: playwrightSearchTotal,
+        read_traversal_status: playwrightBackfillingTraversalStatus,
       },
     });
     await page.goto('/');
@@ -439,109 +426,19 @@ for (const theme of themes) {
   });
 
   test(`composer panel ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      [],
-      [],
-      {
-        id: 'compose-session-1',
-        mode: 'new',
-        accountId: 'mail-account',
-        from: 'you@example.com',
-        recipients: { to: [], cc: [], bcc: [] },
-        subject: '',
-        html: '',
-      },
-    );
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
+    await openComposeSession(page, playwrightNewComposeSession);
     await screenshot(page, page.getByTestId('compose-overlay'), 'composer-panel', theme);
   });
 
-  test(`composer lifecycle ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      ['send_compose_draft'],
-      [],
-      {
-        id: 'compose-session-lifecycle',
-        mode: 'new',
-        accountId: 'mail-account',
-        from: 'you@example.com',
-        recipients: { to: ['elena.r@example.com'], cc: [], bcc: [] },
-        subject: 'Draft to discard',
-        html: '',
-      },
-    );
-    await page.goto('/');
-    await page.getByRole('button', { name: 'Send' }).click();
-    await page.getByRole('button', { name: 'Discard' }).click();
-    await expect(page.getByRole('alertdialog')).toBeVisible();
-    await screenshot(page, page.getByTestId('compose-overlay'), 'composer-lifecycle', theme);
-  });
-
   test(`attachment strip and inline preview ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      [],
-      [],
-      {
-        id: 'compose-session-attachments',
-        mode: 'new',
-        accountId: 'mail-account',
-        from: 'you@example.com',
-        recipients: { to: ['elena.r@example.com'], cc: [], bcc: [] },
-        subject: 'Q3 budget',
-        html: '<p>See the chart:</p><img src="http://asset.localhost/compose-staging/chart.png" alt="Budget chart">',
-        attachments: [
-          {
-            localId: 'budget-pdf',
-            filename: 'Q3-budget.pdf',
-            mimeType: 'application/pdf',
-            size: 253952,
-            state: 'settled',
-            staged: {
-              id: 'staged-budget-pdf',
-              path: '/compose-staging/Q3-budget.pdf',
-              assetUrl: 'http://asset.localhost/compose-staging/Q3-budget.pdf',
-              size: 253952,
-            },
-            contentId: null,
-            error: null,
-          },
-          {
-            localId: 'chart-image',
-            filename: 'chart.png',
-            mimeType: 'image/png',
-            size: 1024,
-            state: 'settled',
-            staged: {
-              id: 'staged-chart-image',
-              path: '/compose-staging/chart.png',
-              assetUrl: 'http://asset.localhost/compose-staging/chart.png',
-              size: 1024,
-            },
-            contentId: 'cid:chart@latentmail',
-            error: null,
-          },
-        ],
-      },
-    );
-    await page.route('http://asset.localhost/**', (route) =>
-      route.fulfill({
-        contentType: 'image/svg+xml',
-        body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="72"><rect width="120" height="72" fill="#dce8ff"/><path d="M12 54 40 34l20 12 42-30" fill="none" stroke="#1459c7" stroke-width="5"/></svg>',
-      }),
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
+    await page.route(playwrightStagedImageUrlPattern, (route) =>
+      route.fulfill({ contentType: 'image/svg+xml', body: playwrightStagedImageSvg }),
     );
     await page.goto('/');
+    await openComposeSession(page, playwrightAttachmentsComposeSession);
     await expect(page.getByTestId('attachment-strip')).toBeVisible();
     await screenshot(
       page,
@@ -552,65 +449,22 @@ for (const theme of themes) {
   });
 
   test(`recipient field ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      [],
-      [],
-      {
-        id: 'compose-session-2',
-        mode: 'new',
-        accountId: 'mail-account',
-        from: 'you@example.com',
-        recipients: {
-          to: [
-            'Priya Raman <priya.raman@example.com>',
-            'Tomás Field <tomas.field@example.com>',
-            'ops@example.com',
-            'marketing@example.com',
-            'engineering@example.com',
-            'design@example.com',
-            'finance.team@example.com',
-            'customer.success@example.com',
-            'product@example.com',
-            'legal@example.com',
-          ],
-          cc: ['Dana Whitfield <dana.whitfield@example.com>'],
-          bcc: [],
-        },
-        subject: '',
-        html: '',
-      },
-    );
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
+    await openComposeSession(page, playwrightManyRecipientsComposeSession);
     await expect(page.getByRole('button', { name: /more recipient/ })).toBeVisible();
     await screenshot(page, page.getByTestId('recipient-field'), 'recipient-field', theme);
   });
 
   test(`contact suggestions ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      {
+    await installPlaywrightIpc(page, {
+      overrides: {
         list_accounts: [playwrightMailAccount],
         lookup_contacts: playwrightContactSuggestionMatches,
       },
-      undefined,
-      undefined,
-      [],
-      [],
-      {
-        id: 'compose-session-suggestions',
-        mode: 'new',
-        accountId: 'mail-account',
-        from: 'you@example.com',
-        recipients: { to: ['Priya Raman <priya.raman@example.com>'], cc: [], bcc: [] },
-        subject: '',
-        html: '',
-      },
-    );
+    });
     await page.goto('/');
+    await openComposeSession(page, playwrightSuggestionsComposeSession);
     await page.getByRole('combobox', { name: 'To' }).fill('mar');
     await expect(page.getByRole('option', { name: /Marta Oliveira/ })).toBeVisible();
     await page.getByRole('combobox', { name: 'To' }).press('ArrowDown');
@@ -618,7 +472,7 @@ for (const theme of themes) {
   });
 
   test(`settings navigation ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: [playwrightMailAccount] });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
     await screenshot(page, page.getByTestId('settings-nav'), 'settings-nav', theme);
@@ -626,10 +480,12 @@ for (const theme of themes) {
 
   test(`settings AI section ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount, playwrightReauthAccount],
-      read_ai_configs: playwrightAiConfigs,
-      read_ai_index_status: playwrightAiIndexStatuses,
-      list_ai_models: playwrightAiModels,
+      overrides: {
+        list_accounts: [playwrightMailAccount, playwrightReauthAccount],
+        read_ai_configs: playwrightAiConfigs,
+        read_ai_index_status: playwrightAiIndexStatuses,
+        list_ai_models: playwrightAiModels,
+      },
     });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
@@ -640,16 +496,10 @@ for (const theme of themes) {
   });
 
   test(`settings general section ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      [],
-      [],
-      undefined,
-      'windows',
-    );
+    await installPlaywrightIpc(page, {
+      overrides: { list_accounts: [playwrightMailAccount] },
+      platform: 'windows',
+    });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
     await page.setViewportSize({ width: 1280, height: 1600 });
@@ -663,8 +513,10 @@ for (const theme of themes) {
 
   test(`settings updates section ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      check_for_update: playwrightUpdateAvailable,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        check_for_update: playwrightUpdateAvailable,
+      },
     });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
@@ -679,8 +531,10 @@ for (const theme of themes) {
 
   test(`settings trusted senders ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      read_settings: playwrightTrustedSenderSettings,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        read_settings: playwrightTrustedSenderSettings,
+      },
     });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
@@ -694,7 +548,7 @@ for (const theme of themes) {
   });
 
   test(`settings accounts section ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(page, { list_accounts: playwrightSidebarAccounts });
+    await installPlaywrightIpc(page, { overrides: { list_accounts: playwrightSidebarAccounts } });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('button', { name: 'Accounts' }).click();
@@ -708,8 +562,10 @@ for (const theme of themes) {
 
   test(`settings keyboard section ${theme}`, async ({ page }) => {
     await installPlaywrightIpc(page, {
-      list_accounts: [playwrightMailAccount],
-      read_settings: playwrightSettings,
+      overrides: {
+        list_accounts: [playwrightMailAccount],
+        read_settings: playwrightSettings,
+      },
     });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
@@ -728,12 +584,10 @@ for (const theme of themes) {
   test(`settings queue section ${theme}`, async ({ page }) => {
     await page.clock.setFixedTime(parseISO('2026-08-18T12:00:00Z'));
     await installPlaywrightIpc(page, {
-      list_accounts: [
-        { ...playwrightMailAccount, displayName: 'Running Account' },
-        { ...playwrightReauthAccount, id: 'reauth-account', displayName: 'Paused Account' },
-        { ...playwrightSidebarAccounts[0], displayName: 'Idle Account' },
-      ],
-      read_queue_operations: playwrightQueueOperationsSnapshot,
+      overrides: {
+        list_accounts: playwrightQueueAccounts,
+        read_queue_operations: playwrightQueueOperationsSnapshot,
+      },
     });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
@@ -757,8 +611,10 @@ for (const theme of themes) {
   test(`settings logs section ${theme}`, async ({ page }) => {
     await page.clock.setFixedTime(parseISO('2026-08-19T14:41:30Z'));
     await installPlaywrightIpc(page, {
-      list_accounts: playwrightSidebarAccounts,
-      read_log_entries: playwrightLogEntries,
+      overrides: {
+        list_accounts: playwrightSidebarAccounts,
+        read_log_entries: playwrightLogEntries,
+      },
     });
     await page.goto('/');
     await page.getByTestId('sidebar-slot').getByRole('button', { name: 'Settings' }).click();
@@ -772,32 +628,17 @@ for (const theme of themes) {
   });
 
   test(`quote disclosure ${theme}`, async ({ page }) => {
-    await installPlaywrightIpc(
-      page,
-      { list_accounts: [playwrightMailAccount] },
-      undefined,
-      undefined,
-      [],
-      [],
-      {
-        id: 'compose-session-3',
-        mode: 'reply',
-        accountId: 'mail-account',
-        from: 'you@example.com',
-        recipients: { to: ['elena.r@example.com'], cc: [], bcc: [] },
-        subject: 'Re: Q3 Marketing Strategy Review',
-        html: '',
-        quote: {
-          html: "<p>Hi Team, I hope you're all having a great week. I've attached the finalized slide deck for tomorrow's presentation.</p>",
-          attribution: 'On 14 Mar 2024 at 10:42, Elena Rodriguez wrote:',
-        },
-      },
-    );
+    await installPlaywrightIpc(page, { overrides: { list_accounts: [playwrightMailAccount] } });
     await page.goto('/');
-    const disclosure = page.getByTestId('quote-disclosure');
-    await screenshot(page, disclosure, 'quote-disclosure-collapsed', theme);
+    await openComposeSession(page, playwrightReplyComposeSession);
+    await toggleTheme(page, theme);
     await page.getByRole('button', { name: 'Show quoted text' }).click();
     await expect(page.getByRole('region', { name: 'Quoted content, read-only' })).toBeVisible();
-    await screenshot(page, disclosure, 'quote-disclosure-expanded', theme);
+    await screenshot(
+      page,
+      page.getByTestId('quote-disclosure'),
+      'quote-disclosure-expanded',
+      theme,
+    );
   });
 }

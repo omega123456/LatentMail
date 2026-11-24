@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { saveMessageAs, type MessageExportTarget } from '@/lib/messages/save';
 import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
+import { captureConsole } from '@/tests/console';
 
 const target: MessageExportTarget = {
   accountId: 'account-1',
@@ -51,6 +52,7 @@ describe('saveMessageAs', () => {
   });
 
   it('passes the reason from Rust on to the error toast', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('plugin:dialog|save', '/tmp/Invoice.html');
     ipc.override('save_message_html_to_path', () =>
       Promise.reject('Open the message so its content loads, then try again.'),
@@ -62,9 +64,13 @@ describe('saveMessageAs', () => {
       severity: 'error',
       message: "Couldn't save the message. Open the message so its content loads, then try again.",
     });
+    expect(consoleError).toHaveBeenCalledWith(
+      'ipc save_message_html_to_path failed: Open the message so its content loads, then try again.',
+    );
   });
 
   it('falls back to a generic error toast for an unexpected failure', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('plugin:dialog|save', '/tmp/Invoice.eml');
     ipc.override('save_message_source_to_path', () => Promise.reject(new Error('disk full')));
 
@@ -74,5 +80,6 @@ describe('saveMessageAs', () => {
       severity: 'error',
       message: "Couldn't save the message.",
     });
+    expect(consoleError).toHaveBeenCalledWith('ipc save_message_source_to_path failed: disk full');
   });
 });

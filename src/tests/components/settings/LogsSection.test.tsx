@@ -1,6 +1,6 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getTime, parseISO } from 'date-fns';
+import { getTime, parseISO, subSeconds } from 'date-fns';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LogsSection } from '@/components/settings/LogsSection';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
@@ -26,9 +26,9 @@ const entries = [
 ];
 
 function manyEntries(count: number) {
-  const base = getTime(parseISO('2026-08-19T09:00:00.000Z'));
+  const base = parseISO('2026-08-19T09:00:00.000Z');
   return Array.from({ length: count }, (_unused, index) => ({
-    timestampMillis: base - index * 1_000,
+    timestampMillis: getTime(subSeconds(base, index)),
     level: 'INFO',
     message: `entry number ${index}`,
   }));

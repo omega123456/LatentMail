@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -7,6 +8,7 @@ import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useSyncStore } from '@/stores/sync';
 import { useComposeStore } from '@/stores/compose';
+import { captureConsole } from '@/tests/console';
 
 beforeEach(() => {
   act(() => {
@@ -65,6 +67,7 @@ describe('MailLayout — label lifecycle wiring', () => {
   });
 
   it('renames and deletes a label through the real IPC commands', async () => {
+    const consoleInfo = captureConsole('info');
     const user = userEvent.setup();
     ipc.override('list_accounts', [account]);
     ipc.override('list_labels', [workLabel]);
@@ -72,10 +75,12 @@ describe('MailLayout — label lifecycle wiring', () => {
     let deleted: unknown;
     ipc.override('rename_label', (args) => {
       renamed = args;
+      ipc.emit('mail://changed', { accountId: 'account-1' });
       return { ...workLabel, name: (args as { name: string }).name };
     });
     ipc.override('delete_label', (args) => {
       deleted = args;
+      ipc.emit('mail://changed', { accountId: 'account-1' });
       return undefined;
     });
     render(<App />);
@@ -99,6 +104,7 @@ describe('MailLayout — label lifecycle wiring', () => {
     await waitFor(() =>
       expect(deleted).toMatchObject({ accountId: 'account-1', labelId: 'Label_1' }),
     );
+    expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account-1"}');
   });
 });
 
@@ -139,7 +145,7 @@ const searchResultThread = {
   subject: 'Q3 invoice',
   sender: { display: 'Anna', address: 'anna@example.com' },
   sentRecipient: null,
-  latestAt: Date.parse('2026-08-11T10:42:00Z'),
+  latestAt: getTime(parseISO('2026-08-11T10:42:00Z')),
   messageCount: 1,
   isUnread: false,
   isStarred: false,
@@ -159,7 +165,7 @@ describe('MailLayout — search', () => {
     await screen.findByRole('button', { name: 'Collapse sidebar' });
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true })));
     expect(screen.getByLabelText('Search mail')).toHaveFocus();
-    (document.activeElement as HTMLElement)?.blur();
+    act(() => (document.activeElement as HTMLElement)?.blur());
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: '/' })));
     expect(screen.getByLabelText('Search mail')).toHaveFocus();
   });
@@ -264,6 +270,7 @@ describe('MailLayout — account removal promotes a remaining account', () => {
   };
 
   it('promotes the first remaining account when the active account disappears from the list', async () => {
+    const consoleInfo = captureConsole('info');
     let accounts = [account, accountTwo];
     ipc.override('list_accounts', () => accounts);
     render(<App />);
@@ -274,6 +281,9 @@ describe('MailLayout — account removal promotes a remaining account', () => {
     act(() => ipc.emit('account://state', accountTwo));
 
     await waitFor(() => expect(useSelectionStore.getState().activeAccountId).toBe('account-2'));
+    expect(consoleInfo).toHaveBeenCalledWith(
+      'event account://state {"id":"account-2","email":"sam@example.com","displayName":"Sam Rivera","avatarUrl":null,"needsReauthentication":false}',
+    );
   });
 
   it('still promotes the first account when the active id is null, as it always has', async () => {

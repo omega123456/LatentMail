@@ -5,6 +5,7 @@ import App from '@/App';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
 import { useSettingsUiStore } from '@/stores/settings-ui';
+import { captureConsole } from '@/tests/console';
 
 const account = {
   id: 'account-1',
@@ -106,6 +107,7 @@ describe('UpdatesSection', () => {
   });
 
   it('reports a failed manual check with an error toast', async () => {
+    const consoleError = captureConsole('error');
     let shouldFail = false;
     ipc.override('check_for_update', () => {
       if (shouldFail) throw new Error('network down');
@@ -117,6 +119,7 @@ describe('UpdatesSection', () => {
     await user.click(screen.getByRole('button', { name: 'Check now' }));
 
     expect(await screen.findByText('Couldn’t check for updates.')).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith('ipc check_for_update failed: network down');
   });
 
   it('toggles install on quit and persists the change', async () => {

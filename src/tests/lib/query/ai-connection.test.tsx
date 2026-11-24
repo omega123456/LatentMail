@@ -9,6 +9,7 @@ import {
 } from '@/lib/query/hooks';
 import { queryKeys } from '@/lib/query/keys';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -40,6 +41,7 @@ describe('AI connection query', () => {
   });
 
   it('does not retry a failed poll', async () => {
+    const consoleError = captureConsole('error');
     const probe = vi.fn(() => {
       throw new Error('Could not connect to provider');
     });
@@ -51,6 +53,9 @@ describe('AI connection query', () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(probe).toHaveBeenCalledTimes(1);
     client.clear();
+    expect(consoleError).toHaveBeenCalledWith(
+      'ipc test_ai_connection failed: Could not connect to provider',
+    );
   });
 
   it('stops while the window is hidden and resumes when it is visible again', async () => {

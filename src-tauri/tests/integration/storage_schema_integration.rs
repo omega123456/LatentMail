@@ -797,6 +797,17 @@ fn hot_queries_use_their_purpose_built_indexes_without_avoidable_sorts() {
         .iter()
         .any(|step| step.contains("messages_by_draft")));
 
+    let conversation_messages_plan = query_plan(
+        &connection,
+        "EXPLAIN QUERY PLAN SELECT id FROM messages WHERE account_id='account' AND thread_id='thread' ORDER BY sent_at",
+    );
+    assert!(conversation_messages_plan
+        .iter()
+        .any(|step| step.contains("messages_by_thread")));
+    assert!(!conversation_messages_plan
+        .iter()
+        .any(|step| step.contains("TEMP B-TREE")));
+
     let contact_plan = query_plan(
         &connection,
         "EXPLAIN QUERY PLAN SELECT address FROM contacts WHERE account_id='account' AND address LIKE 'a%'",

@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { ipcFixtures } from '@/tests/fixtures';
 import type { IpcCommandMap, IpcEventMap } from '@/lib/types/ipc';
+import type { PlaywrightIpc } from '@/lib/ipc/playwright-ipc-mock';
 
 type Listener = (payload: unknown) => void;
 type Override<C extends keyof IpcCommandMap> =
@@ -80,7 +81,6 @@ export const ipc = {
     tauriSetZoom.mockClear();
     tauriConvertFileSrc.mockClear();
     delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
-    delete window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__;
     install();
   },
   override<C extends keyof IpcCommandMap>(command: C, response: Override<C>) {
@@ -91,6 +91,9 @@ export const ipc = {
   },
   useTauriApi() {
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  },
+  usePlaywrightRouter(router: PlaywrightIpc) {
+    window.__LATENTMAIL_PLAYWRIGHT_IPC__ = router;
   },
   tauriInvoke,
   tauriListen,

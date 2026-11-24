@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import type React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -8,10 +9,11 @@ import { ipc } from '@/tests/ipc-mock';
 import { useMessageSourceStore } from '@/stores/message-source';
 import { useToastStore } from '@/stores/toast';
 import type { MessageSource } from '@/lib/types/ipc';
+import { captureConsole } from '@/tests/console';
 
 const source: MessageSource = {
   messageId: '<invoice@northwind.example>',
-  sentAt: Date.parse('2026-10-23T09:14:05Z'),
+  sentAt: getTime(parseISO('2026-10-23T09:14:05Z')),
   sender: 'Northwind <billing@northwind.example>',
   to: 'me@example.com',
   cc: '',
@@ -144,6 +146,7 @@ describe('MessageSourceDialog', () => {
   });
 
   it('explains a failed load and retries on request', async () => {
+    const consoleError = captureConsole('error');
     let attempts = 0;
     ipc.override('read_message_source', () => {
       attempts += 1;
@@ -162,14 +165,19 @@ describe('MessageSourceDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith(
+      'ipc read_message_source failed: This message is too large to show its source here.',
+    );
   });
 
   it('falls back to a generic hint when the failure carries no message', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('read_message_source', () => Promise.reject(new Error('offline')));
     renderDialog();
     openFor();
 
     expect(await screen.findByText('Check your connection, then try again.')).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith('ipc read_message_source failed: offline');
   });
 
   it('closes from the close button', async () => {

@@ -7,6 +7,8 @@ import { useSelectionStore } from '@/stores/selection';
 import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
 import { queryKeys } from '@/lib/query/keys';
+import { EventBridge } from '@/lib/query/event-bridge';
+import { captureConsole } from '@/tests/console';
 
 const thread = {
   id: 'thread-1',
@@ -30,6 +32,7 @@ beforeEach(() => {
 function renderList() {
   return render(
     <QueryClientProvider client={new QueryClient()}>
+      <EventBridge />
       <ConversationListContainer />
     </QueryClientProvider>,
   );
@@ -55,20 +58,29 @@ describe('thread mutations', () => {
   });
 
   it('rolls a failed star back and shows an error toast', async () => {
+    const consoleInfo = captureConsole('info');
     const user = userEvent.setup();
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    ipc.override('mutate_threads', () => Promise.reject(new Error('offline')));
+    ipc.override('mutate_threads', () => {
+      ipc.emit('mail://changed', { accountId: 'account' });
+      return Promise.reject(new Error('offline'));
+    });
     renderList();
     await user.click(await screen.findByLabelText('Star Mutation'));
     await waitFor(() => expect(screen.getByLabelText('Star Mutation')).toBeInTheDocument());
     expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/couldn’t update/i);
     expect(error).toHaveBeenCalledWith('ipc mutate_threads failed: offline');
     error.mockRestore();
+    expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
   });
 
-  it('invalidates every open conversation for the account once a thread-level triage settles', async () => {
+  it('invalidates every open conversation for the account once Rust announces the triage', async () => {
+    const consoleInfo = captureConsole('info');
     const user = userEvent.setup();
-    ipc.override('mutate_threads', []);
+    ipc.override('mutate_threads', () => {
+      ipc.emit('mail://changed', { accountId: 'account' });
+      return [];
+    });
     ipc.override('load_conversation', {
       threadId: 'thread-9',
       subject: 'A different open conversation',
@@ -83,6 +95,7 @@ describe('thread mutations', () => {
     });
     render(
       <QueryClientProvider client={client}>
+        <EventBridge />
         <ConversationListContainer />
       </QueryClientProvider>,
     );
@@ -92,6 +105,7 @@ describe('thread mutations', () => {
         client.getQueryState(queryKeys.conversationThread('account', 'thread-9'))?.isInvalidated,
       ).toBe(true),
     );
+    expect(consoleInfo).toHaveBeenCalledWith('event mail://changed {"accountId":"account"}');
   });
 
   it('clears the open conversation when it is deleted', async () => {

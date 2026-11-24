@@ -36,19 +36,30 @@ fn seed_labels(connection: &rusqlite::Connection) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn insert_message(
-    connection: &rusqlite::Connection,
-    id: &str,
-    thread_id: &str,
-    sender: &str,
-    subject: &str,
-    body: &str,
+struct SeededMessage<'a> {
+    id: &'a str,
+    thread_id: &'a str,
+    sender: &'a str,
+    subject: &'a str,
+    body: &'a str,
     sent_at: i64,
     is_unread: bool,
     has_attachments: bool,
-    labels: &[&str],
-) {
+    labels: &'a [&'a str],
+}
+
+fn insert_message(connection: &rusqlite::Connection, seeded: SeededMessage) {
+    let SeededMessage {
+        id,
+        thread_id,
+        sender,
+        subject,
+        body,
+        sent_at,
+        is_unread,
+        has_attachments,
+        labels,
+    } = seeded;
     let message = Message {
         account_id: "account".into(),
         id: id.into(),
@@ -91,15 +102,17 @@ fn a_bare_term_present_only_in_the_body_is_found() {
     let connection = setup();
     insert_message(
         &connection,
-        "m1",
-        "thread-1",
-        "team@example.com",
-        "Weekly update",
-        "the migration used a zyxwvutriage rollback plan",
-        10,
-        false,
-        false,
-        &["INBOX"],
+        SeededMessage {
+            id: "m1",
+            thread_id: "thread-1",
+            sender: "team@example.com",
+            subject: "Weekly update",
+            body: "the migration used a zyxwvutriage rollback plan",
+            sent_at: 10,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["INBOX"],
+        },
     );
     let parsed = parse("zyxwvutriage", now()).unwrap();
     let scope = resolve(&SearchScope::Default);
@@ -113,28 +126,32 @@ fn a_search_result_counts_trashed_messages_only_in_the_trash_scope() {
     for (id, sent_at) in [("m1", 10), ("m2", 20)] {
         insert_message(
             &connection,
-            id,
-            "thread-1",
-            "sender@example.com",
-            "Quarterly report",
-            "body",
-            sent_at,
-            false,
-            false,
-            &["INBOX"],
+            SeededMessage {
+                id,
+                thread_id: "thread-1",
+                sender: "sender@example.com",
+                subject: "Quarterly report",
+                body: "body",
+                sent_at,
+                is_unread: false,
+                has_attachments: false,
+                labels: &["INBOX"],
+            },
         );
     }
     insert_message(
         &connection,
-        "m3",
-        "thread-1",
-        "sender@example.com",
-        "Quarterly report",
-        "body",
-        30,
-        false,
-        false,
-        &["INBOX", "TRASH"],
+        SeededMessage {
+            id: "m3",
+            thread_id: "thread-1",
+            sender: "sender@example.com",
+            subject: "Quarterly report",
+            body: "body",
+            sent_at: 30,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["INBOX", "TRASH"],
+        },
     );
     let parsed = parse("quarterly", now()).unwrap();
 
@@ -156,15 +173,17 @@ fn a_diacritic_bearing_term_matches_its_unaccented_form_and_vice_versa() {
     let connection = setup();
     insert_message(
         &connection,
-        "m1",
-        "thread-1",
-        "team@example.com",
-        "Café Meeting Notes",
-        "let's discuss the roadmap",
-        10,
-        false,
-        false,
-        &["INBOX"],
+        SeededMessage {
+            id: "m1",
+            thread_id: "thread-1",
+            sender: "team@example.com",
+            subject: "Café Meeting Notes",
+            body: "let's discuss the roadmap",
+            sent_at: 10,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["INBOX"],
+        },
     );
     let scope = resolve(&SearchScope::Default);
 
@@ -184,27 +203,31 @@ fn is_unread_has_attachment_with_no_text_term_uses_the_predicate_only_shape() {
     let connection = setup();
     insert_message(
         &connection,
-        "m1",
-        "thread-1",
-        "team@example.com",
-        "Invoice",
-        "body",
-        10,
-        true,
-        true,
-        &["INBOX"],
+        SeededMessage {
+            id: "m1",
+            thread_id: "thread-1",
+            sender: "team@example.com",
+            subject: "Invoice",
+            body: "body",
+            sent_at: 10,
+            is_unread: true,
+            has_attachments: true,
+            labels: &["INBOX"],
+        },
     );
     insert_message(
         &connection,
-        "m2",
-        "thread-2",
-        "team@example.com",
-        "Read only",
-        "body",
-        20,
-        false,
-        true,
-        &["INBOX"],
+        SeededMessage {
+            id: "m2",
+            thread_id: "thread-2",
+            sender: "team@example.com",
+            subject: "Read only",
+            body: "body",
+            sent_at: 20,
+            is_unread: false,
+            has_attachments: true,
+            labels: &["INBOX"],
+        },
     );
     let parsed = parse("is:unread has:attachment", now()).unwrap();
     assert!(!parsed.has_text_term);
@@ -218,39 +241,45 @@ fn from_anna_is_unread_requires_a_single_message_satisfying_both() {
     let connection = setup();
     insert_message(
         &connection,
-        "m1",
-        "thread-split",
-        "anna@example.com",
-        "Report",
-        "body",
-        10,
-        false,
-        false,
-        &["INBOX"],
+        SeededMessage {
+            id: "m1",
+            thread_id: "thread-split",
+            sender: "anna@example.com",
+            subject: "Report",
+            body: "body",
+            sent_at: 10,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["INBOX"],
+        },
     );
     insert_message(
         &connection,
-        "m2",
-        "thread-split",
-        "bob@example.com",
-        "Re: Report",
-        "body",
-        20,
-        true,
-        false,
-        &["INBOX"],
+        SeededMessage {
+            id: "m2",
+            thread_id: "thread-split",
+            sender: "bob@example.com",
+            subject: "Re: Report",
+            body: "body",
+            sent_at: 20,
+            is_unread: true,
+            has_attachments: false,
+            labels: &["INBOX"],
+        },
     );
     insert_message(
         &connection,
-        "m3",
-        "thread-together",
-        "anna@example.com",
-        "Report",
-        "body",
-        30,
-        true,
-        false,
-        &["INBOX"],
+        SeededMessage {
+            id: "m3",
+            thread_id: "thread-together",
+            sender: "anna@example.com",
+            subject: "Report",
+            body: "body",
+            sent_at: 30,
+            is_unread: true,
+            has_attachments: false,
+            labels: &["INBOX"],
+        },
     );
     let parsed = parse("from:anna is:unread", now()).unwrap();
     let scope = resolve(&SearchScope::Default);
@@ -265,27 +294,31 @@ fn matches_deduplicate_to_threads_order_newest_first_and_paginate_without_loss()
         let thread_id = format!("thread-{index}");
         insert_message(
             &connection,
-            &format!("m{index}a"),
-            &thread_id,
-            "team@example.com",
-            "Quarterly summary",
-            "quarterly numbers attached",
-            10 + index,
-            false,
-            false,
-            &["INBOX"],
+            SeededMessage {
+                id: &format!("m{index}a"),
+                thread_id: &thread_id,
+                sender: "team@example.com",
+                subject: "Quarterly summary",
+                body: "quarterly numbers attached",
+                sent_at: 10 + index,
+                is_unread: false,
+                has_attachments: false,
+                labels: &["INBOX"],
+            },
         );
         insert_message(
             &connection,
-            &format!("m{index}b"),
-            &thread_id,
-            "team@example.com",
-            "Quarterly follow-up",
-            "quarterly follow up notes",
-            10 + index + 100,
-            false,
-            false,
-            &["INBOX"],
+            SeededMessage {
+                id: &format!("m{index}b"),
+                thread_id: &thread_id,
+                sender: "team@example.com",
+                subject: "Quarterly follow-up",
+                body: "quarterly follow up notes",
+                sent_at: 10 + index + 100,
+                is_unread: false,
+                has_attachments: false,
+                labels: &["INBOX"],
+            },
         );
     }
     let parsed = parse("quarterly", now()).unwrap();
@@ -334,15 +367,17 @@ fn backward_search_page_restores_newer_rows_in_newest_first_order() {
     for index in 0..5 {
         insert_message(
             &connection,
-            &format!("m{index}"),
-            &format!("thread-{index}"),
-            "team@example.com",
-            "Quarterly summary",
-            "quarterly numbers attached",
-            index,
-            false,
-            false,
-            &["INBOX"],
+            SeededMessage {
+                id: &format!("m{index}"),
+                thread_id: &format!("thread-{index}"),
+                sender: "team@example.com",
+                subject: "Quarterly summary",
+                body: "quarterly numbers attached",
+                sent_at: index,
+                is_unread: false,
+                has_attachments: false,
+                labels: &["INBOX"],
+            },
         );
     }
     let parsed = parse("quarterly", now()).unwrap();
@@ -377,15 +412,17 @@ fn default_scope_excludes_trash_and_all_scope_includes_it() {
     let connection = setup();
     insert_message(
         &connection,
-        "m1",
-        "thread-1",
-        "team@example.com",
-        "Invoice",
-        "invoice attached",
-        10,
-        false,
-        false,
-        &["TRASH"],
+        SeededMessage {
+            id: "m1",
+            thread_id: "thread-1",
+            sender: "team@example.com",
+            subject: "Invoice",
+            body: "invoice attached",
+            sent_at: 10,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["TRASH"],
+        },
     );
     let parsed = parse("invoice", now()).unwrap();
 
@@ -406,27 +443,31 @@ fn label_scope_narrows_results_to_a_single_label() {
     let connection = setup();
     insert_message(
         &connection,
-        "m1",
-        "thread-1",
-        "team@example.com",
-        "Invoice",
-        "invoice attached",
-        10,
-        false,
-        false,
-        &["INBOX", "Label_1"],
+        SeededMessage {
+            id: "m1",
+            thread_id: "thread-1",
+            sender: "team@example.com",
+            subject: "Invoice",
+            body: "invoice attached",
+            sent_at: 10,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["INBOX", "Label_1"],
+        },
     );
     insert_message(
         &connection,
-        "m2",
-        "thread-2",
-        "team@example.com",
-        "Invoice copy",
-        "invoice attached",
-        20,
-        false,
-        false,
-        &["INBOX"],
+        SeededMessage {
+            id: "m2",
+            thread_id: "thread-2",
+            sender: "team@example.com",
+            subject: "Invoice copy",
+            body: "invoice attached",
+            sent_at: 20,
+            is_unread: false,
+            has_attachments: false,
+            labels: &["INBOX"],
+        },
     );
     let parsed = parse("invoice", now()).unwrap();
     let scope = resolve(&SearchScope::Label {

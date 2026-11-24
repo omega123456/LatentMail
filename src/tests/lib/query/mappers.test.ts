@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import { describe, expect, it } from 'vitest';
 import {
   computeThreadLabelMembership,
@@ -13,7 +14,7 @@ const thread: MailThread = {
   subject: 'Q3 Marketing Strategy Review',
   sender: { display: 'Elena Rodriguez', address: 'elena.r@example.com' },
   sentRecipient: null,
-  latestAt: Date.parse('2026-08-11T09:00:00Z'),
+  latestAt: getTime(parseISO('2026-08-11T09:00:00Z')),
   messageCount: 2,
   isUnread: true,
   isStarred: false,
@@ -122,7 +123,7 @@ describe('mapConversation', () => {
           sender: 'Elena Rodriguez <elena.r@example.com>',
           recipients: ['You <you@example.com>'],
           subject: 'Q3 Marketing Strategy Review',
-          sentAt: Date.parse('2026-08-10T09:00:00Z'),
+          sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
           snippet: 'Attached slides',
           htmlBody: '<p>Attached slides</p>',
           htmlPresence: 'present',

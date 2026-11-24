@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import userEvent from '@testing-library/user-event';
-import { format, subHours, subMinutes, subSeconds } from 'date-fns';
+import { format, getTime, parseISO, subHours, subMinutes, subSeconds } from 'date-fns';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from '@/components/statusbar/StatusBar';
@@ -20,7 +20,7 @@ function renderStatusBar(ui: React.ReactElement) {
 function setStatus(
   state: 'idle' | 'syncing' | 'error',
   queue = emptyQueue,
-  lastSynced: Date | null = new Date('2026-08-11T10:00:00Z'),
+  lastSynced: Date | null = parseISO('2026-08-11T10:00:00Z'),
 ) {
   act(() =>
     useSyncStore.setState({
@@ -42,7 +42,7 @@ function overrideTraversal(
     accountId: 'account-1',
     state,
     kind: state === 'backfilling' ? 'backfill' : null,
-    lastAdvancedAt: Date.parse('2026-08-11T10:00:00Z'),
+    lastAdvancedAt: getTime(parseISO('2026-08-11T10:00:00Z')),
     isResumed,
     ...counts,
   });
@@ -150,7 +150,7 @@ describe('StatusBar', () => {
     ipc.override('trigger_sync', {
       accountId: 'account-1',
       state: 'idle',
-      lastSyncedAt: Date.parse('2026-08-11T10:00:00Z'),
+      lastSyncedAt: getTime(parseISO('2026-08-11T10:00:00Z')),
       lastError: null,
     });
     renderStatusBar(<StatusBar accountId="account-1" />);
@@ -296,7 +296,7 @@ describe('StatusBar', () => {
     ipc.override('read_sync_status', {
       accountId: 'account-1',
       state: 'idle',
-      lastSyncedAt: Date.parse('2026-08-11T09:30:00Z'),
+      lastSyncedAt: getTime(parseISO('2026-08-11T09:30:00Z')),
       lastError: null,
     });
     renderStatusBar(<StatusBar accountId="account-1" />);
@@ -309,13 +309,13 @@ describe('StatusBar', () => {
     ipc.override('read_sync_status', {
       accountId: 'account-1',
       state: 'idle',
-      lastSyncedAt: Date.parse('2026-08-11T09:30:00Z'),
+      lastSyncedAt: getTime(parseISO('2026-08-11T09:30:00Z')),
       lastError: null,
     });
     ipc.override('trigger_sync', {
       accountId: 'account-1',
       state: 'idle',
-      lastSyncedAt: Date.parse('2026-08-11T10:00:00Z'),
+      lastSyncedAt: getTime(parseISO('2026-08-11T10:00:00Z')),
       lastError: null,
     });
     renderStatusBar(<StatusBar accountId="account-1" />);
@@ -412,7 +412,7 @@ describe('StatusBar', () => {
       finish!({
         accountId: 'account-1',
         state: 'idle',
-        lastSyncedAt: Date.parse('2026-08-11T10:00:00Z'),
+        lastSyncedAt: getTime(parseISO('2026-08-11T10:00:00Z')),
         lastError: null,
       });
     });

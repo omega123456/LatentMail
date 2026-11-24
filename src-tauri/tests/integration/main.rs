@@ -103,6 +103,7 @@ mod sync_initial_integration;
 mod sync_label_command_failures_integration;
 mod sync_label_reconciliation_integration;
 mod sync_lazy_body_integration;
+mod sync_mail_change_announcement_integration;
 mod sync_materialize_integration;
 mod sync_resync_integration;
 mod sync_threads_integration;

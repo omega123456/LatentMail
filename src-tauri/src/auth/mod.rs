@@ -737,6 +737,12 @@ pub async fn remove_account<R: Runtime>(
     service.remove_account(queue.inner(), &account_id).await?;
     tauri::Emitter::emit(
         &app,
+        "account://removed",
+        serde_json::json!({"accountId":account_id}),
+    )
+    .map_err(|error| error.to_string())?;
+    tauri::Emitter::emit(
+        &app,
         "ai://config",
         serde_json::json!({"accountId":account_id,"removed":true}),
     )

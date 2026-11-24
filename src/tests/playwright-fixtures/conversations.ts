@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import type { IpcCommandMap } from '@/lib/types/ipc';
 import { playwrightMessageAttachments } from './attachments';
 
@@ -10,7 +11,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
       sender: 'Elena Rodriguez <elena.r@example.com>',
       recipients: ['You <you@example.com>', 'Alex <alex@example.com>', 'Sam <sam@example.com>'],
       subject: 'Q3 Marketing Strategy Review',
-      sentAt: Date.parse('2026-08-10T09:00:00Z'),
+      sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
       snippet: "I've attached the finalized slides for tomorrow's presentation.",
       htmlBody: null,
       htmlPresence: 'present',
@@ -34,7 +35,7 @@ export const playwrightConversation: IpcCommandMap['load_conversation']['result'
         'Sarah <sarah@example.com>',
       ],
       subject: 'Q3 Marketing Strategy Review',
-      sentAt: Date.parse('2026-08-11T09:00:00Z'),
+      sentAt: getTime(parseISO('2026-08-11T09:00:00Z')),
       snippet:
         "I've attached the finalized slide deck for tomorrow's Q3 Marketing Strategy presentation.",
       htmlBody:
@@ -79,4 +80,14 @@ export const playwrightTooLargeConversation: IpcCommandMap['load_conversation'][
       ? { ...message, htmlBody: null, htmlPresence: 'tooLarge' as const }
       : message,
   ),
+};
+
+export const playwrightEmptyMessageBody: IpcCommandMap['load_message_body']['result'] = {
+  htmlBody: null,
+  plainBody: null,
+  htmlPresence: 'absent',
+  truncated: false,
+  remoteImagesBlocked: false,
+  remoteImagesAllowed: false,
+  inlineImagesPending: false,
 };

@@ -1,3 +1,4 @@
+import { parseISO } from 'date-fns';
 import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -13,7 +14,7 @@ const conversation: Conversation = {
   avatarDomain: 'example.com',
   subject: 'Q3 review',
   snippet: 'Attached slides',
-  date: new Date('2026-08-11T10:42:00Z'),
+  date: parseISO('2026-08-11T10:42:00Z'),
   unread: false,
   starred: false,
 };

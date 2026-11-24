@@ -10,3 +10,8 @@ export const playwrightUpdateAvailable: IpcCommandMap['check_for_update']['resul
     dateMillis: getTime(parseISO('2026-08-20T00:00:00.000Z')),
   },
 };
+
+export const playwrightNoUpdate: IpcCommandMap['check_for_update']['result'] = {
+  currentVersion: '0.1.0',
+  available: null,
+};

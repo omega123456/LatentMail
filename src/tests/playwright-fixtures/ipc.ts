@@ -2,12 +2,26 @@ import type { IpcCommandMap } from '@/lib/types/ipc';
 import { playwrightSidebarAccounts } from './accounts';
 import { playwrightCreatedLabel, playwrightLabels, playwrightMutationResults } from './labels';
 import { playwrightThreadPage } from './threads';
-import { playwrightConversation } from './conversations';
+import { playwrightConversation, playwrightEmptyMessageBody } from './conversations';
 import { playwrightSyncStatus, playwrightTriggerSyncResult } from './sync';
 import { playwrightTraversalStatus } from './traversal';
 import { playwrightSettings } from './settings';
 import { playwrightLogEntries } from './logs';
-import { playwrightContactSuggestions, playwrightStagedAttachment } from './compose';
+import {
+  playwrightContactSuggestions,
+  playwrightHydratedDraft,
+  playwrightReplyContext,
+  playwrightSavedDraftAcceptance,
+  playwrightSentDraftAcceptance,
+  playwrightStagedAttachment,
+} from './compose';
+import {
+  playwrightEmptyParsedSearchQuery,
+  playwrightEmptySearchPage,
+  playwrightZeroSearchTotal,
+} from './search';
+import { playwrightNoUpdate } from './update';
+import { playwrightAccountAvatarPath, playwrightSenderAvatarPath } from './avatars';
 import { playwrightCachedAttachment } from './attachments';
 import { playwrightMessageSource } from './message-source';
 import {
@@ -50,45 +64,15 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   cancel_ai_chat: false,
   list_labels: playwrightLabels,
   lookup_contacts: playwrightContactSuggestions,
-  reply_context: {
-    to: [],
-    cc: [],
-    subject: '',
-    originalMessageId: '',
-    targetThreadId: null,
-    inReplyTo: null,
-    references: [],
-    originalGmailMessageId: '',
-    displayQuote: null,
-    attachments: [],
-  },
+  reply_context: playwrightReplyContext,
   stage_attachment_from_path: playwrightStagedAttachment,
   stage_attachment_from_bytes: playwrightStagedAttachment,
   stage_attachment_into_draft: playwrightStagedAttachment,
   release_staged_attachment: undefined,
-  save_compose_draft: { operationId: 'draft-operation', draftId: 'draft-1' },
-  send_compose_draft: { operationId: 'send-operation', draftId: 'draft-1' },
+  save_compose_draft: playwrightSavedDraftAcceptance,
+  send_compose_draft: playwrightSentDraftAcceptance,
   discard_compose_draft: undefined,
-  hydrate_compose_draft: {
-    sessionId: 'session-1',
-    accountId: 'account-1',
-    draftId: 'draft-1',
-    from: 'alex@example.com',
-    to: [],
-    cc: [],
-    bcc: [],
-    subject: '',
-    html: '',
-    quoteHtml: null,
-    quotePlain: null,
-    mode: 'draft',
-    threadId: null,
-    inReplyTo: null,
-    references: [],
-    originalMessageId: null,
-    originalGmailMessageId: null,
-    attachments: [],
-  },
+  hydrate_compose_draft: playwrightHydratedDraft,
   'plugin:dialog|open': null,
   'plugin:dialog|save': null,
   ensure_attachment_cached: playwrightCachedAttachment,
@@ -100,15 +84,7 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   save_message_html_to_path: undefined,
   list_threads: playwrightThreadPage,
   load_conversation: playwrightConversation,
-  load_message_body: {
-    htmlBody: null,
-    plainBody: null,
-    htmlPresence: 'absent',
-    truncated: false,
-    remoteImagesBlocked: false,
-    remoteImagesAllowed: false,
-    inlineImagesPending: false,
-  },
+  load_message_body: playwrightEmptyMessageBody,
   fetch_message_body: undefined,
   trigger_sync: playwrightTriggerSyncResult,
   read_sync_status: playwrightSyncStatus,
@@ -128,26 +104,18 @@ export const playwrightIpcFixtures: { [C in keyof IpcCommandMap]: IpcCommandMap[
   recolor_label: playwrightCreatedLabel,
   delete_label: undefined,
   read_traversal_status: playwrightTraversalStatus,
-  read_sender_avatar: 'avatar-cache/senders/example-com.png',
-  read_account_avatar: 'avatar-cache/accounts/account-1.png',
-  search_threads: { items: [], nextCursor: null, previousCursor: null },
-  search_total: 0,
-  parse_search_query: {
-    hasTextTerm: false,
-    from: null,
-    to: null,
-    subject: null,
-    includes: [],
-    excludes: [],
-    predicates: [],
-  },
+  read_sender_avatar: playwrightSenderAvatarPath,
+  read_account_avatar: playwrightAccountAvatarPath,
+  search_threads: playwrightEmptySearchPage,
+  search_total: playwrightZeroSearchTotal,
+  parse_search_query: playwrightEmptyParsedSearchQuery,
   read_queue_operations: playwrightQueueOperationsSnapshot,
   cancel_queue_operation: true,
   retry_queue_operation: true,
   retry_failed_operations: 0,
   clear_queue_history: undefined,
   set_queue_paused: true,
-  check_for_update: { currentVersion: '0.1.0', available: null },
+  check_for_update: playwrightNoUpdate,
   install_update: undefined,
 };
 

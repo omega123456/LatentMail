@@ -81,7 +81,7 @@ pub fn observe_now(connection: &Connection, account_id: &str, mailbox: &str) -> 
 
 pub fn lookup(connection: &Connection, account_id: &str, prefix: &str) -> Result<Vec<Contact>> {
     let prefix = format!("{}%", prefix.trim().to_ascii_lowercase());
-    let mut statement = connection.prepare(
+    let mut statement = connection.prepare_cached(
         "SELECT account_id,address,display_name,frequency,last_seen_at FROM contacts
          WHERE account_id=?1 AND address LIKE ?2
          ORDER BY frequency DESC,last_seen_at DESC,address ASC LIMIT 10",

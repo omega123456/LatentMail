@@ -1,8 +1,10 @@
+import { parseISO } from 'date-fns';
 import { act, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openEditDraft, openForward, openNewMessage, openReply } from '@/lib/compose/entry';
 import { useComposeStore } from '@/stores/compose';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
 const message = {
   id: 'message-1',
@@ -11,7 +13,7 @@ const message = {
   toRecipients: [{ name: 'Me', address: 'me@example.com' }],
   ccRecipients: [{ name: 'Team', address: 'team@example.com' }],
   bccRecipients: [],
-  sentAt: new Date('2026-08-13T12:00:00Z'),
+  sentAt: parseISO('2026-08-13T12:00:00Z'),
   snippet: 'Hello',
   html: '<p>Hello</p>',
   text: 'Hello',
@@ -101,6 +103,7 @@ describe('compose entry actions', () => {
   });
 
   it('stages each forwarded attachment through the compose store, independently reporting failures', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('reply_context', {
       to: [],
       cc: [],
@@ -149,6 +152,9 @@ describe('compose entry actions', () => {
     const bad = attachments.find((entry) => entry.filename === 'broken.zip');
     expect(ok).toMatchObject({ state: 'settled', size: 1024 });
     expect(bad).toMatchObject({ state: 'failed', error: 'Gmail unavailable' });
+    expect(consoleError).toHaveBeenCalledWith(
+      'ipc stage_attachment_into_draft failed: Gmail unavailable',
+    );
   });
 
   it('saves qualifying dirty work before reliably retargeting the composer', async () => {

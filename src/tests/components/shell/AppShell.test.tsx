@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
@@ -79,7 +80,7 @@ const threadOne = {
   subject: 'Q3 review',
   sender: { display: 'Elena Rodriguez', address: 'elena.r@example.com' },
   sentRecipient: null,
-  latestAt: Date.parse('2026-08-10T09:00:00Z'),
+  latestAt: getTime(parseISO('2026-08-10T09:00:00Z')),
   messageCount: 1,
   isUnread: true,
   isStarred: false,
@@ -96,7 +97,7 @@ const conversationOne = {
       sender: 'Elena Rodriguez <elena.r@example.com>',
       recipients: ['You <you@example.com>'],
       subject: 'Q3 review',
-      sentAt: Date.parse('2026-08-10T09:00:00Z'),
+      sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
       snippet: 'Attached slides',
       htmlBody: '<p>Attached slides</p>',
       htmlPresence: 'present',
@@ -136,12 +137,13 @@ describe('AppShell wired to real data', () => {
     client.setQueryData(queryKeys.accounts, [accountOne]);
     const setRoute = useLayoutStore.getState().setRoute;
     act(() => useLayoutStore.setState({ route: 'auth', setRoute: vi.fn() }));
-    render(
+    const { unmount } = render(
       <QueryClientProvider client={client}>
         <AppShell />
       </QueryClientProvider>,
     );
     expect(screen.getByTestId('startup-surface')).toBeInTheDocument();
+    unmount();
     act(() => useLayoutStore.setState({ setRoute }));
   });
 

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { waitForBodyFramesToSettle } from '@/tests/body-frame';
 import { BodyFrame } from '@/components/reader/BodyFrame';
 import { ipc } from '@/tests/ipc-mock';
 
@@ -38,7 +39,7 @@ describe('BodyFrame', () => {
     expect(openExternal).toHaveBeenCalledWith({ url: 'https://example.com' });
   });
 
-  it('keeps proxied image sources and still drops executable ones', () => {
+  it('keeps proxied image sources and still drops executable ones', async () => {
     const proxied = 'remoteimg://localhost/?url=https%3A%2F%2Fclaude.ai%2Fa.gif';
     render(
       <BodyFrame
@@ -51,13 +52,15 @@ describe('BodyFrame', () => {
     expect(srcdoc).toContain(`<img src="${proxied}">`);
     expect(srcdoc).toContain(`background:url(${proxied})`);
     expect(srcdoc).not.toContain('javascript:');
+    await waitForBodyFramesToSettle();
   });
 
-  it('keeps inline image sources even when remote images stay blocked', () => {
+  it('keeps inline image sources even when remote images stay blocked', async () => {
     const inline = 'inlineimg://localhost/?account=a&message=m&cid=logo';
     render(<BodyFrame html={`<img src="${inline}">`} text={null} />);
     const srcdoc = screen.getByTitle('Message body').getAttribute('srcdoc') ?? '';
     expect(srcdoc).toContain(`<img src="${inline.replaceAll('&', '&amp;')}">`);
+    await waitForBodyFramesToSettle();
   });
 
   it('cancels the native right-click menu and forwards it to the reader menu', async () => {
@@ -85,7 +88,7 @@ describe('BodyFrame', () => {
     expect(frame.dataset.contextHref).toBe('https://example.com');
   });
 
-  it('schedules one frame-wiring loop per document rather than one per render', () => {
+  it('schedules one frame-wiring loop per document rather than one per render', async () => {
     const scheduled = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
     const { rerender } = render(<BodyFrame html="<p>Hello</p>" text={null} />);
     const afterMount = scheduled.mock.calls.length;
@@ -95,5 +98,6 @@ describe('BodyFrame', () => {
     rerender(<BodyFrame html="<p>Changed</p>" text={null} />);
     expect(scheduled.mock.calls.length).toBe(afterMount + 1);
     scheduled.mockRestore();
+    await waitForBodyFramesToSettle();
   });
 });

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use latentmail_lib::{
-    attachments::{commands::ensure_attachment_cached, AttachmentCache},
+    attachments::{
+        commands::{ensure_attachment_cached, AttachmentServices},
+        AttachmentCache,
+    },
     auth::{save_refresh_token, AuthService},
     compose::staging::Staging,
     queue::commands::{retry_failed_operations, retry_queue_operation},
@@ -10,7 +13,9 @@ use latentmail_lib::{
     storage::{Account, AccountRepository, Storage},
     sync::{
         commands::{discard_compose_draft, read_traversal_status},
-        create_queue_engine, noop_event_sink, SyncEngine, WorkRegistry,
+        create_queue_engine, noop_event_sink,
+        services::GmailServices,
+        SyncEngine, WorkRegistry,
     },
 };
 use tauri::Manager;
@@ -178,11 +183,7 @@ async fn caching_an_attachment_surfaces_an_unreadable_database() {
     harness.corrupt();
 
     assert!(ensure_attachment_cached(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
-        app.state(),
+        AttachmentServices::new(app.handle()).unwrap(),
         "account".into(),
         "message-1".into(),
         "attachment-1".into(),
@@ -198,10 +199,7 @@ async fn discarding_a_compose_draft_surfaces_an_unreadable_database() {
     harness.corrupt();
 
     assert!(discard_compose_draft(
-        app.handle().clone(),
-        app.state(),
-        app.state(),
-        app.state(),
+        GmailServices::new(app.handle()).unwrap(),
         app.state(),
         "account".into(),
         None,

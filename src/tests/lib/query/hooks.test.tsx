@@ -9,12 +9,9 @@ import {
   useClearQueueHistoryMutation,
   useContactSuggestionsQuery,
   useConversationQuery,
-  useDeleteThreadsMutation,
   useFetchMessageBodyMutation,
   useLabelsQuery,
   useMessageBodyQuery,
-  useMessageTriageMutation,
-  useMoveThreadsMutation,
   useParseSearchQueryQuery,
   useQueueOperationsQuery,
   useRetryFailedOperationsMutation,
@@ -24,8 +21,13 @@ import {
   useSetQueuePausedMutation,
   useThreadsQuery,
   useTraversalStatusQuery,
-  useTriageMutation,
 } from '@/lib/query/hooks';
+import {
+  useDeleteThreadsMutation,
+  useMessageTriageMutation,
+  useMoveThreadsMutation,
+  useTriageMutation,
+} from '@/lib/query/mutations';
 import { queryKeys } from '@/lib/query/keys';
 import { useLayoutStore } from '@/stores/layout';
 import { useMultiSelectStore } from '@/stores/multi-select';
@@ -33,6 +35,7 @@ import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -624,6 +627,7 @@ describe('queue hooks', () => {
   });
 
   it('surfaces a toast when a queue control command fails', async () => {
+    const consoleError = captureConsole('error');
     const client = new QueryClient();
     ipc.override('set_queue_paused', () => {
       throw new Error('boom');
@@ -637,5 +641,6 @@ describe('queue hooks', () => {
     expect(useToastStore.getState().toasts.at(-1)?.message).toBe(
       'Couldn’t update the pause state.',
     );
+    expect(consoleError).toHaveBeenCalledWith('ipc set_queue_paused failed: boom');
   });
 });

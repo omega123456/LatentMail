@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AccountsSection } from '@/components/settings/AccountsSection';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
 function renderWithoutRetry(ui: React.ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -40,11 +41,13 @@ describe('AccountsSection', () => {
   });
 
   it('shows an error state when accounts fail to load', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('list_accounts', () => {
       throw new Error('boom');
     });
     renderWithoutRetry(<AccountsSection />);
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your accounts.");
+    expect(consoleError).toHaveBeenCalledWith('ipc list_accounts failed: boom');
   });
 
   it('lists every account with avatar, name and address, warning the expired one', async () => {

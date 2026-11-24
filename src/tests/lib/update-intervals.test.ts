@@ -1,3 +1,5 @@
+import { hoursToMilliseconds } from 'date-fns';
+import { millisecondsInDay, millisecondsInWeek } from 'date-fns/constants';
 import { describe, expect, it } from 'vitest';
 import { UPDATE_INTERVAL_MS, UPDATE_INTERVAL_OPTIONS } from '@/lib/update-intervals';
 
@@ -13,9 +15,9 @@ describe('update-intervals', () => {
   });
 
   it('converts every non-off interval to milliseconds', () => {
-    expect(UPDATE_INTERVAL_MS['1h']).toBe(3_600_000);
-    expect(UPDATE_INTERVAL_MS['5h']).toBe(18_000_000);
-    expect(UPDATE_INTERVAL_MS['1d']).toBe(86_400_000);
-    expect(UPDATE_INTERVAL_MS['7d']).toBe(604_800_000);
+    expect(UPDATE_INTERVAL_MS['1h']).toBe(hoursToMilliseconds(1));
+    expect(UPDATE_INTERVAL_MS['5h']).toBe(hoursToMilliseconds(5));
+    expect(UPDATE_INTERVAL_MS['1d']).toBe(millisecondsInDay);
+    expect(UPDATE_INTERVAL_MS['7d']).toBe(millisecondsInWeek);
   });
 });

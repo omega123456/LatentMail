@@ -20,10 +20,9 @@ import {
   useConversationQuery,
   useSearchThreadsQuery,
   useThreadsQuery,
-  useThreadTriageIntentMutation,
   useTraversalStatusQuery,
-  type ThreadTriageIntent,
 } from '@/lib/query/hooks';
+import { useThreadTriageIntentMutation, type ThreadTriageIntent } from '@/lib/query/mutations';
 import { mapConversation, mapLabelsToUserLabels, mapThreadToRow } from '@/lib/query/mappers';
 import { openEditDraft, openForward, openReply } from '@/lib/compose/entry';
 import { useLayoutStore } from '@/stores/layout';
@@ -41,10 +40,6 @@ const emptyCopy: Record<string, string> = {
   SENT: 'No sent conversations.',
   TRASH: 'Trash is empty.',
 };
-const fixtureState = (): ListState =>
-  window.__LATENTMAIL_PLAYWRIGHT_IPC__
-    ? (new URLSearchParams(window.location.search).get('listState') as ListState) || 'ready'
-    : 'ready';
 
 function intersectSystemLabelIds(conversations: Conversation[]): string[] {
   if (conversations.length === 0) return [];
@@ -57,7 +52,7 @@ function intersectSystemLabelIds(conversations: Conversation[]): string[] {
 export function ConversationList({
   threads = conversationFixtures,
   pages,
-  state = fixtureState(),
+  state = 'ready',
   onRetry,
   onLoadMore,
   onLoadPrevious,
@@ -461,21 +456,17 @@ export function ConversationListContainer() {
   );
   const backfillIncomplete =
     traversal.data?.state === 'backfilling' || traversal.data?.state === 'reconciling';
-  const forcedState = fixtureState();
-  const state: ListState =
-    forcedState !== 'ready'
-      ? forcedState
-      : activeQuery.isError
-        ? 'error'
-        : activeQuery.isPending
-          ? 'loading'
-          : rows.length === 0
-            ? searchActive
-              ? 'searchEmpty'
-              : backfillIncomplete
-                ? 'syncing'
-                : 'empty'
-            : 'ready';
+  const state: ListState = activeQuery.isError
+    ? 'error'
+    : activeQuery.isPending
+      ? 'loading'
+      : rows.length === 0
+        ? searchActive
+          ? 'searchEmpty'
+          : backfillIncomplete
+            ? 'syncing'
+            : 'empty'
+        : 'ready';
   return (
     <ConversationList
       threads={rows}

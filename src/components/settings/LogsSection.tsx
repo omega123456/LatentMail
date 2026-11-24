@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { differenceInCalendarDays, format, isToday, isYesterday } from 'date-fns';
 import {
   ChevronLeft,
@@ -20,7 +20,6 @@ import { useLayoutStore } from '@/stores/layout';
 import { useToastStore } from '@/stores/toast';
 import type { LogLevel } from '@/lib/types/ipc';
 
-const AUTO_REFRESH_INTERVAL_MS = 5_000;
 const ENTRIES_PER_PAGE = 50;
 
 const PAGE_WINDOW = 1;
@@ -136,15 +135,6 @@ export function LogsSection() {
       .writeText(entryLine(entry))
       .then(() => showSuccess('Copied log entry.'));
   };
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void refetch();
-      }
-    }, AUTO_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(interval);
-  }, [refetch]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-5.5">

@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import type { IpcCommandMap } from '@/lib/types/ipc';
 
 const playwrightRawSourceHeaders = [
@@ -36,7 +37,7 @@ const playwrightEncodedBody = Array.from(
 
 export const playwrightMessageSource: IpcCommandMap['read_message_source']['result'] = {
   messageId: '<q3-review.7f3a9c@mail.ethereal.example.com>',
-  sentAt: Date.parse('2026-08-11T09:00:00Z'),
+  sentAt: getTime(parseISO('2026-08-11T09:00:00Z')),
   sender: 'Elena Rodriguez <elena.r@example.com>',
   to: 'You <you@example.com>, David <david@example.com>, Sarah <sarah@example.com>',
   cc: '',

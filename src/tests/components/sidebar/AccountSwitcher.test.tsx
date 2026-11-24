@@ -5,6 +5,7 @@ import { expect, it } from 'vitest';
 import { AccountSwitcher } from '@/components/sidebar/AccountSwitcher';
 import { ipc } from '@/tests/ipc-mock';
 import { sidebarAccounts } from '@/tests/fixtures';
+import { captureConsole } from '@/tests/console';
 
 it('shows account warnings and starts add-account in place', async () => {
   const user = userEvent.setup();
@@ -59,6 +60,7 @@ it('lets the user add another account once the sign-in hand-off has finished', a
 });
 
 it('lets the user retry adding an account after the sign-in hand-off fails', async () => {
+  const consoleError = captureConsole('error');
   const user = userEvent.setup();
   ipc.override('begin_sign_in', () => Promise.reject(new Error('browser unavailable')));
   render(
@@ -74,4 +76,5 @@ it('lets the user retry adding an account after the sign-in hand-off fails', asy
   await user.click(screen.getByRole('button', { name: /Alex Morgan/ }));
   await user.click(screen.getByRole('menuitem', { name: 'Add account' }));
   await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Add account' })).toBeEnabled());
+  expect(consoleError).toHaveBeenCalledWith('ipc begin_sign_in failed: browser unavailable');
 });

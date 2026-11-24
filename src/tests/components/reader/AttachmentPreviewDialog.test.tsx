@@ -8,6 +8,7 @@ import { hasFocusContext } from '@/lib/keyboard/useCommands';
 import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
 import type { MessageAttachment } from '@/lib/types/ipc';
+import { captureConsole } from '@/tests/console';
 
 vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({ default: 'worker-url' }));
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
@@ -105,6 +106,7 @@ describe('AttachmentPreviewDialog', () => {
   });
 
   it('renders the acquisition-error fallback when the preview bytes fail to load', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('ensure_attachment_cached', () => Promise.reject(new Error('boom')));
     renderWithClient(
       <AttachmentPreviewDialog
@@ -115,6 +117,7 @@ describe('AttachmentPreviewDialog', () => {
       />,
     );
     expect(await screen.findByText(/Couldn't load preview/)).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith('ipc ensure_attachment_cached failed: boom');
   });
 
   it('renders the unsupported fallback with a working Download for an unrecognised type', async () => {

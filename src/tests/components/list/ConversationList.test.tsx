@@ -1,3 +1,4 @@
+import { parseISO } from 'date-fns';
 import { act, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,7 +17,7 @@ const nextPage = [
     sender: 'Page Two',
     subject: 'More mail',
     snippet: '',
-    date: new Date('2026-08-01T10:00:00Z'),
+    date: parseISO('2026-08-01T10:00:00Z'),
     unread: false,
     starred: false,
   },
@@ -27,7 +28,7 @@ const prepended = [
     sender: 'New mail',
     subject: 'A fresh message',
     snippet: '',
-    date: new Date('2026-08-11T11:00:00Z'),
+    date: parseISO('2026-08-11T11:00:00Z'),
     unread: true,
     starred: false,
   },
@@ -312,7 +313,7 @@ describe('ConversationList multi-selection', () => {
         sender: 'Anna',
         subject: 'In trash',
         snippet: '',
-        date: new Date('2026-08-11T10:00:00Z'),
+        date: parseISO('2026-08-11T10:00:00Z'),
         unread: false,
         starred: false,
         systemLabelIds: ['TRASH'],
@@ -322,7 +323,7 @@ describe('ConversationList multi-selection', () => {
         sender: 'Bob',
         subject: 'In inbox',
         snippet: '',
-        date: new Date('2026-08-10T10:00:00Z'),
+        date: parseISO('2026-08-10T10:00:00Z'),
         unread: false,
         starred: false,
         systemLabelIds: ['INBOX'],

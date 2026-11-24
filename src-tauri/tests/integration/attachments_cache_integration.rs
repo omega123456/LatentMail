@@ -2,6 +2,17 @@ use latentmail_lib::attachments::{cache::AttachmentCache, seed_cache};
 use latentmail_lib::gmail::{AttachmentPart, GmailClient};
 use wiremock::MockServer;
 
+fn age_by_hours(path: &std::path::Path, hours: i64) {
+    let age = chrono::Duration::hours(hours).to_std().unwrap();
+    let modified = std::time::SystemTime::now() - age;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+}
+
 #[test]
 fn write_bytes_lays_out_files_per_account_and_message_and_reports_size() {
     let directory = tempfile::tempdir().unwrap();
@@ -122,7 +133,7 @@ fn sweep_evicts_least_recently_used_entries_down_to_the_ceiling() {
     let directory = tempfile::tempdir().unwrap();
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
 
-    cache
+    let old = cache
         .write_bytes(
             "account",
             "m1",
@@ -132,7 +143,7 @@ fn sweep_evicts_least_recently_used_entries_down_to_the_ceiling() {
             &[0u8; 100],
         )
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    age_by_hours(&old.cache_path, 1);
     cache
         .write_bytes(
             "account",
@@ -196,7 +207,7 @@ fn touching_an_entry_on_lookup_protects_it_from_the_next_sweep() {
     let directory = tempfile::tempdir().unwrap();
     let cache = AttachmentCache::new(directory.path().join("cache")).unwrap();
 
-    cache
+    let older = cache
         .write_bytes(
             "account",
             "m1",
@@ -206,8 +217,7 @@ fn touching_an_entry_on_lookup_protects_it_from_the_next_sweep() {
             &[0u8; 100],
         )
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    cache
+    let newer = cache
         .write_bytes(
             "account",
             "m1",
@@ -217,7 +227,8 @@ fn touching_an_entry_on_lookup_protects_it_from_the_next_sweep() {
             &[0u8; 100],
         )
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    age_by_hours(&older.cache_path, 2);
+    age_by_hours(&newer.cache_path, 1);
 
     assert!(cache
         .lookup("account", "m1", "a", "a.bin", "application/octet-stream")

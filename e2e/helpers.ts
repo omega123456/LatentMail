@@ -1,49 +1,72 @@
+import { getTime, parseISO } from 'date-fns';
 import type { Page } from '@playwright/test';
-import { playwrightIpcFixtures } from '@/tests/playwright-fixtures';
+import {
+  playwrightFileSources,
+  playwrightIpcFixtures,
+  playwrightMailChangingCommands,
+} from '@/tests/playwright-fixtures';
 import type { OpenComposeArgs } from '@/stores/compose';
 
-export async function installPlaywrightIpc(
-  page: Page,
-  overrides: Record<string, unknown> = {},
-  readerState?: 'loading' | 'error',
-  syncStatus?: { state: 'idle' | 'syncing' | 'error'; lastSynced: string; error?: string },
-  rejectedCommands: string[] = [],
-  pendingCommands: string[] = [],
-  composeSession?: OpenComposeArgs,
-  platform: 'windows' | 'macos' = 'macos',
-) {
-  const syncOverride = syncStatus
-    ? {
-        read_sync_status: {
-          accountId: '',
-          state: syncStatus.state,
-          lastSyncedAt: Date.parse(syncStatus.lastSynced),
-          lastError: syncStatus.error ?? null,
-        },
-      }
-    : {};
+type ComposeStoreModule = typeof import('@/stores/compose');
+
+const COMPOSE_STORE_MODULE_URL = '/src/stores/compose.ts';
+
+export type PlaywrightSyncStatus = {
+  state: 'idle' | 'syncing' | 'error';
+  lastSynced: string;
+  error?: string;
+};
+
+export type PlaywrightIpcOptions = {
+  overrides?: Record<string, unknown>;
+  syncStatus?: PlaywrightSyncStatus;
+  rejectedCommands?: string[];
+  pendingCommands?: string[];
+  platform?: 'windows' | 'macos';
+};
+
+function syncStatusOverride(syncStatus: PlaywrightSyncStatus | undefined) {
+  if (!syncStatus) return {};
+  return {
+    read_sync_status: {
+      accountId: '',
+      state: syncStatus.state,
+      lastSyncedAt: getTime(parseISO(syncStatus.lastSynced)),
+      lastError: syncStatus.error ?? null,
+    },
+  };
+}
+
+export async function installPlaywrightIpc(page: Page, options: PlaywrightIpcOptions = {}) {
   await page.addInitScript(
     ({
       fixtures,
-      overrides: supplied,
-      readerState: state,
+      overrides,
       rejectedCommands,
       pendingCommands,
-      composeSession: session,
       platform,
+      fileSources,
+      mailChangingCommands,
     }) => {
-      const responses = { ...fixtures, ...supplied } as Record<string, unknown>;
+      const responses = { ...fixtures, ...overrides } as Record<string, unknown>;
       const calls: { command: string; args: unknown }[] = [];
       const listeners = new Map<string, ((payload: unknown) => void)[]>();
-      window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ = calls;
-      window.__LATENTMAIL_PLAYWRIGHT_EMIT__ = (event, payload) => {
+      const emit = (event: string, payload: unknown) => {
         for (const listener of listeners.get(event) ?? []) listener(payload);
       };
+      const announceMailChange = (command: string, args: unknown) => {
+        if (!mailChangingCommands.includes(command)) return;
+        const { accountId } = args as { accountId: string };
+        emit('mail://changed', { accountId });
+      };
+      window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ = calls;
+      window.__LATENTMAIL_PLAYWRIGHT_EMIT__ = emit;
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
         invoke: async (command, args) => {
           calls.push({ command, args });
-          if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (pendingCommands.includes(command)) return new Promise(() => undefined);
+          announceMailChange(command, args);
+          if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (command in responses) return responses[command];
           throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
         },
@@ -57,9 +80,10 @@ export async function installPlaywrightIpc(
             );
           };
         },
+        convertFileSrc: (path) =>
+          fileSources.byPathMarker.find((source) => path.includes(source.marker))?.src ??
+          fileSources.placeholder,
       };
-      window.__LATENTMAIL_PLAYWRIGHT_READER_STATE__ = state;
-      window.__LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__ = session;
       window.__TAURI_OS_PLUGIN_INTERNALS__ = {
         eol: '\n',
         os_type: platform,
@@ -72,12 +96,23 @@ export async function installPlaywrightIpc(
     },
     {
       fixtures: playwrightIpcFixtures,
-      overrides: { ...overrides, ...syncOverride },
-      readerState,
-      rejectedCommands,
-      pendingCommands,
-      composeSession,
-      platform,
+      overrides: { ...options.overrides, ...syncStatusOverride(options.syncStatus) },
+      rejectedCommands: options.rejectedCommands ?? [],
+      pendingCommands: options.pendingCommands ?? [],
+      platform: options.platform ?? 'macos',
+      fileSources: playwrightFileSources,
+      mailChangingCommands: playwrightMailChangingCommands,
     },
+  );
+}
+
+export async function openComposeSession(page: Page, session: OpenComposeArgs) {
+  await page.getByTestId('mail-layout').waitFor();
+  await page.evaluate(
+    async ({ moduleUrl, args }) => {
+      const composeStore: ComposeStoreModule = await import(moduleUrl);
+      composeStore.useComposeStore.getState().open(args);
+    },
+    { moduleUrl: COMPOSE_STORE_MODULE_URL, args: session },
   );
 }

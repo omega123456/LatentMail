@@ -57,3 +57,5 @@ export const playwrightAiModels = [
   { id: 'embed-model', ownedBy: 'provider' },
   { id: 'chat-model', ownedBy: 'provider' },
 ] satisfies IpcCommandMap['list_ai_models']['result'];
+
+export const playwrightNoAiIndexStatuses: IpcCommandMap['read_ai_index_status']['result'] = [];

@@ -1,10 +1,18 @@
-#[cfg(unix)]
 use std::sync::Arc;
 
 use latentmail_lib::{
-    cli::{apply, parse, run_client, send, serve, socket_path, usage, Command},
+    cli::{
+        apply, parse, run_client, send, serve, socket_path, start, usage, Command, ControlSocket,
+    },
     queue::QueueEngine,
 };
+
+#[test]
+fn starting_the_control_socket_is_unsupported_under_test_utils() {
+    let app = tauri::test::mock_app();
+
+    assert_eq!(start(app.handle()), ControlSocket::Unsupported);
+}
 
 #[test]
 fn parses_only_terminal_sync_commands() {
@@ -123,5 +131,66 @@ async fn serves_one_json_command_and_rejects_invalid_json() {
 fn reports_when_no_listener_is_running() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("missing.sock");
+    assert!(send(&path, Command::PauseSync).is_err());
+}
+
+#[cfg(windows)]
+const TEST_PIPE_PREFIX: &str = r"\\.\pipe\latentmail-test-";
+
+#[cfg(windows)]
+#[test]
+fn pipe_name_honors_the_process_override() {
+    let override_path = format!("{TEST_PIPE_PREFIX}override");
+    std::env::set_var("LATENTMAIL_CLI_SOCKET", &override_path);
+
+    assert_eq!(socket_path(), override_path);
+
+    std::env::remove_var("LATENTMAIL_CLI_SOCKET");
+}
+
+#[cfg(windows)]
+#[test]
+fn pipe_name_keeps_only_safe_characters_of_the_user_name() {
+    std::env::remove_var("LATENTMAIL_CLI_SOCKET");
+    std::env::set_var("USERNAME", "jo hn.doe_1-x");
+
+    assert!(socket_path().starts_with(r"\\.\pipe\latentmail-johndoe_1-x"));
+}
+
+#[cfg(windows)]
+fn send_once_listening(path: &str) -> latentmail_lib::cli::Response {
+    let deadline = std::time::Instant::now() + chrono::Duration::seconds(1).to_std().unwrap();
+    loop {
+        let attempt = send(path, Command::PauseSync);
+        let out_of_time = std::time::Instant::now() >= deadline;
+        let finished = attempt.is_ok() || out_of_time;
+        if finished {
+            return attempt.unwrap();
+        }
+        std::thread::sleep(chrono::Duration::milliseconds(1).to_std().unwrap());
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn serves_one_json_command_over_a_named_pipe() {
+    let path = format!("{TEST_PIPE_PREFIX}{}", std::process::id());
+    let queue = QueueEngine::no_op();
+    let server = tokio::spawn(serve(path.clone(), Arc::clone(&queue)));
+
+    let response = tokio::task::spawn_blocking(move || send_once_listening(&path))
+        .await
+        .unwrap();
+
+    assert_eq!(response.message, "Background sync paused.");
+    assert!(queue.summary().paused);
+    server.abort();
+}
+
+#[cfg(windows)]
+#[test]
+fn reports_when_no_pipe_listener_is_running() {
+    let path = format!("{TEST_PIPE_PREFIX}missing-{}", std::process::id());
+
     assert!(send(&path, Command::PauseSync).is_err());
 }

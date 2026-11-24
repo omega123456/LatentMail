@@ -5,7 +5,7 @@ use latentmail_lib::{
     gmail::GmailClient,
     storage::{
         Account, AccountRepository, HtmlPresence, LabelRepository, Message, MessageRepository,
-        Storage,
+        Storage, ThreadRepository,
     },
     sync::{
         commands::{delete_draft, mutate_threads},
@@ -65,6 +65,7 @@ fn seeded_engine() -> (Arc<SyncEngine>, tempfile::TempDir) {
         .unwrap();
         MessageRepository::set_label_membership(&connection, "account", message_id, "INBOX", true)
             .unwrap();
+        ThreadRepository::recompute(&connection, "account", thread_id).unwrap();
     }
     drop(connection);
     let registry = WorkRegistry::new();
@@ -314,6 +315,7 @@ fn deleting_a_draft_thread_through_triage_never_batch_modifies_it() {
             true,
         )
         .unwrap();
+        ThreadRepository::recompute(&connection, "account-draft", "thread-draft").unwrap();
         drop(connection);
 
         let registry = WorkRegistry::new();

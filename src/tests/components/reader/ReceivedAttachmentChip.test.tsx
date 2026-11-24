@@ -7,6 +7,7 @@ import { ReceivedAttachmentChip } from '@/components/reader/ReceivedAttachmentCh
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
 import type { MessageAttachment } from '@/lib/types/ipc';
+import { captureConsole } from '@/tests/console';
 
 function renderWithClient(ui: React.ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -133,6 +134,7 @@ describe('ReceivedAttachmentChip', () => {
   });
 
   it('falls back silently to the glyph on a thumbnail failure, with no error text or retry control', async () => {
+    const consoleError = captureConsole('error');
     act(() => useLayoutStore.setState({ prefetchImageAttachments: true }));
     ipc.override('ensure_attachment_cached', () => Promise.reject(new Error('boom')));
     renderWithClient(
@@ -148,6 +150,7 @@ describe('ReceivedAttachmentChip', () => {
     );
     expect(screen.queryByText(/retry/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/error/i)).not.toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith('ipc ensure_attachment_cached failed: boom');
   });
 
   it('dims the chip and disables the download control while a download is in flight', async () => {
@@ -190,6 +193,7 @@ describe('ReceivedAttachmentChip', () => {
   });
 
   it('shows an inline error and a Retry control on a failed download, without a toast', async () => {
+    const consoleError = captureConsole('error');
     const user = userEvent.setup();
     ipc.override('plugin:dialog|save', '/Users/alex/Downloads/Q3-summary.pdf');
     ipc.override('save_attachment_to_path', () => Promise.reject(new Error('disk full')));
@@ -206,6 +210,7 @@ describe('ReceivedAttachmentChip', () => {
     expect(
       screen.getByRole('button', { name: 'Retry download of Q3-summary.pdf' }),
     ).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith('ipc save_attachment_to_path failed: disk full');
   });
 
   it('produces no feedback when the native Save dialog is cancelled', async () => {

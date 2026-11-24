@@ -1,31 +1,20 @@
-import { getCurrentWebview } from '@tauri-apps/api/webview';
-import type { DragDropEvent } from '@/lib/types/ipc';
+import { dispatchOnDragDrop } from '@/lib/ipc/dispatch';
+import type { Unlisten } from '@/lib/ipc/playwright-ipc-mock';
 
-type Unlisten = () => void;
-
-function hasTauriRuntime(): boolean {
-  return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-}
-
-export function subscribeToFileDrop(onDrop: (paths: string[]) => void): Unlisten {
-  if (!hasTauriRuntime()) {
-    return () => undefined;
-  }
+export function subscribeToFileDrop(onDrop: (paths: string[]) => void): () => void {
   let disposed = false;
   let unlisten: Unlisten | undefined;
-  void getCurrentWebview()
-    .onDragDropEvent(({ payload }: { payload: DragDropEvent }) => {
-      if (payload.type === 'drop') onDrop(payload.paths);
-    })
-    .then((dispose) => {
-      if (disposed) {
-        void dispose();
-        return;
-      }
-      unlisten = dispose;
-    });
+  void dispatchOnDragDrop((event) => {
+    if (event.type === 'drop') onDrop(event.paths);
+  }).then((dispose) => {
+    if (disposed) {
+      void dispose();
+      return;
+    }
+    unlisten = dispose;
+  });
   return () => {
     disposed = true;
-    unlisten?.();
+    void unlisten?.();
   };
 }

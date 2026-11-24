@@ -9,6 +9,7 @@ import { useAssistantStore } from '@/stores/assistant';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import type { AiConfig, AiIndexStatus } from '@/lib/types/ipc';
+import { captureConsole } from '@/tests/console';
 
 const config = (overrides: Partial<AiConfig> = {}): AiConfig => ({
   accountId: 'account-1',
@@ -125,6 +126,7 @@ describe('AssistantPanel', () => {
   });
 
   it('reports an unreachable provider from the polled connection query', async () => {
+    const consoleError = captureConsole('error');
     ipc.override('read_ai_configs', [config()]);
     ipc.override('read_ai_index_status', [status()]);
     ipc.override('test_ai_connection', () => {
@@ -132,6 +134,9 @@ describe('AssistantPanel', () => {
     });
     renderPanel();
     expect(await screen.findByText('Cannot reach the provider')).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith(
+      'ipc test_ai_connection failed: Could not connect to provider',
+    );
   });
 
   it('closes from the header control and from Escape without letting Escape escape', async () => {

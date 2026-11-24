@@ -88,6 +88,9 @@ default = ["app"]
 app = []
 test-utils = []
 
+[lints.clippy]
+too_many_arguments = "deny"
+
 [profile.dev]
 debug = "line-tables-only"
 

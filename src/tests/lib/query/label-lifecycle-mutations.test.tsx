@@ -7,7 +7,7 @@ import {
   useDeleteLabelMutation,
   useRecolorLabelMutation,
   useRenameLabelMutation,
-} from '@/lib/query/hooks';
+} from '@/lib/query/mutations';
 import { queryKeys } from '@/lib/query/keys';
 import type { MailLabel } from '@/lib/types/ipc';
 import { ipc } from '@/tests/ipc-mock';
@@ -19,7 +19,7 @@ function wrapper(client: QueryClient) {
 }
 
 describe('label lifecycle mutations', () => {
-  it('creates a label and invalidates the labels query on success', async () => {
+  it('creates a label and leaves re-reading the labels to the Rust change announcement', async () => {
     const client = new QueryClient();
     client.setQueryData(queryKeys.labels('account-1'), []);
     const { result } = renderHook(() => useCreateLabelMutation('account-1'), {
@@ -28,9 +28,7 @@ describe('label lifecycle mutations', () => {
     await act(async () => {
       await result.current.mutateAsync({ name: 'Contracts', colorId: 'red' });
     });
-    await waitFor(() =>
-      expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(true),
-    );
+    expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(false);
   });
 
   it('shows the created, renamed and deleted label before the request settles', async () => {
@@ -149,7 +147,7 @@ describe('label lifecycle mutations', () => {
     error.mockRestore();
   });
 
-  it('recolours and deletes, invalidating the labels query either way', async () => {
+  it('recolours and deletes without invalidating the labels query by hand', async () => {
     const client = new QueryClient();
     client.setQueryData(queryKeys.labels('account-1'), []);
     const recolor = renderHook(() => useRecolorLabelMutation('account-1'), {
@@ -158,9 +156,7 @@ describe('label lifecycle mutations', () => {
     await act(async () => {
       await recolor.result.current.mutateAsync({ labelId: 'Label_1', colorId: 'blue' });
     });
-    await waitFor(() =>
-      expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(true),
-    );
+    expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(false);
 
     client.setQueryData(queryKeys.labels('account-1'), []);
     const deleteHook = renderHook(() => useDeleteLabelMutation('account-1'), {
@@ -169,8 +165,6 @@ describe('label lifecycle mutations', () => {
     await act(async () => {
       await deleteHook.result.current.mutateAsync({ labelId: 'Label_1' });
     });
-    await waitFor(() =>
-      expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(true),
-    );
+    expect(client.getQueryState(queryKeys.labels('account-1'))?.isInvalidated).toBe(false);
   });
 });

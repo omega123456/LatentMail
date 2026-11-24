@@ -604,6 +604,11 @@ async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barr
     tauri::Manager::manage(&app, queue);
     tauri::Manager::manage(&app, engine);
     tauri::Manager::manage(&app, latentmail_lib::ai::AiService::new(storage.clone()));
+    let removals = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&removals);
+    tauri::Listener::listen(&app, "account://removed", move |event| {
+        recorded.lock().unwrap().push(event.payload().to_owned());
+    });
 
     timeout(
         Duration::from_secs(2),
@@ -622,4 +627,5 @@ async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barr
     assert!(AccountRepository::list(&storage.connection().unwrap())
         .unwrap()
         .is_empty());
+    assert_eq!(*removals.lock().unwrap(), [r#"{"accountId":"indexed"}"#]);
 }

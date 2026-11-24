@@ -1,40 +1,56 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
-import { playwrightIpcFixtures } from '@/tests/playwright-fixtures';
-import { playwrightAvatarFixtureMark } from '@/tests/playwright-fixtures/avatars';
+
+function playwrightRouter() {
+  return {
+    invoke: vi.fn().mockResolvedValue({ status: 'routed' }),
+    listen: vi.fn().mockResolvedValue(() => undefined),
+    convertFileSrc: vi.fn(() => 'data:image/svg+xml,fixture'),
+  };
+}
 
 describe('IPC dispatch', () => {
-  it('uses the Tauri IPC global when it is present', async () => {
-    const globalInvoke = vi.fn().mockResolvedValue({ status: 'ok' });
-    (
-      window as Window & { __TAURI_INTERNALS__?: { invoke: typeof globalInvoke } }
-    ).__TAURI_INTERNALS__ = {
-      invoke: globalInvoke,
-    };
-    const { invoke } = await import('@/lib/ipc/commands');
-
-    await expect(invoke('health_check', {})).resolves.toEqual({ status: 'ok' });
-    expect(globalInvoke).toHaveBeenCalledWith('health_check', {});
-  });
-
-  it('uses the Playwright router', async () => {
-    vi.stubEnv('VITE_PLAYWRIGHT', 'true');
-    ipc.useTauriApi();
-    const routerInvoke = vi.fn().mockResolvedValue({ status: 'ok' });
-    window.__LATENTMAIL_PLAYWRIGHT_IPC__ = { invoke: routerInvoke, listen: vi.fn() };
-    const { invoke } = await import('@/lib/ipc/commands');
-
-    await expect(invoke('health_check', {})).resolves.toEqual({ status: 'ok' });
-    expect(routerInvoke).toHaveBeenCalledWith('health_check', {});
-    vi.unstubAllEnvs();
-  });
-
-  it('falls back to the Tauri API', async () => {
-    ipc.useTauriApi();
+  it('routes commands through the Tauri runtime when it is present', async () => {
+    ipc.override('health_check', { status: 'ok' });
     const { invoke } = await import('@/lib/ipc/commands');
 
     await expect(invoke('health_check', {})).resolves.toEqual({ status: 'ok' });
     expect(ipc.tauriInvoke).toHaveBeenCalledWith('health_check', {});
+  });
+
+  it('sends every call to the Playwright router once one is installed', async () => {
+    const router = playwrightRouter();
+    ipc.usePlaywrightRouter(router);
+    const {
+      dispatchConvertFileSrc,
+      dispatchEmit,
+      dispatchInvoke,
+      dispatchListen,
+      dispatchSetZoom,
+    } = await import('@/lib/ipc/dispatch');
+    const listener = vi.fn();
+
+    await expect(dispatchInvoke('health_check', {})).resolves.toEqual({ status: 'routed' });
+    await dispatchListen('avatar://resolved', listener);
+    await dispatchEmit('frontend://ready', {});
+    await dispatchSetZoom(1.5);
+
+    expect(router.invoke).toHaveBeenCalledWith('health_check', {});
+    expect(router.listen).toHaveBeenCalledWith('avatar://resolved', listener);
+    expect(dispatchConvertFileSrc('/avatar-cache/a.png')).toBe('data:image/svg+xml,fixture');
+    expect(ipc.tauriInvoke).not.toHaveBeenCalled();
+    expect(ipc.tauriEmit).not.toHaveBeenCalled();
+    expect(ipc.tauriSetZoom).not.toHaveBeenCalled();
+  });
+
+  it('ignores native file drops under the Playwright router', async () => {
+    ipc.usePlaywrightRouter(playwrightRouter());
+    const { dispatchOnDragDrop } = await import('@/lib/ipc/dispatch');
+
+    const unlisten = await dispatchOnDragDrop(vi.fn());
+
+    expect(unlisten()).toBeUndefined();
+    expect(ipc.tauriOnDragDropEvent).not.toHaveBeenCalled();
   });
 
   it('delivers typed events to subscribers', async () => {
@@ -59,15 +75,32 @@ describe('IPC dispatch', () => {
     expect(ipc.tauriEmit).toHaveBeenCalledWith('frontend://ready', {});
   });
 
-  it('skips the webview zoom call when there is no Tauri runtime', async () => {
-    ipc.useTauriApi();
-    const { dispatchSetZoom } = await import('@/lib/ipc/dispatch');
+  it('zooms the webview and converts file paths through the Tauri runtime', async () => {
+    const { dispatchConvertFileSrc, dispatchSetZoom } = await import('@/lib/ipc/dispatch');
 
-    await expect(dispatchSetZoom(1.5)).resolves.toBeUndefined();
-    expect(ipc.tauriSetZoom).not.toHaveBeenCalled();
+    await dispatchSetZoom(1.5);
+
+    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(1.5);
+    expect(dispatchConvertFileSrc('/cache/a.png')).toBe(
+      `asset://localhost/${encodeURIComponent('/cache/a.png')}`,
+    );
   });
 
-  it('supports overrides and Tauri event subscriptions through the shared harness', async () => {
+  it('skips the webview zoom, emits and file drops when there is no Tauri runtime', async () => {
+    ipc.useTauriApi();
+    const { dispatchEmit, dispatchOnDragDrop, dispatchSetZoom } =
+      await import('@/lib/ipc/dispatch');
+
+    await expect(dispatchSetZoom(1.5)).resolves.toBeUndefined();
+    await expect(dispatchEmit('frontend://ready', {})).resolves.toBeUndefined();
+    await dispatchOnDragDrop(vi.fn());
+
+    expect(ipc.tauriSetZoom).not.toHaveBeenCalled();
+    expect(ipc.tauriEmit).not.toHaveBeenCalled();
+    expect(ipc.tauriOnDragDropEvent).not.toHaveBeenCalled();
+  });
+
+  it('still routes commands and subscriptions through the Tauri API without a runtime', async () => {
     ipc.override('health_check', () => ({ status: 'ok' }));
     ipc.useTauriApi();
     const { invoke } = await import('@/lib/ipc/commands');
@@ -85,35 +118,5 @@ describe('IPC dispatch', () => {
     await expect(dispatchInvoke('missing_command', {})).rejects.toThrow(
       '[vitest] Unmocked Tauri IPC command: missing_command',
     );
-  });
-
-  it('requires the Playwright router when that dispatch path is selected', async () => {
-    vi.stubEnv('VITE_PLAYWRIGHT', 'true');
-    ipc.useTauriApi();
-    delete window.__LATENTMAIL_PLAYWRIGHT_IPC__;
-    const { invoke } = await import('@/lib/ipc/commands');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    await expect(invoke('health_check', {})).rejects.toThrow(
-      'Playwright IPC router is not installed',
-    );
-    expect(error).toHaveBeenCalledWith(
-      'ipc health_check failed: Playwright IPC router is not installed',
-    );
-    error.mockRestore();
-    vi.unstubAllEnvs();
-  });
-
-  it('resolves the avatar Playwright fixtures to the fixture mark, not the grey placeholder', async () => {
-    vi.stubEnv('VITE_PLAYWRIGHT', 'true');
-    const { dispatchConvertFileSrc } = await import('@/lib/ipc/dispatch');
-
-    const senderAvatarPath = playwrightIpcFixtures.read_sender_avatar;
-    const accountAvatarPath = playwrightIpcFixtures.read_account_avatar;
-    expect(senderAvatarPath).toBeTruthy();
-    expect(accountAvatarPath).toBeTruthy();
-    expect(dispatchConvertFileSrc(senderAvatarPath as string)).toBe(playwrightAvatarFixtureMark);
-    expect(dispatchConvertFileSrc(accountAvatarPath as string)).toBe(playwrightAvatarFixtureMark);
-    vi.unstubAllEnvs();
   });
 });

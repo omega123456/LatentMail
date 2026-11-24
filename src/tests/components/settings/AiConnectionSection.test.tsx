@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 import { AiConnectionSection } from '@/components/settings/AiConnectionSection';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 import { ipc } from '@/tests/ipc-mock';
+import { captureConsole } from '@/tests/console';
 
 function renderSection() {
   return renderWithQueryClient(
@@ -31,6 +32,7 @@ it('shows the polled connection state without pressing Test connection', async (
 });
 
 it('reports a failed poll and retries it from the card', async () => {
+  const consoleError = captureConsole('error');
   const user = userEvent.setup();
   let attempts = 0;
   ipc.override('test_ai_connection', () => {
@@ -43,6 +45,7 @@ it('reports a failed poll and retries it from the card', async () => {
   await user.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByText('Connected')).toBeInTheDocument();
   expect(attempts).toBe(2);
+  expect(consoleError).toHaveBeenCalledWith('ipc test_ai_connection failed: Connection refused');
 });
 
 it('re-runs the shared poll from Test connection', async () => {

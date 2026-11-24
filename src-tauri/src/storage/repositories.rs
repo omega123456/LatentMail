@@ -65,7 +65,7 @@ impl AccountRepository {
         connection.query_row("SELECT id,email,display_name,avatar_url,history_id,needs_reauthentication,created_at,updated_at FROM accounts WHERE email=?1", [email], account).optional()
     }
     pub fn list(connection: &Connection) -> Result<Vec<Account>> {
-        let mut statement = connection.prepare("SELECT id,email,display_name,avatar_url,history_id,needs_reauthentication,created_at,updated_at FROM accounts ORDER BY created_at")?;
+        let mut statement = connection.prepare_cached("SELECT id,email,display_name,avatar_url,history_id,needs_reauthentication,created_at,updated_at FROM accounts ORDER BY created_at")?;
         let accounts = statement.query_map([], account)?.collect();
         accounts
     }
@@ -135,7 +135,7 @@ impl LabelRepository {
         Ok(())
     }
     pub fn list(connection: &Connection, account_id: &str) -> Result<Vec<Label>> {
-        let mut statement = connection.prepare("SELECT account_id,id,name,kind,color_text,color_background,message_count FROM labels WHERE account_id=?1 ORDER BY name")?;
+        let mut statement = connection.prepare_cached("SELECT account_id,id,name,kind,color_text,color_background,message_count FROM labels WHERE account_id=?1 ORDER BY name")?;
         let labels = statement.query_map([account_id], label)?.collect();
         labels
     }
@@ -539,7 +539,7 @@ impl MessageRepository {
         account_id: &str,
         thread_id: &str,
     ) -> Result<Vec<Message>> {
-        let mut statement = connection.prepare("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at")?;
+        let mut statement = connection.prepare_cached("SELECT account_id,id,thread_id,rfc_message_id,sender,recipients,subject,sent_at,snippet,html_body,plain_body,has_attachments,is_unread,is_starred,history_id,truncated_body,html_presence FROM messages WHERE account_id=?1 AND thread_id=?2 ORDER BY sent_at")?;
         let messages = statement
             .query_map(params![account_id, thread_id], message)?
             .collect();
@@ -1671,12 +1671,12 @@ impl SearchRepository {
         scope: &crate::search::scope::ScopeFilter,
     ) -> Result<i64> {
         let (where_sql, values) = search_predicate_sql(account_id, parsed, scope);
-        let from = if parsed.has_text_term {
-            "message_search JOIN messages m ON m.seq=message_search.rowid"
+        let select_from = if parsed.has_text_term {
+            "SELECT COUNT(DISTINCT m.thread_id) FROM message_search JOIN messages m ON m.seq=message_search.rowid WHERE "
         } else {
-            "messages m"
+            "SELECT COUNT(DISTINCT m.thread_id) FROM messages m WHERE "
         };
-        let sql = format!("SELECT COUNT(DISTINCT m.thread_id) FROM {from} WHERE {where_sql}");
+        let sql = [select_from, where_sql.as_str()].concat();
         let mut statement = connection.prepare_cached(&sql)?;
         statement.query_row(rusqlite::params_from_iter(values.iter()), |row| row.get(0))
     }
@@ -1793,7 +1793,9 @@ fn search_message_conditions(
     }
     if !scope.excluded_labels.is_empty() {
         let placeholders = vec!["?"; scope.excluded_labels.len()].join(",");
-        sql.push_str(&format!(" AND NOT EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN ({placeholders}))"));
+        sql.push_str(" AND NOT EXISTS(SELECT 1 FROM message_labels ml WHERE ml.account_id=m.account_id AND ml.message_id=m.id AND ml.label_id IN (");
+        sql.push_str(&placeholders);
+        sql.push_str("))");
         for label in &scope.excluded_labels {
             values.push(Value::Text(label.clone()));
         }

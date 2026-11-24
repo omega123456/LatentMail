@@ -6,7 +6,7 @@ LatentMail v2 is a ground-up rewrite of a desktop Gmail client as a **Tauri v2 �
 
 - **Rust owns** all data, network, persistence, sanitization, scheduling and business logic.
 - **React owns** presentation and interaction state only.
-- **State management rule:** TanStack Query owns anything that comes from Rust (mailboxes, threads, messages, accounts, settings). Zustand owns anything the user did that Rust doesn't know about (selection, cursor, panel sizes, layout mode, density, theme, route). Rule of thumb: _a thread's ID is Zustand; a thread's content is Query._ Rust events are bridged to `queryClient.invalidateQueries` by a small listener layer (`src/lib/query/event-bridge.ts`) — never invalidate/refetch by hand outside that bridge.
+- **State management rule:** TanStack Query owns anything that comes from Rust (mailboxes, threads, messages, accounts, settings). Zustand owns anything the user did that Rust doesn't know about (selection, cursor, panel sizes, layout mode, density, theme, route). Rule of thumb: _a thread's ID is Zustand; a thread's content is Query._ Rust events are bridged to `queryClient.invalidateQueries` by a small listener layer (`src/lib/query/event-bridge.ts`) — never invalidate/refetch by hand outside that bridge. Optimistic `setQueryData` in `onMutate` is allowed only in `src/lib/query/mutations.ts`; a Rust command that changes local mail state announces it with `mail://changed` (`sync::announce::MailChangeAnnouncer`, on success and failure) so the bridge re-reads it.
 
 ### IPC conventions
 
@@ -61,6 +61,7 @@ The database is a rebuildable cache of Gmail, but it is also the thing the UI re
 
 - **Pure Tailwind utility classes only.**
 - **No custom CSS rules. No `@apply`. No square-bracket arbitrary values** (e.g. `w-[237px]`, `text-[#abc]`).
+- Square-bracket arbitrary **variants** that target an attribute state (e.g. `data-[state=checked]:`, `data-[highlighted]:`, `aria-[current=true]:`) are permitted: they are the only way to style Radix `data-*` attributes without custom CSS. The ban covers bracket arbitrary **values** only.
 - The Tailwind v4 **`@theme {}` block in `index.css` is the allowed design-system config** — every custom color/spacing/type-step/radius/shadow is a **named token** there, used as a normal utility (`bg-dark-window`, `w-tree`, `text-row`).
 - Need a new value? Add a **named `@theme` token**, then use the generated utility. Never inline a bracket value.
 - **Radius tokens are redefined from Tailwind's defaults**: `rounded-sm` 0.25rem, `rounded` (DEFAULT) 0.5rem, `rounded-md` 0.75rem, `rounded-lg` 1rem, `rounded-xl` 1.5rem. Do not assume Tailwind's stock values (e.g. `rounded-md` is **not** 0.375rem here).
@@ -91,6 +92,7 @@ Keep every test in a dedicated file under the appropriate test root (`src/tests/
 - Specs live in `e2e/`. `pnpm test:e2e` (and therefore `pnpm test:all`) always includes `screenshots.spec.ts`.
 - Treat visual regression as a component inventory, not a state matrix: keep **exactly one screenshot scenario per visually distinct component**, run that scenario in light and dark themes, and extend it instead of adding cases for densities, interactions, loading/error variants, or other states already covered by Vitest.
 - Keep only the canonical shell's light and dark baselines as full-page screenshots. Do not add per-layout or per-state full-page baselines.
+- Visual regression baselines are **macOS-only for now** (`*-darwin.png`). There is no `win32` baseline set, so `screenshots.spec.ts` is not a Windows check; verify Windows visuals by hand until a Windows CI job generates and reviews its own set.
 - **Do not increase Playwright screenshot pixel tolerance** (or any visual diff threshold in `playwright.config.mjs`) to make tests pass — fix the UI/regression or intentionally update baselines instead.
 - Update the `VITE_PLAYWRIGHT` mock for any new IPC command called from the UI. **Never embed fixture data or domain logic inline in `playwright-ipc-mock.ts`** — all fixture data belongs in `src/tests/playwright-fixtures/` (one file per domain) and must be wired through the registry in `src/tests/playwright-fixtures/index.ts` so it can be looked up and overridden per-test without touching the mock router.
 - After intentional visual changes, regenerate baselines: `pnpm test:e2e --update-snapshots` and commit the updated snapshot files.

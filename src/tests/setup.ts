@@ -17,14 +17,6 @@ Object.assign(window, {
   },
 });
 
-function silenceConsole() {
-  vi.spyOn(console, 'debug').mockImplementation(() => {});
-  vi.spyOn(console, 'info').mockImplementation(() => {});
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
-  vi.spyOn(console, 'error').mockImplementation(() => {});
-}
-silenceConsole();
-
 vi.stubGlobal(
   'matchMedia',
   vi.fn(() => ({
@@ -101,6 +93,5 @@ beforeEach(() => {
   ipc.reset();
   resetSettingsHydration();
   window.__resizeObserverInstances__ = [];
-  silenceConsole();
 });
 afterEach(cleanup);

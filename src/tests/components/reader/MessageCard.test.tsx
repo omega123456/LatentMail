@@ -1,6 +1,8 @@
+import { parseISO } from 'date-fns';
 import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { waitForBodyFramesToSettle } from '@/tests/body-frame';
 import { MessageCard } from '@/components/reader/MessageCard';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
@@ -9,7 +11,7 @@ const message = {
   id: 'message-1',
   sender: { name: 'Alex', address: 'alex@example.com' },
   recipients: [],
-  sentAt: new Date('2026-08-10T09:00:00Z'),
+  sentAt: parseISO('2026-08-10T09:00:00Z'),
   snippet: 'Preview',
   html: null,
   text: null,
@@ -84,7 +86,7 @@ describe('MessageCard', () => {
     expect(onFetchBody).not.toHaveBeenCalled();
   });
 
-  it('refetches a rendered message whose inline images are still unresolved', () => {
+  it('refetches a rendered message whose inline images are still unresolved', async () => {
     const onFetchBody = vi.fn();
     renderWithQueryClient(
       <MessageCard
@@ -100,9 +102,10 @@ describe('MessageCard', () => {
       />,
     );
     expect(onFetchBody).toHaveBeenCalledWith('message-1');
+    await waitForBodyFramesToSettle();
   });
 
-  it('leaves a rendered message with resolved inline images alone', () => {
+  it('leaves a rendered message with resolved inline images alone', async () => {
     const onFetchBody = vi.fn();
     renderWithQueryClient(
       <MessageCard
@@ -118,6 +121,7 @@ describe('MessageCard', () => {
       />,
     );
     expect(onFetchBody).not.toHaveBeenCalled();
+    await waitForBodyFramesToSettle();
   });
 
   it('leaves a message that already has a plain body alone', () => {
@@ -179,7 +183,7 @@ describe('MessageCard', () => {
     expect(onTrustSender).toHaveBeenCalledWith('alex@example.com');
   });
 
-  it.each(['SPAM', 'TRASH'])('offers no bypass at all on a %s message', (labelId) => {
+  it.each(['SPAM', 'TRASH'])('offers no bypass at all on a %s message', async (labelId) => {
     renderWithQueryClient(
       <MessageCard
         message={{
@@ -196,9 +200,10 @@ describe('MessageCard', () => {
     expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load images' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Always allow from/ })).not.toBeInTheDocument();
+    await waitForBodyFramesToSettle();
   });
 
-  it('widens the body frame image policy only when the message is allowed', () => {
+  it('widens the body frame image policy only when the message is allowed', async () => {
     const { rerender } = renderWithQueryClient(
       <MessageCard
         message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present' }}
@@ -224,6 +229,7 @@ describe('MessageCard', () => {
     expect(allowedFrame.srcdoc).toContain(
       'img-src data: inlineimg: http://inlineimg.localhost remoteimg: http://remoteimg.localhost https: http:;',
     );
+    await waitForBodyFramesToSettle();
   });
 
   it('toggles the message from a click on its row without hijacking the sender button', async () => {
@@ -312,7 +318,7 @@ describe('MessageCard', () => {
     });
   });
 
-  it('leaves the card collapsed when the header click ended a text selection', () => {
+  it('leaves the card collapsed when the header click ended a text selection', async () => {
     const { container } = renderWithQueryClient(
       <MessageCard
         message={{ ...message, html: '<p>Body</p>', htmlPresence: 'present' }}
@@ -332,6 +338,7 @@ describe('MessageCard', () => {
     selection?.removeAllRanges();
     fireEvent.click(stamp);
     expect(screen.queryByText('Preview')).not.toBeInTheDocument();
+    await waitForBodyFramesToSettle();
   });
 
   it('marks a collapsed message that carries attachments', () => {

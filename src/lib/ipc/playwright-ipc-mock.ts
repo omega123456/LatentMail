@@ -1,10 +1,9 @@
-import type { OpenComposeArgs } from '@/stores/compose';
-
 export type Unlisten = () => void | Promise<void>;
 
-type PlaywrightIpc = {
+export type PlaywrightIpc = {
   invoke(command: string, args: unknown): Promise<unknown>;
   listen(event: string, listener: (payload: unknown) => void): Promise<Unlisten>;
+  convertFileSrc(path: string): string;
 };
 
 declare global {
@@ -12,20 +11,5 @@ declare global {
     __LATENTMAIL_PLAYWRIGHT_IPC__?: PlaywrightIpc;
     __LATENTMAIL_PLAYWRIGHT_IPC_CALLS__?: { command: string; args: unknown }[];
     __LATENTMAIL_PLAYWRIGHT_EMIT__?: (event: string, payload: unknown) => void;
-    __LATENTMAIL_PLAYWRIGHT_READER_STATE__?: 'loading' | 'error';
-    __LATENTMAIL_PLAYWRIGHT_COMPOSE_SESSION__?: OpenComposeArgs;
   }
 }
-
-function router(): PlaywrightIpc {
-  if (!window.__LATENTMAIL_PLAYWRIGHT_IPC__) {
-    throw new Error('Playwright IPC router is not installed');
-  }
-
-  return window.__LATENTMAIL_PLAYWRIGHT_IPC__;
-}
-
-export const playwrightIpcMock = {
-  invoke: (command: string, args: unknown) => router().invoke(command, args),
-  listen: (event: string, listener: (payload: unknown) => void) => router().listen(event, listener),
-};

@@ -1,59 +1,83 @@
 import { convertFileSrc as tauriConvertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core';
+import type { InvokeArgs } from '@tauri-apps/api/core';
 import { emit as tauriEmit, listen as tauriListen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { playwrightIpcMock, type Unlisten } from './playwright-ipc-mock';
-import { playwrightAvatarFixtureMark } from '@/tests/playwright-fixtures/avatars';
-import { playwrightAttachmentImageSrc } from '@/tests/playwright-fixtures/attachments';
+import type { DragDropEvent } from '@/lib/types/ipc';
+import type { PlaywrightIpc, Unlisten } from './playwright-ipc-mock';
 
-const playwrightPlaceholderAssetUrl =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect width='40' height='40' fill='%23c1c6d7'/%3E%3C/svg%3E";
+type IpcTransport = {
+  invoke(command: string, args: unknown): Promise<unknown>;
+  listen(event: string, listener: (payload: unknown) => void): Promise<Unlisten>;
+  emit(event: string, payload: unknown): Promise<void>;
+  setZoom(scale: number): Promise<void>;
+  convertFileSrc(path: string): string;
+  onDragDrop(handler: (event: DragDropEvent) => void): Promise<Unlisten>;
+};
 
-const AVATAR_CACHE_PATH_MARKER = 'avatar-cache';
-const ATTACHMENT_CACHE_PATH_MARKER = 'attachment-cache';
+const resolveNothing = () => Promise.resolve();
+const ignoreDragDrop = () => Promise.resolve<Unlisten>(() => undefined);
 
-type TauriInternals = { invoke?: (command: string, args: unknown) => Promise<unknown> };
+const tauriTransport: IpcTransport = {
+  invoke: (command, args) => tauriInvoke(command, args as InvokeArgs),
+  listen: (event, listener) => tauriListen(event, ({ payload }) => listener(payload)),
+  emit: (event, payload) => tauriEmit(event, payload),
+  setZoom: (scale) => getCurrentWebview().setZoom(scale),
+  convertFileSrc: (path) => tauriConvertFileSrc(path),
+  onDragDrop: (handler) => getCurrentWebview().onDragDropEvent(({ payload }) => handler(payload)),
+};
 
-function tauriGlobal(): TauriInternals | undefined {
-  return (window as Window & { __TAURI_INTERNALS__?: TauriInternals }).__TAURI_INTERNALS__;
+const runtimelessTransport: IpcTransport = {
+  ...tauriTransport,
+  emit: resolveNothing,
+  setZoom: resolveNothing,
+  onDragDrop: ignoreDragDrop,
+};
+
+function playwrightTransport(router: PlaywrightIpc): IpcTransport {
+  return {
+    invoke: router.invoke,
+    listen: router.listen,
+    emit: resolveNothing,
+    setZoom: resolveNothing,
+    convertFileSrc: router.convertFileSrc,
+    onDragDrop: ignoreDragDrop,
+  };
+}
+
+function hasTauriRuntime() {
+  return '__TAURI_INTERNALS__' in window;
+}
+
+function activeTransport(): IpcTransport {
+  const router = window.__LATENTMAIL_PLAYWRIGHT_IPC__;
+  if (router) return playwrightTransport(router);
+  if (hasTauriRuntime()) return tauriTransport;
+  return runtimelessTransport;
 }
 
 export function dispatchInvoke<Result>(command: string, args: unknown): Promise<Result> {
-  const invoke = tauriGlobal()?.invoke;
-  if (invoke) {
-    return invoke(command, args) as Promise<Result>;
-  }
-
-  if (import.meta.env.VITE_PLAYWRIGHT || window.__LATENTMAIL_PLAYWRIGHT_IPC__) {
-    return playwrightIpcMock.invoke(command, args) as Promise<Result>;
-  }
-
-  return tauriInvoke<Result>(command, args as Record<string, unknown>);
+  return activeTransport().invoke(command, args) as Promise<Result>;
 }
 
 export function dispatchListen<Payload>(
   event: string,
   listener: (payload: Payload) => void,
 ): Promise<Unlisten> {
-  if (import.meta.env.VITE_PLAYWRIGHT || window.__LATENTMAIL_PLAYWRIGHT_IPC__) {
-    return playwrightIpcMock.listen(event, listener as (payload: unknown) => void);
-  }
-
-  return tauriListen<Payload>(event, ({ payload }) => listener(payload));
+  return activeTransport().listen(event, listener as (payload: unknown) => void);
 }
 
 export function dispatchEmit(event: string, payload: unknown): Promise<void> {
-  return tauriGlobal() ? tauriEmit(event, payload) : Promise.resolve();
+  return activeTransport().emit(event, payload);
 }
 
 export function dispatchSetZoom(scale: number): Promise<void> {
-  return tauriGlobal() ? getCurrentWebview().setZoom(scale) : Promise.resolve();
+  return activeTransport().setZoom(scale);
 }
 
 export function dispatchConvertFileSrc(path: string): string {
-  if (import.meta.env.VITE_PLAYWRIGHT || window.__LATENTMAIL_PLAYWRIGHT_IPC__) {
-    if (path.includes(AVATAR_CACHE_PATH_MARKER)) return playwrightAvatarFixtureMark;
-    if (path.includes(ATTACHMENT_CACHE_PATH_MARKER)) return playwrightAttachmentImageSrc;
-    return playwrightPlaceholderAssetUrl;
-  }
-  return tauriConvertFileSrc(path);
+  return activeTransport().convertFileSrc(path);
+}
+
+export function dispatchOnDragDrop(handler: (event: DragDropEvent) => void): Promise<Unlisten> {
+  return activeTransport().onDragDrop(handler);
 }

@@ -1,3 +1,4 @@
+import { getTime, parseISO } from 'date-fns';
 import { act } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useSyncStore } from '@/stores/sync';
@@ -23,12 +24,12 @@ describe('useSyncStore', () => {
     ipc.override('read_sync_status', {
       accountId: 'account-1',
       state: 'idle',
-      lastSyncedAt: Date.parse('2026-08-11T09:00:00Z'),
+      lastSyncedAt: getTime(parseISO('2026-08-11T09:00:00Z')),
       lastError: null,
     });
     await act(() => useSyncStore.getState().hydrateSync('account-1'));
     const state = useSyncStore.getState();
-    expect(state.lastSynced).toEqual(new Date('2026-08-11T09:00:00Z'));
+    expect(state.lastSynced).toEqual(parseISO('2026-08-11T09:00:00Z'));
     expect(state.syncState).toBe('idle');
   });
 
@@ -48,11 +49,11 @@ describe('useSyncStore', () => {
     ipc.override('trigger_sync', {
       accountId: 'account-1',
       state: 'idle',
-      lastSyncedAt: Date.parse('2026-08-11T10:00:00Z'),
+      lastSyncedAt: getTime(parseISO('2026-08-11T10:00:00Z')),
       lastError: null,
     });
     await act(() => useSyncStore.getState().triggerSync('account-1'));
-    expect(useSyncStore.getState().lastSynced).toEqual(new Date('2026-08-11T10:00:00Z'));
+    expect(useSyncStore.getState().lastSynced).toEqual(parseISO('2026-08-11T10:00:00Z'));
     expect(useSyncStore.getState().refreshing).toBe(false);
     log.mockRestore();
   });

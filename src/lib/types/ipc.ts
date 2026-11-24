@@ -686,6 +686,7 @@ export interface SyncCompleteEvent {
   historyId: number;
   addedCount: number;
   changed: boolean;
+  completedAt: number;
 }
 
 export interface MailArrival {
@@ -745,6 +746,8 @@ export interface IpcEventMap {
   };
   'queue://summary': QueueSummary;
   'account://state': Account;
+  'account://removed': { accountId: string };
+  'mail://changed': { accountId: string };
   'ai://config': { accountId: string; removed?: boolean };
   'ai-chat://event': AiChatEvent;
   'sync://progress': SyncProgressEvent;
