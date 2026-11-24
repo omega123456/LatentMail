@@ -6,6 +6,10 @@ import { useSelectionStore } from '@/stores/selection';
 import { useAssistantStore } from '@/stores/assistant';
 import { ipc } from '@/tests/ipc-mock';
 
+const SELECTED_THREAD_COUNT = 2;
+
+const QUESTION_AND_ANSWER = 2;
+
 beforeEach(() => {
   useSelectionStore.setState({
     activeAccountId: null,
@@ -45,7 +49,7 @@ describe('selection store coordination with multi-select', () => {
 
   it('does not touch the multi-selection when the open thread is cleared to null', () => {
     useSelectionStore.getState().setActiveThreadId(null);
-    expect(useMultiSelectStore.getState().selectedIds.size).toBe(2);
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(SELECTED_THREAD_COUNT);
   });
 
   it('clears the multi-selection when the mailbox changes', () => {
@@ -176,8 +180,8 @@ describe('selection store — the assistant session follows the active account',
 
   it('cancels the active request and clears the transcript when the account changes', () => {
     const cancelled: unknown[] = [];
-    ipc.override('cancel_ai_chat', (args) => {
-      cancelled.push(args);
+    ipc.override('cancel_ai_chat', (request) => {
+      cancelled.push(request);
       return true;
     });
 
@@ -194,13 +198,13 @@ describe('selection store — the assistant session follows the active account',
 
   it('keeps the session when the same account is selected again', () => {
     useSelectionStore.getState().setActiveAccountId('account-1');
-    expect(useAssistantStore.getState().messages).toHaveLength(2);
+    expect(useAssistantStore.getState().messages).toHaveLength(QUESTION_AND_ANSWER);
   });
 
   it('cancels and clears when the active account is removed', () => {
     const cancelled: unknown[] = [];
-    ipc.override('cancel_ai_chat', (args) => {
-      cancelled.push(args);
+    ipc.override('cancel_ai_chat', (request) => {
+      cancelled.push(request);
       return true;
     });
     useSelectionStore.setState({ activeAccountId: 'account-1' });
@@ -218,6 +222,6 @@ describe('selection store — the assistant session follows the active account',
   it('leaves the session alone when another account is removed', () => {
     useSelectionStore.setState({ activeAccountId: 'account-1' });
     useSelectionStore.getState().clearStateForRemovedAccount('account-2');
-    expect(useAssistantStore.getState().messages).toHaveLength(2);
+    expect(useAssistantStore.getState().messages).toHaveLength(QUESTION_AND_ANSWER);
   });
 });

@@ -9,6 +9,7 @@ import {
   type FitMode,
   type Size,
   type ZoomMode,
+  viewportCentre,
 } from './zoom';
 
 type Point = { x: number; y: number };
@@ -74,7 +75,7 @@ export function useZoom({
       const element = scrollRef.current;
       const { zoom: current, content: size } = latest.current;
       if (element && size && target !== current) {
-        const point = anchor ?? { x: element.clientWidth / 2, y: element.clientHeight / 2 };
+        const point = anchor ?? viewportCentre(element);
         const scroll = pendingScroll.current ?? {
           left: element.scrollLeft,
           top: element.scrollTop,
@@ -99,7 +100,7 @@ export function useZoom({
         };
       }
       latest.current = { ...latest.current, zoom: target };
-      setView({ mode, zoom: target });
+      setView({ mode: mode, zoom: target });
     },
     [scrollRef],
   );
@@ -178,12 +179,12 @@ export function useZoom({
   }, [zoomIn, zoomOut, reset]);
 
   return {
-    zoom,
+    zoom: zoom,
     mode: view.mode,
-    viewport,
+    viewport: viewport,
     ready: content !== null && viewport !== null,
-    zoomIn,
-    zoomOut,
-    selectPreset,
+    zoomIn: zoomIn,
+    zoomOut: zoomOut,
+    selectPreset: selectPreset,
   };
 }

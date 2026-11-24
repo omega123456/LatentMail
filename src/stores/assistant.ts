@@ -49,7 +49,7 @@ function nextId(prefix: string) {
 function emptySession(accountId: string | null) {
   return {
     sessionId: nextId('assistant-session'),
-    accountId,
+    accountId: accountId,
     messages: [] as AssistantMessage[],
     activeRequestId: null,
     cancelPending: false,
@@ -62,11 +62,11 @@ function emptySession(accountId: string | null) {
 function message(role: AssistantRole, text: string, streaming: boolean): AssistantMessage {
   return {
     id: nextId(`assistant-${role}`),
-    role,
-    text,
+    role: role,
+    text: text,
     error: null,
     sources: [],
-    streaming,
+    streaming: streaming,
     createdAt: getTime(new Date()),
   };
 }
@@ -113,7 +113,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       activeRequestId: null,
       cancelPending: false,
     });
-    void invoke('start_ai_chat', { accountId, sessionId, question: text })
+    void invoke('start_ai_chat', { accountId: accountId, sessionId: sessionId, question: text })
       .then((requestId) => {
         if (get().sessionId !== sessionId) {
           void invoke('cancel_ai_chat', { requestId });
@@ -150,7 +150,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     set((state) => ({
       messages: withLastAssistant(state.messages, (entry) => ({
         ...entry,
-        sources,
+        sources: sources,
         text: answer,
       })),
     })),
@@ -161,7 +161,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         ...entry,
         streaming: false,
         sources: cancelled ? [] : entry.sources,
-        error,
+        error: error,
       })),
     })),
   historyPrevious: () => {

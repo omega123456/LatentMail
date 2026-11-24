@@ -1,6 +1,10 @@
 import { useNow } from '@/lib/format/use-now';
 import type { OperationRecord } from '@/lib/types/ipc';
 import { QueueOperationRow } from './QueueOperationRow';
+import { secondsToMilliseconds } from 'date-fns';
+
+const RETRY_COUNTDOWN_REFRESH_SECONDS = 1;
+const RETRY_COUNTDOWN_REFRESH_MS = secondsToMilliseconds(RETRY_COUNTDOWN_REFRESH_SECONDS);
 
 export function QueueOperationList({
   operations,
@@ -11,7 +15,7 @@ export function QueueOperationList({
   onCancel: (operationId: string) => Promise<boolean>;
   onRetry: (operationId: string) => void;
 }) {
-  const now = useNow(1_000);
+  const now = useNow(RETRY_COUNTDOWN_REFRESH_MS);
   if (operations.length === 0) {
     return (
       <p className="py-1.75 pl-queue-indent-op text-settings-meta text-settings-ink-mute dark:text-dark-settings-ink-mute">

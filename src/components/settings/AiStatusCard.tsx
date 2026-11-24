@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type AiStatusTone = 'neutral' | 'success' | 'error';
 export type AiStatusPip = 'idle' | 'success' | 'warn' | 'error' | 'busy';
@@ -51,7 +52,7 @@ export function AiStatusCard({
           {spinner ? (
             <Loader2
               aria-hidden="true"
-              size={13}
+              size={ICON_SIZE.xs}
               className="shrink-0 text-settings-ink-mute motion-safe:animate-spin dark:text-dark-settings-ink-mute"
             />
           ) : (

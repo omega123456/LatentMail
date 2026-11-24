@@ -63,8 +63,8 @@ fn harness() -> Harness {
     app.manage(storage);
     app.manage(queue);
     Harness {
-        app,
-        database,
+        app: app,
+        database: database,
         _directory: directory,
     }
 }

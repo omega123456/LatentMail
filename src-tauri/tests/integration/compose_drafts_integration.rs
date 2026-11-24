@@ -152,7 +152,7 @@ async fn discard_marks_queued_and_active_session_creates_for_cancellation() {
 
 fn base_payload(mode: DraftOperationMode, draft_id: Option<&str>) -> DraftOperationPayload {
     DraftOperationPayload {
-        mode,
+        mode: mode,
         draft_id: draft_id.map(str::to_owned),
         thread_id: None,
         from: "me@example.com".into(),
@@ -621,11 +621,12 @@ async fn malformed_or_missing_draft_snapshots_fail_durably_before_gmail_is_conta
         .unwrap();
     let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
     let sink = std::sync::Arc::clone(&reported);
-    app.handle().listen("compose://failed", move |event| {
-        sink.lock()
-            .unwrap()
-            .push(serde_json::from_str(event.payload()).unwrap());
-    });
+    app.handle()
+        .listen(latentmail_lib::events::COMPOSE_FAILED, move |event| {
+            sink.lock()
+                .unwrap()
+                .push(serde_json::from_str(event.payload()).unwrap());
+        });
     queue.resume();
 
     wait_for(|| {
@@ -1371,7 +1372,7 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
         "done"
     );
 
-    for (op_id, message_id) in [("op-2", "m2"), ("op-3", "m2")] {
+    for (operation_id, message_id) in [("op-2", "m2"), ("op-3", "m2")] {
         drafts::admit(
             &drafts::AdmissionServices {
                 queue: &queue,
@@ -1380,7 +1381,7 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
                 coalescer: &coalescer,
             },
             drafts::DraftAdmission {
-                id: op_id.into(),
+                id: operation_id.into(),
                 account_id: "account".into(),
                 entity_key: "draft:d1".into(),
                 payload: base_payload(DraftOperationMode::Update, Some("d1")),
@@ -1394,9 +1395,9 @@ async fn first_create_stably_promotes_later_session_save_to_update_and_retains_p
             MessageRepository::get(&storage.connection().unwrap(), "account", message_id)
                 .unwrap()
                 .is_some(),
-            "operation {op_id} must materialize {message_id}"
+            "operation {operation_id} must materialize {message_id}"
         );
-        assert!(staging.snapshot_manifest(op_id).is_err());
+        assert!(staging.snapshot_manifest(operation_id).is_err());
     }
     assert!(part.path.exists(), "canonical parts survive both updates");
     let requests = server.received_requests().await.unwrap();
@@ -2213,11 +2214,12 @@ fn failed_reports(
 ) -> std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> {
     let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
     let sink = std::sync::Arc::clone(&reported);
-    app.handle().listen("compose://failed", move |event| {
-        sink.lock()
-            .unwrap()
-            .push(serde_json::from_str(event.payload()).unwrap());
-    });
+    app.handle()
+        .listen(latentmail_lib::events::COMPOSE_FAILED, move |event| {
+            sink.lock()
+                .unwrap()
+                .push(serde_json::from_str(event.payload()).unwrap());
+        });
     reported
 }
 
@@ -2367,7 +2369,7 @@ async fn a_sent_message_whose_local_write_fails_is_still_reported_as_sent() {
     let reported = failed_reports(&app);
     let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let completion = std::sync::Arc::clone(&completed);
-    handle.listen("send://complete", move |_| {
+    handle.listen(latentmail_lib::events::SEND_COMPLETE, move |_| {
         completion.store(true, std::sync::atomic::Ordering::SeqCst);
     });
 

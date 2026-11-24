@@ -31,9 +31,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const STATEMENT_CACHE_CAPACITY: usize = 66;
 const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+const VACUUM_INTERVAL_HOURS: i64 = 6;
 
 pub fn vacuum_interval() -> Duration {
-    chrono::Duration::hours(6)
+    chrono::Duration::hours(VACUUM_INTERVAL_HOURS)
         .to_std()
         .expect("six hours is a positive duration")
 }

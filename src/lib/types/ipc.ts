@@ -451,6 +451,8 @@ export interface StagedAttachment {
   contentId: string | null;
   size: number;
 }
+export type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward' | 'draft';
+
 export interface ComposeDraftRequest {
   sessionId: string;
   accountId: string;
@@ -461,7 +463,7 @@ export interface ComposeDraftRequest {
   bcc: string[];
   subject: string;
   html: string;
-  mode: string;
+  mode: ComposeMode;
   threadId: string | null;
   inReplyTo: string | null;
   references: string[];

@@ -6,6 +6,8 @@ import { useComposeStore } from '@/stores/compose';
 import { ipc } from '@/tests/ipc-mock';
 import { captureConsole } from '@/tests/console';
 
+const FORWARDED_ATTACHMENT_COUNT = 2;
+
 const message = {
   id: 'message-1',
   sender: { name: 'Elena', address: 'elena@example.com' },
@@ -120,9 +122,9 @@ describe('compose entry actions', () => {
       ],
     });
     const stageCalls: unknown[] = [];
-    ipc.override('stage_attachment_into_draft', (args) => {
-      stageCalls.push(args);
-      if (args.attachmentId === 'att-bad') return Promise.reject(new Error('Gmail unavailable'));
+    ipc.override('stage_attachment_into_draft', (request) => {
+      stageCalls.push(request);
+      if (request.attachmentId === 'att-bad') return Promise.reject(new Error('Gmail unavailable'));
       return Promise.resolve({
         id: 'staged-ok',
         filename: 'report.pdf',
@@ -136,10 +138,12 @@ describe('compose entry actions', () => {
     await act(async () => openForward('account', 'me@example.com', message));
     const owner = useComposeStore.getState().session?.id;
     expect(owner).toBeTruthy();
-    expect(useComposeStore.getState().session?.attachments).toHaveLength(2);
+    expect(useComposeStore.getState().session?.attachments).toHaveLength(
+      FORWARDED_ATTACHMENT_COUNT,
+    );
     expect(stageCalls).toEqual([
-      expect.objectContaining({ attachmentId: 'att-ok', owner }),
-      expect.objectContaining({ attachmentId: 'att-bad', owner }),
+      expect.objectContaining({ attachmentId: 'att-ok', owner: owner }),
+      expect.objectContaining({ attachmentId: 'att-bad', owner: owner }),
     ]);
 
     await waitFor(() => {

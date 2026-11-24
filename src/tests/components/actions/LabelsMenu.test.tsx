@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { LabelsMenu, type LabelMenuEntry } from '@/components/actions/LabelsMenu';
 
+const FILTER_THRESHOLD = 10;
+
 const labels: LabelMenuEntry[] = [
   { id: 'Label_1', name: 'Clients', color: 'blue', membership: 'checked' },
   { id: 'Label_2', name: 'Invoices', color: 'red', membership: 'indeterminate' },
@@ -66,12 +68,15 @@ describe('LabelsMenu — staged variant', () => {
     );
     expect(screen.queryByLabelText('Filter labels')).not.toBeInTheDocument();
 
-    const many: LabelMenuEntry[] = Array.from({ length: 11 }, (_, index) => ({
-      id: `Label_${index}`,
-      name: `Label ${index}`,
-      color: 'black',
-      membership: 'unchecked',
-    }));
+    const many: LabelMenuEntry[] = Array.from(
+      { length: FILTER_THRESHOLD + 1 },
+      (_entry, index) => ({
+        id: `Label_${index}`,
+        name: `Label ${index}`,
+        color: 'black',
+        membership: 'unchecked',
+      }),
+    );
     rerender(<LabelsMenu variant="staged" labels={many} onApply={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByLabelText('Filter labels')).toBeInTheDocument();
   });
@@ -92,12 +97,15 @@ describe('LabelsMenu — staged variant', () => {
     await user.click(screen.getByRole('button', { name: 'Create label' }));
     expect(onCreateLabel).toHaveBeenCalledOnce();
 
-    const many: LabelMenuEntry[] = Array.from({ length: 11 }, (_, index) => ({
-      id: `Label_${index}`,
-      name: `Label ${index}`,
-      color: 'black',
-      membership: 'unchecked',
-    }));
+    const many: LabelMenuEntry[] = Array.from(
+      { length: FILTER_THRESHOLD + 1 },
+      (_entry, index) => ({
+        id: `Label_${index}`,
+        name: `Label ${index}`,
+        color: 'black',
+        membership: 'unchecked',
+      }),
+    );
     rerender(<LabelsMenu variant="staged" labels={many} onApply={vi.fn()} onCancel={vi.fn()} />);
     await user.type(screen.getByLabelText('Filter labels'), 'nonexistent');
     expect(screen.getByText(/No labels match/)).toBeInTheDocument();

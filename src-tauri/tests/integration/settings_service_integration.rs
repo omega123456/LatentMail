@@ -197,8 +197,8 @@ async fn restore_window_applies_saved_position_size_and_maximized_state() {
     let service = SettingsService::new(storage);
     service
         .save_window_state(&WindowState {
-            x: 5,
-            y: 10,
+            left: 5,
+            top: 10,
             width: 800,
             height: 600,
             maximized: true,

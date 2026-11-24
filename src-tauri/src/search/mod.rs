@@ -12,7 +12,7 @@ use crate::sync::{
 use query::{ParsedQuery, Predicate, PredicateKind};
 use scope::SearchScope;
 
-const DEFAULT_PAGE_SIZE: i64 = 50;
+const DEFAULT_PAGE_SIZE: u32 = 50;
 
 impl From<&Predicate> for SearchPredicateDto {
     fn from(predicate: &Predicate) -> Self {
@@ -20,18 +20,18 @@ impl From<&Predicate> for SearchPredicateDto {
         match &predicate.kind {
             PredicateKind::Label(value) => Self::Label {
                 value: value.clone(),
-                negated,
+                negated: negated,
             },
             PredicateKind::Unread => Self::Unread { negated },
             PredicateKind::Starred => Self::Starred { negated },
             PredicateKind::HasAttachment => Self::HasAttachment { negated },
             PredicateKind::SentBefore(at_seconds) => Self::SentBefore {
                 at_seconds: *at_seconds,
-                negated,
+                negated: negated,
             },
             PredicateKind::SentAfter(at_seconds) => Self::SentAfter {
                 at_seconds: *at_seconds,
-                negated,
+                negated: negated,
             },
             PredicateKind::TextExcludes(_) => Self::TextExcludes { negated },
         }
@@ -74,7 +74,8 @@ pub async fn search_threads(
     }
 
     let scope_filter = scope::resolve(&scope.unwrap_or(SearchScope::Default));
-    let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
+    let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).max(1);
+    let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
     let has_cursor = cursor_pair.is_some();
     let direction = direction.unwrap_or_default();
@@ -87,7 +88,7 @@ pub async fn search_threads(
                 &parsed,
                 &scope_filter,
                 cursor_pair,
-                limit + 1,
+                i64::from(limit) + 1,
                 direction,
             )?;
             Ok(rows)
@@ -95,12 +96,12 @@ pub async fn search_threads(
         .await
         .map_err(|error| error.to_string())?;
 
-    let has_more = rows.len() as i64 > limit;
+    let has_more = rows.len() > page_size;
     if has_more {
         match direction {
-            ThreadPageDirection::Forward => rows.truncate(limit as usize),
+            ThreadPageDirection::Forward => rows.truncate(page_size),
             ThreadPageDirection::Backward => {
-                rows.drain(..rows.len() - limit as usize);
+                rows.drain(..rows.len() - page_size);
             }
         }
     }

@@ -69,9 +69,9 @@ fn seed_account(connection: &rusqlite::Connection, account_id: &str) {
         .unwrap();
     }
 
-    for n in 0..5 {
-        let message_id = format!("{account_id}-message-{n}");
-        let thread_id = format!("{account_id}-thread-{n}");
+    for index in 0..5 {
+        let message_id = format!("{account_id}-message-{index}");
+        let thread_id = format!("{account_id}-thread-{index}");
         MessageRepository::write_full_state(
             connection,
             &seed_message(account_id, &message_id, &thread_id),
@@ -403,17 +403,17 @@ fn controllable_executor() -> (
     Executor,
     mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (sender, receiver) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let tx = tx.clone();
+        let sender = sender.clone();
         Box::pin(async move {
-            let (release_tx, release_rx) = oneshot::channel();
-            let _ = tx.send((operation.id, release_tx));
-            let _ = release_rx.await;
+            let (release_sender, release_receiver) = oneshot::channel();
+            let _ = sender.send((operation.id, release_sender));
+            let _ = release_receiver.await;
             Ok(())
         })
     });
-    (executor, rx)
+    (executor, receiver)
 }
 
 fn operation(id: &str, account_id: &str, entity_key: &str) -> QueueOperation {
@@ -606,9 +606,13 @@ async fn removing_an_account_drains_the_semantic_index_through_an_embedding_barr
     tauri::Manager::manage(&app, latentmail_lib::ai::AiService::new(storage.clone()));
     let removals = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = Arc::clone(&removals);
-    tauri::Listener::listen(&app, "account://removed", move |event| {
-        recorded.lock().unwrap().push(event.payload().to_owned());
-    });
+    tauri::Listener::listen(
+        &app,
+        latentmail_lib::events::ACCOUNT_REMOVED,
+        move |event| {
+            recorded.lock().unwrap().push(event.payload().to_owned());
+        },
+    );
 
     timeout(
         Duration::from_secs(2),

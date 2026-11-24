@@ -1,8 +1,11 @@
 import { act, render, screen } from '@testing-library/react';
-import { fromUnixTime } from 'date-fns';
+import { fromUnixTime, secondsToMilliseconds } from 'date-fns';
 import { describe, expect, it, vi } from 'vitest';
 import { QueueOperationList } from '@/components/queue/QueueOperationList';
 import type { OperationRecord } from '@/lib/types/ipc';
+
+const STARTED_AT_SECONDS = 1_700_000_000;
+const ELAPSED_SECONDS = 3;
 
 const baseOperation: OperationRecord = {
   id: 'op-1',
@@ -40,17 +43,17 @@ describe('QueueOperationList', () => {
   it('advances the elapsed time of each operation every second', () => {
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(fromUnixTime(1_700_000_000));
+      vi.setSystemTime(fromUnixTime(STARTED_AT_SECONDS));
       render(
         <QueueOperationList
-          operations={[{ ...baseOperation, updatedAt: 1_700_000_000 }]}
+          operations={[{ ...baseOperation, updatedAt: STARTED_AT_SECONDS }]}
           onCancel={vi.fn()}
           onRetry={vi.fn()}
         />,
       );
       expect(screen.getByText('started 0 seconds ago')).toBeInTheDocument();
       act(() => {
-        vi.advanceTimersByTime(3_000);
+        vi.advanceTimersByTime(secondsToMilliseconds(ELAPSED_SECONDS));
       });
       expect(screen.getByText('started 3 seconds ago')).toBeInTheDocument();
     } finally {

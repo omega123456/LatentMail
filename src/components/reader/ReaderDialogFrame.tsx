@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Dialog } from 'radix-ui';
 import { X } from 'lucide-react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export const dialogPrimaryButtonClass =
   'flex shrink-0 cursor-pointer items-center gap-1.5 rounded-chip bg-primary px-3 py-1.5 text-label-md font-semibold text-on-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary';
@@ -53,7 +54,7 @@ export function ReaderDialogFrame({
                   aria-label={closeLabel}
                   className="shrink-0 cursor-pointer rounded-chip p-1.5 text-secondary hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container"
                 >
-                  <X size={16} aria-hidden="true" />
+                  <X size={ICON_SIZE.base} aria-hidden="true" />
                 </button>
               </Dialog.Close>
             </div>

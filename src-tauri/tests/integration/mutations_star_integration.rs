@@ -23,11 +23,11 @@ use wiremock::{
 
 fn operation(id: String, lane: Lane, entity_key: String) -> QueueOperation {
     QueueOperation {
-        id,
+        id: id,
         account_id: "account".into(),
-        lane,
+        lane: lane,
         kind: OperationKind::Star,
-        entity_key,
+        entity_key: entity_key,
         cost: 0,
         attempts: 0,
         description: "test operation".into(),
@@ -168,7 +168,7 @@ fn mutation_history_write_back_rejects_an_older_full_state() {
         has_attachments: false,
         is_unread: true,
         is_starred: false,
-        history_id,
+        history_id: history_id,
         truncated_body: None,
         html_presence: HtmlPresence::Absent,
     };
@@ -268,7 +268,7 @@ async fn sync_engine_star_preempts_500_background_operations_and_coalesces_threa
     let queue = create_queue_engine_with_events(1_000, 1_000, Arc::clone(&registry), {
         let dispatched = Arc::clone(&dispatched);
         Arc::new(move |event, payload| {
-            if event == "queue://item" && payload["status"] == "active" {
+            if event == latentmail_lib::events::QUEUE_ITEM && payload["status"] == "active" {
                 dispatched
                     .lock()
                     .unwrap()

@@ -4,6 +4,7 @@ import { LANE_META, LANE_STATE_META } from '@/lib/queue/describe';
 import { LaneOccupancy } from './LaneOccupancy';
 import { QueueStateChip } from './QueueStateChip';
 import { QueueOperationList } from './QueueOperationList';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function QueueLaneRow({
   lane,
@@ -40,7 +41,7 @@ export function QueueLaneRow({
           aria-label={`${expanded ? 'Collapse' : 'Expand'} the ${meta.label} lane`}
           className="flex h-full flex-1 cursor-pointer items-center gap-3 pl-queue-indent-lane text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-settings-primary"
         >
-          <LaneIcon aria-hidden="true" size={13} className={stateMeta.iconClass} />
+          <LaneIcon aria-hidden="true" size={ICON_SIZE.xs} className={stateMeta.iconClass} />
           <span className={`min-w-24 text-settings-lane uppercase ${stateMeta.nameClass}`}>
             {meta.label}
           </span>
@@ -63,7 +64,11 @@ export function QueueLaneRow({
           onClick={onTogglePause}
           className="mx-3.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-ink"
         >
-          {paused ? <Play aria-hidden="true" size={13} /> : <Pause aria-hidden="true" size={13} />}
+          {paused ? (
+            <Play aria-hidden="true" size={ICON_SIZE.xs} />
+          ) : (
+            <Pause aria-hidden="true" size={ICON_SIZE.xs} />
+          )}
         </button>
       </div>
       {expanded && (

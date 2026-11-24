@@ -10,6 +10,7 @@ import { InlineConfirm } from './InlineConfirm';
 import { SettingRow } from './SettingRow';
 import { SettingsSubsection } from './SettingsSection';
 import { settingsQuietButton } from './styles';
+import { percentOf } from '@/lib/format/percent';
 
 type State = AiIndexStatus['state'];
 
@@ -43,8 +44,8 @@ const REBUILD_MESSAGE =
 const RESUMABLE: State[] = ['notStarted', 'partial', 'paused', 'interrupted', 'unavailable'];
 const TRACKED: State[] = ['preparing', 'building', 'partial'];
 
-function count(value: number) {
-  return value.toLocaleString();
+function count(total: number) {
+  return total.toLocaleString();
 }
 
 function IndexProgress({
@@ -111,8 +112,7 @@ export function AiIndexSection({
   const indexedMessages = status?.indexedMessages ?? 0;
   const totalEligibleMessages = status?.totalEligibleMessages ?? 0;
   const indexedPassages = status?.indexedPassages ?? 0;
-  const percentage =
-    totalEligibleMessages === 0 ? 0 : Math.round((indexedMessages / totalEligibleMessages) * 100);
+  const percentage = Math.round(percentOf(indexedMessages, totalEligibleMessages));
   const resumable = RESUMABLE.includes(current);
   const started = current !== 'notStarted' && current !== 'unavailable';
 

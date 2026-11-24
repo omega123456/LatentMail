@@ -10,9 +10,9 @@ import { SettingsNav } from './SettingsNav';
 import { UpdatesSection } from './UpdatesSection';
 
 export function SettingsShell() {
-  const setRoute = useLayoutStore((state) => state.setRoute);
-  const activeSection = useSettingsUiStore((state) => state.activeSection);
-  const setActiveSection = useSettingsUiStore((state) => state.setActiveSection);
+  const setRoute = useLayoutStore((layout) => layout.setRoute);
+  const activeSection = useSettingsUiStore((settingsUi) => settingsUi.activeSection);
+  const setActiveSection = useSettingsUiStore((settingsUi) => settingsUi.setActiveSection);
 
   return (
     <div

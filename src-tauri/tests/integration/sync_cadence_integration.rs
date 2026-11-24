@@ -24,7 +24,7 @@ fn seed_message(id: &str, thread_id: &str, sent_at: i64) -> Message {
         sender: format!("{id}@example.com"),
         recipients: "me@example.com".into(),
         subject: "Existing".into(),
-        sent_at,
+        sent_at: sent_at,
         snippet: String::new(),
         html_body: None,
         plain_body: None,
@@ -140,8 +140,12 @@ async fn probe_only_never_advances_the_history_checkpoint_while_run_sync_does() 
     drop(connection);
 
     let fired = events.lock().unwrap().clone();
-    assert!(fired.iter().any(|(name, _)| name == "mail://new"));
-    assert!(!fired.iter().any(|(name, _)| name == "sync://complete"));
+    assert!(fired
+        .iter()
+        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
+    assert!(!fired
+        .iter()
+        .any(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE));
 }
 
 #[tokio::test]
@@ -186,32 +190,32 @@ async fn run_sync_advances_the_checkpoint_through_the_full_incremental_path() {
 
 #[tokio::test(start_paused = true)]
 async fn the_fast_and_periodic_cadences_tick_independently_and_only_the_periodic_one_retimes() {
-    let (fast_tx, mut fast_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (fast_sender, mut fast_receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
     let fast = SyncScheduler::start(
         Duration::from_secs(latentmail_lib::sync::FAST_PROBE_INTERVAL_SECS),
         true,
         move || {
-            let fast_tx = fast_tx.clone();
+            let fast_sender = fast_sender.clone();
             async move {
-                let _ = fast_tx.send(());
+                let _ = fast_sender.send(());
             }
         },
     );
 
-    let (periodic_tx, mut periodic_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (periodic_sender, mut periodic_receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
     let periodic = SyncScheduler::start(Duration::from_secs(300), false, move || {
-        let periodic_tx = periodic_tx.clone();
+        let periodic_sender = periodic_sender.clone();
         async move {
-            let _ = periodic_tx.send(());
+            let _ = periodic_sender.send(());
         }
     });
 
     assert!(
-        fast_rx.recv().await.is_some(),
+        fast_receiver.recv().await.is_some(),
         "the fast cadence ticks immediately regardless of sync-on-startup"
     );
     assert!(
-        periodic_rx.try_recv().is_err(),
+        periodic_receiver.try_recv().is_err(),
         "the periodic cadence must not tick immediately when sync-on-startup is disabled"
     );
 
@@ -224,13 +228,13 @@ async fn the_fast_and_periodic_cadences_tick_independently_and_only_the_periodic
 
     tokio::time::advance(Duration::from_secs(61)).await;
     assert!(
-        periodic_rx.recv().await.is_some(),
+        periodic_receiver.recv().await.is_some(),
         "the periodic cadence should tick at its newly configured interval"
     );
 
     tokio::time::advance(Duration::from_secs(30)).await;
     assert!(
-        fast_rx.recv().await.is_some(),
+        fast_receiver.recv().await.is_some(),
         "the fast cadence keeps ticking on its own fixed schedule"
     );
 }

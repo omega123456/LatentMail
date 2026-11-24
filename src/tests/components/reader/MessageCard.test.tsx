@@ -7,6 +7,8 @@ import { MessageCard } from '@/components/reader/MessageCard';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
+const BODY_FETCHES = 2;
+
 const message = {
   id: 'message-1',
   sender: { name: 'Alex', address: 'alex@example.com' },
@@ -42,7 +44,7 @@ describe('MessageCard', () => {
     );
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(onFetchBody).toHaveBeenCalledTimes(2);
+    expect(onFetchBody).toHaveBeenCalledTimes(BODY_FETCHES);
   });
 
   it('does not fetch Gmail for a message marked fetched that stored neither body part', () => {

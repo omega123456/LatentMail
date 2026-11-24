@@ -1,5 +1,6 @@
 import { format, isSameYear, toDate } from 'date-fns';
 import type { AiChatSource } from '@/lib/types/ipc';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 const cardClass =
   'flex w-full cursor-pointer items-start gap-2.25 rounded-control border border-outline-variant bg-surface-container-low px-2.25 py-1.75 text-left hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:hover:bg-dark-surface-container';
@@ -9,7 +10,7 @@ const numberClass =
 
 export function sourceDateLabel(sentAtMillis: number, now: Date) {
   const sentAt = toDate(sentAtMillis);
-  return format(sentAt, isSameYear(sentAt, now) ? 'MMM d' : 'MMM d, yyyy');
+  return format(sentAt, isSameYear(sentAt, now) ? DATE_FORMAT.monthDay : DATE_FORMAT.monthDayYear);
 }
 
 export function AssistantSources({

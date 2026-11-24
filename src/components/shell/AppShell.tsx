@@ -20,8 +20,8 @@ function StartupSurface() {
 }
 
 export function AppShell() {
-  const route = useLayoutStore((state) => state.route);
-  const setRoute = useLayoutStore((state) => state.setRoute);
+  const route = useLayoutStore((layout) => layout.route);
+  const setRoute = useLayoutStore((layout) => layout.setRoute);
   const { data: accounts, isPending } = useAccountsQuery();
   const configured = (accounts?.length ?? 0) > 0;
   useEffect(() => {

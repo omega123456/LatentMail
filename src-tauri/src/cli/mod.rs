@@ -74,6 +74,11 @@ pub enum ControlSocket {
     Unsupported,
 }
 
+#[cfg(any(unix, windows))]
+const RESPONSE_TIMEOUT_SECONDS: i64 = 5;
+#[cfg(unix)]
+const SOCKET_PERMISSIONS: u32 = 0o600;
+
 #[cfg(not(feature = "test-utils"))]
 pub fn start<R: Runtime>(app: &AppHandle<R>) -> ControlSocket {
     use tauri::Manager;
@@ -134,7 +139,7 @@ pub async fn serve(path: std::path::PathBuf, queue: Arc<QueueEngine>) -> io::Res
         }
     }
     let listener = UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(SOCKET_PERMISSIONS))?;
     loop {
         let (stream, _) = listener.accept().await?;
         handle(stream, Arc::clone(&queue)).await?;
@@ -172,7 +177,7 @@ pub fn send(path: &std::path::Path, command: Command) -> io::Result<Response> {
 
     let mut stream = UnixStream::connect(path)?;
     stream.set_read_timeout(Some(
-        chrono::Duration::seconds(5)
+        chrono::Duration::seconds(RESPONSE_TIMEOUT_SECONDS)
             .to_std()
             .expect("valid timeout"),
     ))?;
@@ -210,7 +215,7 @@ pub fn send(path: &str, command: Command) -> io::Result<Response> {
     std::thread::spawn(move || {
         if received
             .recv_timeout(
-                chrono::Duration::seconds(5)
+                chrono::Duration::seconds(RESPONSE_TIMEOUT_SECONDS)
                     .to_std()
                     .expect("valid timeout"),
             )

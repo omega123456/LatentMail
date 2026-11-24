@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { addressKey } from '@/lib/format/participants';
+import type { ComposeMode } from '@/lib/types/ipc';
 
-export type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward' | 'draft';
+export type { ComposeMode };
 export type RecipientRole = 'to' | 'cc' | 'bcc';
 export type RecipientRoles = { to: string[]; cc: string[]; bcc: string[] };
 export type ComposeDimensions = { width: number; height: number };
@@ -172,24 +173,26 @@ export const useComposeStore = create<ComposeStore>((set) => ({
   close: () => set({ session: null }),
   setSubject: (subject) =>
     set((state) =>
-      state.session ? { session: { ...state.session, subject, dirty: true } } : state,
+      state.session ? { session: { ...state.session, subject: subject, dirty: true } } : state,
     ),
   setHtml: (html) =>
-    set((state) => (state.session ? { session: { ...state.session, html, dirty: true } } : state)),
+    set((state) =>
+      state.session ? { session: { ...state.session, html: html, dirty: true } } : state,
+    ),
   setDimensions: (dimensions) =>
     set((state) => (state.session ? { session: { ...state.session, dimensions } } : state)),
   commitRecipient: (role, raw) =>
     set((state) => {
       if (!state.session) return state;
-      const value = normalizeRecipient(raw);
-      if (!value) return state;
+      const recipient = normalizeRecipient(raw);
+      if (!recipient) return state;
       const existing = state.session.recipients[role];
-      const key = addressKey(value);
+      const key = addressKey(recipient);
       if (existing.some((entry) => addressKey(entry) === key)) return state;
       return {
         session: {
           ...state.session,
-          recipients: { ...state.session.recipients, [role]: [...existing, value] },
+          recipients: { ...state.session.recipients, [role]: [...existing, recipient] },
           dirty: true,
         },
       };
@@ -202,7 +205,9 @@ export const useComposeStore = create<ComposeStore>((set) => ({
           ...state.session,
           recipients: {
             ...state.session.recipients,
-            [role]: state.session.recipients[role].filter((_, entryIndex) => entryIndex !== index),
+            [role]: state.session.recipients[role].filter(
+              (_entry, entryIndex) => entryIndex !== index,
+            ),
           },
           dirty: true,
         },
@@ -242,13 +247,13 @@ export const useComposeStore = create<ComposeStore>((set) => ({
     set((state) => {
       if (!state.session) return state;
       const attachment: ComposeAttachment = {
-        localId,
-        filename,
-        mimeType,
+        localId: localId,
+        filename: filename,
+        mimeType: mimeType,
         size: 0,
         state: 'reading',
         staged: null,
-        contentId,
+        contentId: contentId,
         error: null,
       };
       return {
@@ -268,7 +273,7 @@ export const useComposeStore = create<ComposeStore>((set) => ({
           ...state.session,
           attachments: state.session.attachments.map((entry) =>
             entry.localId === localId
-              ? { ...entry, state: 'settled', staged, size: staged.size, error: null }
+              ? { ...entry, state: 'settled', staged: staged, size: staged.size, error: null }
               : entry,
           ),
         },
@@ -282,7 +287,7 @@ export const useComposeStore = create<ComposeStore>((set) => ({
         session: {
           ...state.session,
           attachments: state.session.attachments.map((entry) =>
-            entry.localId === localId ? { ...entry, state: 'failed', error } : entry,
+            entry.localId === localId ? { ...entry, state: 'failed', error: error } : entry,
           ),
         },
       };

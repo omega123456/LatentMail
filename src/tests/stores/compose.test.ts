@@ -7,6 +7,9 @@ import {
   useComposeStore,
 } from '@/stores/compose';
 
+const HIDDEN_RECIPIENTS = 2;
+const MANY_HIDDEN_RECIPIENTS = 4;
+
 const openSession = (overrides: Partial<OpenComposeArgs> = {}) =>
   useComposeStore.getState().open({
     id: 'session',
@@ -47,32 +50,32 @@ describe('compose store', () => {
   });
 
   it('scales the opening size to the viewport, between its floor and its ceiling', () => {
-    const resize = (width: number, height: number) => {
-      window.innerWidth = width;
-      window.innerHeight = height;
+    const resize = (viewport: { width: number; height: number }) => {
+      window.innerWidth = viewport.width;
+      window.innerHeight = viewport.height;
     };
     const original = { width: window.innerWidth, height: window.innerHeight };
     try {
-      resize(1280, 800);
+      resize({ width: 1280, height: 800 });
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 538, height: 500 });
 
       useComposeStore.getState().close();
-      resize(1920, 1080);
+      resize({ width: 1920, height: 1080 });
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 806, height: 670 });
 
       useComposeStore.getState().close();
-      resize(3440, 1440);
+      resize({ width: 3440, height: 1440 });
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 840, height: 820 });
 
       useComposeStore.getState().close();
-      resize(500, 400);
+      resize({ width: 500, height: 400 });
       openSession();
       expect(useComposeStore.getState().session?.dimensions).toEqual({ width: 452, height: 360 });
     } finally {
-      resize(original.width, original.height);
+      resize(original);
     }
   });
 
@@ -100,7 +103,7 @@ describe('compose store', () => {
     useComposeStore.getState().removeRecipient('to', 0);
     useComposeStore.getState().removeLastRecipient('to');
     useComposeStore.getState().revealCcBcc();
-    useComposeStore.getState().setOverflowCount('to', 2);
+    useComposeStore.getState().setOverflowCount('to', HIDDEN_RECIPIENTS);
     useComposeStore.getState().toggleQuote();
     expect(useComposeStore.getState().session).toBeNull();
     useComposeStore.getState().close();
@@ -149,8 +152,12 @@ describe('compose store', () => {
     });
 
     it('tracks overflow count per role', () => {
-      useComposeStore.getState().setOverflowCount('to', 4);
-      expect(useComposeStore.getState().session?.overflow).toEqual({ to: 4, cc: 0, bcc: 0 });
+      useComposeStore.getState().setOverflowCount('to', MANY_HIDDEN_RECIPIENTS);
+      expect(useComposeStore.getState().session?.overflow).toEqual({
+        to: MANY_HIDDEN_RECIPIENTS,
+        cc: 0,
+        bcc: 0,
+      });
     });
 
     it('derives recipient readiness from a committed To recipient', () => {

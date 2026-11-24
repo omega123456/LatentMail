@@ -103,7 +103,7 @@ pub struct FakeBadge {
 impl FakeBadge {
     pub fn new(platform: BadgePlatform) -> Self {
         Self {
-            platform,
+            platform: platform,
             dock_badge: None,
             overlay: None,
         }

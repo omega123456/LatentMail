@@ -11,6 +11,9 @@ use chrono::Duration;
 
 use crate::queue::QueueEngine;
 
+const MACOS_SETTLING_SECONDS: i64 = 7;
+const OTHER_SETTLING_SECONDS: i64 = 15;
+
 pub type ResumeWork = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,9 +38,9 @@ pub struct Lifecycle {
 impl Lifecycle {
     pub fn new(queue: Arc<QueueEngine>, settling_delay: Duration, resume_work: ResumeWork) -> Self {
         Self {
-            queue,
-            settling_delay,
-            resume_work,
+            queue: queue,
+            settling_delay: settling_delay,
+            resume_work: resume_work,
             close_confirmed: AtomicBool::new(false),
         }
     }
@@ -78,7 +81,7 @@ impl Lifecycle {
                 "messages are"
             };
             ExitDecision::Confirm {
-                count,
+                count: count,
                 message: format!("{count} {noun} still sending. Close anyway?"),
             }
         }
@@ -91,8 +94,8 @@ impl Lifecycle {
 
 pub fn settling_delay() -> Duration {
     if cfg!(target_os = "macos") {
-        Duration::seconds(7)
+        Duration::seconds(MACOS_SETTLING_SECONDS)
     } else {
-        Duration::seconds(15)
+        Duration::seconds(OTHER_SETTLING_SECONDS)
     }
 }

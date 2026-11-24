@@ -8,6 +8,8 @@ use chrono::{DateTime, Local};
 
 use crate::storage::{Attachment, InlinePart, Message};
 
+const EXPORT_DATE_FORMAT: &str = "%a, %-d %b %Y %H:%M";
+
 const MIN_COLLAPSED_LINES: usize = 8;
 const MIN_ENCODED_LINE_LENGTH: usize = 40;
 const BYTES_PER_KILOBYTE: usize = 1024;
@@ -136,7 +138,7 @@ pub fn export_document(
     let date = DateTime::from_timestamp(message.sent_at, 0)
         .map(|sent| {
             sent.with_timezone(&Local)
-                .format("%a, %-d %b %Y %H:%M")
+                .format(EXPORT_DATE_FORMAT)
                 .to_string()
         })
         .unwrap_or_default();

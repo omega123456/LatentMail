@@ -70,8 +70,8 @@ describe('UpdatesSection', () => {
   it('offers hourly/5-hour/daily/weekly/off check intervals and persists the change', async () => {
     ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
     const user = await openUpdates();
 
@@ -125,8 +125,8 @@ describe('UpdatesSection', () => {
   it('toggles install on quit and persists the change', async () => {
     ipc.override('check_for_update', { currentVersion: '0.1.0', available: null });
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
     const user = await openUpdates();
 

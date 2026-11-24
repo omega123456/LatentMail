@@ -79,11 +79,9 @@ async fn suspension_emits_summary_and_holds_new_work() {
     queue.enqueue(operation("held")).await.unwrap();
     tokio::task::yield_now().await;
     assert_eq!(queue.summary().pending, 1);
-    assert!(events
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|(event, payload)| event == &"queue://summary" && payload["suspended"] == true));
+    assert!(events.lock().unwrap().iter().any(|(event, payload)| event
+        == &latentmail_lib::events::QUEUE_SUMMARY
+        && payload["suspended"] == true));
     queue.set_suspended(false);
     tokio::time::timeout(Duration::seconds(1).to_std().unwrap(), async {
         while queue.summary().done != 1 {

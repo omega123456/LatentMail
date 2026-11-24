@@ -3,6 +3,8 @@ import { DropdownMenu } from 'radix-ui';
 import { Check, ChevronDown, Minus, Plus } from 'lucide-react';
 import { formatZoom, MAX_ZOOM, MIN_ZOOM, ZOOM_STEPS, type ZoomMode } from '@/lib/attachments/zoom';
 import type { ZoomPreset } from '@/lib/attachments/useZoom';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { POPOVER_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
 
 const iconButtonClass =
   'cursor-pointer rounded-chip p-1.5 hover:bg-surface-container aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-primary dark:hover:bg-dark-surface-container dark:aria-disabled:hover:bg-transparent';
@@ -16,17 +18,17 @@ const FIT_PRESETS: { value: ZoomMode; label: string }[] = [
   { value: 'fit-page', label: 'Fit page' },
 ];
 
-function presetOf(value: string): ZoomPreset {
-  return value === 'fit-width' || value === 'fit-page' ? value : Number(value);
+function presetOf(presetName: string): ZoomPreset {
+  return presetName === 'fit-width' || presetName === 'fit-page' ? presetName : Number(presetName);
 }
 
 function portalTarget(): HTMLElement | undefined {
   return document.getElementById('root') ?? undefined;
 }
 
-function RadioItem({ value, label }: { value: string; label: string }) {
+function RadioItem({ value: presetName, label }: { value: string; label: string }) {
   return (
-    <DropdownMenu.RadioItem value={value} className={itemClass}>
+    <DropdownMenu.RadioItem value={presetName} className={itemClass}>
       <span className="flex size-4 shrink-0 items-center justify-center">
         <DropdownMenu.ItemIndicator>
           <Check aria-hidden="true" className="size-4" />
@@ -76,7 +78,7 @@ export function ZoomToolbar({
           onClick={onZoomOut}
           className={iconButtonClass}
         >
-          <Minus size={16} aria-hidden="true" />
+          <Minus size={ICON_SIZE.base} aria-hidden="true" />
         </button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
@@ -86,17 +88,22 @@ export function ZoomToolbar({
               className="flex w-zoom-readout cursor-pointer items-center justify-center gap-1 rounded-chip py-1 font-medium tabular-nums text-on-surface hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-primary data-[state=open]:bg-surface-container dark:text-dark-on-surface dark:hover:bg-dark-surface-container dark:data-[state=open]:bg-dark-surface-container"
             >
               {percent}
-              <ChevronDown size={12} aria-hidden="true" />
+              <ChevronDown size={ICON_SIZE.xxs} aria-hidden="true" />
             </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal container={portalTarget()}>
-            <DropdownMenu.Content side="top" align="center" sideOffset={6} className={contentClass}>
+            <DropdownMenu.Content
+              side="top"
+              align="center"
+              sideOffset={POPOVER_SIDE_OFFSET_PX}
+              className={contentClass}
+            >
               <DropdownMenu.RadioGroup
                 value={mode === 'custom' ? String(zoom) : mode}
-                onValueChange={(value) => onSelectPreset(presetOf(value))}
+                onValueChange={(presetName) => onSelectPreset(presetOf(presetName))}
               >
-                {FIT_PRESETS.map(({ value, label }) => (
-                  <RadioItem key={value} value={value} label={label} />
+                {FIT_PRESETS.map(({ value: presetName, label }) => (
+                  <RadioItem key={presetName} value={presetName} label={label} />
                 ))}
                 <DropdownMenu.Separator className="mx-1 my-1 h-px bg-outline-variant/40 dark:bg-dark-outline-variant" />
                 {ZOOM_STEPS.map((step) => (
@@ -113,7 +120,7 @@ export function ZoomToolbar({
           onClick={onZoomIn}
           className={iconButtonClass}
         >
-          <Plus size={16} aria-hidden="true" />
+          <Plus size={ICON_SIZE.base} aria-hidden="true" />
         </button>
         <span className="sr-only" aria-live="polite">
           {announcement}

@@ -12,7 +12,7 @@ function loadSelawik() {
   fontLoaded = true;
   for (const { weight, url } of selawikFaces) {
     const face = new FontFace('Selawik', `url(${url})`, {
-      weight,
+      weight: weight,
       unicodeRange: selawikUnicodeRangeWithoutEllipsis,
     });
     void face.load().then(
@@ -23,8 +23,8 @@ function loadSelawik() {
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
-  const theme = useThemeStore((state) => state.theme);
-  const hydrate = useThemeStore((state) => state.hydrate);
+  const theme = useThemeStore((themeState) => themeState.theme);
+  const hydrate = useThemeStore((themeState) => themeState.hydrate);
 
   useEffect(() => {
     applyTheme(theme);

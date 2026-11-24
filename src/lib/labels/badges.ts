@@ -59,7 +59,7 @@ function toUserBadge(label: UserLabel): MessageBadge {
 }
 
 function toSystemBadges(ids: SystemBadgeId[], present: (id: SystemBadgeId) => boolean) {
-  return ids.filter(present).map((id): MessageBadge => ({ kind: 'system', id }));
+  return ids.filter(present).map((id): MessageBadge => ({ kind: 'system', id: id }));
 }
 
 export function messageBadges(
@@ -91,5 +91,5 @@ const SOURCE_BADGE_PRECEDENCE: SystemBadgeId[] = ['INBOX', 'SENT', 'DRAFT', 'TRA
 export function sourceBadge(systemLabelIds: string[] | undefined): MessageBadge | null {
   const ids = systemLabelIds ?? [];
   const id = SOURCE_BADGE_PRECEDENCE.find((candidate) => ids.includes(candidate));
-  return id ? { kind: 'system', id } : null;
+  return id ? { kind: 'system', id: id } : null;
 }

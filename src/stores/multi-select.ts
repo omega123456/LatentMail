@@ -18,7 +18,7 @@ export const useMultiSelectStore = create<MultiSelectState>((set, get) => ({
       const selectedIds = new Set(state.selectedIds);
       if (selectedIds.has(id)) selectedIds.delete(id);
       else selectedIds.add(id);
-      return { selectedIds, anchorId: id };
+      return { selectedIds: selectedIds, anchorId: id };
     }),
   selectRange: (orderedIds, targetId) => {
     const anchor = get().anchorId ?? targetId;

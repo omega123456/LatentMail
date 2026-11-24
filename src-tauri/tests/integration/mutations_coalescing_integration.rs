@@ -70,10 +70,10 @@ fn seed_many_threads(count: usize) -> (Storage, tempfile::TempDir) {
     for id in ["INBOX", "TRASH", "STARRED", "UNREAD"] {
         LabelRepository::upsert(&connection, &system_label(id)).unwrap();
     }
-    for n in 0..count {
+    for index in 0..count {
         MessageRepository::write_full_state(
             &connection,
-            &message(&format!("message-{n}"), &format!("thread-{n}")),
+            &message(&format!("message-{index}"), &format!("thread-{index}")),
         )
         .unwrap();
     }
@@ -181,7 +181,7 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
     let engine = SyncEngine::new(storage, Arc::clone(&queue), registry, noop_event_sink());
 
     let tasks = (0..COUNT)
-        .map(|n| {
+        .map(|index| {
             let engine = Arc::clone(&engine);
             let base_url = server.uri();
             tokio::spawn(async move {
@@ -189,7 +189,7 @@ async fn bulk_star_of_many_threads_groups_into_a_single_batch_call() {
                     .mutate(
                         "account",
                         GmailClient::with_base_url("token", base_url),
-                        format!("thread-{n}"),
+                        format!("thread-{index}"),
                         HashSet::from(["STARRED".to_owned()]),
                         HashSet::new(),
                     )

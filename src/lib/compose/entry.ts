@@ -10,12 +10,12 @@ function formatRaw(participant: Participant): string {
   return participant.name ? `${participant.name} <${participant.address}>` : participant.address;
 }
 
-function openOrRetarget(args: OpenComposeArgs): void {
+function openOrRetarget(request: OpenComposeArgs): void {
   const state = useComposeStore.getState();
   if (state.session?.dirty) {
     void invoke('save_compose_draft', { draft: toDraftRequest(state.session) });
   }
-  state.open(args);
+  state.open(request);
 }
 
 function baseSession(
@@ -23,7 +23,7 @@ function baseSession(
   accountId: string,
   accountEmail: string,
 ): Pick<OpenComposeArgs, 'id' | 'mode' | 'accountId' | 'from'> {
-  return { id: crypto.randomUUID(), mode, accountId, from: accountEmail };
+  return { id: crypto.randomUUID(), mode: mode, accountId: accountId, from: accountEmail };
 }
 
 export async function openReply(
@@ -35,9 +35,9 @@ export async function openReply(
   if (!message) return;
   const session = baseSession(mode, accountId, accountEmail);
   const context = await invoke('reply_context', {
-    accountId,
+    accountId: accountId,
     messageId: message.id,
-    accountEmail,
+    accountEmail: accountEmail,
     replyAll: mode === 'reply-all',
     forward: false,
   });
@@ -63,17 +63,17 @@ async function stageForwardAttachment(
 ): Promise<void> {
   const localId = crypto.randomUUID();
   useComposeStore.getState().addReadingAttachment({
-    localId,
+    localId: localId,
     filename: attachment.filename,
     mimeType: attachment.mimeType,
     contentId: null,
   });
   try {
     const staged = await invoke('stage_attachment_into_draft', {
-      accountId,
-      messageId,
+      accountId: accountId,
+      messageId: messageId,
       attachmentId: attachment.id,
-      owner,
+      owner: owner,
     });
     useComposeStore.getState().settleAttachment(localId, {
       id: staged.id,
@@ -96,9 +96,9 @@ export async function openForward(
   if (!message) return;
   const session = baseSession('forward', accountId, accountEmail);
   const context = await invoke('reply_context', {
-    accountId,
+    accountId: accountId,
     messageId: message.id,
-    accountEmail,
+    accountEmail: accountEmail,
     replyAll: false,
     forward: true,
   });
@@ -128,7 +128,7 @@ export function openNewMessage(
       : { to: preset?.to ?? [], cc: preset?.cc ?? [], bcc: preset?.bcc ?? [] };
   openOrRetarget({
     ...baseSession('new', accountId, accountEmail),
-    recipients,
+    recipients: recipients,
     subject: preset && 'address' in preset ? '' : (preset?.subject ?? ''),
     html: preset && 'address' in preset ? '' : (preset?.body ?? ''),
   });
@@ -146,8 +146,8 @@ export async function openEditDraft(
     const draft = await invoke('hydrate_compose_draft', { accountId, draftId });
     openOrRetarget({
       id: draft.sessionId,
-      mode: draft.mode as ComposeMode,
-      accountId,
+      mode: draft.mode,
+      accountId: accountId,
       from: draft.from,
       recipients: { to: draft.to, cc: draft.cc, bcc: draft.bcc },
       subject: draft.subject,
@@ -184,7 +184,7 @@ export async function openEditDraft(
       cc: (message.ccRecipients ?? []).map(formatRaw),
       bcc: (message.bccRecipients ?? []).map(formatRaw),
     },
-    subject,
+    subject: subject,
     html: message.html ?? '',
   });
 }

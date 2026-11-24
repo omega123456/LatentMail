@@ -10,11 +10,11 @@ fn events_channel() -> (
     QueueEventSink,
     mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (sender, receiver) = mpsc::unbounded_channel();
     let sink: QueueEventSink = Arc::new(move |event, payload| {
-        let _ = tx.send((event, payload));
+        let _ = sender.send((event, payload));
     });
-    (sink, rx)
+    (sink, receiver)
 }
 
 async fn wait_for_item_status(
@@ -24,7 +24,10 @@ async fn wait_for_item_status(
 ) {
     loop {
         let (event, payload) = receiver.recv().await.expect("event stream stays open");
-        if event == "queue://item" && payload["id"] == id && payload["status"] == status {
+        if event == latentmail_lib::events::QUEUE_ITEM
+            && payload["id"] == id
+            && payload["status"] == status
+        {
             return;
         }
     }
@@ -34,17 +37,17 @@ fn controllable_executor() -> (
     Executor,
     mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (sender, receiver) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let tx = tx.clone();
+        let sender = sender.clone();
         Box::pin(async move {
-            let (release_tx, release_rx) = oneshot::channel();
-            let _ = tx.send((operation.id, release_tx));
-            let _ = release_rx.await;
+            let (release_sender, release_receiver) = oneshot::channel();
+            let _ = sender.send((operation.id, release_sender));
+            let _ = release_receiver.await;
             Ok(())
         })
     });
-    (executor, rx)
+    (executor, receiver)
 }
 
 fn operation(
@@ -57,7 +60,7 @@ fn operation(
     QueueOperation {
         id: id.into(),
         account_id: account_id.into(),
-        lane,
+        lane: lane,
         kind: OperationKind::Sync,
         entity_key: entity_key.into(),
         cost: 0,
@@ -69,7 +72,7 @@ fn operation(
 #[tokio::test]
 async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
     let (executor, mut started) = controllable_executor();
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     queue
@@ -83,7 +86,7 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
         .await
         .unwrap();
 
-    wait_for_item_status(&mut events_rx, "op-1", "active").await;
+    wait_for_item_status(&mut events_receiver, "op-1", "active").await;
 
     let snapshot = queue.snapshot().await;
     let account = snapshot
@@ -110,7 +113,7 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
 
     let (_, release) = started.recv().await.expect("executor started");
     release.send(()).unwrap();
-    wait_for_item_status(&mut events_rx, "op-1", "done").await;
+    wait_for_item_status(&mut events_receiver, "op-1", "done").await;
 
     let snapshot = queue.snapshot().await;
     let account = snapshot
@@ -135,7 +138,7 @@ async fn enqueuing_creates_a_record_that_transitions_through_its_lifecycle() {
 #[tokio::test]
 async fn a_lane_lists_the_most_recently_finished_operation_first() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     for id in ["op-1", "op-2", "op-3"] {
@@ -149,7 +152,7 @@ async fn a_lane_lists_the_most_recently_finished_operation_first() {
             ))
             .await
             .unwrap();
-        wait_for_item_status(&mut events_rx, id, "done").await;
+        wait_for_item_status(&mut events_receiver, id, "done").await;
     }
 
     let snapshot = queue.snapshot().await;
@@ -165,7 +168,7 @@ async fn a_lane_lists_the_most_recently_finished_operation_first() {
 #[tokio::test]
 async fn history_caps_at_two_hundred_records_per_account_evicting_oldest_first() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     for index in 0..205 {
@@ -180,7 +183,7 @@ async fn history_caps_at_two_hundred_records_per_account_evicting_oldest_first()
             ))
             .await
             .unwrap();
-        wait_for_item_status(&mut events_rx, &id, "done").await;
+        wait_for_item_status(&mut events_receiver, &id, "done").await;
     }
 
     let snapshot = queue.snapshot().await;
@@ -204,7 +207,7 @@ async fn history_caps_at_two_hundred_records_per_account_evicting_oldest_first()
 #[tokio::test]
 async fn snapshot_groups_records_by_account_then_lane() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     queue
@@ -217,7 +220,7 @@ async fn snapshot_groups_records_by_account_then_lane() {
         ))
         .await
         .unwrap();
-    wait_for_item_status(&mut events_rx, "a1-interactive", "done").await;
+    wait_for_item_status(&mut events_receiver, "a1-interactive", "done").await;
     queue
         .enqueue(operation(
             "a2-background",
@@ -228,7 +231,7 @@ async fn snapshot_groups_records_by_account_then_lane() {
         ))
         .await
         .unwrap();
-    wait_for_item_status(&mut events_rx, "a2-background", "done").await;
+    wait_for_item_status(&mut events_receiver, "a2-background", "done").await;
 
     let snapshot = queue.snapshot().await;
     let account_ids: Vec<&str> = snapshot
@@ -270,7 +273,7 @@ async fn lane_state_resolves_running_idle_paused_and_background_blocked_by_inter
     use latentmail_lib::queue::PauseScope;
 
     let (executor, mut started) = controllable_executor();
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     for index in 0..5 {

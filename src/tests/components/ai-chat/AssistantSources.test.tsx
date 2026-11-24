@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { AssistantSources } from '@/components/ai-chat/AssistantSources';
 import type { AiChatSource } from '@/lib/types/ipc';
 
+const SOURCE_COUNT = 2;
+const ACTIVATIONS = 3;
+const YEARS_AGO = 2;
+
 const source = (overrides: Partial<AiChatSource> = {}): AiChatSource => ({
   number: 1,
   senderName: 'Dan Okonjo',
@@ -33,23 +37,23 @@ describe('AssistantSources', () => {
       />,
     );
     const cards = screen.getAllByRole('button');
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(SOURCE_COUNT);
     expect(cards[0]).toHaveTextContent('1');
     expect(cards[0]).toHaveTextContent('Dan Okonjo');
     expect(cards[1]).toHaveTextContent('dan@northgate.co');
-    expect(screen.getAllByTitle('Re: venue change for Thursday')).toHaveLength(2);
+    expect(screen.getAllByTitle('Re: venue change for Thursday')).toHaveLength(SOURCE_COUNT);
 
     await user.click(cards[0]);
     expect(onActivate).toHaveBeenCalledWith(cited);
     cards[1].focus();
     await user.keyboard('{Enter}');
     await user.keyboard(' ');
-    expect(onActivate).toHaveBeenCalledTimes(3);
+    expect(onActivate).toHaveBeenCalledTimes(ACTIVATIONS);
   });
 
   it('adds the year to a date outside the current year', () => {
     const now = parseISO('2026-08-26T09:00:00.000Z');
-    const older = getTime(subYears(now, 2));
+    const older = getTime(subYears(now, YEARS_AGO));
     render(
       <AssistantSources
         sources={[

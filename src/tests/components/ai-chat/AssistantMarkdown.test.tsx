@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { AssistantMarkdown } from '@/components/ai-chat/AssistantMarkdown';
 import { ipc } from '@/tests/ipc-mock';
 
+const LIST_ITEM_COUNT = 2;
+
 describe('AssistantMarkdown', () => {
   it('renders the supported constructs as elements rather than injected HTML', () => {
     const { container } = render(
@@ -14,7 +16,7 @@ describe('AssistantMarkdown', () => {
       />,
     );
     expect(screen.getByText('22 August').tagName).toBe('STRONG');
-    expect(container.querySelectorAll('ul li')).toHaveLength(2);
+    expect(container.querySelectorAll('ul li')).toHaveLength(LIST_ITEM_COUNT);
     expect(container.querySelector('ol li')).toHaveTextContent('first');
     expect(screen.getByText('token').tagName).toBe('CODE');
     expect(container.querySelector('pre')).toHaveTextContent('code fence');

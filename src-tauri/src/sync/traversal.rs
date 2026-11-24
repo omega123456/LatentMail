@@ -34,7 +34,7 @@ pub struct TraversalProgressEvent {
 
 pub fn emit_traversal_progress(sink: &EventSink, event: TraversalProgressEvent) {
     sink(
-        "sync://traversal",
+        crate::events::SYNC_TRAVERSAL,
         serde_json::to_value(event).expect("TraversalProgressEvent always serializes"),
     );
 }
@@ -113,12 +113,12 @@ pub async fn run_backfill_step(
                 &TraversalCursor {
                     account_id: account_owned.clone(),
                     kind: TraversalKind::Backfill,
-                    position,
+                    position: position,
                     discovered_count: discovered,
                     persisted_count: persisted,
                     completed: is_last_page,
                     last_advanced_at: now,
-                    resumed,
+                    resumed: resumed,
                 },
             )?;
             transaction.commit()
@@ -196,7 +196,7 @@ fn write_traversal_message(
         is_unread: message.label_ids.iter().any(|id| id == "UNREAD"),
         is_starred: message.label_ids.iter().any(|id| id == "STARRED"),
         history_id: message.history_id,
-        truncated_body,
+        truncated_body: truncated_body,
         html_presence: if message.oversize {
             HtmlPresence::TooLarge
         } else {

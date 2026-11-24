@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { LabelList, type Label } from '@/components/sidebar/LabelList';
+import { closestOrThrow } from '@/tests/dom';
 
 const labels: Label[] = [
   { id: 'Label_1', name: 'Clients', unreadCount: 3, color: 'blue' },
@@ -134,8 +135,7 @@ describe('LabelList', () => {
     expect(clients).toHaveAttribute('aria-current', 'page');
     expect(screen.getByText('3')).toBeInTheDocument();
 
-    const invoices = screen.getByText('Invoices').closest('button');
-    await user.click(invoices!);
+    await user.click(closestOrThrow(screen.getByText('Invoices'), 'button'));
     expect(onSelect).toHaveBeenCalledWith('Label_2');
   });
 

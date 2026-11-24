@@ -300,7 +300,7 @@ impl Provider {
             client: Client::build(transport.clone(), config).with_http_service(
                 StatusPreservingTransport {
                     client: transport,
-                    authorized,
+                    authorized: authorized,
                 },
             ),
             reasoning_tier: Arc::new(AtomicUsize::new(0)),

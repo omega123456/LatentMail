@@ -12,7 +12,7 @@ describe('appLog', () => {
 
     appLog[level]('A frontend record');
 
-    expect(record).toHaveBeenCalledWith({ level, message: 'A frontend record' });
+    expect(record).toHaveBeenCalledWith({ level: level, message: 'A frontend record' });
     expect(consoleMethod).toHaveBeenCalledWith('A frontend record');
   });
 

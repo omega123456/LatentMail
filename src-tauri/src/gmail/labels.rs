@@ -184,7 +184,7 @@ impl GmailClient {
                 reqwest::Method::POST,
                 "/users/me/labels",
                 &CreateLabelRequest {
-                    name,
+                    name: name,
                     color: color.map(|value| LabelColorRequest {
                         text_color: &value.text_color,
                         background_color: &value.background_color,
@@ -208,7 +208,7 @@ impl GmailClient {
                 reqwest::Method::PATCH,
                 &format!("/users/me/labels/{id}"),
                 &UpdateLabelRequest {
-                    name,
+                    name: name,
                     color: color.map(|value| LabelColorRequest {
                         text_color: &value.text_color,
                         background_color: &value.background_color,

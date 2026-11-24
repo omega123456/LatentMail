@@ -281,7 +281,7 @@ for (const theme of themes) {
       const call = (window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ ?? []).find(
         (entry) => entry.command === 'start_ai_chat',
       );
-      return call?.args as { accountId: string; sessionId: string };
+      return call?.request as { accountId: string; sessionId: string };
     });
     await page.evaluate(
       (events) =>

@@ -7,6 +7,8 @@ import { useLayoutStore } from '@/stores/layout';
 import { useThemeStore } from '@/stores/theme';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 
+const ZOOM_FACTOR = 1.25;
+
 const account = {
   id: 'account-1',
   email: 'alex@example.com',
@@ -20,7 +22,7 @@ function setPlatform(platform: 'macos' | 'windows') {
     __TAURI_OS_PLUGIN_INTERNALS__: {
       eol: '\n',
       os_type: platform,
-      platform,
+      platform: platform,
       family: platform === 'windows' ? 'windows' : 'unix',
       version: '',
       arch: 'x86_64',
@@ -124,8 +126,8 @@ describe('GeneralSection', () => {
 
   it('offers 1/2/5/10/15/30 minute options and persists the change in seconds', async () => {
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
     const user = await openGeneralWithDefaults();
 
@@ -148,8 +150,8 @@ describe('GeneralSection', () => {
 
   it('offers zoom levels, applies them to the webview and persists the choice', async () => {
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
     const user = await openGeneralWithDefaults();
 
@@ -168,13 +170,13 @@ describe('GeneralSection', () => {
     await user.click(screen.getByRole('option', { name: '125%' }));
 
     expect(writes).toContainEqual({ key: 'zoomPercent', value: 125 });
-    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(1.25);
+    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(ZOOM_FACTOR);
   });
 
   it('writes through write_setting for every control on change', async () => {
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
     const user = await openGeneralWithDefaults();
 

@@ -1,6 +1,7 @@
 import { Collapsible } from 'radix-ui';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { BodyFrame } from '@/components/reader/BodyFrame';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function QuoteDisclosure({
   html,
@@ -22,9 +23,9 @@ export function QuoteDisclosure({
         className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-low py-1 pl-2.5 pr-3 text-snippet font-medium text-secondary hover:border-primary hover:text-primary dark:border-dark-outline-variant dark:bg-dark-surface-container-low dark:text-dark-secondary dark:hover:border-dark-primary dark:hover:text-dark-primary"
       >
         {open ? (
-          <ChevronUp aria-hidden="true" size={14} />
+          <ChevronUp aria-hidden="true" size={ICON_SIZE.sm} />
         ) : (
-          <ChevronDown aria-hidden="true" size={14} />
+          <ChevronDown aria-hidden="true" size={ICON_SIZE.sm} />
         )}
         {open ? 'Hide quoted text' : 'Show quoted text'}
       </Collapsible.Trigger>

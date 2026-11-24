@@ -76,7 +76,7 @@ async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_cli
     };
     for index in 0..5 {
         app.emit(
-            "mail://new",
+            latentmail_lib::events::MAIL_NEW,
             latentmail_lib::sync::NewMailEvent {
                 account_id: "account-1".into(),
                 thread_ids: vec![format!("thread-{index}")],
@@ -107,7 +107,7 @@ async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_cli
         .await
         .unwrap();
     app.emit(
-        "mail://new",
+        latentmail_lib::events::MAIL_NEW,
         latentmail_lib::sync::NewMailEvent {
             account_id: "account-2".into(),
             thread_ids: vec![arrival.thread_id.clone()],
@@ -130,7 +130,7 @@ async fn notification_fake_batches_arrivals_honours_the_preference_and_emits_cli
     );
     let intents = Arc::new(Mutex::new(Vec::new()));
     let received = Arc::clone(&intents);
-    app.listen("os://intent", move |event| {
+    app.listen(latentmail_lib::events::OS_INTENT, move |event| {
         received.lock().unwrap().push(event.payload().to_owned())
     });
     NotificationController::click(app.handle(), "account-1".into(), Some("thread-1".into()));

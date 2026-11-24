@@ -3,6 +3,7 @@ import { TextInput } from '@/components/shared/TextInput';
 import { LABEL_COLOR_PALETTE, type LabelColorId } from '@/lib/labels/palette';
 
 const RESERVED_LABEL_PREFIX = 'CATEGORY_';
+const LABEL_NAME_MAX_LENGTH = 100;
 const RESERVED_LABEL_NAMES = new Set([
   'INBOX',
   'SENT',
@@ -22,7 +23,9 @@ export function validateLabelName(
 ): string | null {
   const trimmed = name.trim();
   if (trimmed.length === 0) return 'label name cannot be empty';
-  if (trimmed.length > 100) return 'label name must be 100 characters or fewer';
+  if (trimmed.length > LABEL_NAME_MAX_LENGTH) {
+    return `label name must be ${LABEL_NAME_MAX_LENGTH} characters or fewer`;
+  }
   if (/[\\*%]/.test(trimmed)) return 'label name cannot contain \\, *, or %';
   const upper = trimmed.toUpperCase();
   if (upper.startsWith(RESERVED_LABEL_PREFIX) || RESERVED_LABEL_NAMES.has(upper)) {
@@ -71,7 +74,7 @@ export function LabelForm({
       mode === 'rename' ? initialName : undefined,
     );
     if (validationError) return;
-    onSubmit({ name: name.trim(), colorId });
+    onSubmit({ name: name.trim(), colorId: colorId });
   };
 
   return (

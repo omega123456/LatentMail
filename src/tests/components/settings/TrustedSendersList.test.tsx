@@ -5,6 +5,9 @@ import { TrustedSendersList } from '@/components/settings/TrustedSendersList';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
 
+const DEFAULT_ROWS_PER_PAGE = 10;
+const SMALL_ROWS_PER_PAGE = 5;
+
 const senders = [
   'alerts@monzo.com',
   'billing@acme-cloud.com',
@@ -55,7 +58,7 @@ describe('TrustedSendersList', () => {
     setSenders([...senders].reverse());
     render(<TrustedSendersList />);
 
-    expect(visibleAddresses()).toEqual(senders.slice(0, 10));
+    expect(visibleAddresses()).toEqual(senders.slice(0, DEFAULT_ROWS_PER_PAGE));
     expect(screen.getByText('1–10 of 12')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Prev' })).toBeDisabled();
   });
@@ -67,7 +70,7 @@ describe('TrustedSendersList', () => {
 
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
-    expect(visibleAddresses()).toEqual(senders.slice(10));
+    expect(visibleAddresses()).toEqual(senders.slice(DEFAULT_ROWS_PER_PAGE));
     expect(screen.getByText('11–12 of 12')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
@@ -97,7 +100,7 @@ describe('TrustedSendersList', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear filter' }));
     expect(filter).toHaveValue('');
-    expect(visibleAddresses()).toEqual(senders.slice(0, 10));
+    expect(visibleAddresses()).toEqual(senders.slice(0, DEFAULT_ROWS_PER_PAGE));
   });
 
   it('snaps back to page one when a filter invalidates the current page', async () => {
@@ -114,7 +117,7 @@ describe('TrustedSendersList', () => {
 
   it('snaps back to page one when a removal empties the current page', async () => {
     const user = userEvent.setup();
-    setSenders(senders.slice(0, 11));
+    setSenders(senders.slice(0, DEFAULT_ROWS_PER_PAGE + 1));
     render(<TrustedSendersList />);
 
     await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -133,7 +136,7 @@ describe('TrustedSendersList', () => {
     await user.click(screen.getByRole('combobox', { name: 'Rows per page' }));
     await user.click(await screen.findByRole('option', { name: '5 rows' }));
 
-    expect(visibleAddresses()).toEqual(senders.slice(0, 5));
+    expect(visibleAddresses()).toEqual(senders.slice(0, SMALL_ROWS_PER_PAGE));
     expect(screen.getByText('1–5 of 12')).toBeInTheDocument();
   });
 

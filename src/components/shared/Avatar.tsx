@@ -1,7 +1,16 @@
 import { useState } from 'react';
 import { initialFor } from '@/lib/avatars/identity';
 
-export type AvatarSize = 24 | 30 | 32 | 36 | 40 | 48;
+export const AVATAR_SIZE = {
+  xs: 24,
+  sm: 30,
+  md: 32,
+  lg: 36,
+  xl: 40,
+  xxl: 48,
+} as const;
+
+export type AvatarSize = (typeof AVATAR_SIZE)[keyof typeof AVATAR_SIZE];
 
 const DIMENSION_CLASS: Record<AvatarSize, string> = {
   24: 'size-6',
@@ -68,7 +77,8 @@ export function Avatar({
     setTrackedSrc(src);
     setFailed(false);
   }
-  const showImage = Boolean(src) && !failed;
+  const imageSrc = !failed && src ? src : null;
+  const showImage = imageSrc !== null;
 
   return (
     <span
@@ -84,8 +94,8 @@ export function Avatar({
               }`
         }`}
       >
-        {showImage ? (
-          <AvatarImage key={src} src={src as string} onError={() => setFailed(true)} />
+        {imageSrc ? (
+          <AvatarImage key={imageSrc} src={imageSrc} onError={() => setFailed(true)} />
         ) : (
           initialFor(label)
         )}

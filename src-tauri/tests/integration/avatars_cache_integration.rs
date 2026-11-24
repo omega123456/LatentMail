@@ -195,7 +195,7 @@ async fn seeded(
     let storage = Storage::open(storage_path).unwrap();
     let record = AvatarCacheRecord {
         cache_key: key.to_owned(),
-        outcome,
+        outcome: outcome,
         image_path: None,
         looked_up_at: (Utc::now() - age).timestamp(),
     };

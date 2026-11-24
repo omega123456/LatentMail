@@ -10,6 +10,10 @@ import { ipc } from '@/tests/ipc-mock';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
 
+const EXTRA_SECONDS = 30;
+const MINUTES_AGO = 12;
+const HOURS_AGO = 3;
+
 const emptyQueue = { pending: 0, active: 0, failed: 0, done: 0, paused: false, suspended: false };
 
 function renderStatusBar(ui: React.ReactElement) {
@@ -24,9 +28,9 @@ function setStatus(
 ) {
   act(() =>
     useSyncStore.setState({
-      queue,
+      queue: queue,
       syncState: state,
-      lastSynced,
+      lastSynced: lastSynced,
       error: state === 'error' ? 'Gmail is unavailable' : undefined,
       refreshing: false,
     }),
@@ -40,10 +44,10 @@ function overrideTraversal(
 ) {
   ipc.override('read_traversal_status', {
     accountId: 'account-1',
-    state,
+    state: state,
     kind: state === 'backfilling' ? 'backfill' : null,
     lastAdvancedAt: getTime(parseISO('2026-08-11T10:00:00Z')),
-    isResumed,
+    isResumed: isResumed,
     ...counts,
   });
 }
@@ -61,10 +65,10 @@ describe('StatusBar', () => {
     setStatus('idle', emptyQueue, new Date());
     expect(region).toHaveTextContent('Synced just now');
 
-    setStatus('idle', emptyQueue, subMinutes(subSeconds(new Date(), 30), 12));
+    setStatus('idle', emptyQueue, subMinutes(subSeconds(new Date(), EXTRA_SECONDS), MINUTES_AGO));
     expect(region).toHaveTextContent('Synced 12m ago');
 
-    const earlier = subHours(new Date(), 3);
+    const earlier = subHours(new Date(), HOURS_AGO);
     setStatus('idle', emptyQueue, earlier);
     rerender(
       <QueryClientProvider client={new QueryClient()}>
@@ -409,7 +413,7 @@ describe('StatusBar', () => {
     await user.click(await screen.findByRole('button', { name: 'Refresh mail' }));
     expect(await screen.findByText('Checking for new mail…')).toBeInTheDocument();
     act(() => {
-      finish!({
+      finish?.({
         accountId: 'account-1',
         state: 'idle',
         lastSyncedAt: getTime(parseISO('2026-08-11T10:00:00Z')),

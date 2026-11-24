@@ -90,8 +90,8 @@ describe('theme store', () => {
     });
     const { useThemeStore } = await loadThemeStore();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args);
+    ipc.override('write_setting', (request) => {
+      writes.push(request);
     });
 
     await useThemeStore.getState().hydrate();

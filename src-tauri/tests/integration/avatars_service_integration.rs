@@ -134,7 +134,7 @@ async fn read_sender_avatar_records_a_miss_when_no_record_exists() {
         use tauri::Listener;
         application
             .handle()
-            .listen("avatar://resolved", move |event| {
+            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
                 *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
             });
     }
@@ -251,7 +251,7 @@ async fn read_account_avatar_records_a_miss_when_the_photo_download_fails() {
         use tauri::Listener;
         application
             .handle()
-            .listen("avatar://resolved", move |event| {
+            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
                 *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
             });
     }
@@ -359,7 +359,7 @@ async fn read_account_avatar_records_a_miss_when_the_account_has_no_remote_photo
         use tauri::Listener;
         application
             .handle()
-            .listen("avatar://resolved", move |event| {
+            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
                 *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
             });
     }
@@ -440,7 +440,7 @@ async fn resolution_complete_emits_avatar_resolved_with_pipeline_key_and_outcome
         use tauri::Listener;
         application
             .handle()
-            .listen("avatar://resolved", move |event| {
+            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
                 *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
             });
     }
@@ -502,7 +502,7 @@ async fn resolution_complete_emits_the_raw_account_id_for_the_account_pipeline()
         use tauri::Listener;
         application
             .handle()
-            .listen("avatar://resolved", move |event| {
+            .listen(latentmail_lib::events::AVATAR_RESOLVED, move |event| {
                 *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
             });
     }

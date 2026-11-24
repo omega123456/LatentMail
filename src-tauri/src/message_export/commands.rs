@@ -96,12 +96,12 @@ pub async fn read_message_source<R: Runtime>(
         } else {
             to
         },
-        cc,
+        cc: cc,
         subject: message.subject,
         authentication_results: authentication_results(&raw),
         size_bytes: bytes.len() as u64,
         display: collapse_encoded_bodies(&raw),
-        raw,
+        raw: raw,
     })
 }
 

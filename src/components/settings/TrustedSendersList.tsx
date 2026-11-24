@@ -4,6 +4,7 @@ import { Select } from '@/components/shared/Select';
 import { TextInput } from '@/components/shared/TextInput';
 import { useLayoutStore } from '@/stores/layout';
 import { settingsDangerIconButton, settingsLinkPrimary, settingsTriggerClass } from './styles';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const rowsPerPageOptions = ['5', '10', '25'];
 
@@ -34,9 +35,9 @@ function HighlightedAddress({ address, needle }: { address: string; needle: stri
 }
 
 export function TrustedSendersList() {
-  const alwaysLoad = useLayoutStore((state) => state.alwaysLoadRemoteImages);
-  const senders = useLayoutStore((state) => state.allowedImageSenders);
-  const untrustImageSender = useLayoutStore((state) => state.untrustImageSender);
+  const alwaysLoad = useLayoutStore((layout) => layout.alwaysLoadRemoteImages);
+  const senders = useLayoutStore((layout) => layout.allowedImageSenders);
+  const untrustImageSender = useLayoutStore((layout) => layout.untrustImageSender);
   const [filter, setFilter] = useState('');
   const [rowsPerPage, setRowsPerPage] = useState('10');
   const [requestedPage, setRequestedPage] = useState(1);
@@ -68,7 +69,7 @@ export function TrustedSendersList() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <label className="flex h-8.5 w-52.5 items-center gap-1.75 rounded-control border border-transparent bg-settings-container-low px-2.5 text-settings-ink-mute focus-within:border-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute dark:focus-within:border-dark-settings-primary">
-              <Search aria-hidden="true" size={14} className="shrink-0" />
+              <Search aria-hidden="true" size={ICON_SIZE.sm} className="shrink-0" />
               <TextInput
                 type="search"
                 value={filter}
@@ -99,7 +100,7 @@ export function TrustedSendersList() {
             <div className={emptyStateClass}>
               <ImageOff
                 aria-hidden="true"
-                size={20}
+                size={ICON_SIZE.xl}
                 className="mb-0.5 text-settings-blocked dark:text-dark-settings-blocked"
               />
               <span className={emptyLeadClass}>No trusted senders yet</span>
@@ -126,7 +127,7 @@ export function TrustedSendersList() {
                 className={`group flex items-center gap-2.5 rounded-b border-b ${cardLine} py-2.25 pl-3 pr-2 hover:bg-settings-container-low dark:hover:bg-dark-settings-container-low`}
               >
                 <span className={blockedGlyphClass}>
-                  <Mail aria-hidden="true" size={12} />
+                  <Mail aria-hidden="true" size={ICON_SIZE.xxs} />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-body-sm text-settings-ink dark:text-dark-settings-ink">
                   <HighlightedAddress address={address} needle={needle} />
@@ -137,7 +138,7 @@ export function TrustedSendersList() {
                   onClick={() => untrustImageSender(address)}
                   className={`${settingsDangerIconButton} opacity-0 focus-visible:opacity-100 group-hover:opacity-100`}
                 >
-                  <Trash2 aria-hidden="true" size={13} />
+                  <Trash2 aria-hidden="true" size={ICON_SIZE.xs} />
                 </button>
               </div>
             ))
@@ -184,7 +185,7 @@ export function TrustedSendersList() {
         <p className="mt-3 flex items-start gap-2 rounded-control bg-settings-container-low px-3 py-2.5 text-settings-desc text-settings-ink-mute dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
           <Info
             aria-hidden="true"
-            size={15}
+            size={ICON_SIZE.md}
             className="mt-0.5 shrink-0 text-settings-blocked dark:text-dark-settings-blocked"
           />
           <span>

@@ -3,8 +3,8 @@ import { useUpdateStore } from '@/stores/update';
 
 export function UpdateBanner() {
   const { data } = useAppUpdateQuery();
-  const dismissedVersion = useUpdateStore((state) => state.dismissedVersion);
-  const dismiss = useUpdateStore((state) => state.dismiss);
+  const dismissedVersion = useUpdateStore((updates) => updates.dismissedVersion);
+  const dismiss = useUpdateStore((updates) => updates.dismiss);
   const installMutation = useInstallUpdateMutation();
 
   const available = data?.available;

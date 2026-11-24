@@ -13,10 +13,12 @@ import {
   ReaderDialogFrame,
   ReaderDialogStatus,
 } from './ReaderDialogFrame';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 export function MessageSourceDialog() {
-  const target = useMessageSourceStore((state) => state.target);
-  const close = useMessageSourceStore((state) => state.close);
+  const target = useMessageSourceStore((messageSource) => messageSource.target);
+  const close = useMessageSourceStore((messageSource) => messageSource.close);
   if (!target) return null;
   return <MessageSourceContent key={target.messageId} target={target} onClose={close} />;
 }
@@ -29,8 +31,8 @@ function MessageSourceContent({
   onClose: () => void;
 }) {
   const source = useMessageSourceQuery(target.accountId, target.messageId);
-  const showSuccess = useToastStore((state) => state.showSuccess);
-  const showError = useToastStore((state) => state.showError);
+  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
+  const showError = useToastStore((toaster) => toaster.showError);
   const data = source.data;
   const reason: unknown = source.error;
   const failure = typeof reason === 'string' ? reason : 'Check your connection, then try again.';
@@ -60,7 +62,7 @@ function MessageSourceContent({
         <>
           {data && (
             <button type="button" onClick={copy} className={dialogQuietButtonClass}>
-              <Copy size={14} aria-hidden="true" />
+              <Copy size={ICON_SIZE.sm} aria-hidden="true" />
               Copy
             </button>
           )}
@@ -70,7 +72,7 @@ function MessageSourceContent({
             disabled={!data}
             className={`${dialogPrimaryButtonClass} disabled:cursor-default disabled:opacity-60`}
           >
-            <Download size={14} aria-hidden="true" />
+            <Download size={ICON_SIZE.sm} aria-hidden="true" />
             Download .eml
           </button>
         </>
@@ -81,7 +83,7 @@ function MessageSourceContent({
       ) : source.isError ? (
         <ReaderDialogStatus>
           <FileWarning
-            size={26}
+            size={ICON_SIZE.xl4}
             aria-hidden="true"
             className="text-outline dark:text-dark-outline"
           />
@@ -99,7 +101,7 @@ function MessageSourceContent({
         </ReaderDialogStatus>
       ) : (
         <ReaderDialogStatus>
-          <Loader2 className="animate-spin" size={22} aria-hidden="true" />
+          <Loader2 className="animate-spin" size={ICON_SIZE.xl2} aria-hidden="true" />
           <span>Loading source…</span>
         </ReaderDialogStatus>
       )}
@@ -111,7 +113,7 @@ function MessageSourceBody({ source }: { source: MessageSource }) {
   const [wrap, setWrap] = useState(true);
   const rows: [string, string | null][] = [
     ['Message ID', source.messageId],
-    ['Created', format(new Date(source.sentAt), 'PPpp')],
+    ['Created', format(new Date(source.sentAt), DATE_FORMAT.longDateTime)],
     ['From', source.sender],
     ['To', source.to],
     ['Cc', source.cc],

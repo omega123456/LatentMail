@@ -19,6 +19,8 @@ import type { LogEntry } from '@/lib/query/mappers';
 import { useLayoutStore } from '@/stores/layout';
 import { useToastStore } from '@/stores/toast';
 import type { LogLevel } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 const ENTRIES_PER_PAGE = 50;
 
@@ -75,7 +77,7 @@ const stripeClass: Record<string, string> = {
 };
 
 function timeLabel(date: Date) {
-  return isToday(date) ? format(date, 'HH:mm:ss.SSS') : format(date, 'MMM d · HH:mm:ss.SSS');
+  return isToday(date) ? format(date, DATE_FORMAT.logTime) : format(date, DATE_FORMAT.logDateTime);
 }
 
 function entryLine(entry: LogEntry) {
@@ -98,9 +100,9 @@ function Highlighted({ text, needle }: { text: string; needle: string }) {
 }
 
 export function LogsSection() {
-  const logLevel = useLayoutStore((state) => state.logLevel);
-  const setLogLevel = useLayoutStore((state) => state.setLogLevel);
-  const showSuccess = useToastStore((state) => state.showSuccess);
+  const logLevel = useLayoutStore((layout) => layout.logLevel);
+  const setLogLevel = useLayoutStore((layout) => layout.setLogLevel);
+  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
   const {
     data: entries,
     isLoading,
@@ -149,7 +151,7 @@ export function LogsSection() {
               disabled={isFetching}
               className={settingsQuietButton}
             >
-              <RefreshCw aria-hidden="true" size={15} />
+              <RefreshCw aria-hidden="true" size={ICON_SIZE.md} />
               Refresh
             </button>
           }
@@ -171,7 +173,7 @@ export function LogsSection() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-settings-card-line bg-settings-card dark:border-dark-settings-card-line dark:bg-dark-settings-card">
         <div className="flex flex-wrap items-center gap-2.5 border-b border-settings-card-line p-3.5 dark:border-dark-settings-card-line">
           <label className="flex h-8.5 min-w-45 flex-1 items-center gap-1.75 rounded-control border border-transparent bg-settings-container-low px-2.5 text-settings-ink-mute focus-within:border-settings-primary dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute dark:focus-within:border-dark-settings-primary">
-            <Search aria-hidden="true" size={14} className="shrink-0" />
+            <Search aria-hidden="true" size={ICON_SIZE.sm} className="shrink-0" />
             <TextInput
               type="search"
               value={search}
@@ -237,7 +239,9 @@ export function LogsSection() {
               <div key={`${entry.timestamp.getTime()}-${index}`}>
                 {crossedDay && (
                   <div className="border-y border-settings-card-line bg-settings-container-low px-4 py-2 font-mono text-settings-meta uppercase tracking-wide text-settings-ink-mute dark:border-dark-settings-card-line dark:bg-dark-settings-container-low dark:text-dark-settings-ink-mute">
-                    {isYesterday(entry.timestamp) ? 'Yesterday' : format(entry.timestamp, 'MMM d')}
+                    {isYesterday(entry.timestamp)
+                      ? 'Yesterday'
+                      : format(entry.timestamp, DATE_FORMAT.monthDay)}
                   </div>
                 )}
                 <button
@@ -337,7 +341,8 @@ export function LogsSection() {
           </span>
           {dataUpdatedAt > 0 && (
             <span>
-              Last updated {format(new Date(dataUpdatedAt), 'p')} · auto-refreshes every 5s
+              Last updated {format(new Date(dataUpdatedAt), DATE_FORMAT.timeOfDay)} · auto-refreshes
+              every 5s
             </span>
           )}
         </div>

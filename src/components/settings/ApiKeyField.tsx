@@ -4,6 +4,7 @@ import { TextInput } from '@/components/shared/TextInput';
 import { invoke } from '@/lib/ipc/commands';
 import { InlineConfirm } from './InlineConfirm';
 import { aiFieldSaveButton, settingsLinkMuted, settingsLinkPrimary } from './styles';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function ApiKeyField({
   accountId,
@@ -27,7 +28,7 @@ export function ApiKeyField({
 
   const save = async () => {
     try {
-      await invoke('set_ai_api_key', { accountId, apiKey: value });
+      await invoke('set_ai_api_key', { accountId: accountId, apiKey: value });
       setValue('');
       setEditing(false);
       setVisible(false);
@@ -120,9 +121,9 @@ export function ApiKeyField({
             className="absolute right-1.5 grid size-6 cursor-pointer place-items-center rounded-sm text-settings-ink-mute focus-visible:outline-2 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute"
           >
             {visible ? (
-              <EyeOff aria-hidden="true" size={15} />
+              <EyeOff aria-hidden="true" size={ICON_SIZE.md} />
             ) : (
-              <Eye aria-hidden="true" size={15} />
+              <Eye aria-hidden="true" size={ICON_SIZE.md} />
             )}
           </button>
         </span>

@@ -32,6 +32,14 @@ import { useSearchStore } from '@/stores/search';
 import type { Conversation } from '@/lib/types/conversation';
 import { conversationFixtures } from './conversation-fixtures';
 import { ConversationRow } from './ConversationRow';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import type { Density } from '@/lib/types/ipc';
+
+const ROW_HEIGHT_BY_DENSITY: Record<Density, number> = {
+  compact: 48,
+  comfortable: 68,
+  spacious: 88,
+};
 
 type ListState = 'ready' | 'loading' | 'empty' | 'syncing' | 'error' | 'searchEmpty';
 const emptyCopy: Record<string, string> = {
@@ -84,21 +92,21 @@ export function ConversationList({
   const parentRef = useRef<HTMLDivElement>(null);
   const previousRows = useRef(threads);
   const previousHeight = useRef(0);
-  const density = useLayoutStore((value) => value.density);
-  const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
-  const searchActive = useSearchStore((value) => value.active);
-  const cursor = useSelectionStore((value) => value.keyboardCursor);
-  const setCursor = useSelectionStore((value) => value.setKeyboardCursor);
-  const setThread = useSelectionStore((value) => value.setActiveThreadId);
-  const flashThreadId = useSelectionStore((value) => value.flashThreadId);
-  const setFlashThreadId = useSelectionStore((value) => value.setFlashThreadId);
-  const selectedIds = useMultiSelectStore((value) => value.selectedIds);
+  const density = useLayoutStore((layout) => layout.density);
+  const mailboxId = useSelectionStore((selection) => selection.activeMailboxId) ?? 'INBOX';
+  const searchActive = useSearchStore((search) => search.active);
+  const cursor = useSelectionStore((selection) => selection.keyboardCursor);
+  const setCursor = useSelectionStore((selection) => selection.setKeyboardCursor);
+  const setThread = useSelectionStore((selection) => selection.setActiveThreadId);
+  const flashThreadId = useSelectionStore((selection) => selection.flashThreadId);
+  const setFlashThreadId = useSelectionStore((selection) => selection.setFlashThreadId);
+  const selectedIds = useMultiSelectStore((multiSelect) => multiSelect.selectedIds);
   const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
-  const toggleSelected = useMultiSelectStore((value) => value.toggle);
-  const selectRange = useMultiSelectStore((value) => value.selectRange);
-  const selectAll = useMultiSelectStore((value) => value.selectAll);
-  const pruneSelected = useMultiSelectStore((value) => value.prune);
-  const clearMultiSelect = useMultiSelectStore((value) => value.clear);
+  const toggleSelected = useMultiSelectStore((multiSelect) => multiSelect.toggle);
+  const selectRange = useMultiSelectStore((multiSelect) => multiSelect.selectRange);
+  const selectAll = useMultiSelectStore((multiSelect) => multiSelect.selectAll);
+  const pruneSelected = useMultiSelectStore((multiSelect) => multiSelect.prune);
+  const clearMultiSelect = useMultiSelectStore((multiSelect) => multiSelect.clear);
   const [fixturePage, setFixturePage] = useState(0);
   const [source, setSource] = useState(() => ({ pages, threads, mailboxId }));
   if (source.pages !== pages || source.threads !== threads || source.mailboxId !== mailboxId) {
@@ -122,7 +130,7 @@ export function ConversationList({
     previousRows.current = rows;
     previousHeight.current = parent?.scrollHeight ?? 0;
   }, [rows]);
-  const rowHeight = density === 'compact' ? 48 : density === 'comfortable' ? 68 : 88;
+  const rowHeight = ROW_HEIGHT_BY_DENSITY[density];
   const virtualizer = useMailVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -173,6 +181,11 @@ export function ConversationList({
     () => intersectSystemLabelIds(rows.filter((row) => selectedIds.has(row.id))),
     [rows, selectedIds],
   );
+  const commandTargetIds = (): string[] => {
+    if (multiSelectActive) return [...selectedIds];
+    const cursorRow = cursor === null ? undefined : rows[cursor];
+    return cursorRow ? [cursorRow.id] : [];
+  };
   useCommands({
     moveCursorDown: (event) => {
       event.preventDefault();
@@ -206,11 +219,7 @@ export function ConversationList({
       selectAll(rowIds);
     },
     toggleStar: () => {
-      const ids = multiSelectActive
-        ? [...selectedIds]
-        : cursor === null
-          ? []
-          : ([rows[cursor]?.id].filter(Boolean) as string[]);
+      const ids = commandTargetIds();
       if (!ids.length) return;
       const starred = rows.some((row) => ids.includes(row.id) && row.starred);
       onTriage?.(ids, {
@@ -219,51 +228,12 @@ export function ConversationList({
         remove: starred ? ['STARRED'] : [],
       });
     },
-    markRead: () =>
-      onTriage?.(
-        multiSelectActive
-          ? [...selectedIds]
-          : cursor === null
-            ? []
-            : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { kind: 'label', add: [], remove: ['UNREAD'] },
-      ),
+    markRead: () => onTriage?.(commandTargetIds(), { kind: 'label', add: [], remove: ['UNREAD'] }),
     markUnread: () =>
-      onTriage?.(
-        multiSelectActive
-          ? [...selectedIds]
-          : cursor === null
-            ? []
-            : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { kind: 'label', add: ['UNREAD'], remove: [] },
-      ),
-    markSpam: () =>
-      onTriage?.(
-        multiSelectActive
-          ? [...selectedIds]
-          : cursor === null
-            ? []
-            : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { kind: 'move', destination: 'SPAM' },
-      ),
-    markNotSpam: () =>
-      onTriage?.(
-        multiSelectActive
-          ? [...selectedIds]
-          : cursor === null
-            ? []
-            : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { kind: 'move', destination: 'INBOX' },
-      ),
-    deleteConversation: () =>
-      onTriage?.(
-        multiSelectActive
-          ? [...selectedIds]
-          : cursor === null
-            ? []
-            : ([rows[cursor]?.id].filter(Boolean) as string[]),
-        { kind: 'delete' },
-      ),
+      onTriage?.(commandTargetIds(), { kind: 'label', add: ['UNREAD'], remove: [] }),
+    markSpam: () => onTriage?.(commandTargetIds(), { kind: 'move', destination: 'SPAM' }),
+    markNotSpam: () => onTriage?.(commandTargetIds(), { kind: 'move', destination: 'INBOX' }),
+    deleteConversation: () => onTriage?.(commandTargetIds(), { kind: 'delete' }),
   });
   useEffect(() => {
     pruneSelected(rowIds);
@@ -293,7 +263,7 @@ export function ConversationList({
       data-testid="search-incomplete-notice"
       className="mb-1 flex items-center gap-2 rounded bg-badge-draft px-3 py-2 text-label-sm text-badge-on-draft dark:bg-dark-badge-draft dark:text-dark-badge-on-draft"
     >
-      <Info aria-hidden="true" size={14} />
+      <Info aria-hidden="true" size={ICON_SIZE.sm} />
       Results may be incomplete — mail is still syncing.
     </div>
   );
@@ -334,7 +304,7 @@ export function ConversationList({
     const items = virtualizer.getVirtualItems();
     const visible = items.length
       ? items
-      : rows.map((_, index) => ({ key: index, index, start: index * rowHeight }));
+      : rows.map((_row, index) => ({ key: index, index: index, start: index * rowHeight }));
     return (
       <>
         {incompleteStrip}
@@ -424,12 +394,12 @@ export function ConversationList({
 }
 
 export function ConversationListContainer() {
-  const accountId = useSelectionStore((value) => value.activeAccountId);
-  const activeThreadId = useSelectionStore((value) => value.activeThreadId);
-  const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
-  const searchActive = useSearchStore((value) => value.active);
-  const searchQuery = useSearchStore((value) => value.submittedQuery);
-  const searchScope = useSearchStore((value) => value.scope);
+  const accountId = useSelectionStore((selection) => selection.activeAccountId);
+  const activeThreadId = useSelectionStore((selection) => selection.activeThreadId);
+  const mailboxId = useSelectionStore((selection) => selection.activeMailboxId) ?? 'INBOX';
+  const searchActive = useSearchStore((search) => search.active);
+  const searchQuery = useSearchStore((search) => search.submittedQuery);
+  const searchScope = useSearchStore((search) => search.scope);
   const query = useThreadsQuery(accountId, mailboxId);
   const searchResultsQuery = useSearchThreadsQuery(accountId, searchQuery, searchScope);
   const activeQuery = searchActive ? searchResultsQuery : query;

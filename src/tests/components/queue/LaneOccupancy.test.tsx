@@ -2,10 +2,12 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { LaneOccupancy } from '@/components/queue/LaneOccupancy';
 
+const LANE_CAPACITY = 4;
+
 describe('LaneOccupancy', () => {
   it('renders one dot per capacity slot', () => {
     render(<LaneOccupancy capacity={4} active={2} muted={false} />);
-    expect(screen.getAllByTestId('lane-slot')).toHaveLength(4);
+    expect(screen.getAllByTestId('lane-slot')).toHaveLength(LANE_CAPACITY);
   });
 
   it('fills exactly the active count of dots', () => {

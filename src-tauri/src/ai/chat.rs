@@ -20,7 +20,6 @@ use crate::{
 
 pub const QUESTION_LIMIT: usize = 2000;
 pub const HISTORY_LIMIT: usize = 10;
-pub const CHAT_EVENT: &str = "ai-chat://event";
 pub const NO_RESULTS: &str =
     "I could not find anything in this account's indexed mail that answers that.";
 
@@ -114,12 +113,12 @@ impl ChatRegistry {
         });
         let history = trim(&state.history);
         Ok(ChatRun {
-            request_id,
+            request_id: request_id,
             session_id: session_id.to_owned(),
             account_id: account_id.to_owned(),
             question: question.to_owned(),
-            history,
-            cancel,
+            history: history,
+            cancel: cancel,
         })
     }
     pub fn cancel(&self, request_id: &str) -> Result<bool, String> {
@@ -291,12 +290,12 @@ enum Answer {
 
 fn emit<R: Runtime>(app: &AppHandle<R>, request: &ChatRun, kind: ChatEventKind) {
     let _ = app.emit(
-        CHAT_EVENT,
+        crate::events::AI_CHAT_EVENT,
         ChatEvent {
             request_id: &request.request_id,
             session_id: &request.session_id,
             account_id: &request.account_id,
-            kind,
+            kind: kind,
         },
     );
 }
@@ -424,7 +423,7 @@ pub async fn run<R: Runtime>(app: &AppHandle<R>, service: &AiService, request: C
                     app,
                     &request,
                     ChatEventKind::Sources {
-                        sources,
+                        sources: sources,
                         answer: text.clone(),
                     },
                 );

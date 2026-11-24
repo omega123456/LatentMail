@@ -6,6 +6,7 @@ use std::{
 use rusqlite::{params, Connection};
 use tauri::{AppHandle, Runtime};
 
+use crate::gmail::system_labels::{SPAM, TRASH};
 use crate::{
     auth::AuthService,
     storage::{MessageRepository, Storage},
@@ -16,8 +17,8 @@ use super::{
     SyncEngine,
 };
 
-pub const REMOVABLE_SYSTEM_FOLDER_LABELS: [&str; 3] = ["INBOX", "SPAM", "TRASH"];
-pub const MOVE_DESTINATIONS: [&str; 3] = ["INBOX", "SPAM", "TRASH"];
+pub const REMOVABLE_SYSTEM_FOLDER_LABELS: [&str; 3] = ["INBOX", SPAM, TRASH];
+pub const MOVE_DESTINATIONS: [&str; 3] = ["INBOX", SPAM, TRASH];
 
 fn validate_destination(destination: &str) -> Result<(), String> {
     if MOVE_DESTINATIONS.contains(&destination) {
@@ -87,10 +88,10 @@ async fn message_raw_membership_many(
 }
 
 pub fn delete_labels(membership: &HashSet<String>) -> (HashSet<String>, HashSet<String>) {
-    let add = HashSet::from(["TRASH".to_owned()]);
+    let add = HashSet::from([TRASH.to_owned()]);
     let remove = REMOVABLE_SYSTEM_FOLDER_LABELS
         .iter()
-        .filter(|label| **label != "TRASH" && membership.contains(**label))
+        .filter(|label| **label != TRASH && membership.contains(**label))
         .map(|label| (*label).to_owned())
         .collect();
     (add, remove)
@@ -154,7 +155,7 @@ async fn apply_thread_intent<R: Runtime>(
                     .await?;
             }
             results.push(MutationResultDto {
-                thread_id,
+                thread_id: thread_id,
                 outcome: MutationOutcome::Applied.into(),
             });
             continue;
@@ -185,7 +186,7 @@ async fn apply_thread_intent<R: Runtime>(
         let (thread_id, outcome) = outcome.map_err(|error| error.to_string())?;
         let outcome = outcome?;
         results.push(MutationResultDto {
-            thread_id,
+            thread_id: thread_id,
             outcome: outcome.into(),
         });
     }

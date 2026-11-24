@@ -9,6 +9,8 @@ import { useLayoutStore } from '@/stores/layout';
 import type { MessageAttachment } from '@/lib/types/ipc';
 import { captureConsole } from '@/tests/console';
 
+const EXPECTED_CALLS = 3;
+
 function renderWithClient(ui: React.ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
@@ -78,7 +80,7 @@ describe('ReceivedAttachmentChip', () => {
     preview.focus();
     await user.keyboard('{Enter}');
     await user.keyboard(' ');
-    expect(calls).toBe(3);
+    expect(calls).toBe(EXPECTED_CALLS);
   });
 
   it('does not open the preview when the download control is activated', async () => {
@@ -176,8 +178,8 @@ describe('ReceivedAttachmentChip', () => {
   it('sanitises a hostile filename before offering it as the Save dialog default path', async () => {
     const user = userEvent.setup();
     let receivedArgs: unknown;
-    ipc.override('plugin:dialog|save', (args) => {
-      receivedArgs = args;
+    ipc.override('plugin:dialog|save', (request) => {
+      receivedArgs = request;
       return null;
     });
     renderWithClient(

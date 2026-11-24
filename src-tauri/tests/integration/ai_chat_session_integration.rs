@@ -43,7 +43,7 @@ fn message(id: &str, sender: &str, sent_at: i64) -> Message {
         sender: sender.into(),
         recipients: "me@example.com".into(),
         subject: format!("Subject {id}"),
-        sent_at,
+        sent_at: sent_at,
         snippet: "Snippet".into(),
         html_body: None,
         plain_body: None,
@@ -58,7 +58,7 @@ fn message(id: &str, sender: &str, sent_at: i64) -> Message {
 
 fn source(message_seq: i64, id: &str, sender: &str) -> PassageSource {
     PassageSource {
-        message_seq,
+        message_seq: message_seq,
         message_id: id.into(),
         thread_id: format!("thread-{id}"),
         sender: sender.into(),
@@ -77,7 +77,7 @@ fn source(message_seq: i64, id: &str, sender: &str) -> PassageSource {
 
 fn passage(message_seq: i64) -> Passage {
     Passage {
-        message_seq,
+        message_seq: message_seq,
         chunk_index: 0,
         similarity: 0.9,
         sent_at: 1_700_000_100,
@@ -174,12 +174,13 @@ fn recorder() -> Recorder {
     let app = tauri::test::mock_app();
     let events: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
     let collected = events.clone();
-    app.handle().listen("ai-chat://event", move |event| {
-        collected
-            .lock()
-            .unwrap()
-            .push(serde_json::from_str(event.payload()).unwrap());
-    });
+    app.handle()
+        .listen(latentmail_lib::events::AI_CHAT_EVENT, move |event| {
+            collected
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(event.payload()).unwrap());
+        });
     Recorder { app, events }
 }
 

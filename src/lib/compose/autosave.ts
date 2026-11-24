@@ -57,11 +57,11 @@ export function toDraftRequest(session: ComposeSession): ComposeDraftRequest {
 }
 
 export function useComposeAutosave() {
-  const session = useComposeStore((state) => state.session);
+  const session = useComposeStore((compose) => compose.session);
   const qualifies = useComposeStore(selectQualifiesForDraft);
-  const setStatus = useComposeStore((state) => state.setDraftStatus);
-  const setDraftId = useComposeStore((state) => state.setDraftId);
-  const markSaved = useComposeStore((state) => state.markSaved);
+  const setStatus = useComposeStore((compose) => compose.setDraftStatus);
+  const setDraftId = useComposeStore((compose) => compose.setDraftId);
+  const markSaved = useComposeStore((compose) => compose.markSaved);
   const timer = useRef<number | null>(null);
 
   useEffect(() => {

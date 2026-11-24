@@ -20,6 +20,7 @@ import { MessageHeader, type MessageSender } from './MessageHeader';
 import type { MessageBadge } from '@/lib/labels/badges';
 import type { Participant } from '@/lib/format/participants';
 import type { MessageAttachment } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type ReaderMessage = {
   id: string;
@@ -119,7 +120,7 @@ export function MessageCard({
         onClick={(event) => {
           if (newest || (event.target as HTMLElement).closest('button')) return;
           if (!(window.getSelection()?.isCollapsed ?? true)) return;
-          setExpanded((value) => !value);
+          setExpanded((wasExpanded) => !wasExpanded);
         }}
         className={`flex items-start gap-2 rounded px-4 pt-4 ${open ? 'mb-2 border-b border-outline-variant/30 pb-6 dark:border-dark-outline-variant/50' : 'pb-4'} ${newest ? '' : 'cursor-pointer transition-colors hover:bg-surface-container-low dark:hover:bg-dark-surface-container-low'}`}
       >
@@ -129,10 +130,10 @@ export function MessageCard({
           <button
             aria-expanded={open}
             aria-label={`${open ? 'Collapse' : 'Expand'} message from ${message.sender.name || message.sender.address}`}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => setExpanded((wasExpanded) => !wasExpanded)}
             className="mt-3 shrink-0 cursor-pointer rounded-sm p-1 text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary"
           >
-            {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            {open ? <ChevronDown size={ICON_SIZE.base} /> : <ChevronRight size={ICON_SIZE.base} />}
           </button>
         )}
         <div className="min-w-0 flex-1">
@@ -147,7 +148,7 @@ export function MessageCard({
             <div className="ml-16 mt-stack-gap-sm flex items-center gap-2 text-body-sm text-secondary dark:text-dark-secondary">
               <p className="min-w-0 flex-1 truncate">{message.snippet}</p>
               {message.attachments && message.attachments.length > 0 && (
-                <Paperclip aria-label="Has attachment" className="shrink-0" size={15} />
+                <Paperclip aria-label="Has attachment" className="shrink-0" size={ICON_SIZE.md} />
               )}
             </div>
           )}
@@ -157,7 +158,7 @@ export function MessageCard({
         <div className="mx-auto w-full max-w-4xl px-4 pb-4 text-body-md">
           {renderedMessage.remoteImagesBlocked && (
             <div className={`${noticeBarClass} mb-stack-gap-md`}>
-              <ImageOff className="shrink-0" size={16} />
+              <ImageOff className="shrink-0" size={ICON_SIZE.base} />
               <span>Remote images are blocked.</span>
               {!remoteImagesLocked && (
                 <span className="ml-auto flex items-center gap-2.5">
@@ -186,7 +187,7 @@ export function MessageCard({
             >
               <FileWarning
                 className="text-on-surface-variant dark:text-dark-on-surface-variant"
-                size={28}
+                size={ICON_SIZE.xl5}
               />
               <p
                 role="status"
@@ -238,7 +239,7 @@ export function MessageCard({
               />
               {renderedMessage.truncated && gmailThreadUrl && (
                 <div data-testid="clipped-notice" className={`${noticeBarClass} mt-stack-gap-md`}>
-                  <AlignLeft className="shrink-0" size={16} />
+                  <AlignLeft className="shrink-0" size={ICON_SIZE.base} />
                   <span role="status">This message is cut short.</span>
                   <button
                     type="button"

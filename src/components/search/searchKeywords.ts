@@ -52,11 +52,11 @@ export function suggestionsFor(draft: string, labels: MailLabel[]): SearchSugges
   }
 
   const key = token.slice(0, colonIndex).toLowerCase();
-  const value = token.slice(colonIndex + 1);
+  const operand = token.slice(colonIndex + 1);
 
   if (key === 'label' || key === 'in') {
     return labels
-      .filter((label) => label.name.toLowerCase().startsWith(value.toLowerCase()))
+      .filter((label) => label.name.toLowerCase().startsWith(operand.toLowerCase()))
       .map((label) => ({
         insert: `${prefix}${key}:${quoteIfNeeded(label.id)}`,
         primary: label.name,
@@ -67,7 +67,7 @@ export function suggestionsFor(draft: string, labels: MailLabel[]): SearchSugges
   const values = VALUES[key];
   if (!values) return [];
   return values
-    .filter((candidate) => candidate.toLowerCase().startsWith(value.toLowerCase()))
+    .filter((candidate) => candidate.toLowerCase().startsWith(operand.toLowerCase()))
     .map((candidate) => ({
       insert: `${prefix}${key}:${candidate}`,
       primary: `${key}:${candidate}`,

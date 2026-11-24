@@ -73,10 +73,10 @@ const renderRule: MarkdownToJSX.Options['renderRule'] = (next, node, _renderChil
 };
 
 const options: MarkdownToJSX.Options = {
-  overrides,
+  overrides: overrides,
   forceBlock: true,
   disableParsingRawHTML: true,
-  renderRule,
+  renderRule: renderRule,
 };
 
 export function AssistantMarkdown({ text }: { text: string }) {

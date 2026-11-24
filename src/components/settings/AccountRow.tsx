@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { TriangleAlert, Trash2 } from 'lucide-react';
-import { Avatar } from '@/components/shared/Avatar';
+import { Avatar, AVATAR_SIZE } from '@/components/shared/Avatar';
 import { useAccountAvatarQuery } from '@/lib/query/hooks';
 import { invoke } from '@/lib/ipc/commands';
 import type { Account } from '@/lib/types/ipc';
 import { settingsButton, settingsDangerIconButton } from './styles';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function AccountRow({
   account,
@@ -35,7 +36,7 @@ export function AccountRow({
         />
       )}
       <Avatar
-        size={30}
+        size={AVATAR_SIZE.sm}
         src={avatarSrc}
         label={account.displayName}
         fallbackClassName="text-avatar-md bg-settings-primary-container text-settings-on-primary-container dark:bg-dark-settings-primary-container dark:text-dark-settings-on-primary-container"
@@ -52,7 +53,7 @@ export function AccountRow({
             role="alert"
             className="mt-0.75 flex items-center gap-1.5 text-settings-meta text-settings-error dark:text-dark-settings-error"
           >
-            <TriangleAlert aria-hidden="true" size={13} />
+            <TriangleAlert aria-hidden="true" size={ICON_SIZE.xs} />
             Sign-in expired — LatentMail can&apos;t sync this account.
           </p>
         )}
@@ -80,7 +81,7 @@ export function AccountRow({
           onClick={() => onRemove(account)}
           className={settingsDangerIconButton}
         >
-          <Trash2 aria-hidden="true" size={13} />
+          <Trash2 aria-hidden="true" size={ICON_SIZE.xs} />
         </button>
       </div>
     </div>

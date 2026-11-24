@@ -3,6 +3,9 @@ import { Suspense, type ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DelayedFallback, lazyWithDelayedFallback } from '@/components/states/DelayedFallback';
 
+const FALLBACK_DELAY_MS = 200;
+const MINIMUM_VISIBLE_MS = 300;
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -13,7 +16,7 @@ describe('DelayedFallback', () => {
     render(<DelayedFallback>Loading</DelayedFallback>);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(199);
+      await vi.advanceTimersByTimeAsync(FALLBACK_DELAY_MS - 1);
     });
     expect(screen.queryByText('Loading')).not.toBeInTheDocument();
 
@@ -39,14 +42,14 @@ describe('DelayedFallback', () => {
     );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(FALLBACK_DELAY_MS);
     });
     expect(screen.getByText('Loading')).toBeInTheDocument();
 
     await act(async () => {
       resolve?.();
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(299);
+      await vi.advanceTimersByTimeAsync(MINIMUM_VISIBLE_MS - 1);
     });
     expect(screen.getByText('Loading')).toBeInTheDocument();
 

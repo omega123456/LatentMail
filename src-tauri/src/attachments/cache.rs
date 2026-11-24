@@ -89,7 +89,7 @@ impl AttachmentCache {
         };
         Ok(CachedAttachment {
             cache_path: raw,
-            display_path,
+            display_path: display_path,
             mime_type: mime_type.to_owned(),
             filename: filename.to_owned(),
             size: bytes.len() as u64,
@@ -122,7 +122,7 @@ impl AttachmentCache {
         };
         Some(CachedAttachment {
             cache_path: raw,
-            display_path,
+            display_path: display_path,
             mime_type: mime_type.to_owned(),
             filename: filename.to_owned(),
             size: metadata.len(),

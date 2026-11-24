@@ -6,6 +6,9 @@ import { MessageHeader } from '@/components/reader/MessageHeader';
 import { useLayoutStore } from '@/stores/layout';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
+const SECOND_CALL = 2;
+const COPIED_RESET_MS = 2000;
+
 describe('MessageHeader', () => {
   it('opens a pre-addressed compose for the sender and first recipient', async () => {
     const user = userEvent.setup();
@@ -24,7 +27,7 @@ describe('MessageHeader', () => {
     await user.click(screen.getByRole('button', { name: 'Elena' }));
     await user.click(screen.getByRole('button', { name: /to Me/ }));
     expect(compose).toHaveBeenNthCalledWith(1, { name: 'Elena', address: 'elena@example.com' });
-    expect(compose).toHaveBeenNthCalledWith(2, { name: 'Me', address: 'me@example.com' });
+    expect(compose).toHaveBeenNthCalledWith(SECOND_CALL, { name: 'Me', address: 'me@example.com' });
   });
 
   it('lists the message badges beside the sender', () => {
@@ -102,7 +105,10 @@ describe('MessageHeader', () => {
     await user.click(screen.getByRole('button', { name: 'Elena' }));
     await user.click(screen.getByRole('button', { name: '<elena@example.com>' }));
     expect(compose).toHaveBeenNthCalledWith(1, { name: 'Elena', address: 'elena@example.com' });
-    expect(compose).toHaveBeenNthCalledWith(2, { name: 'Elena', address: 'elena@example.com' });
+    expect(compose).toHaveBeenNthCalledWith(SECOND_CALL, {
+      name: 'Elena',
+      address: 'elena@example.com',
+    });
   });
 
   it('copies the sender address and announces it, then returns to the copy icon', async () => {
@@ -121,7 +127,7 @@ describe('MessageHeader', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Copied elena@example.com');
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(COPIED_RESET_MS);
     });
     expect(screen.getByRole('status')).toHaveTextContent('');
     vi.useRealTimers();

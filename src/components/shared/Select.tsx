@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { Select as SelectPrimitive } from 'radix-ui';
+import { DROPDOWN_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
 
 export type SelectOption<T extends string> = {
   value: T;
@@ -43,7 +44,7 @@ export function Select<T extends string>({
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
           position="popper"
-          sideOffset={4}
+          sideOffset={DROPDOWN_SIDE_OFFSET_PX}
           className={contentClass}
           style={{ minWidth: 'var(--radix-select-trigger-width, var(--spacing-select-menu))' }}
         >

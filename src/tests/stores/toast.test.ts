@@ -10,11 +10,11 @@ describe('toast store', () => {
     const [failure, success] = useToastStore.getState().toasts;
     expect(failure).toMatchObject({ severity: 'error', message: 'Failed' });
     expect(success).toMatchObject({ severity: 'success', message: 'Saved' });
-    expect(success!.id).not.toBe(failure!.id);
+    expect(success.id).not.toBe(failure.id);
 
-    useToastStore.getState().dismiss(failure!.id);
+    useToastStore.getState().dismiss(failure.id);
     expect(useToastStore.getState().toasts).toEqual([success]);
-    useToastStore.getState().dismiss(success!.id);
+    useToastStore.getState().dismiss(success.id);
     expect(useToastStore.getState().toasts).toEqual([]);
   });
 
@@ -33,7 +33,7 @@ describe('toast store', () => {
   it('ignores a dismissal for a toast that is already gone', () => {
     useToastStore.getState().showSuccess('Saved');
     const [only] = useToastStore.getState().toasts;
-    useToastStore.getState().dismiss(only!.id + 1);
+    useToastStore.getState().dismiss(only.id + 1);
     expect(useToastStore.getState().toasts).toEqual([only]);
   });
 });

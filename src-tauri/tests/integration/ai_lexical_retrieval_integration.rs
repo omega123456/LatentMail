@@ -36,7 +36,7 @@ fn message(account_id: &str, id: &str, body: &str, sent_at: i64) -> Message {
         sender: "sender@example.com".into(),
         recipients: "recipient@example.com".into(),
         subject: "Subject".into(),
-        sent_at,
+        sent_at: sent_at,
         snippet: "Snippet".into(),
         html_body: None,
         plain_body: Some(body.into()),

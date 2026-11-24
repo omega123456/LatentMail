@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { messageExportFilename, sanitizeFilename } from '@/lib/attachments/filename';
+import { parseISO } from 'date-fns';
+
+const OVERLONG_SUBJECT_LENGTH = 400;
+const CAPPED_FILENAME_LENGTH = 124;
 
 describe('sanitizeFilename', () => {
   it('strips path separators, keeping only the final segment', () => {
@@ -43,7 +47,7 @@ describe('sanitizeFilename', () => {
 });
 
 describe('messageExportFilename', () => {
-  const sentAt = new Date(2026, 9, 23, 9, 14);
+  const sentAt = parseISO('2026-10-23T09:14:00');
 
   it('prefixes the subject with the sent date and appends the format', () => {
     expect(messageExportFilename('Your invoice is ready', sentAt, 'a@example.com', 'eml')).toBe(
@@ -64,8 +68,8 @@ describe('messageExportFilename', () => {
   });
 
   it('caps a very long subject', () => {
-    const filename = messageExportFilename('x'.repeat(400), sentAt, '', 'eml');
-    expect(filename).toHaveLength(124);
+    const filename = messageExportFilename('x'.repeat(OVERLONG_SUBJECT_LENGTH), sentAt, '', 'eml');
+    expect(filename).toHaveLength(CAPPED_FILENAME_LENGTH);
     expect(filename.endsWith('x.eml')).toBe(true);
   });
 });

@@ -37,12 +37,12 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   setActiveAccountId: (activeAccountId) => {
     useMultiSelectStore.getState().clear();
     if (activeAccountId !== null) useAssistantStore.getState().selectAccount(activeAccountId);
-    set({ activeAccountId, flashThreadId: null });
+    set({ activeAccountId: activeAccountId, flashThreadId: null });
   },
   setActiveMailboxId: (activeMailboxId) => {
     useMultiSelectStore.getState().clear();
     set({
-      activeMailboxId,
+      activeMailboxId: activeMailboxId,
       activeThreadId: null,
       keyboardCursor: null,
       imagesAllowedFor: [],
@@ -52,7 +52,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
   setActiveThreadId: (activeThreadId) => {
     if (activeThreadId !== null) useMultiSelectStore.getState().clear();
     set({
-      activeThreadId,
+      activeThreadId: activeThreadId,
       imagesAllowedFor: [],
       flashThreadId: get().flashThreadId === activeThreadId ? activeThreadId : null,
     });

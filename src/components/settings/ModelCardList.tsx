@@ -5,6 +5,8 @@ import { TextInput } from '@/components/shared/TextInput';
 import { modelsOfKind } from '@/lib/ai/model-kind';
 import { settingsLinkMuted } from './styles';
 import type { AiModel } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { DROPDOWN_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
 
 const triggerClass =
   'w-full cursor-pointer rounded-control border border-settings-outline-variant bg-settings-card px-3.25 py-2.5 text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:border-dark-settings-outline-variant dark:bg-dark-settings-card dark:text-dark-settings-ink';
@@ -102,7 +104,7 @@ export function ModelCardList({
         <SelectPrimitive.Portal>
           <SelectPrimitive.Content
             position="popper"
-            sideOffset={4}
+            sideOffset={DROPDOWN_SIDE_OFFSET_PX}
             className={contentClass}
             style={{ minWidth: 'var(--radix-select-trigger-width)' }}
             onFocusCapture={(event) => {
@@ -144,7 +146,7 @@ export function ModelCardList({
               {ofKind.length !== models.length && (
                 <button
                   type="button"
-                  onClick={() => setShowAll((value) => !value)}
+                  onClick={() => setShowAll((wasShowingAll) => !wasShowingAll)}
                   className={`shrink-0 ${settingsLinkMuted}`}
                 >
                   {showAll ? `${label} only` : 'Show all'}
@@ -176,7 +178,7 @@ export function ModelCardList({
                   <SelectPrimitive.ItemIndicator>
                     <Check
                       aria-label="Selected"
-                      size={15}
+                      size={ICON_SIZE.md}
                       className="shrink-0 text-settings-primary dark:text-dark-settings-primary"
                     />
                   </SelectPrimitive.ItemIndicator>

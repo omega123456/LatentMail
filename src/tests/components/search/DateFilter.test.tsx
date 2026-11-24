@@ -12,8 +12,10 @@ import {
   type DateFilterValue,
 } from '@/components/search/DateFilter';
 import type { SearchPredicate } from '@/lib/types/ipc';
+import { parseISO } from 'date-fns';
 
-const TODAY = new Date(2026, 7, 17, 12, 0, 0);
+const TODAY = parseISO('2026-08-17T12:00:00');
+const RANGE_ENDPOINT_COUNT = 2;
 
 function Harness({
   initial = BLANK_DATE_FILTER,
@@ -124,19 +126,19 @@ describe('dateFilterFromPredicates', () => {
 });
 
 describe('nextFocusedDay', () => {
-  const anchor = new Date(2026, 7, 17);
+  const anchor = parseISO('2026-08-17');
 
   it('maps the WAI-ARIA grid keys onto day, week, month and year steps', () => {
-    expect(nextFocusedDay('ArrowLeft', false, anchor)).toEqual(new Date(2026, 7, 16));
-    expect(nextFocusedDay('ArrowRight', false, anchor)).toEqual(new Date(2026, 7, 18));
-    expect(nextFocusedDay('ArrowUp', false, anchor)).toEqual(new Date(2026, 7, 10));
-    expect(nextFocusedDay('ArrowDown', false, anchor)).toEqual(new Date(2026, 7, 24));
-    expect(nextFocusedDay('Home', false, anchor)).toEqual(new Date(2026, 7, 17));
-    expect(nextFocusedDay('End', false, anchor)).toEqual(new Date(2026, 7, 23, 23, 59, 59, 999));
-    expect(nextFocusedDay('PageUp', false, anchor)).toEqual(new Date(2026, 6, 17));
-    expect(nextFocusedDay('PageDown', false, anchor)).toEqual(new Date(2026, 8, 17));
-    expect(nextFocusedDay('PageUp', true, anchor)).toEqual(new Date(2025, 7, 17));
-    expect(nextFocusedDay('PageDown', true, anchor)).toEqual(new Date(2027, 7, 17));
+    expect(nextFocusedDay('ArrowLeft', false, anchor)).toEqual(parseISO('2026-08-16'));
+    expect(nextFocusedDay('ArrowRight', false, anchor)).toEqual(parseISO('2026-08-18'));
+    expect(nextFocusedDay('ArrowUp', false, anchor)).toEqual(parseISO('2026-08-10'));
+    expect(nextFocusedDay('ArrowDown', false, anchor)).toEqual(parseISO('2026-08-24'));
+    expect(nextFocusedDay('Home', false, anchor)).toEqual(parseISO('2026-08-17'));
+    expect(nextFocusedDay('End', false, anchor)).toEqual(parseISO('2026-08-23T23:59:59.999'));
+    expect(nextFocusedDay('PageUp', false, anchor)).toEqual(parseISO('2026-07-17'));
+    expect(nextFocusedDay('PageDown', false, anchor)).toEqual(parseISO('2026-09-17'));
+    expect(nextFocusedDay('PageUp', true, anchor)).toEqual(parseISO('2025-08-17'));
+    expect(nextFocusedDay('PageDown', true, anchor)).toEqual(parseISO('2027-08-17'));
   });
 
   it('ignores keys outside the grid map', () => {
@@ -257,7 +259,7 @@ describe('DateFilter', () => {
       screen
         .getAllByRole('gridcell')
         .filter((cell) => cell.getAttribute('aria-selected') === 'true'),
-    ).toHaveLength(2);
+    ).toHaveLength(RANGE_ENDPOINT_COUNT);
   });
 
   it('restarts the range when the second click lands before the first', async () => {

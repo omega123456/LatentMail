@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
 
+const WEBVIEW_ZOOM = 1.5;
+
 function playwrightRouter() {
   return {
     invoke: vi.fn().mockResolvedValue({ status: 'routed' }),
@@ -33,7 +35,7 @@ describe('IPC dispatch', () => {
     await expect(dispatchInvoke('health_check', {})).resolves.toEqual({ status: 'routed' });
     await dispatchListen('avatar://resolved', listener);
     await dispatchEmit('frontend://ready', {});
-    await dispatchSetZoom(1.5);
+    await dispatchSetZoom(WEBVIEW_ZOOM);
 
     expect(router.invoke).toHaveBeenCalledWith('health_check', {});
     expect(router.listen).toHaveBeenCalledWith('avatar://resolved', listener);
@@ -78,9 +80,9 @@ describe('IPC dispatch', () => {
   it('zooms the webview and converts file paths through the Tauri runtime', async () => {
     const { dispatchConvertFileSrc, dispatchSetZoom } = await import('@/lib/ipc/dispatch');
 
-    await dispatchSetZoom(1.5);
+    await dispatchSetZoom(WEBVIEW_ZOOM);
 
-    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(1.5);
+    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(WEBVIEW_ZOOM);
     expect(dispatchConvertFileSrc('/cache/a.png')).toBe(
       `asset://localhost/${encodeURIComponent('/cache/a.png')}`,
     );
@@ -91,7 +93,7 @@ describe('IPC dispatch', () => {
     const { dispatchEmit, dispatchOnDragDrop, dispatchSetZoom } =
       await import('@/lib/ipc/dispatch');
 
-    await expect(dispatchSetZoom(1.5)).resolves.toBeUndefined();
+    await expect(dispatchSetZoom(WEBVIEW_ZOOM)).resolves.toBeUndefined();
     await expect(dispatchEmit('frontend://ready', {})).resolves.toBeUndefined();
     await dispatchOnDragDrop(vi.fn());
 

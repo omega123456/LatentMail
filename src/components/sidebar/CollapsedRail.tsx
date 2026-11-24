@@ -7,6 +7,7 @@ import type { Mailbox } from './FolderList';
 import { AccountSwitcher } from './AccountSwitcher';
 import { FolderList } from './FolderList';
 import { CollapsedSearchIndicator } from './SearchResultsRow';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function CollapsedRail({
   accounts,
@@ -47,7 +48,7 @@ export function CollapsedRail({
         onClick={onCompose}
         className="grid size-9 cursor-pointer place-items-center rounded-full bg-primary text-on-primary focus-visible:outline-2 focus-visible:outline-primary"
       >
-        <Plus aria-hidden="true" size={18} />
+        <Plus aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       {searchActive && <CollapsedSearchIndicator query={searchQuery} />}
       <div className="min-h-0 w-full flex-1 overflow-y-auto">
@@ -89,7 +90,7 @@ export function CollapsedRail({
         onClick={onExpand}
         className="grid size-9 cursor-pointer place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
       >
-        <PanelLeftOpen aria-hidden="true" size={18} />
+        <PanelLeftOpen aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       <button
         type="button"
@@ -97,7 +98,7 @@ export function CollapsedRail({
         onClick={onSettings}
         className="grid size-9 cursor-pointer place-items-center rounded focus-visible:outline-2 focus-visible:outline-primary"
       >
-        <Settings aria-hidden="true" size={18} />
+        <Settings aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       <div className="mt-1 flex w-full justify-center border-t border-outline-variant pt-3 dark:border-dark-outline-variant">
         <AccountSwitcher

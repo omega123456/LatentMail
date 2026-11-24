@@ -4,6 +4,7 @@ use url::{form_urlencoded, Url};
 use crate::storage::{MessageRepository, Storage};
 
 pub const SCHEME: &str = "inlineimg";
+pub const IMAGE_CACHE_CONTROL: &str = "max-age=86400";
 
 pub fn proxy_url(account_id: &str, message_id: &str, content_id: &str) -> String {
     let query = form_urlencoded::Serializer::new(String::new())
@@ -40,7 +41,7 @@ pub async fn respond(storage: &Storage, uri: &str) -> Response<Vec<u8>> {
         Ok((mime_type, bytes)) => builder
             .status(StatusCode::OK)
             .header("content-type", mime_type)
-            .header("cache-control", "max-age=86400")
+            .header("cache-control", IMAGE_CACHE_CONTROL)
             .body(bytes),
         Err(reason) => {
             tracing::debug!("inline image refused ({reason}): {uri}");

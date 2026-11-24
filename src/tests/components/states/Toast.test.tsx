@@ -3,6 +3,12 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Toast } from '@/components/states/Toast';
 import { MAX_VISIBLE_TOASTS, useToastStore } from '@/stores/toast';
+import { minutesToMilliseconds, secondsToMilliseconds } from 'date-fns';
+
+const BACKGROUND_MINUTES = 10;
+const TOAST_COUNT = 2;
+const SUCCESS_EXPIRY_SECONDS = 10;
+const REMAINING_ERROR_SECONDS = 25;
 
 const show = (raise: () => void) => act(raise);
 
@@ -41,7 +47,8 @@ describe('Toast', () => {
     show(() => useToastStore.getState().showSuccess('Label renamed.'));
     show(() => useToastStore.getState().showError('Couldn’t update conversation.'));
 
-    await user.click((await screen.findAllByLabelText('Dismiss'))[0]!);
+    const [firstDismiss] = await screen.findAllByLabelText('Dismiss');
+    await user.click(firstDismiss);
     await waitFor(() =>
       expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
         'Couldn’t update conversation.',
@@ -80,7 +87,7 @@ describe('Toast', () => {
 
     act(() => void fireEvent.blur(window));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(600_000);
+      await vi.advanceTimersByTimeAsync(minutesToMilliseconds(BACKGROUND_MINUTES));
     });
     expect(useToastStore.getState().toasts).toHaveLength(1);
 
@@ -93,10 +100,10 @@ describe('Toast', () => {
     render(<Toast />);
     show(() => useToastStore.getState().showError('Couldn’t send your message.'));
     show(() => useToastStore.getState().showSuccess('Message sent.'));
-    await waitFor(() => expect(rails()).toHaveLength(2));
+    await waitFor(() => expect(rails()).toHaveLength(TOAST_COUNT));
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(secondsToMilliseconds(SUCCESS_EXPIRY_SECONDS));
     });
     await waitFor(() =>
       expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
@@ -105,7 +112,7 @@ describe('Toast', () => {
     );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(25_000);
+      await vi.advanceTimersByTimeAsync(secondsToMilliseconds(REMAINING_ERROR_SECONDS));
     });
     await waitFor(() => expect(useToastStore.getState().toasts).toEqual([]));
   });

@@ -182,7 +182,7 @@ async fn initial_sync_announces_no_arrivals_to_notify_about() {
         .lock()
         .unwrap()
         .iter()
-        .find(|(name, _)| *name == "mail://new")
+        .find(|(name, _)| *name == latentmail_lib::events::MAIL_NEW)
         .map(|(_, payload)| payload.clone())
         .expect("initial sync still announces new mail so the list refreshes");
     assert_eq!(new_mail.get("arrivals"), Some(&serde_json::json!([])));
@@ -241,7 +241,7 @@ async fn initial_sync_leaves_the_checkpoint_untouched_on_failure() {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(name, _)| *name == "sync://progress")
+        .filter(|(name, _)| *name == latentmail_lib::events::SYNC_PROGRESS)
         .map(|(_, payload)| payload["state"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(progress, vec!["syncing".to_owned(), "error".to_owned()]);

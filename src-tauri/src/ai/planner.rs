@@ -11,8 +11,6 @@ use crate::{
     storage::RetrievalFilters,
 };
 
-const DATE_FORMAT: &str = "%Y-%m-%d";
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RetrievalPlan {
     pub query: Option<String>,
@@ -195,7 +193,7 @@ fn flag(value: Option<Value>) -> Option<bool> {
 }
 
 fn day_start(value: Option<String>) -> Option<i64> {
-    let day = NaiveDate::parse_from_str(text(value)?.trim(), DATE_FORMAT).ok()?;
+    let day = NaiveDate::parse_from_str(text(value)?.trim(), crate::date_formats::ISO_DATE).ok()?;
     Local
         .from_local_datetime(&day.and_hms_opt(0, 0, 0)?)
         .earliest()
@@ -203,7 +201,7 @@ fn day_start(value: Option<String>) -> Option<i64> {
 }
 
 fn day_end(value: Option<String>) -> Option<i64> {
-    let day = NaiveDate::parse_from_str(text(value)?.trim(), DATE_FORMAT).ok()?;
+    let day = NaiveDate::parse_from_str(text(value)?.trim(), crate::date_formats::ISO_DATE).ok()?;
     Local
         .from_local_datetime(&day.and_hms_opt(23, 59, 59)?)
         .latest()

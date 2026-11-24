@@ -7,6 +7,10 @@ import { renderWithQueryClient } from '@/tests/render-with-query-client';
 import { ipc } from '@/tests/ipc-mock';
 import { useLayoutStore } from '@/stores/layout';
 
+const READS_AFTER_REFRESH = 2;
+const LOG_AUTO_REFRESH_INTERVAL_MS = 5_000;
+const MORE_THAN_ONE_PAGE = 60;
+
 const entries = [
   {
     timestampMillis: getTime(parseISO('2026-08-19T09:41:22.118Z')),
@@ -115,7 +119,7 @@ describe('LogsSection', () => {
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
 
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(READS_AFTER_REFRESH));
   });
 
   it('persists the retained log level through write_setting', async () => {
@@ -142,10 +146,10 @@ describe('LogsSection', () => {
     expect(read).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(LOG_AUTO_REFRESH_INTERVAL_MS);
     });
 
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(READS_AFTER_REFRESH));
     vi.useRealTimers();
   });
 
@@ -159,7 +163,7 @@ describe('LogsSection', () => {
     expect(read).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(LOG_AUTO_REFRESH_INTERVAL_MS);
     });
 
     expect(read).toHaveBeenCalledTimes(1);
@@ -168,7 +172,7 @@ describe('LogsSection', () => {
 
   it('paginates at 50 entries per page and resets to page 1 on a new search', async () => {
     const user = userEvent.setup();
-    ipc.override('read_log_entries', manyEntries(60));
+    ipc.override('read_log_entries', manyEntries(MORE_THAN_ONE_PAGE));
     renderWithQueryClient(<LogsSection />);
     await screen.findByText('entry number 0');
 

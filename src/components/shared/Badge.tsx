@@ -1,6 +1,7 @@
 import { Tag, type LucideIcon } from 'lucide-react';
 import { SYSTEM_BADGES, type MessageBadge } from '@/lib/labels/badges';
 import { LABEL_COLOR_BY_ID, LABEL_COLOR_PALETTE } from '@/lib/labels/palette';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 function BadgeShell({
   name,
@@ -18,7 +19,7 @@ function BadgeShell({
       title={name}
       className={`inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 text-label-sm ${className}`}
     >
-      <Icon aria-hidden="true" size={12} />
+      <Icon aria-hidden="true" size={ICON_SIZE.xxs} />
       <span className={iconOnly ? 'sr-only' : 'truncate'}>{name}</span>
     </li>
   );

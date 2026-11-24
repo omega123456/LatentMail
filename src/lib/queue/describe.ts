@@ -141,9 +141,9 @@ export function describeAccountBar(snapshot: AccountQueueSnapshot): {
   const queuedLabel =
     snapshot.queued > 0 ? `${snapshot.queued.toLocaleString()} queued` : 'Nothing queued';
   return {
-    state,
-    statusLabel,
-    queuedLabel,
+    state: state,
+    statusLabel: statusLabel,
+    queuedLabel: queuedLabel,
     failedLabel: snapshot.failed > 0 ? `${snapshot.failed} failed` : null,
     ...ACCOUNT_BAR_CLASSES[state],
   };

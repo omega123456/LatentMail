@@ -57,7 +57,7 @@ pub struct AiConfigDto {
 impl AiService {
     pub fn new(storage: Storage) -> Self {
         Self {
-            storage,
+            storage: storage,
             removing: Arc::default(),
             reconfiguring: Arc::default(),
             index_errors: Arc::default(),
@@ -160,8 +160,11 @@ impl AiService {
             self.clear_index_error(&account_id)?;
             self.set_index_state(&account_id, IndexState::Unavailable)?;
         }
-        app.emit("ai://config", serde_json::json!({"accountId":account_id}))
-            .map_err(|error| error.to_string())
+        app.emit(
+            crate::events::AI_CONFIG,
+            serde_json::json!({"accountId":account_id}),
+        )
+        .map_err(|error| error.to_string())
     }
     pub async fn set_base_url<R: Runtime>(
         &self,
@@ -178,8 +181,11 @@ impl AiService {
             })
             .await
             .map_err(|error| error.to_string())?;
-        app.emit("ai://config", serde_json::json!({"accountId":account_id}))
-            .map_err(|error| error.to_string())
+        app.emit(
+            crate::events::AI_CONFIG,
+            serde_json::json!({"accountId":account_id}),
+        )
+        .map_err(|error| error.to_string())
     }
     pub async fn set_chat_model<R: Runtime>(
         &self,
@@ -194,8 +200,11 @@ impl AiService {
             })
             .await
             .map_err(|error| error.to_string())?;
-        app.emit("ai://config", serde_json::json!({"accountId":account_id}))
-            .map_err(|error| error.to_string())
+        app.emit(
+            crate::events::AI_CONFIG,
+            serde_json::json!({"accountId":account_id}),
+        )
+        .map_err(|error| error.to_string())
     }
     pub async fn set_embedding_model<R: Runtime>(
         &self,
@@ -221,8 +230,11 @@ impl AiService {
             })
             .await
             .map_err(|error| error.to_string())?;
-        app.emit("ai://config", serde_json::json!({"accountId":account_id}))
-            .map_err(|error| error.to_string())
+        app.emit(
+            crate::events::AI_CONFIG,
+            serde_json::json!({"accountId":account_id}),
+        )
+        .map_err(|error| error.to_string())
     }
     pub fn storage(&self) -> Storage {
         self.storage.clone()

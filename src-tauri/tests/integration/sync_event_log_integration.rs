@@ -15,7 +15,7 @@ fn emitted_events_are_logged_by_name_and_size_without_their_mail_content() {
         latentmail_lib::logging::subscriber(logs.path(), LevelFilter::DEBUG).unwrap();
     tracing::dispatcher::with_default(&dispatch, || {
         sink(
-            "mail://new",
+            latentmail_lib::events::MAIL_NEW,
             serde_json::json!({
                 "accountId": "account",
                 "sender": "boss@example.com",
@@ -33,7 +33,7 @@ fn emitted_events_are_logged_by_name_and_size_without_their_mail_content() {
         .unwrap()
         .path();
     let log = std::fs::read_to_string(log_path).unwrap();
-    assert!(log.contains("mail://new"), "{log}");
+    assert!(log.contains(latentmail_lib::events::MAIL_NEW), "{log}");
     assert!(log.contains("bytes"), "{log}");
     assert!(!log.contains(PRIVATE_SUBJECT), "{log}");
     assert!(!log.contains(PRIVATE_SNIPPET), "{log}");

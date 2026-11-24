@@ -21,6 +21,8 @@ import {
   startOfWeek,
 } from 'date-fns';
 import type { SearchPredicate } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 export type DateFilterMode = 'preset' | 'before' | 'after' | 'on' | 'between';
 
@@ -39,7 +41,6 @@ export const BLANK_DATE_FILTER: DateFilterValue = {
 };
 
 const WEEK_OPTIONS = { weekStartsOn: 1 } as const;
-const ISO_DAY = 'yyyy-MM-dd';
 
 export const PRESETS: { value: string; label: string; summary: string }[] = [
   { value: '', label: 'Any time', summary: 'Any time' },
@@ -62,11 +63,11 @@ const MODES: { value: DateFilterMode; label: string }[] = [
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 function toIsoDay(atSeconds: number): string {
-  return format(fromUnixTime(atSeconds), ISO_DAY);
+  return format(fromUnixTime(atSeconds), DATE_FORMAT.isoDate);
 }
 
 function shiftIsoDay(iso: string, days: number): string {
-  return format(addDays(parseISO(iso), days), ISO_DAY);
+  return format(addDays(parseISO(iso), days), DATE_FORMAT.isoDate);
 }
 
 export function serializeDateFilter(value: DateFilterValue): string[] {
@@ -103,22 +104,22 @@ export function dateFilterFromPredicates(predicates: SearchPredicate[]): {
   if (after !== null && before !== null) {
     const end = shiftIsoDay(before, -1);
     return {
-      value: { mode: after === end ? 'on' : 'between', preset: '', start: after, end },
-      remaining,
+      value: { mode: after === end ? 'on' : 'between', preset: '', start: after, end: end },
+      remaining: remaining,
     };
   }
   if (after !== null)
-    return { value: { ...BLANK_DATE_FILTER, mode: 'after', start: after }, remaining };
+    return { value: { ...BLANK_DATE_FILTER, mode: 'after', start: after }, remaining: remaining };
   if (before !== null)
-    return { value: { ...BLANK_DATE_FILTER, mode: 'before', start: before }, remaining };
-  return { value: BLANK_DATE_FILTER, remaining };
+    return { value: { ...BLANK_DATE_FILTER, mode: 'before', start: before }, remaining: remaining };
+  return { value: BLANK_DATE_FILTER, remaining: remaining };
 }
 
 export function summariseDateFilter(value: DateFilterValue): string {
   if (value.mode === 'preset')
     return PRESETS.find((preset) => preset.value === value.preset)?.summary ?? 'Any time';
   if (!value.start) return 'Pick a date';
-  const readable = (iso: string) => format(parseISO(iso), 'd MMM yyyy');
+  const readable = (iso: string) => format(parseISO(iso), DATE_FORMAT.dayMonthYear);
   switch (value.mode) {
     case 'before':
       return `Before ${readable(value.start)}`;
@@ -193,7 +194,7 @@ export function DateFilter({
     end: endOfWeek(endOfMonth(monthAnchor), WEEK_OPTIONS),
   });
   const weeks = days.reduce<Date[][]>((rows, day, index) => {
-    if (index % 7 === 0) rows.push([]);
+    if (index % WEEKDAYS.length === 0) rows.push([]);
     rows[rows.length - 1].push(day);
     return rows;
   }, []);
@@ -202,7 +203,7 @@ export function DateFilter({
   const endDay = value.end ? parseISO(value.end) : null;
 
   const selectDay = (day: Date) => {
-    const iso = format(day, ISO_DAY);
+    const iso = format(day, DATE_FORMAT.isoDate);
     if (value.mode !== 'between' || !startDay || endDay || isBefore(day, startDay)) {
       onChange({ ...value, start: iso, end: '' });
       return;
@@ -303,14 +304,14 @@ export function DateFilter({
                 onClick={() => setFocusedDay(addMonths(focusedDay, -1))}
                 className={navClass}
               >
-                <ChevronLeft aria-hidden="true" size={16} />
+                <ChevronLeft aria-hidden="true" size={ICON_SIZE.base} />
               </button>
               <span
                 id={headingId}
                 aria-live="polite"
                 className="text-label-md uppercase text-on-surface dark:text-dark-on-surface"
               >
-                {format(monthAnchor, 'MMMM yyyy')}
+                {format(monthAnchor, DATE_FORMAT.monthYear)}
               </span>
               <button
                 type="button"
@@ -318,7 +319,7 @@ export function DateFilter({
                 onClick={() => setFocusedDay(addMonths(focusedDay, 1))}
                 className={navClass}
               >
-                <ChevronRight aria-hidden="true" size={16} />
+                <ChevronRight aria-hidden="true" size={ICON_SIZE.base} />
               </button>
             </div>
 
@@ -341,7 +342,7 @@ export function DateFilter({
               className="grid grid-cols-7 gap-y-0.5"
             >
               {weeks.map((week) => (
-                <div key={format(week[0], ISO_DAY)} role="row" className="contents">
+                <div key={format(week[0], DATE_FORMAT.isoDate)} role="row" className="contents">
                   {week.map((day) => {
                     const isStart = startDay !== null && isSameDay(day, startDay);
                     const isEnd = endDay !== null && isSameDay(day, endDay);
@@ -357,7 +358,7 @@ export function DateFilter({
                       : `bg-secondary-container dark:bg-dark-secondary-container ${isStart ? 'rounded-l-full' : ''} ${isEnd ? 'rounded-r-full' : ''}`;
                     return (
                       <div
-                        key={format(day, ISO_DAY)}
+                        key={format(day, DATE_FORMAT.isoDate)}
                         role="gridcell"
                         aria-selected={selected}
                         className={`flex h-9.5 items-center justify-center ${bandClass}`}
@@ -368,7 +369,7 @@ export function DateFilter({
                           tabIndex={focused ? 0 : -1}
                           aria-disabled={disabled}
                           aria-current={isSameDay(day, today) ? 'date' : undefined}
-                          aria-label={format(day, 'd MMMM yyyy')}
+                          aria-label={format(day, DATE_FORMAT.longDayMonthYear)}
                           onClick={() => !disabled && selectDay(day)}
                           onFocus={() => setFocusedDay(day)}
                           onKeyDown={handleKeyDown}
@@ -384,7 +385,7 @@ export function DateFilter({
                                     : 'text-on-surface hover:bg-surface-container-high dark:text-dark-on-surface dark:hover:bg-dark-surface-container-high'
                           }`}
                         >
-                          {format(day, 'd')}
+                          {format(day, DATE_FORMAT.dayOfMonth)}
                         </button>
                       </div>
                     );

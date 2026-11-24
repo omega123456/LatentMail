@@ -3,6 +3,7 @@ import { CircleAlert, CircleCheck, X } from 'lucide-react';
 import { Toast as ToastPrimitive } from 'radix-ui';
 import { addMilliseconds, isFuture, milliseconds } from 'date-fns';
 import { useToastStore, type Toast as ToastEntry, type ToastSeverity } from '@/stores/toast';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const DURATION_MS: Record<ToastSeverity, number> = {
   success: milliseconds({ seconds: 4 }),
@@ -32,7 +33,7 @@ const VARIANT: Record<
 };
 
 function ToastCard({ toast }: { toast: ToastEntry }) {
-  const dismiss = useToastStore((state) => state.dismiss);
+  const dismiss = useToastStore((toaster) => toaster.dismiss);
   const [paused, setPaused] = useState(false);
   const variant = VARIANT[toast.severity];
   const Icon = variant.icon;
@@ -58,7 +59,7 @@ function ToastCard({ toast }: { toast: ToastEntry }) {
       data-testid="toast"
       className={`relative flex w-toast-max items-start gap-3 overflow-hidden rounded-md border-l-3 bg-surface-container-lowest py-4.5 pr-3.5 pl-4 shadow-md motion-safe:animate-toast-enter dark:bg-dark-surface-container ${variant.edge}`}
     >
-      <Icon aria-hidden="true" size={16} className={`mt-px shrink-0 ${variant.tint}`} />
+      <Icon aria-hidden="true" size={ICON_SIZE.base} className={`mt-px shrink-0 ${variant.tint}`} />
       <ToastPrimitive.Description className="flex-1 text-body-sm text-on-surface dark:text-dark-on-surface">
         {toast.message}
       </ToastPrimitive.Description>
@@ -66,7 +67,7 @@ function ToastCard({ toast }: { toast: ToastEntry }) {
         aria-label="Dismiss"
         className="shrink-0 rounded-sm text-on-surface-variant opacity-60 hover:bg-surface-container-high hover:opacity-100 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container-high"
       >
-        <X aria-hidden="true" size={15} />
+        <X aria-hidden="true" size={ICON_SIZE.md} />
       </ToastPrimitive.Close>
       <span
         aria-hidden="true"
@@ -78,7 +79,7 @@ function ToastCard({ toast }: { toast: ToastEntry }) {
 }
 
 export function Toast() {
-  const toasts = useToastStore((state) => state.toasts);
+  const toasts = useToastStore((toaster) => toaster.toasts);
   return (
     <ToastPrimitive.Provider swipeDirection="right">
       {toasts.map((toast) => (

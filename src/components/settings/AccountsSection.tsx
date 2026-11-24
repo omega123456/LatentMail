@@ -6,6 +6,7 @@ import type { Account } from '@/lib/types/ipc';
 import { AccountRow } from './AccountRow';
 import { RemoveAccountDialog } from './RemoveAccountDialog';
 import { SettingsSection } from './SettingsSection';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function AccountsSection() {
   const { data: accounts, isLoading, isError } = useAccountsQuery();
@@ -53,7 +54,7 @@ export function AccountsSection() {
         disabled={adding}
         className="mt-3.5 inline-flex w-fit cursor-pointer items-center gap-2 rounded-control bg-settings-container px-3.5 py-2 text-settings-desc font-semibold text-settings-ink hover:bg-settings-container-high disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-settings-primary dark:bg-dark-settings-container dark:text-dark-settings-ink dark:hover:bg-dark-settings-container-high"
       >
-        <Plus aria-hidden="true" size={13} />
+        <Plus aria-hidden="true" size={ICON_SIZE.xs} />
         {adding ? 'Adding account…' : 'Add account'}
       </button>
       {pendingRemoval && (

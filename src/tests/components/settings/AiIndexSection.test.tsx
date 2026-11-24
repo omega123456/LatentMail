@@ -17,7 +17,7 @@ it.each([
       accountId="account-a"
       status={{
         accountId: 'account-a',
-        state,
+        state: state,
         indexed: 99,
         total: 100,
         indexedMessages: 2,
@@ -36,8 +36,8 @@ it.each([
 it('renders building progress and pauses only its account', async () => {
   const user = userEvent.setup();
   const cancel = vi.fn();
-  ipc.override('cancel_ai_index', (args) => {
-    cancel(args.accountId);
+  ipc.override('cancel_ai_index', (request) => {
+    cancel(request.accountId);
   });
   renderWithQueryClient(
     <AiIndexSection
@@ -65,8 +65,8 @@ it('renders building progress and pauses only its account', async () => {
 it('confirms rebuilding without affecting another account', async () => {
   const user = userEvent.setup();
   const rebuild = vi.fn();
-  ipc.override('rebuild_ai_index', (args) => {
-    rebuild(args.accountId);
+  ipc.override('rebuild_ai_index', (request) => {
+    rebuild(request.accountId);
   });
   renderWithQueryClient(
     <AiIndexSection
@@ -133,8 +133,8 @@ it('keeps an interrupted error visible and resumes a paused index', async () => 
 it('explains a needsRebuild index, offers no Resume, and reaches the Rebuild control', async () => {
   const user = userEvent.setup();
   const rebuild = vi.fn();
-  ipc.override('rebuild_ai_index', (args) => {
-    rebuild(args.accountId);
+  ipc.override('rebuild_ai_index', (request) => {
+    rebuild(request.accountId);
   });
   renderWithQueryClient(
     <AiIndexSection

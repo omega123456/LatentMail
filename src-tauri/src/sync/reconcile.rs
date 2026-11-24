@@ -200,14 +200,14 @@ pub async fn run(
                 TraversalCursorRepository::upsert(
                     &transaction,
                     &TraversalCursor {
-                        account_id,
+                        account_id: account_id,
                         kind: TraversalKind::Reconciliation,
                         position: None,
                         discovered_count: state.discovered_count,
                         persisted_count: state.persisted_count,
                         completed: true,
                         last_advanced_at: completed_at,
-                        resumed,
+                        resumed: resumed,
                     },
                 )?;
                 transaction.commit()
@@ -219,7 +219,7 @@ pub async fn run(
     emit(events, account_id, &state, true);
     Ok(FullSyncOutcome {
         history_id: candidate,
-        added_count,
+        added_count: added_count,
         thread_ids: Vec::new(),
         changed: true,
         arrivals: Vec::new(),
@@ -251,11 +251,11 @@ fn cursor(
         account_id: account_id.to_owned(),
         kind: TraversalKind::Reconciliation,
         position: Some(phase.position(candidate)),
-        discovered_count,
-        persisted_count,
-        completed,
+        discovered_count: discovered_count,
+        persisted_count: persisted_count,
+        completed: completed,
         last_advanced_at: chrono::Utc::now().timestamp(),
-        resumed,
+        resumed: resumed,
     }
 }
 async fn stage_universe(
@@ -307,7 +307,7 @@ fn emit(events: &EventSink, account_id: &str, state: &TraversalCursor, completed
             kind: "reconciliation",
             discovered_count: state.discovered_count,
             persisted_count: state.persisted_count,
-            completed,
+            completed: completed,
             state: if completed {
                 TraversalState::Complete
             } else {

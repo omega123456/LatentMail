@@ -361,7 +361,9 @@ pub enum ConversationEntryScope {
 impl ConversationEntryScope {
     fn includes_trashed_and_spammed(&self) -> bool {
         match self {
-            Self::Mailbox { mailbox_id } => mailbox_id == "TRASH" || mailbox_id == "SPAM",
+            Self::Mailbox { mailbox_id } => {
+                crate::gmail::system_labels::is_trash_or_spam(mailbox_id)
+            }
             Self::Search { scope } => {
                 crate::search::scope::resolve(scope).includes_trashed_and_spammed()
             }
@@ -1374,12 +1376,12 @@ impl ThreadRepository {
                 participants: participants.join(", "),
                 latest_at: latest.sent_at,
                 message_count: rows.len() as i64,
-                is_unread,
-                is_starred,
-                has_attachments,
-                has_draft,
-                sender_identity,
-                recipient_identity,
+                is_unread: is_unread,
+                is_starred: is_starred,
+                has_attachments: has_attachments,
+                has_draft: has_draft,
+                sender_identity: sender_identity,
+                recipient_identity: recipient_identity,
             },
         )?;
         Self::write_label_index(connection, account_id, thread_id)
@@ -1436,7 +1438,8 @@ impl ThreadRepository {
         limit: i64,
         direction: crate::sync::ThreadPageDirection,
     ) -> Result<Vec<ThreadListRow>> {
-        let includes_trashed_and_spammed = matches!(label_id, None | Some("TRASH") | Some("SPAM"));
+        let includes_trashed_and_spammed =
+            label_id.is_none_or(crate::gmail::system_labels::is_trash_or_spam);
         let sql = match (label_id.is_some(), cursor.is_some(), direction) {
             (false, false, crate::sync::ThreadPageDirection::Forward) => {
                 THREAD_LIST_UNLABELLED_FORWARD
@@ -2156,7 +2159,7 @@ fn label(row: &rusqlite::Row<'_>) -> Result<Label> {
         id: row.get(1)?,
         name: row.get(2)?,
         kind: row.get(3)?,
-        color,
+        color: color,
         message_count: row.get(6)?,
     })
 }

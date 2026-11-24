@@ -3,7 +3,7 @@ import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import type { MoveDestinationId } from '@/components/actions/MoveToMenu';
 import type { LabelMenuEntry } from '@/components/actions/LabelsMenu';
 import { RowContextMenu } from '@/components/actions/RowContextMenu';
-import { Avatar } from '@/components/shared/Avatar';
+import { Avatar, AVATAR_SIZE } from '@/components/shared/Avatar';
 import { Badge } from '@/components/shared/Badge';
 import { sourceBadge, userBadgesByName } from '@/lib/labels/badges';
 import { exactTime, relativeTime } from '@/lib/format/relative-time';
@@ -12,6 +12,7 @@ import { type ThreadTriageIntent } from '@/lib/query/mutations';
 import { useLayoutStore } from '@/stores/layout';
 import type { Conversation } from '@/lib/types/conversation';
 import type { Density } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const ROW_BADGE_LIMIT = 2;
 
@@ -66,7 +67,7 @@ export function ConversationRow({
   const compact = density === 'compact';
   const spacious = density === 'spacious';
   const showAvatarSlot = !compact;
-  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
+  const showSenderAvatars = useLayoutStore((layout) => layout.showSenderAvatars);
   const { data: avatarSrc } = useSenderAvatarQuery(
     showAvatarSlot ? (conversation.avatarDomain ?? null) : null,
   );
@@ -105,7 +106,9 @@ export function ConversationRow({
         })
       }
       onToggleStar={onStar}
-      onMoveTo={(destination: MoveDestinationId) => onTriage({ kind: 'move', destination })}
+      onMoveTo={(destination: MoveDestinationId) =>
+        onTriage({ kind: 'move', destination: destination })
+      }
       onToggleLabel={(labelId, checked) =>
         onTriage({ kind: 'label', add: checked ? [labelId] : [], remove: checked ? [] : [labelId] })
       }
@@ -142,7 +145,7 @@ export function ConversationRow({
         </span>
         {renderAvatar && (
           <Avatar
-            size={spacious ? 40 : 32}
+            size={spacious ? AVATAR_SIZE.xl : AVATAR_SIZE.md}
             src={avatarSrc}
             label={conversation.identityLabel}
             unread={conversation.unread}
@@ -178,7 +181,7 @@ export function ConversationRow({
                 </span>
                 <span className="relative z-10 flex shrink-0 items-center gap-2 text-secondary dark:text-dark-secondary">
                   {conversation.hasAttachment && (
-                    <Paperclip aria-label="Has attachment" size={15} />
+                    <Paperclip aria-label="Has attachment" size={ICON_SIZE.md} />
                   )}
                   {(rowBadges.length > 0 || showSource) && (
                     <ul aria-label="Labels and source mailbox" className="flex items-center gap-1">
@@ -225,7 +228,7 @@ export function ConversationRow({
             onClick={onStar}
             className={`relative z-10 shrink-0 cursor-pointer rounded-sm p-1 focus-visible:outline-2 focus-visible:outline-primary ${conversation.starred ? 'text-star dark:text-dark-star' : 'text-secondary dark:text-dark-secondary'}`}
           >
-            <Star size={18} fill={conversation.starred ? 'currentColor' : 'none'} />
+            <Star size={ICON_SIZE.lg} fill={conversation.starred ? 'currentColor' : 'none'} />
           </button>
         )}
       </article>

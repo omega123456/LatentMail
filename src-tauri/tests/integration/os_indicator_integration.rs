@@ -63,7 +63,7 @@ async fn aggregate_reads_every_account_and_the_safe_platform_surfaces() {
                         display_name: id.to_owned(),
                         avatar_url: None,
                         history_id: None,
-                        needs_reauthentication,
+                        needs_reauthentication: needs_reauthentication,
                         created_at: 0,
                         updated_at: 0,
                     },

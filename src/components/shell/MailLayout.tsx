@@ -51,6 +51,8 @@ import { SearchResultsRow } from '@/components/sidebar/SearchResultsRow';
 import { navRow } from '@/components/sidebar/rowStyles';
 import { AssistantPanel } from '@/components/ai-chat/AssistantPanel';
 import { useSettingsUiStore } from '@/stores/settings-ui';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { percentOf } from '@/lib/format/percent';
 
 const navItem = navRow(false);
 
@@ -106,19 +108,19 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
     layout === 'three-column' || (layout === 'bottom-preview' && activeThreadId !== null);
   const setPane = (
     key: '--sidebar-w' | '--list-w' | '--reader-h' | '--assistant-w',
-    value: number,
-    update: (value: number) => void,
+    size: number,
+    update: (size: number) => void,
   ) => {
-    shell.current?.style.setProperty(key, key === '--reader-h' ? `${value}%` : `${value}px`);
-    update(value);
+    shell.current?.style.setProperty(key, key === '--reader-h' ? `${size}%` : `${size}px`);
+    update(size);
   };
   const labelsQuery = useLabelsQuery(activeAccountId);
   const keyboardConversation = useConversationQuery(activeAccountId, activeThreadId);
   const keyboardMultiSelect = useMultiSelectStore(selectIsMultiSelectActive);
-  const searchActive = useSearchStore((state) => state.active);
-  const searchSubmittedQuery = useSearchStore((state) => state.submittedQuery);
-  const searchScope = useSearchStore((state) => state.scope);
-  const searchClear = useSearchStore((state) => state.clear);
+  const searchActive = useSearchStore((search) => search.active);
+  const searchSubmittedQuery = useSearchStore((search) => search.submittedQuery);
+  const searchScope = useSearchStore((search) => search.scope);
+  const searchClear = useSearchStore((search) => search.clear);
   const searchResults = useSearchThreadsQuery(activeAccountId, searchSubmittedQuery, searchScope);
   const searchTotalQuery = useSearchTotalQuery(activeAccountId, searchSubmittedQuery, searchScope);
   const searchTotal = searchTotalQuery.data ?? 0;
@@ -163,7 +165,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const compose = useCallback(() => {
     if (activeAccount) openNewMessage(activeAccount.id, activeAccount.email);
   }, [activeAccount]);
-  const composeOpen = useComposeStore((state) => state.session !== null);
+  const composeOpen = useComposeStore((composeState) => composeState.session !== null);
   const composeTarget = useCallback(
     (action: 'reply' | 'reply-all' | 'forward' | 'edit-draft') => {
       if (!activeAccount || keyboardMultiSelect || !keyboardConversation.data) return;
@@ -283,7 +285,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           onClick={compose}
           className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-label-md text-on-primary shadow-sm focus-visible:outline-2 focus-visible:outline-primary dark:bg-dark-primary dark:text-dark-on-primary"
         >
-          <Pencil aria-hidden="true" size={16} />
+          <Pencil aria-hidden="true" size={ICON_SIZE.base} />
           Compose
         </button>
         {searchActive && (
@@ -306,9 +308,11 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           showUnreadCounts={showUnreadCounts}
           onSelect={selectMailbox}
           onCreateLabel={({ name, colorId }) => createLabelMutation.mutateAsync({ name, colorId })}
-          onRenameLabel={({ id, name }) => renameLabelMutation.mutateAsync({ labelId: id, name })}
+          onRenameLabel={({ id, name }) =>
+            renameLabelMutation.mutateAsync({ labelId: id, name: name })
+          }
           onRecolorLabel={({ id, colorId }) =>
-            recolorLabelMutation.mutateAsync({ labelId: id, colorId })
+            recolorLabelMutation.mutateAsync({ labelId: id, colorId: colorId })
           }
           onDeleteLabel={(id) => deleteLabelMutation.mutateAsync({ labelId: id })}
         />
@@ -318,11 +322,11 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
           onClick={() => setSidebarCollapsed(true)}
           className={`mt-auto ${navItem}`}
         >
-          <PanelLeftClose aria-hidden="true" size={18} />
+          <PanelLeftClose aria-hidden="true" size={ICON_SIZE.lg} />
           Collapse
         </button>
         <button type="button" onClick={openSettings} className={navItem}>
-          <Settings aria-hidden="true" size={18} />
+          <Settings aria-hidden="true" size={ICON_SIZE.lg} />
           Settings
         </button>
       </div>
@@ -352,7 +356,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
             : 'text-on-surface-variant hover:bg-surface-container dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container'
         }`}
       >
-        <Sparkles aria-hidden="true" size={18} />
+        <Sparkles aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
     </header>
   );
@@ -428,7 +432,7 @@ export function MailLayout({ accounts }: { accounts: Account[] }) {
   const readerResize = (offset: number) =>
     setPane(
       '--reader-h',
-      readerHeight - (offset / (shell.current?.clientHeight || 1)) * 100,
+      readerHeight - percentOf(offset, shell.current?.clientHeight || 1),
       setReaderHeight,
     );
   const body: ReactNode =

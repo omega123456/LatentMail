@@ -57,9 +57,9 @@ async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
     Mock::given(method("GET")).and(path("/users/me/messages/new")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"new","threadId":"new-thread","historyId":"50","labelIds":[],"internalDate":"1000","payload":{"headers":[]}}))).mount(&server).await;
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("mail.sqlite")).unwrap();
-    let c = storage.connection().unwrap();
+    let connection = storage.connection().unwrap();
     AccountRepository::upsert(
-        &c,
+        &connection,
         &Account {
             id: "account".into(),
             email: "me@example.com".into(),
@@ -73,10 +73,10 @@ async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
     )
     .unwrap();
     for (id, thread) in [("kept", "kept-thread"), ("gone", "gone-thread")] {
-        MessageRepository::write_full_state(&c, &row(id, thread)).unwrap();
-        ThreadRepository::recompute(&c, "account", thread).unwrap();
+        MessageRepository::write_full_state(&connection, &row(id, thread)).unwrap();
+        ThreadRepository::recompute(&connection, "account", thread).unwrap();
     }
-    drop(c);
+    drop(connection);
     let registry = WorkRegistry::new();
     let engine = SyncEngine::new(
         storage.clone(),
@@ -88,18 +88,18 @@ async fn reconciliation_deletes_only_absent_messages_and_fetches_new_ones() {
         .run_sync("account", GmailClient::with_base_url("token", server.uri()))
         .await
         .unwrap();
-    let c = storage.connection().unwrap();
-    assert!(MessageRepository::get(&c, "account", "kept")
+    let connection = storage.connection().unwrap();
+    assert!(MessageRepository::get(&connection, "account", "kept")
         .unwrap()
         .is_some());
-    assert!(MessageRepository::get(&c, "account", "gone")
+    assert!(MessageRepository::get(&connection, "account", "gone")
         .unwrap()
         .is_none());
-    assert!(MessageRepository::get(&c, "account", "new")
+    assert!(MessageRepository::get(&connection, "account", "new")
         .unwrap()
         .is_some());
     assert_eq!(
-        AccountRepository::get(&c, "account")
+        AccountRepository::get(&connection, "account")
             .unwrap()
             .unwrap()
             .history_id,

@@ -59,7 +59,7 @@ impl LabelDto {
                 background: color.background,
             }),
             message_count: label.message_count,
-            unread_count,
+            unread_count: unread_count,
         }
     }
 }
@@ -103,7 +103,7 @@ pub struct TraversalStatusDto {
 impl TraversalStatusDto {
     pub fn not_started(account_id: String) -> Self {
         Self {
-            account_id,
+            account_id: account_id,
             state: TraversalState::NotStarted,
             kind: None,
             discovered_count: 0,
@@ -147,7 +147,7 @@ impl From<TraversalCursor> for TraversalStatusDto {
         };
         Self {
             account_id: cursor.account_id,
-            state,
+            state: state,
             kind: Some(kind),
             discovered_count: cursor.discovered_count,
             persisted_count: cursor.persisted_count,
@@ -341,7 +341,7 @@ impl ImagePolicy {
     pub fn allows(&self, label_ids: &[String], message_id: &str, sender: &str) -> bool {
         if label_ids
             .iter()
-            .any(|label| label == "SPAM" || label == "TRASH")
+            .any(|label| crate::gmail::system_labels::is_trash_or_spam(label))
         {
             return false;
         }
@@ -404,18 +404,18 @@ pub fn message_dto(
         subject: message.subject,
         sent_at: to_millis(message.sent_at),
         snippet: message.snippet,
-        html_body,
+        html_body: html_body,
         html_presence: message.html_presence.into(),
         plain_body: message.plain_body,
         has_attachments: message.has_attachments,
         is_unread: message.is_unread,
         is_starred: message.is_starred,
-        label_ids,
-        remote_images_blocked,
-        remote_images_allowed,
-        inline_images_pending,
-        draft_id,
-        truncated,
+        label_ids: label_ids,
+        remote_images_blocked: remote_images_blocked,
+        remote_images_allowed: remote_images_allowed,
+        inline_images_pending: inline_images_pending,
+        draft_id: draft_id,
+        truncated: truncated,
         attachments: attachments.into_iter().map(AttachmentDto::from).collect(),
     }
 }
@@ -448,13 +448,13 @@ pub fn message_body_dto(
         None => (None, false, false, false),
     };
     MessageBodyDto {
-        html_body,
+        html_body: html_body,
         plain_body: message.plain_body.clone(),
         html_presence: message.html_presence.into(),
-        truncated,
-        remote_images_blocked,
+        truncated: truncated,
+        remote_images_blocked: remote_images_blocked,
         remote_images_allowed: allow_remote,
-        inline_images_pending,
+        inline_images_pending: inline_images_pending,
     }
 }
 

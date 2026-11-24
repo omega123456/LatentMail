@@ -1,6 +1,7 @@
 import { Star, X } from 'lucide-react';
 import type { Conversation } from '@/lib/types/conversation';
 import { ActionRibbon, type ActionRibbonProps } from './ActionRibbon';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type BulkSelectionPanelProps = ActionRibbonProps & {
   count: number;
@@ -60,7 +61,7 @@ export function BulkSelectionPanel({
             onClick={onClearSelection}
             className={`${textButtonClass} inline-flex items-center gap-1.5 border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 dark:border-dark-primary/30 dark:bg-dark-primary/10 dark:text-dark-primary dark:hover:bg-dark-primary/20`}
           >
-            <X aria-hidden="true" size={14} />
+            <X aria-hidden="true" size={ICON_SIZE.sm} />
             Clear
           </button>
         </div>
@@ -102,7 +103,7 @@ export function BulkSelectionPanel({
                 {thread.starred && (
                   <Star
                     aria-label="Starred"
-                    size={14}
+                    size={ICON_SIZE.sm}
                     fill="currentColor"
                     className="text-star dark:text-dark-star"
                   />

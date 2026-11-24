@@ -2,7 +2,12 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ZoomToolbar } from '@/components/reader/previews/ZoomToolbar';
-import type { ZoomMode } from '@/lib/attachments/zoom';
+import { MAX_ZOOM, MIN_ZOOM, type ZoomMode } from '@/lib/attachments/zoom';
+
+const FITTED_ZOOM = 1.25;
+const BETWEEN_STEPS = 1.18;
+const DOUBLE_ZOOM = 2;
+const ONE_STEP_IN = 1.5;
 
 function renderToolbar(zoom: number, mode: ZoomMode = 'custom') {
   const handlers = { onZoomIn: vi.fn(), onZoomOut: vi.fn(), onSelectPreset: vi.fn() };
@@ -13,7 +18,7 @@ function renderToolbar(zoom: number, mode: ZoomMode = 'custom') {
 describe('ZoomToolbar', () => {
   it('shows the leading text, the percentage and steps with the buttons', async () => {
     const user = userEvent.setup();
-    const handlers = renderToolbar(1.25);
+    const handlers = renderToolbar(FITTED_ZOOM);
     expect(screen.getByText('Page 2 of 5')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Zoom level 125%' })).toHaveTextContent('125%');
     expect(screen.getByText('Zoom 125%')).toBeInTheDocument();
@@ -24,7 +29,7 @@ describe('ZoomToolbar', () => {
   });
 
   it('dims but keeps focusable the button at each limit and announces it', () => {
-    renderToolbar(4);
+    renderToolbar(MAX_ZOOM);
     expect(screen.getByRole('button', { name: 'Zoom in' })).toHaveAttribute(
       'aria-disabled',
       'true',
@@ -34,7 +39,7 @@ describe('ZoomToolbar', () => {
   });
 
   it('announces the minimum', () => {
-    renderToolbar(0.5);
+    renderToolbar(MIN_ZOOM);
     expect(screen.getByRole('button', { name: 'Zoom out' })).toHaveAttribute(
       'aria-disabled',
       'true',
@@ -44,14 +49,14 @@ describe('ZoomToolbar', () => {
 
   it('checks the active fit mode and picks presets from the menu', async () => {
     const user = userEvent.setup();
-    const handlers = renderToolbar(1.18, 'fit-width');
+    const handlers = renderToolbar(BETWEEN_STEPS, 'fit-width');
     await user.click(screen.getByRole('button', { name: 'Zoom level 118%' }));
     expect(await screen.findByRole('menuitemradio', { name: 'Fit width' })).toHaveAttribute(
       'aria-checked',
       'true',
     );
     await user.click(screen.getByRole('menuitemradio', { name: '200%' }));
-    expect(handlers.onSelectPreset).toHaveBeenCalledWith(2);
+    expect(handlers.onSelectPreset).toHaveBeenCalledWith(DOUBLE_ZOOM);
 
     await user.click(screen.getByRole('button', { name: 'Zoom level 118%' }));
     await user.click(await screen.findByRole('menuitemradio', { name: 'Fit page' }));
@@ -60,7 +65,7 @@ describe('ZoomToolbar', () => {
 
   it('checks the matching step when a fixed zoom is active', async () => {
     const user = userEvent.setup();
-    renderToolbar(1.5);
+    renderToolbar(ONE_STEP_IN);
     await user.click(screen.getByRole('button', { name: 'Zoom level 150%' }));
     expect(await screen.findByRole('menuitemradio', { name: '150%' })).toHaveAttribute(
       'aria-checked',

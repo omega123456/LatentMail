@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function computeRibbonVisibility(systemLabelIds: string[]) {
   const isDrafts = systemLabelIds.includes('DRAFT');
@@ -78,7 +79,7 @@ function useMeasuredOverflow() {
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
-  return { containerRef, probeRef, narrow: requiredWidth > availableWidth };
+  return { containerRef: containerRef, probeRef: probeRef, narrow: requiredWidth > availableWidth };
 }
 
 export function ActionRibbon({
@@ -123,7 +124,11 @@ export function ActionRibbon({
       onClick={onToggleRead}
       className={iconButtonClass}
     >
-      {unread ? <Mail aria-hidden="true" size={18} /> : <MailOpen aria-hidden="true" size={18} />}
+      {unread ? (
+        <Mail aria-hidden="true" size={ICON_SIZE.lg} />
+      ) : (
+        <MailOpen aria-hidden="true" size={ICON_SIZE.lg} />
+      )}
     </button>
   );
 
@@ -136,7 +141,7 @@ export function ActionRibbon({
       onClick={onToggleStar}
       className={`${iconButtonClass} ${starred ? 'text-star dark:text-dark-star' : ''}`}
     >
-      <Star aria-hidden="true" size={18} fill={starred ? 'currentColor' : 'none'} />
+      <Star aria-hidden="true" size={ICON_SIZE.lg} fill={starred ? 'currentColor' : 'none'} />
     </button>
   );
 
@@ -144,7 +149,7 @@ export function ActionRibbon({
     <DropdownMenu.Root key="labels" open={labelsOpen} onOpenChange={setLabelsOpen}>
       <DropdownMenu.Trigger asChild>
         <button type="button" aria-label="Labels" title="Labels" className={iconButtonClass}>
-          <Tag aria-hidden="true" size={18} />
+          <Tag aria-hidden="true" size={ICON_SIZE.lg} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -171,7 +176,7 @@ export function ActionRibbon({
     <DropdownMenu.Root key="move-to" open={moveOpen} onOpenChange={setMoveOpen}>
       <DropdownMenu.Trigger asChild>
         <button type="button" aria-label="Move to" title="Move to" className={iconButtonClass}>
-          <FolderInput aria-hidden="true" size={18} />
+          <FolderInput aria-hidden="true" size={ICON_SIZE.lg} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -201,9 +206,9 @@ export function ActionRibbon({
       className={iconButtonClass}
     >
       {visibility.spamMode === 'notSpam' ? (
-        <ShieldOff aria-hidden="true" size={18} />
+        <ShieldOff aria-hidden="true" size={ICON_SIZE.lg} />
       ) : (
-        <ShieldAlert aria-hidden="true" size={18} />
+        <ShieldAlert aria-hidden="true" size={ICON_SIZE.lg} />
       )}
     </button>
   );
@@ -217,7 +222,7 @@ export function ActionRibbon({
       onClick={onDelete}
       className="inline-flex items-center justify-center rounded p-2 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error cursor-pointer"
     >
-      <Trash2 aria-hidden="true" size={18} />
+      <Trash2 aria-hidden="true" size={ICON_SIZE.lg} />
     </button>
   );
 
@@ -256,7 +261,7 @@ export function ActionRibbon({
                   title="More actions"
                   className={iconButtonClass}
                 >
-                  <MoreHorizontal aria-hidden="true" size={18} />
+                  <MoreHorizontal aria-hidden="true" size={ICON_SIZE.lg} />
                 </button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -317,7 +322,7 @@ function RibbonMeasure({
   ];
   return icons.map((Icon, index) => (
     <span key={index} className={iconButtonClass}>
-      <Icon aria-hidden="true" size={18} />
+      <Icon aria-hidden="true" size={ICON_SIZE.lg} />
     </span>
   ));
 }
@@ -342,7 +347,7 @@ function ComposeGroup({
         onClick={onReply}
         className={iconButtonClass}
       >
-        <Reply aria-hidden="true" size={18} />
+        <Reply aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       <button
         type="button"
@@ -351,7 +356,7 @@ function ComposeGroup({
         onClick={onReplyAll}
         className={iconButtonClass}
       >
-        <ReplyAll aria-hidden="true" size={18} />
+        <ReplyAll aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       <button
         type="button"
@@ -360,7 +365,7 @@ function ComposeGroup({
         onClick={onForward}
         className={iconButtonClass}
       >
-        <Forward aria-hidden="true" size={18} />
+        <Forward aria-hidden="true" size={ICON_SIZE.lg} />
       </button>
       {onEditDraft && (
         <button
@@ -370,7 +375,7 @@ function ComposeGroup({
           onClick={onEditDraft}
           className={iconButtonClass}
         >
-          <PenSquare aria-hidden="true" size={18} />
+          <PenSquare aria-hidden="true" size={ICON_SIZE.lg} />
         </button>
       )}
       <span

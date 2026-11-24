@@ -1,4 +1,5 @@
 import { AlertTriangle, RefreshCw, type LucideIcon } from 'lucide-react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const icons = { warning: AlertTriangle, rebuild: RefreshCw } satisfies Record<string, LucideIcon>;
 
@@ -24,7 +25,7 @@ export function InlineConfirm({
       className="flex flex-col gap-2.5 rounded-control border border-settings-error-container bg-settings-error-container px-3.5 py-3 text-settings-on-error-container dark:border-dark-settings-error-container dark:bg-dark-settings-error-container dark:text-dark-settings-on-error-container"
     >
       <p className="flex items-center gap-2 text-settings-desc font-semibold">
-        <Icon aria-hidden="true" size={14} className="shrink-0" />
+        <Icon aria-hidden="true" size={ICON_SIZE.sm} className="shrink-0" />
         {title}
       </p>
       <p className="text-settings-meta opacity-90">{body}</p>

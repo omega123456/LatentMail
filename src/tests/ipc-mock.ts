@@ -7,13 +7,13 @@ type Listener = (payload: unknown) => void;
 type Override<C extends keyof IpcCommandMap> =
   | (C extends 'read_settings' ? Partial<IpcCommandMap[C]['result']> : IpcCommandMap[C]['result'])
   | ((
-      args: IpcCommandMap[C]['args'],
+      request: IpcCommandMap[C]['args'],
     ) => IpcCommandMap[C]['result'] | Promise<IpcCommandMap[C]['result']>);
 
 const overrides = new Map<keyof IpcCommandMap, Override<keyof IpcCommandMap>>();
 const listeners = new Map<keyof IpcEventMap, Set<Listener>>();
 
-const tauriInvoke = vi.fn(async (command: string, args: unknown) => invoke(command, args));
+const tauriInvoke = vi.fn(async (command: string, request: unknown) => invoke(command, request));
 const tauriListen = vi.fn(
   async (event: string, listener: (event: { payload: unknown }) => void) => {
     const wrapped: Listener = (payload) => listener({ payload });
@@ -47,11 +47,11 @@ vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({ onDragDropEvent: tauriOnDragDropEvent, setZoom: tauriSetZoom }),
 }));
 
-function invoke(command: string, args: unknown): Promise<unknown> {
+function invoke(command: string, request: unknown): Promise<unknown> {
   const key = command as keyof IpcCommandMap;
   const override = overrides.get(key);
   if (override !== undefined) {
-    const value = typeof override === 'function' ? override(args as never) : override;
+    const value = typeof override === 'function' ? override(request as never) : override;
     if (key === 'read_settings' && typeof value === 'object' && value !== null) {
       return Promise.resolve({ ...ipcFixtures.read_settings, ...value });
     }

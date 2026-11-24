@@ -4,6 +4,7 @@ import { captureBinding, findConflictingCommand, isMacPlatform } from '@/lib/key
 import { COMMAND_METADATA, type CommandBindings, type CommandName } from '@/lib/keyboard/registry';
 import { KeyCaps } from './KeyCaps';
 import { settingsLinkMuted, settingsLinkPrimary } from './styles';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function ShortcutCapture({
   command,
@@ -93,7 +94,7 @@ export function ShortcutCapture({
           role="alert"
           className="flex items-center gap-1.5 pt-1.75 text-settings-meta text-settings-error dark:text-dark-settings-error"
         >
-          <TriangleAlert aria-hidden="true" size={13} />
+          <TriangleAlert aria-hidden="true" size={ICON_SIZE.xs} />
           Already used by <b className="font-semibold">{COMMAND_METADATA[conflict].label}</b>
         </p>
       )}

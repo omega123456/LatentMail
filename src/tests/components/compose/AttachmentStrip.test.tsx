@@ -9,7 +9,7 @@ const staged = (state: ComposeAttachment['state']): ComposeAttachment => ({
   filename: 'Q3 budget.pdf',
   mimeType: 'application/pdf',
   size: 253952,
-  state,
+  state: state,
   staged:
     state === 'settled'
       ? {

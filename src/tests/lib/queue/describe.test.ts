@@ -6,7 +6,7 @@ function emptyLane(
   lane: AccountQueueSnapshot['lanes'][number]['lane'],
   state: AccountQueueSnapshot['lanes'][number]['state'],
 ): AccountQueueSnapshot['lanes'][number] {
-  return { lane, capacity: 4, active: 0, backlog: 0, state, operations: [] };
+  return { lane: lane, capacity: 4, active: 0, backlog: 0, state: state, operations: [] };
 }
 
 function snapshot(overrides: Partial<AccountQueueSnapshot>): AccountQueueSnapshot {

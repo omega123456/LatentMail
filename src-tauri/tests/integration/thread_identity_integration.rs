@@ -23,7 +23,7 @@ fn message(
             vec!["INBOX".into()]
         },
         snippet: String::new(),
-        sent_at,
+        sent_at: sent_at,
         rfc_message_id: None,
         sender: sender.into(),
         recipients: to.into(),

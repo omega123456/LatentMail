@@ -6,7 +6,6 @@ const SYSTEM: &str = include_str!("../../prompts/inbox-chat-system.md");
 const PLAN: &str = include_str!("../../prompts/inbox-chat-plan.md");
 
 const DATE_TIME_FORMAT: &str = "%A, %B %-d, %Y, %-I:%M %p";
-const DATE_FORMAT: &str = "%Y-%m-%d";
 const PASSAGE_SEPARATOR: &str = "\n\n---\n\n";
 
 pub fn system(now: DateTime<Local>, account_email: &str) -> String {
@@ -21,7 +20,10 @@ pub fn system(now: DateTime<Local>, account_email: &str) -> String {
 
 pub fn plan(now: DateTime<Local>, account_email: &str, folders: &[String]) -> String {
     PLAN.trim()
-        .replace("{{TODAY_DATE}}", &now.format(DATE_FORMAT).to_string())
+        .replace(
+            "{{TODAY_DATE}}",
+            &now.format(crate::date_formats::ISO_DATE).to_string(),
+        )
         .replace("{{FOLDERS}}", &folders.join(", "))
         .replace("{{USER_EMAIL}}", account_email)
 }

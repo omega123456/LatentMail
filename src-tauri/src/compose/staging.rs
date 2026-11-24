@@ -84,11 +84,11 @@ impl Staging {
         let size = fs::metadata(&target)?.len();
         Ok(StagedPart {
             id: id.to_owned(),
-            filename,
-            mime_type,
+            filename: filename,
+            mime_type: mime_type,
             path: target,
-            content_id,
-            size,
+            content_id: content_id,
+            size: size,
         })
     }
 
@@ -108,10 +108,10 @@ impl Staging {
                 Ok(metadata) => {
                     return Ok(StagedPart {
                         id: id.to_owned(),
-                        filename,
-                        mime_type,
-                        path,
-                        content_id,
+                        filename: filename,
+                        mime_type: mime_type,
+                        path: path,
+                        content_id: content_id,
                         size: metadata.len(),
                     })
                 }
@@ -154,7 +154,7 @@ impl Staging {
             id: descriptor.id.clone(),
             filename: descriptor.filename.clone(),
             mime_type: descriptor.mime_type.clone(),
-            path,
+            path: path,
             content_id: descriptor.content_id.clone(),
             size: bytes.len() as u64,
         })

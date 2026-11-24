@@ -18,7 +18,7 @@ it('logs every failed command centrally and still rejects', async () => {
 
   const message = 'ipc list_threads failed: no such table: threads';
   expect(consoleError).toHaveBeenCalledWith(message);
-  expect(logged).toHaveBeenCalledWith({ level: 'error', message });
+  expect(logged).toHaveBeenCalledWith({ level: 'error', message: message });
 });
 
 it('does not recurse when the log command itself fails', async () => {

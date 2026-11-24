@@ -1,5 +1,7 @@
 use crate::storage::{AccountRepository, LabelRepository, Storage};
 
+const MAX_EXACT_BADGE_COUNT: u64 = 99;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndicatorState {
     pub unread_count: u64,
@@ -19,8 +21,8 @@ impl IndicatorState {
             Some("!".to_owned())
         } else if self.unread_count == 0 {
             None
-        } else if self.unread_count > 99 {
-            Some("99+".to_owned())
+        } else if self.unread_count > MAX_EXACT_BADGE_COUNT {
+            Some(format!("{MAX_EXACT_BADGE_COUNT}+"))
         } else {
             Some(self.unread_count.to_string())
         }
@@ -61,7 +63,7 @@ pub async fn aggregate(storage: &Storage) -> Result<IndicatorState, String> {
                 Ok::<_, rusqlite::Error>(total.saturating_add(u64::try_from(count).unwrap_or(0)))
             })?;
             Ok(IndicatorState {
-                unread_count,
+                unread_count: unread_count,
                 needs_reauthentication: accounts
                     .iter()
                     .any(|account| account.needs_reauthentication),

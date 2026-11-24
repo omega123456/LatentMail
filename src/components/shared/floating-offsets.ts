@@ -1,0 +1,3 @@
+export const MENU_COLLISION_PADDING_PX = 8;
+export const DROPDOWN_SIDE_OFFSET_PX = 4;
+export const POPOVER_SIDE_OFFSET_PX = 6;

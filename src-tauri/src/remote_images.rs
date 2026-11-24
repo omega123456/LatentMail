@@ -86,7 +86,7 @@ pub async fn respond(client: &reqwest::Client, uri: &str, hosts: HostScope) -> R
         Ok((content_type, bytes)) => builder
             .status(StatusCode::OK)
             .header("content-type", content_type)
-            .header("cache-control", "max-age=86400")
+            .header("cache-control", crate::inline_images::IMAGE_CACHE_CONTROL)
             .body(bytes),
         Err(reason) => {
             tracing::debug!("remote image refused ({reason}): {uri}");

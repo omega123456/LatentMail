@@ -1,4 +1,5 @@
 import { format } from 'date-fns';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 const RESERVED_WINDOWS_NAMES = new Set([
   'CON',
@@ -46,7 +47,7 @@ export function messageExportFilename(
   extension: 'eml' | 'html',
 ): string {
   const title = subject.trim() || `Message from ${sender}`;
-  const stem = `${format(sentAt, 'yyyy-MM-dd')} ${title}`
+  const stem = `${format(sentAt, DATE_FORMAT.isoDate)} ${title}`
     .replace(PATH_UNSAFE_CHARACTERS, ' ')
     .replace(/\s+/g, ' ')
     .trim()

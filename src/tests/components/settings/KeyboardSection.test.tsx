@@ -59,8 +59,8 @@ describe('KeyboardSection', () => {
   it('rebinding a command through the section writes an override and shows Reset all', async () => {
     const user = userEvent.setup();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
 
     render(

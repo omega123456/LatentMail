@@ -1,6 +1,8 @@
 import { render } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 
+const BUNDLED_FONT_FACES = 3;
+
 it('loads every bundled Selawik weight when the browser supports it', async () => {
   const add = vi.fn();
   const load = vi.fn().mockResolvedValue('selawik-face');
@@ -18,7 +20,7 @@ it('loads every bundled Selawik weight when the browser supports it', async () =
     </ThemeProvider>,
   );
 
-  await vi.waitFor(() => expect(add).toHaveBeenCalledTimes(3));
+  await vi.waitFor(() => expect(add).toHaveBeenCalledTimes(BUNDLED_FONT_FACES));
   expect(add).toHaveBeenCalledWith('selawik-face');
 });
 

@@ -33,7 +33,9 @@ function renderDialog() {
 }
 
 function openFor(messageId = 'message-1') {
-  act(() => useMessageSourceStore.getState().open({ accountId: 'account-1', messageId }));
+  act(() =>
+    useMessageSourceStore.getState().open({ accountId: 'account-1', messageId: messageId }),
+  );
 }
 
 beforeEach(() => {

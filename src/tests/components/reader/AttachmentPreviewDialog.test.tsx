@@ -10,6 +10,9 @@ import { useToastStore } from '@/stores/toast';
 import type { MessageAttachment } from '@/lib/types/ipc';
 import { captureConsole } from '@/tests/console';
 
+const ATTACHMENT_BYTE_LENGTH = 8;
+const READS_AFTER_RETRY = 2;
+
 vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({ default: 'worker-url' }));
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: {},
@@ -134,7 +137,9 @@ describe('AttachmentPreviewDialog', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Download' }));
     await waitFor(() =>
-      expect(useToastStore.getState().toasts.some((t) => t.severity === 'success')).toBe(true),
+      expect(useToastStore.getState().toasts.some((toast) => toast.severity === 'success')).toBe(
+        true,
+      ),
     );
   });
 
@@ -170,7 +175,7 @@ describe('AttachmentPreviewDialog', () => {
   });
 
   it('renders a DOCX attachment as converted, sanitised HTML in a script-free frame', async () => {
-    ipc.override('read_attachment_bytes', new ArrayBuffer(8));
+    ipc.override('read_attachment_bytes', new ArrayBuffer(ATTACHMENT_BYTE_LENGTH));
     const { queryClient, unmount } = renderWithClient(
       <AttachmentPreviewDialog
         accountId="account-1"
@@ -199,7 +204,7 @@ describe('AttachmentPreviewDialog', () => {
     let reads = 0;
     ipc.override('read_attachment_bytes', () => {
       reads += 1;
-      return new ArrayBuffer(8);
+      return new ArrayBuffer(ATTACHMENT_BYTE_LENGTH);
     });
     const first = renderWithClient(
       <AttachmentPreviewDialog
@@ -226,7 +231,7 @@ describe('AttachmentPreviewDialog', () => {
         onClose={() => undefined}
       />,
     );
-    await waitFor(() => expect(reads).toBe(2));
+    await waitFor(() => expect(reads).toBe(READS_AFTER_RETRY));
     expect(
       second.queryClient
         .getQueryCache()

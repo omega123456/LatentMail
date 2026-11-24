@@ -22,8 +22,8 @@ async fn closing_decides_between_hiding_and_termination_after_geometry_is_persis
     let service =
         SettingsService::new(Storage::open(directory.path().join("mail.sqlite")).unwrap());
     let state = WindowState {
-        x: 12,
-        y: 34,
+        left: 12,
+        top: 34,
         width: 1200,
         height: 800,
         maximized: false,

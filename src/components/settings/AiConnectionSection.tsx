@@ -25,7 +25,7 @@ export function AiConnectionSection({
 
   const save = async () => {
     try {
-      await invoke('set_ai_base_url', { accountId, baseUrl: draft });
+      await invoke('set_ai_base_url', { accountId: accountId, baseUrl: draft });
       setError(null);
       onChanged();
     } catch (reason) {

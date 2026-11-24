@@ -24,6 +24,8 @@ import { computeRibbonVisibility } from './ActionRibbon';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
 import { itemClass, menuContentClass } from './RowContextMenu';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { MENU_COLLISION_PADDING_PX } from '@/components/shared/floating-offsets';
 
 export type MessageExportActions = {
   onShowOriginal: () => void;
@@ -89,7 +91,7 @@ export function MessageActionRibbon({
         onClick={onReply}
         className={iconButtonClass}
       >
-        <Reply aria-hidden="true" size={14} />
+        <Reply aria-hidden="true" size={ICON_SIZE.sm} />
       </button>
       <button
         type="button"
@@ -98,7 +100,7 @@ export function MessageActionRibbon({
         onClick={onReplyAll}
         className={iconButtonClass}
       >
-        <ReplyAll aria-hidden="true" size={14} />
+        <ReplyAll aria-hidden="true" size={ICON_SIZE.sm} />
       </button>
       <button
         type="button"
@@ -107,7 +109,7 @@ export function MessageActionRibbon({
         onClick={onForward}
         className={iconButtonClass}
       >
-        <Forward aria-hidden="true" size={14} />
+        <Forward aria-hidden="true" size={ICON_SIZE.sm} />
       </button>
       {onEditDraft && (
         <button
@@ -117,7 +119,7 @@ export function MessageActionRibbon({
           onClick={onEditDraft}
           className={iconButtonClass}
         >
-          <PenSquare aria-hidden="true" size={14} />
+          <PenSquare aria-hidden="true" size={ICON_SIZE.sm} />
         </button>
       )}
       <span
@@ -133,9 +135,9 @@ export function MessageActionRibbon({
           className={iconButtonClass}
         >
           {unread ? (
-            <Mail aria-hidden="true" size={14} />
+            <Mail aria-hidden="true" size={ICON_SIZE.sm} />
           ) : (
-            <MailOpen aria-hidden="true" size={14} />
+            <MailOpen aria-hidden="true" size={ICON_SIZE.sm} />
           )}
         </button>
       )}
@@ -147,14 +149,14 @@ export function MessageActionRibbon({
           onClick={onToggleStar}
           className={`${iconButtonClass} ${starred ? 'text-star dark:text-dark-star' : ''}`}
         >
-          <Star aria-hidden="true" size={14} fill={starred ? 'currentColor' : 'none'} />
+          <Star aria-hidden="true" size={ICON_SIZE.sm} fill={starred ? 'currentColor' : 'none'} />
         </button>
       )}
       {visibility.showLabels && (
         <DropdownMenu.Root open={labelsOpen} onOpenChange={setLabelsOpen}>
           <DropdownMenu.Trigger asChild>
             <button type="button" aria-label="Labels" title="Labels" className={iconButtonClass}>
-              <Tag aria-hidden="true" size={14} />
+              <Tag aria-hidden="true" size={ICON_SIZE.sm} />
             </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -180,7 +182,7 @@ export function MessageActionRibbon({
         <DropdownMenu.Root open={moveOpen} onOpenChange={setMoveOpen}>
           <DropdownMenu.Trigger asChild>
             <button type="button" aria-label="Move to" title="Move to" className={iconButtonClass}>
-              <FolderInput aria-hidden="true" size={14} />
+              <FolderInput aria-hidden="true" size={ICON_SIZE.sm} />
             </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -213,9 +215,9 @@ export function MessageActionRibbon({
             className={iconButtonClass}
           >
             {visibility.spamMode === 'notSpam' ? (
-              <ShieldOff aria-hidden="true" size={14} />
+              <ShieldOff aria-hidden="true" size={ICON_SIZE.sm} />
             ) : (
-              <ShieldAlert aria-hidden="true" size={14} />
+              <ShieldAlert aria-hidden="true" size={ICON_SIZE.sm} />
             )}
           </button>
         </>
@@ -233,7 +235,7 @@ export function MessageActionRibbon({
             onClick={onDelete}
             className="inline-flex items-center justify-center rounded p-1.5 text-secondary hover:bg-error-container hover:text-error focus-visible:outline-2 focus-visible:outline-error dark:text-dark-secondary dark:hover:bg-dark-error-container dark:hover:text-dark-error cursor-pointer"
           >
-            <Trash2 aria-hidden="true" size={14} />
+            <Trash2 aria-hidden="true" size={ICON_SIZE.sm} />
           </button>
         </>
       )}
@@ -255,13 +257,17 @@ function MoreMessageActions({ actions }: { actions: MessageExportActions }) {
           title="More message actions"
           className={iconButtonClass}
         >
-          <EllipsisVertical aria-hidden="true" size={14} />
+          <EllipsisVertical aria-hidden="true" size={ICON_SIZE.sm} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" className={menuContentClass} collisionPadding={8}>
+        <DropdownMenu.Content
+          align="end"
+          className={menuContentClass}
+          collisionPadding={MENU_COLLISION_PADDING_PX}
+        >
           <DropdownMenu.Item className={itemClass} onSelect={actions.onShowOriginal}>
-            <FileCode aria-hidden="true" size={16} />
+            <FileCode aria-hidden="true" size={ICON_SIZE.base} />
             Show original
             {binding && (
               <span className="ml-auto pl-4 text-label-sm text-secondary dark:text-dark-secondary">
@@ -270,11 +276,11 @@ function MoreMessageActions({ actions }: { actions: MessageExportActions }) {
             )}
           </DropdownMenu.Item>
           <DropdownMenu.Item className={itemClass} onSelect={actions.onDownloadEml}>
-            <Download aria-hidden="true" size={16} />
+            <Download aria-hidden="true" size={ICON_SIZE.base} />
             Download message (.eml)
           </DropdownMenu.Item>
           <DropdownMenu.Item className={itemClass} onSelect={actions.onDownloadHtml}>
-            <Globe aria-hidden="true" size={16} />
+            <Globe aria-hidden="true" size={ICON_SIZE.base} />
             Download as web page (.html)
           </DropdownMenu.Item>
         </DropdownMenu.Content>

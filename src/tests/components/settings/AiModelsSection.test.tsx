@@ -5,6 +5,8 @@ import { AiModelsSection } from '@/components/settings/AiModelsSection';
 import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 
+const MODEL_PICKER_COUNT = 2;
+
 async function pickEmbeddingModel(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
   await user.click(
     await screen.findByRole('combobox', { name: 'Embedding model for ada@example.com' }),
@@ -24,14 +26,14 @@ it('renders an account model catalogue', async () => {
       onChanged={() => undefined}
     />,
   );
-  expect(await screen.findAllByRole('combobox')).toHaveLength(2);
+  expect(await screen.findAllByRole('combobox')).toHaveLength(MODEL_PICKER_COUNT);
 });
 
 it('warns before changing an indexed embedding model', async () => {
   const user = userEvent.setup();
   const select = vi.fn();
-  ipc.override('select_ai_embedding_model', (args) => {
-    select(args);
+  ipc.override('select_ai_embedding_model', (request) => {
+    select(request);
   });
   ipc.override('list_ai_models', [
     { id: 'old', ownedBy: 'owner' },
@@ -72,8 +74,8 @@ it('warns before changing an indexed embedding model', async () => {
 it('changes an embedding model without confirmation when only eligible mail exists', async () => {
   const user = userEvent.setup();
   const select = vi.fn();
-  ipc.override('select_ai_embedding_model', (args) => {
-    select(args);
+  ipc.override('select_ai_embedding_model', (request) => {
+    select(request);
   });
   ipc.override('list_ai_models', [
     { id: 'old', ownedBy: 'owner' },

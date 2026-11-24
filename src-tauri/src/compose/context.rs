@@ -47,7 +47,7 @@ pub fn display_quote(message: &Message) -> Option<DisplayQuote> {
                 .map(|text| format!("<p>{}</p>", plain_text_html(text)))
         });
     html.map(|html| DisplayQuote {
-        html,
+        html: html,
         attribution: attribution(message),
     })
 }
@@ -155,7 +155,7 @@ pub fn reply(
         references: chain,
         original_gmail_message_id: message.id.clone(),
         display_quote: display_quote(message),
-        attachments,
+        attachments: attachments,
     }
 }
 
@@ -170,6 +170,6 @@ pub fn forward(message: &Message, attachments: Vec<ReplyAttachment>) -> ReplyCon
         references: Vec::new(),
         original_gmail_message_id: message.id.clone(),
         display_quote: display_quote(message),
-        attachments,
+        attachments: attachments,
     }
 }

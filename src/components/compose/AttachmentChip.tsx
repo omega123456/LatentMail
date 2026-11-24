@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import type { ComposeAttachment } from '@/stores/compose';
 import { formatFileSize } from '@/lib/format/file-size';
 import { resolveMimeIcon } from '@/lib/format/mime-icon';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function AttachmentChip({
   attachment,
@@ -34,9 +35,9 @@ export function AttachmentChip({
         }`}
       >
         {reading ? (
-          <Loader2 className="animate-spin" size={16} />
+          <Loader2 className="animate-spin" size={ICON_SIZE.base} />
         ) : failed ? (
-          <AlertCircle size={16} />
+          <AlertCircle size={ICON_SIZE.base} />
         ) : (
           createElement(Icon, { size: 16 })
         )}
@@ -67,7 +68,7 @@ export function AttachmentChip({
         onClick={onRemove}
         className="shrink-0 cursor-pointer rounded p-1 text-secondary hover:bg-surface-container-low hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"
       >
-        <X aria-hidden="true" size={14} />
+        <X aria-hidden="true" size={ICON_SIZE.sm} />
       </button>
     </div>
   );

@@ -6,6 +6,9 @@ import { useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 import { MAC_PLATFORM, setPlatform, WINDOWS_PLATFORM } from '@/tests/platform';
+import { MAX_SEARCH_QUERY_LENGTH } from '@/stores/search';
+
+const SUGGESTION_COUNT = 4;
 
 beforeEach(() => {
   act(() => {
@@ -96,7 +99,7 @@ describe('SearchField', () => {
     renderWithQueryClient(<SearchField labels={[]} />);
     const field = screen.getByLabelText('Search mail');
     await user.click(field);
-    fireEvent.change(field, { target: { value: 'x'.repeat(2049) } });
+    fireEvent.change(field, { target: { value: 'x'.repeat(MAX_SEARCH_QUERY_LENGTH + 1) } });
     await user.keyboard('{Enter}');
     expect(useSearchStore.getState().active).toBe(false);
     expect(useToastStore.getState().toasts.at(-1)?.message).toMatch(/2048 characters/);
@@ -146,7 +149,7 @@ describe('SearchField', () => {
     renderWithQueryClient(<SearchField labels={[]} />);
     const field = screen.getByLabelText('Search mail');
     await user.type(field, 'is:');
-    expect(screen.getAllByRole('option')).toHaveLength(4);
+    expect(screen.getAllByRole('option')).toHaveLength(SUGGESTION_COUNT);
     await user.keyboard('{ArrowDown}{Enter}');
     expect(field).toHaveValue('is:unread ');
   });

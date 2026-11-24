@@ -6,7 +6,7 @@ function setPlatform(platform: 'macos' | 'windows') {
     __TAURI_OS_PLUGIN_INTERNALS__: {
       eol: '\n',
       os_type: platform,
-      platform,
+      platform: platform,
       family: platform === 'windows' ? 'windows' : 'unix',
       version: '',
       arch: 'x86_64',

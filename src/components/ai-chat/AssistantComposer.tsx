@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, type KeyboardEvent, type RefObject } from 'rea
 import { ArrowUp, Square } from 'lucide-react';
 import { TextArea } from '@/components/shared/TextArea';
 import { isStreaming, QUESTION_LIMIT, useAssistantStore } from '@/stores/assistant';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const sendClass =
   'grid size-8 shrink-0 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary';
@@ -13,13 +14,13 @@ export function AssistantComposer({
 }) {
   const fallbackRef = useRef<HTMLTextAreaElement>(null);
   const promptRef = inputRef ?? fallbackRef;
-  const draft = useAssistantStore((state) => state.draft);
-  const messages = useAssistantStore((state) => state.messages);
-  const setDraft = useAssistantStore((state) => state.setDraft);
-  const ask = useAssistantStore((state) => state.ask);
-  const stop = useAssistantStore((state) => state.stop);
-  const historyPrevious = useAssistantStore((state) => state.historyPrevious);
-  const historyNext = useAssistantStore((state) => state.historyNext);
+  const draft = useAssistantStore((assistant) => assistant.draft);
+  const messages = useAssistantStore((assistant) => assistant.messages);
+  const setDraft = useAssistantStore((assistant) => assistant.setDraft);
+  const ask = useAssistantStore((assistant) => assistant.ask);
+  const stop = useAssistantStore((assistant) => assistant.stop);
+  const historyPrevious = useAssistantStore((assistant) => assistant.historyPrevious);
+  const historyNext = useAssistantStore((assistant) => assistant.historyNext);
 
   useLayoutEffect(() => {
     const prompt = promptRef.current;
@@ -86,7 +87,7 @@ export function AssistantComposer({
             onClick={stop}
             className={`${sendClass} bg-error-container text-on-error-container dark:bg-dark-error-container dark:text-dark-on-error-container`}
           >
-            <Square aria-hidden="true" size={14} fill="currentColor" />
+            <Square aria-hidden="true" size={ICON_SIZE.sm} fill="currentColor" />
           </button>
         ) : (
           <button
@@ -101,7 +102,7 @@ export function AssistantComposer({
                 : 'cursor-not-allowed bg-surface-container-high text-outline dark:bg-dark-surface-container-high dark:text-dark-outline'
             }`}
           >
-            <ArrowUp aria-hidden="true" size={16} />
+            <ArrowUp aria-hidden="true" size={ICON_SIZE.base} />
           </button>
         )}
       </div>

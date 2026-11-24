@@ -11,6 +11,10 @@ import { useSearchStore } from '@/stores/search';
 import type { AiConfig, AiIndexStatus } from '@/lib/types/ipc';
 import { captureConsole } from '@/tests/console';
 
+const AVAILABLE_MODEL_COUNT = 4;
+const CLOSE_REQUESTS = 2;
+const QUESTION_AND_ANSWER = 2;
+
 const config = (overrides: Partial<AiConfig> = {}): AiConfig => ({
   accountId: 'account-1',
   email: 'alex@example.com',
@@ -41,7 +45,7 @@ const status = (overrides: Partial<AiIndexStatus> = {}): AiIndexStatus => ({
 function ready(overrides: { config?: Partial<AiConfig>; status?: Partial<AiIndexStatus> } = {}) {
   ipc.override('read_ai_configs', [config(overrides.config)]);
   ipc.override('read_ai_index_status', [status(overrides.status)]);
-  ipc.override('test_ai_connection', 4);
+  ipc.override('test_ai_connection', AVAILABLE_MODEL_COUNT);
 }
 
 function renderPanel(onClose = vi.fn(), onOpenAiSettings = vi.fn()) {
@@ -149,7 +153,7 @@ describe('AssistantPanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     screen.getByLabelText('Ask a question').focus();
     await user.keyboard('{Escape}');
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(CLOSE_REQUESTS);
     expect(windowEscape).not.toHaveBeenCalled();
     window.removeEventListener('keydown', windowEscape);
   });
@@ -207,7 +211,9 @@ describe('AssistantPanel', () => {
     ipc.override('start_ai_chat', 'request-1');
     renderPanel();
     await user.click(await screen.findByRole('button', { name: 'Who emailed me most recently?' }));
-    await waitFor(() => expect(useAssistantStore.getState().messages).toHaveLength(2));
+    await waitFor(() =>
+      expect(useAssistantStore.getState().messages).toHaveLength(QUESTION_AND_ANSWER),
+    );
     ipc.override('cancel_ai_chat', true);
     await user.click(screen.getByRole('button', { name: 'New chat' }));
     expect(useAssistantStore.getState().messages).toHaveLength(0);

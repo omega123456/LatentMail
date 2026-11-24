@@ -16,7 +16,7 @@ fn token_with_scopes(
     token.set_scopes(scopes.map(|scopes| {
         scopes
             .into_iter()
-            .map(|s| Scope::new(s.to_owned()))
+            .map(|scope| Scope::new(scope.to_owned()))
             .collect()
     }));
     token

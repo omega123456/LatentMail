@@ -2,6 +2,12 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ImagePreview } from '@/components/reader/previews/ImagePreview';
+import { paddedLength, type Size } from '@/lib/attachments/zoom';
+
+const VIEWPORT_WIDTH = 400;
+const VIEWPORT_HEIGHT = 300;
+const LARGE_IMAGE_WIDTH = 640;
+const FITTED_ZOOM = 0.585;
 
 function measure() {
   act(() =>
@@ -11,7 +17,7 @@ function measure() {
   );
 }
 
-function loadImage(width: number, height: number) {
+function loadImage({ width, height }: Size) {
   const image = screen.getByRole('img', { name: 'scan.jpg' });
   Object.defineProperty(image, 'naturalWidth', { configurable: true, value: width });
   Object.defineProperty(image, 'naturalHeight', { configurable: true, value: height });
@@ -22,11 +28,11 @@ function loadImage(width: number, height: number) {
 beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
     configurable: true,
-    get: () => 400,
+    get: () => VIEWPORT_WIDTH,
   });
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
     configurable: true,
-    get: () => 300,
+    get: () => VIEWPORT_HEIGHT,
   });
 });
 
@@ -44,16 +50,18 @@ describe('ImagePreview', () => {
 
   it('fits a large image into the view on open', () => {
     render(<ImagePreview src="blob:scan" filename="scan.jpg" />);
-    const image = loadImage(640, 480);
+    const image = loadImage({ width: LARGE_IMAGE_WIDTH, height: 480 });
     measure();
     expect(screen.getByRole('button', { name: 'Zoom level 59%' })).toBeInTheDocument();
-    expect(image.parentElement).toHaveStyle({ width: `${672 * 0.585}px` });
+    expect(image.parentElement).toHaveStyle({
+      width: `${paddedLength(LARGE_IMAGE_WIDTH) * FITTED_ZOOM}px`,
+    });
   });
 
   it('never enlarges a small image past its own size on open, but zooms in on request', async () => {
     const user = userEvent.setup();
     render(<ImagePreview src="blob:scan" filename="scan.jpg" />);
-    loadImage(100, 50);
+    loadImage({ width: 100, height: 50 });
     measure();
     expect(screen.getByRole('button', { name: 'Zoom level 100%' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Zoom in' }));

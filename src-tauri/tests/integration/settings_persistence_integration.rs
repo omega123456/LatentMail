@@ -65,8 +65,8 @@ async fn preferences_and_window_state_survive_reopening_storage() {
         .unwrap();
     service
         .save_window_state(&WindowState {
-            x: 12,
-            y: 24,
+            left: 12,
+            top: 24,
             width: 1400,
             height: 900,
             maximized: true,
@@ -90,8 +90,8 @@ async fn preferences_and_window_state_survive_reopening_storage() {
     assert_eq!(
         reopened.window_state().unwrap(),
         Some(WindowState {
-            x: 12,
-            y: 24,
+            left: 12,
+            top: 24,
             width: 1400,
             height: 900,
             maximized: true

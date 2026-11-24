@@ -21,6 +21,8 @@ use tokio::sync::Mutex;
 use self::deeplink::Mailto;
 use self::lifecycle::Lifecycle;
 
+const INDICATOR_DEBOUNCE_MILLISECONDS: i64 = 100;
+
 pub struct OsIntegration {
     tray: Arc<dyn tray::TrayController>,
     badge: Arc<dyn badge::BadgeController>,
@@ -108,7 +110,9 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             return;
         }
         tauri::async_runtime::spawn(async move {
-            let Ok(delay) = chrono::Duration::milliseconds(100).to_std() else {
+            let Ok(delay) =
+                chrono::Duration::milliseconds(INDICATOR_DEBOUNCE_MILLISECONDS).to_std()
+            else {
                 return;
             };
             tokio::time::sleep(delay).await;
@@ -129,13 +133,13 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         });
     };
     let mail_schedule = schedule.clone();
-    app.listen("mail://new", move |_| mail_schedule());
+    app.listen(crate::events::MAIL_NEW, move |_| mail_schedule());
     let queue_schedule = schedule.clone();
-    app.listen("queue://item", move |_| queue_schedule());
+    app.listen(crate::events::QUEUE_ITEM, move |_| queue_schedule());
     let initial_schedule = schedule.clone();
-    app.listen("account://state", move |_| schedule());
+    app.listen(crate::events::ACCOUNT_STATE, move |_| schedule());
     let ready_handle = app.clone();
-    app.listen("frontend://ready", move |_| {
+    app.listen(crate::events::FRONTEND_READY, move |_| {
         let integration = ready_handle.state::<OsIntegration>();
         if integration.frontend_ready.swap(true, Ordering::SeqCst) {
             return;
@@ -145,7 +149,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         tauri::async_runtime::spawn(async move {
             for mailto in pending.lock().await.drain(..) {
                 let _ = app.emit(
-                    "os://intent",
+                    crate::events::OS_INTENT,
                     serde_json::json!({ "kind": "mailto", "mailto": mailto }),
                 );
             }
@@ -183,7 +187,7 @@ pub fn emit_mailto<R: Runtime>(app: &AppHandle<R>, value: &str) {
             return;
         }
         let _ = app.emit(
-            "os://intent",
+            crate::events::OS_INTENT,
             serde_json::json!({ "kind": "mailto", "mailto": mailto }),
         );
     }

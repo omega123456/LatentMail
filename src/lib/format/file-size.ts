@@ -1,13 +1,19 @@
 const UNITS = ['B', 'KB', 'MB', 'GB'];
+const BYTES_PER_KILOBYTE = 1024;
+const WHOLE_NUMBER_THRESHOLD = 10;
+const ONE_DECIMAL_SCALE = 10;
 
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  let value = bytes / 1024;
+  if (bytes < BYTES_PER_KILOBYTE) return `${bytes} B`;
+  let sizeInUnit = bytes / BYTES_PER_KILOBYTE;
   let unitIndex = 1;
-  while (value >= 1024 && unitIndex < UNITS.length - 1) {
-    value /= 1024;
+  while (sizeInUnit >= BYTES_PER_KILOBYTE && unitIndex < UNITS.length - 1) {
+    sizeInUnit /= BYTES_PER_KILOBYTE;
     unitIndex += 1;
   }
-  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  const rounded =
+    sizeInUnit >= WHOLE_NUMBER_THRESHOLD
+      ? Math.round(sizeInUnit)
+      : Math.round(sizeInUnit * ONE_DECIMAL_SCALE) / ONE_DECIMAL_SCALE;
   return `${rounded} ${UNITS[unitIndex]}`;
 }

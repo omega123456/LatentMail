@@ -1,12 +1,13 @@
 use std::sync::{Arc, Mutex};
 
-use latentmail_lib::sync::announce::{MailChangeAnnouncer, MAIL_CHANGED_EVENT};
+use latentmail_lib::events::MAIL_CHANGED;
+use latentmail_lib::sync::announce::MailChangeAnnouncer;
 use tauri::Listener;
 
 fn recorded_announcements(app: &tauri::App<tauri::test::MockRuntime>) -> Arc<Mutex<Vec<String>>> {
     let announcements = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&announcements);
-    app.listen(MAIL_CHANGED_EVENT, move |event| {
+    app.listen(MAIL_CHANGED, move |event| {
         recorded.lock().unwrap().push(event.payload().to_owned());
     });
     announcements

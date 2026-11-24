@@ -28,11 +28,11 @@ fn events_channel() -> (
     QueueEventSink,
     mpsc::UnboundedReceiver<(&'static str, serde_json::Value)>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (sender, receiver) = mpsc::unbounded_channel();
     let sink: QueueEventSink = Arc::new(move |event, payload| {
-        let _ = tx.send((event, payload));
+        let _ = sender.send((event, payload));
     });
-    (sink, rx)
+    (sink, receiver)
 }
 
 async fn wait_for_item_status(
@@ -42,7 +42,10 @@ async fn wait_for_item_status(
 ) {
     loop {
         let (event, payload) = receiver.recv().await.expect("event stream stays open");
-        if event == "queue://item" && payload["id"] == id && payload["status"] == status {
+        if event == latentmail_lib::events::QUEUE_ITEM
+            && payload["id"] == id
+            && payload["status"] == status
+        {
             return;
         }
     }
@@ -53,7 +56,7 @@ fn drained_contains_summary(
 ) -> bool {
     let mut found = false;
     while let Ok((event, _)) = receiver.try_recv() {
-        if event == "queue://summary" {
+        if event == latentmail_lib::events::QUEUE_SUMMARY {
             found = true;
         }
     }
@@ -64,24 +67,24 @@ fn controllable_executor() -> (
     Executor,
     mpsc::UnboundedReceiver<(String, oneshot::Sender<()>)>,
 ) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (sender, receiver) = mpsc::unbounded_channel();
     let executor: Executor = Arc::new(move |operation: QueueOperation| {
-        let tx = tx.clone();
+        let sender = sender.clone();
         Box::pin(async move {
-            let (release_tx, release_rx) = oneshot::channel();
-            let _ = tx.send((operation.id, release_tx));
-            let _ = release_rx.await;
+            let (release_sender, release_receiver) = oneshot::channel();
+            let _ = sender.send((operation.id, release_sender));
+            let _ = release_receiver.await;
             Ok(())
         })
     });
-    (executor, rx)
+    (executor, receiver)
 }
 
 fn operation(id: &str, account_id: &str, lane: Lane, entity_key: &str) -> QueueOperation {
     QueueOperation {
         id: id.into(),
         account_id: account_id.into(),
-        lane,
+        lane: lane,
         kind: OperationKind::Sync,
         entity_key: entity_key.into(),
         cost: 0,
@@ -92,8 +95,8 @@ fn operation(id: &str, account_id: &str, lane: Lane, entity_key: &str) -> QueueO
 
 #[tokio::test]
 async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counters() {
-    let (release_tx, release_rx) = oneshot::channel::<()>();
-    let evicted = Arc::new(std::sync::Mutex::new(Some(release_tx)));
+    let (release_sender, release_receiver) = oneshot::channel::<()>();
+    let evicted = Arc::new(std::sync::Mutex::new(Some(release_sender)));
     let evicted_for_hook = Arc::clone(&evicted);
     let executed = Arc::new(AtomicUsize::new(0));
     let executed_for_executor = Arc::clone(&executed);
@@ -101,7 +104,7 @@ async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counter
         executed_for_executor.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(()) })
     });
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events_and_hook(
         250,
         250,
@@ -123,9 +126,9 @@ async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counter
     let cancelled = queue.cancel("cancel-me").await;
     assert!(cancelled.is_some());
     assert_eq!(queue.summary().pending, before);
-    assert!(drained_contains_summary(&mut events_rx));
+    assert!(drained_contains_summary(&mut events_receiver));
 
-    let resolved = release_rx.await;
+    let resolved = release_receiver.await;
     assert!(resolved.is_err(), "evicted closure drops its sender");
 
     queue.resume();
@@ -142,7 +145,7 @@ async fn cancelling_before_execution_evicts_the_hook_and_unwinds_pending_counter
 #[tokio::test]
 async fn cancelling_an_interactive_operation_does_not_block_that_accounts_other_lanes() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     queue.pause();
@@ -168,33 +171,33 @@ async fn cancelling_an_interactive_operation_does_not_block_that_accounts_other_
         ))
         .await
         .unwrap();
-    wait_for_item_status(&mut events_rx, "background-after", "done").await;
+    wait_for_item_status(&mut events_receiver, "background-after", "done").await;
 }
 
 #[tokio::test]
 async fn cancelling_an_already_executing_operation_reports_not_applied() {
     let (executor, mut started) = controllable_executor();
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     queue
         .enqueue(operation("running", "account", Lane::Background, "e1"))
         .await
         .unwrap();
-    wait_for_item_status(&mut events_rx, "running", "active").await;
+    wait_for_item_status(&mut events_receiver, "running", "active").await;
 
     let cancelled = queue.cancel("running").await;
     assert!(cancelled.is_none());
 
     let (_, release) = started.recv().await.unwrap();
     release.send(()).unwrap();
-    wait_for_item_status(&mut events_rx, "running", "done").await;
+    wait_for_item_status(&mut events_receiver, "running", "done").await;
 }
 
 #[tokio::test]
 async fn scoped_lane_pause_holds_only_that_lane_and_resuming_wakes_parked_work() {
     let (executor, mut started) = controllable_executor();
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     let paused = queue
@@ -240,7 +243,7 @@ async fn scoped_lane_pause_holds_only_that_lane_and_resuming_wakes_parked_work()
 #[tokio::test]
 async fn paused_interactive_lane_does_not_hold_back_the_other_lanes() {
     let (executor, mut started) = controllable_executor();
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     queue
@@ -281,25 +284,25 @@ async fn paused_interactive_lane_does_not_hold_back_the_other_lanes() {
 #[tokio::test]
 async fn clear_queue_history_removes_terminal_records_optionally_scoped_to_an_account() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     queue
         .enqueue(operation("acct-1-op", "account-1", Lane::Background, "e1"))
         .await
         .unwrap();
-    wait_for_item_status(&mut events_rx, "acct-1-op", "done").await;
+    wait_for_item_status(&mut events_receiver, "acct-1-op", "done").await;
     queue
         .enqueue(operation("acct-2-op", "account-2", Lane::Background, "e2"))
         .await
         .unwrap();
-    wait_for_item_status(&mut events_rx, "acct-2-op", "done").await;
+    wait_for_item_status(&mut events_receiver, "acct-2-op", "done").await;
 
     let app = app();
     app.manage(Arc::clone(&queue));
 
     clear_queue_history(app.state(), Some("account-1".into()));
-    assert!(drained_contains_summary(&mut events_rx));
+    assert!(drained_contains_summary(&mut events_receiver));
 
     let snapshot = queue.snapshot().await;
     let account_one_has_history = snapshot
@@ -345,7 +348,7 @@ async fn cancel_queue_operation_command_marks_a_cancelled_durable_send_terminal(
     drop(connection);
 
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
     queue.pause();
     admit_durable(
@@ -388,7 +391,7 @@ async fn cancel_queue_operation_command_marks_a_cancelled_durable_send_terminal(
 async fn cancel_queue_operation_command_reports_true_without_touching_storage_for_a_non_persisting_kind(
 ) {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
     queue.pause();
     queue
@@ -467,7 +470,7 @@ async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds(
             }
         })
     });
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     admit_durable(
@@ -487,7 +490,7 @@ async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds(
     )
     .await
     .unwrap();
-    wait_for_item_status(&mut events_rx, "send-retry", "failed").await;
+    wait_for_item_status(&mut events_receiver, "send-retry", "failed").await;
     storage
         .run(|connection| {
             OperationRepository::mark_terminal(connection, "send-retry", "failed", Some("boom"))
@@ -518,7 +521,7 @@ async fn retry_queue_operation_reenqueues_a_failed_send_and_refuses_other_kinds(
         .await
         .unwrap();
     assert!(retried);
-    wait_for_item_status(&mut events_rx, "send-retry", "done").await;
+    wait_for_item_status(&mut events_receiver, "send-retry", "done").await;
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
@@ -552,7 +555,7 @@ async fn retry_failed_operations_retries_every_failed_durable_row_optionally_sco
     drop(connection);
 
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, mut events_rx) = events_channel();
+    let (events, mut events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     let app = app();
@@ -563,7 +566,7 @@ async fn retry_failed_operations_retries_every_failed_durable_row_optionally_sco
         .await
         .unwrap();
     assert_eq!(scoped, 1);
-    wait_for_item_status(&mut events_rx, "send-a1", "done").await;
+    wait_for_item_status(&mut events_receiver, "send-a1", "done").await;
 
     storage
         .run(|connection| {
@@ -587,7 +590,7 @@ async fn retry_failed_operations_command_is_a_no_op_when_no_rows_match_the_scope
     drop(connection);
 
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     let app = app();
@@ -603,7 +606,7 @@ async fn retry_failed_operations_command_is_a_no_op_when_no_rows_match_the_scope
 #[tokio::test]
 async fn set_queue_paused_command_reports_whether_it_took_effect() {
     let executor: Executor = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let (events, _events_rx) = events_channel();
+    let (events, _events_receiver) = events_channel();
     let queue = QueueEngine::new_with_events(250, 250, executor, events);
 
     let app = app();

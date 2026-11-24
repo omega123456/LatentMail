@@ -136,7 +136,7 @@ fn changed_flag(events: &FiredEvents) -> Option<serde_json::Value> {
         .lock()
         .unwrap()
         .iter()
-        .find(|(name, _)| name == "sync://complete")
+        .find(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE)
         .and_then(|(_, payload)| payload.get("changed").cloned())
 }
 

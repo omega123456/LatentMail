@@ -188,7 +188,7 @@ export function ReadingPane({
   const exportActionsFor = (message: ReaderMessage): MessageExportActions | undefined => {
     if (!accountId || message.isDraft) return undefined;
     const target = {
-      accountId,
+      accountId: accountId,
       messageId: message.id,
       subject: conversation.subject,
       sender: message.sender.address,
@@ -196,7 +196,7 @@ export function ReadingPane({
     };
     return {
       onShowOriginal: () =>
-        useMessageSourceStore.getState().open({ accountId, messageId: message.id }),
+        useMessageSourceStore.getState().open({ accountId: accountId, messageId: message.id }),
       onDownloadEml: () => void saveMessageAs('eml', target),
       onDownloadHtml: () => void saveMessageAs('html', target),
     };
@@ -246,7 +246,7 @@ export function ReadingPane({
                 onApplyLabels: (changes) =>
                   onMessageTriage?.(message.id, { kind: 'label', ...changes }),
                 onMoveTo: (destination) =>
-                  onMessageTriage?.(message.id, { kind: 'move', destination }),
+                  onMessageTriage?.(message.id, { kind: 'move', destination: destination }),
                 onToggleSpam: () =>
                   onMessageTriage?.(message.id, {
                     kind: 'move',
@@ -307,29 +307,29 @@ function triageHandlersFor(
         remove: starred ? ['STARRED'] : [],
       }),
     onApplyLabels: ({ add, remove }: { add: string[]; remove: string[] }) =>
-      mutate(threadIds, { kind: 'label', add, remove }),
+      mutate(threadIds, { kind: 'label', add: add, remove: remove }),
     onMoveTo: (destination: 'INBOX' | 'SPAM' | 'TRASH') =>
-      mutate(threadIds, { kind: 'move', destination }),
+      mutate(threadIds, { kind: 'move', destination: destination }),
     onToggleSpam: () => mutate(threadIds, { kind: 'move', destination: isSpam ? 'INBOX' : 'SPAM' }),
     onDelete: () => mutate(threadIds, { kind: 'delete' }),
   };
 }
 
 export function ReadingPaneContainer({ threadId }: { threadId: string | null }) {
-  const accountId = useSelectionStore((value) => value.activeAccountId);
-  const mailboxId = useSelectionStore((value) => value.activeMailboxId) ?? 'INBOX';
-  const allowImagesFor = useSelectionStore((value) => value.allowImagesFor);
-  const trustImageSender = useLayoutStore((value) => value.trustImageSender);
-  const searchActive = useSearchStore((value) => value.active);
-  const searchQuery = useSearchStore((value) => value.submittedQuery);
-  const searchScope = useSearchStore((value) => value.scope);
+  const accountId = useSelectionStore((selection) => selection.activeAccountId);
+  const mailboxId = useSelectionStore((selection) => selection.activeMailboxId) ?? 'INBOX';
+  const allowImagesFor = useSelectionStore((selection) => selection.allowImagesFor);
+  const trustImageSender = useLayoutStore((layout) => layout.trustImageSender);
+  const searchActive = useSearchStore((search) => search.active);
+  const searchQuery = useSearchStore((search) => search.submittedQuery);
+  const searchScope = useSearchStore((search) => search.scope);
   const accountsQuery = useAccountsQuery();
   const accountEmail = accountsQuery.data?.find((account) => account.id === accountId)?.email ?? '';
-  const selectedCount = useMultiSelectStore((value) => value.selectedIds.size);
-  const selectedIds = useMultiSelectStore((value) => value.selectedIds);
+  const selectedCount = useMultiSelectStore((multiSelect) => multiSelect.selectedIds.size);
+  const selectedIds = useMultiSelectStore((multiSelect) => multiSelect.selectedIds);
   const multiSelectActive = useMultiSelectStore(selectIsMultiSelectActive);
-  const clearSelection = useMultiSelectStore((value) => value.clear);
-  const selectAll = useMultiSelectStore((value) => value.selectAll);
+  const clearSelection = useMultiSelectStore((multiSelect) => multiSelect.clear);
+  const selectAll = useMultiSelectStore((multiSelect) => multiSelect.selectAll);
   const conversationQuery = useConversationQuery(accountId, multiSelectActive ? null : threadId);
   const fetchBody = useFetchMessageBodyMutation(accountId);
   const triage = useThreadTriageIntentMutation(accountId);

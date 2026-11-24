@@ -6,7 +6,7 @@ import type { DragDropEvent } from '@/lib/types/ipc';
 import type { PlaywrightIpc, Unlisten } from './playwright-ipc-mock';
 
 type IpcTransport = {
-  invoke(command: string, args: unknown): Promise<unknown>;
+  invoke(command: string, request: unknown): Promise<unknown>;
   listen(event: string, listener: (payload: unknown) => void): Promise<Unlisten>;
   emit(event: string, payload: unknown): Promise<void>;
   setZoom(scale: number): Promise<void>;
@@ -18,7 +18,7 @@ const resolveNothing = () => Promise.resolve();
 const ignoreDragDrop = () => Promise.resolve<Unlisten>(() => undefined);
 
 const tauriTransport: IpcTransport = {
-  invoke: (command, args) => tauriInvoke(command, args as InvokeArgs),
+  invoke: (command, request) => tauriInvoke(command, request as InvokeArgs),
   listen: (event, listener) => tauriListen(event, ({ payload }) => listener(payload)),
   emit: (event, payload) => tauriEmit(event, payload),
   setZoom: (scale) => getCurrentWebview().setZoom(scale),
@@ -55,8 +55,8 @@ function activeTransport(): IpcTransport {
   return runtimelessTransport;
 }
 
-export function dispatchInvoke<Result>(command: string, args: unknown): Promise<Result> {
-  return activeTransport().invoke(command, args) as Promise<Result>;
+export function dispatchInvoke<Result>(command: string, request: unknown): Promise<Result> {
+  return activeTransport().invoke(command, request) as Promise<Result>;
 }
 
 export function dispatchListen<Payload>(

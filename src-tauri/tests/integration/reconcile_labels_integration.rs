@@ -22,7 +22,7 @@ fn temp_storage(history_id: Option<i64>) -> (Storage, tempfile::TempDir) {
             email: "me@example.com".into(),
             display_name: String::new(),
             avatar_url: None,
-            history_id,
+            history_id: history_id,
             needs_reauthentication: false,
             created_at: 1,
             updated_at: 1,
@@ -284,7 +284,7 @@ async fn progress_counts_report_the_distinct_universe_size_not_a_sum_across_labe
     let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink_events = std::sync::Arc::clone(&events);
     let sink: latentmail_lib::sync::EventSink = std::sync::Arc::new(move |name, payload| {
-        if name == "sync://traversal" {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
             sink_events.lock().unwrap().push(payload);
         }
     });

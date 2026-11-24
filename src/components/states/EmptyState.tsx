@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Loader2, SearchX } from 'lucide-react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 type EmptyStateProps = {
   children?: ReactNode;
@@ -24,7 +25,7 @@ export function EmptyState({
       >
         <SearchX
           aria-hidden="true"
-          size={24}
+          size={ICON_SIZE.xl3}
           className="text-on-surface-variant dark:text-dark-on-surface-variant"
         />
         <p className="text-body-md text-on-surface dark:text-dark-on-surface">
@@ -41,7 +42,7 @@ export function EmptyState({
       >
         <Loader2
           aria-hidden="true"
-          size={24}
+          size={ICON_SIZE.xl3}
           className="animate-spin text-primary dark:text-dark-primary"
         />
         <p>{children}</p>

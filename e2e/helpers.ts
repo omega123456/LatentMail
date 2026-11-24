@@ -49,23 +49,23 @@ export async function installPlaywrightIpc(page: Page, options: PlaywrightIpcOpt
       mailChangingCommands,
     }) => {
       const responses = { ...fixtures, ...overrides } as Record<string, unknown>;
-      const calls: { command: string; args: unknown }[] = [];
+      const calls: { command: string; request: unknown }[] = [];
       const listeners = new Map<string, ((payload: unknown) => void)[]>();
       const emit = (event: string, payload: unknown) => {
         for (const listener of listeners.get(event) ?? []) listener(payload);
       };
-      const announceMailChange = (command: string, args: unknown) => {
+      const announceMailChange = (command: string, request: unknown) => {
         if (!mailChangingCommands.includes(command)) return;
-        const { accountId } = args as { accountId: string };
+        const { accountId } = request as { accountId: string };
         emit('mail://changed', { accountId });
       };
       window.__LATENTMAIL_PLAYWRIGHT_IPC_CALLS__ = calls;
       window.__LATENTMAIL_PLAYWRIGHT_EMIT__ = emit;
       window.__LATENTMAIL_PLAYWRIGHT_IPC__ = {
-        invoke: async (command, args) => {
-          calls.push({ command, args });
+        invoke: async (command, request) => {
+          calls.push({ command, request });
           if (pendingCommands.includes(command)) return new Promise(() => undefined);
-          announceMailChange(command, args);
+          announceMailChange(command, request);
           if (rejectedCommands.includes(command)) throw new Error('Mocked IPC failure');
           if (command in responses) return responses[command];
           throw new Error(`[playwright] Unmocked Tauri IPC command: ${command}`);
@@ -87,7 +87,7 @@ export async function installPlaywrightIpc(page: Page, options: PlaywrightIpcOpt
       window.__TAURI_OS_PLUGIN_INTERNALS__ = {
         eol: '\n',
         os_type: platform,
-        platform,
+        platform: platform,
         family: platform === 'windows' ? 'windows' : 'unix',
         version: '',
         arch: 'x86_64',
@@ -109,10 +109,10 @@ export async function installPlaywrightIpc(page: Page, options: PlaywrightIpcOpt
 export async function openComposeSession(page: Page, session: OpenComposeArgs) {
   await page.getByTestId('mail-layout').waitFor();
   await page.evaluate(
-    async ({ moduleUrl, args }) => {
+    async ({ moduleUrl, session }) => {
       const composeStore: ComposeStoreModule = await import(moduleUrl);
-      composeStore.useComposeStore.getState().open(args);
+      composeStore.useComposeStore.getState().open(session);
     },
-    { moduleUrl: COMPOSE_STORE_MODULE_URL, args: session },
+    { moduleUrl: COMPOSE_STORE_MODULE_URL, session: session },
   );
 }

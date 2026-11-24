@@ -7,6 +7,9 @@ use tracing_subscriber::{
     filter::LevelFilter, fmt, fmt::writer::MakeWriterExt, layer::SubscriberExt, reload, Registry,
 };
 
+const MINIMUM_ENTRIES_SHOWN: usize = 100;
+const RETENTION_DAYS: i64 = 7;
+
 pub const DEFAULT_LEVEL: LevelFilter = LevelFilter::INFO;
 const FILE_STEM: &str = "latentmail";
 const FILE_SUFFIX: &str = "log";
@@ -98,7 +101,10 @@ pub fn read_entries(directory: &Path, today: NaiveDate, minimum: usize) -> Vec<L
 }
 
 fn file_name(date: NaiveDate) -> String {
-    format!("{FILE_STEM}.{}.{FILE_SUFFIX}", date.format("%Y-%m-%d"))
+    format!(
+        "{FILE_STEM}.{}.{FILE_SUFFIX}",
+        date.format(crate::date_formats::ISO_DATE)
+    )
 }
 
 fn read_file_entries(directory: &Path, date: NaiveDate) -> Vec<LogEntry> {
@@ -114,11 +120,15 @@ pub fn read_log_entries<R: Runtime>(app: AppHandle<R>) -> Result<Vec<LogEntry>, 
         .path()
         .app_log_dir()
         .map_err(|error| error.to_string())?;
-    Ok(read_entries(&directory, Utc::now().date_naive(), 100))
+    Ok(read_entries(
+        &directory,
+        Utc::now().date_naive(),
+        MINIMUM_ENTRIES_SHOWN,
+    ))
 }
 
 pub fn cleanup(directory: impl AsRef<Path>, today: NaiveDate) -> std::io::Result<()> {
-    let oldest_kept = today - Duration::days(7);
+    let oldest_kept = today - Duration::days(RETENTION_DAYS);
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         let Some(date) = path
@@ -130,7 +140,7 @@ pub fn cleanup(directory: impl AsRef<Path>, today: NaiveDate) -> std::io::Result
                     .strip_suffix(FILE_SUFFIX)?
                     .strip_suffix('.')
             })
-            .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+            .and_then(|date| NaiveDate::parse_from_str(date, crate::date_formats::ISO_DATE).ok())
         else {
             continue;
         };

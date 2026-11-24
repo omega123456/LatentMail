@@ -1,8 +1,10 @@
 export type Participant = { name: string; address: string };
 
+const MAX_LISTED_PARTICIPANTS = 2;
+
 export function formatParticipants(participants: Participant[]) {
   const names = participants.map(({ name, address }) => name || address);
-  if (names.length <= 2) return names.join(', ');
+  if (names.length <= MAX_LISTED_PARTICIPANTS) return names.join(', ');
   return `${names[0]} and ${names.length - 1} others`;
 }
 

@@ -12,6 +12,9 @@ import { useSearchStore } from '@/stores/search';
 import { ipc } from '@/tests/ipc-mock';
 import { captureConsole } from '@/tests/console';
 
+const LABEL_CHANGE_COUNT = 2;
+const SELECTED_THREAD_COUNT = 2;
+
 function renderWithClient({ bridged }: { bridged: boolean } = { bridged: false }) {
   const client = new QueryClient();
   return render(
@@ -35,7 +38,7 @@ function conversationFor(htmlPresence: 'neverFetched' | 'present' | 'tooLarge') 
         sentAt: getTime(parseISO('2026-08-10T09:00:00Z')),
         snippet: 'Preview',
         htmlBody: null,
-        htmlPresence,
+        htmlPresence: htmlPresence,
         truncated: false,
         plainBody: null,
         hasAttachments: false,
@@ -292,7 +295,7 @@ describe('ReadingPaneContainer', () => {
     ]);
     ipc.override('list_threads', {
       items: ['thread-one', 'thread-two'].map((id) => ({
-        id,
+        id: id,
         subject: id,
         sender: { display: 'Anna', address: 'anna@example.com' },
         sentRecipient: null,
@@ -362,8 +365,8 @@ describe('ReadingPaneContainer', () => {
     });
 
     let moveArgs: unknown;
-    ipc.override('move_threads', (args) => {
-      moveArgs = args;
+    ipc.override('move_threads', (request) => {
+      moveArgs = request;
       return [];
     });
 
@@ -395,16 +398,16 @@ describe('ReadingPaneContainer', () => {
     const labelChanges: unknown[] = [];
     const moveChanges: unknown[] = [];
     const deleteChanges: unknown[] = [];
-    ipc.override('mutate_threads', (args) => {
-      labelChanges.push(args);
+    ipc.override('mutate_threads', (request) => {
+      labelChanges.push(request);
       return [];
     });
-    ipc.override('move_threads', (args) => {
-      moveChanges.push(args);
+    ipc.override('move_threads', (request) => {
+      moveChanges.push(request);
       return [];
     });
-    ipc.override('delete_threads', (args) => {
-      deleteChanges.push(args);
+    ipc.override('delete_threads', (request) => {
+      deleteChanges.push(request);
       return [];
     });
     renderWithClient();
@@ -413,7 +416,7 @@ describe('ReadingPaneContainer', () => {
     await user.click(ribbon.getByRole('button', { name: 'Star' }));
     await user.click(ribbon.getByRole('button', { name: 'Mark as spam' }));
     await user.click(ribbon.getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(labelChanges).toHaveLength(2));
+    await waitFor(() => expect(labelChanges).toHaveLength(LABEL_CHANGE_COUNT));
     await waitFor(() => expect(moveChanges).toHaveLength(1));
     await waitFor(() => expect(deleteChanges).toHaveLength(1));
     expect(labelChanges).toEqual(
@@ -466,13 +469,13 @@ describe('ReadingPaneContainer', () => {
     });
     const moveMessageChanges: unknown[] = [];
     const deleteMessageChanges: unknown[] = [];
-    ipc.override('move_messages', (args) => {
-      moveMessageChanges.push(args);
+    ipc.override('move_messages', (request) => {
+      moveMessageChanges.push(request);
       ipc.emit('mail://changed', { accountId: 'account-1' });
       return undefined;
     });
-    ipc.override('delete_messages', (args) => {
-      deleteMessageChanges.push(args);
+    ipc.override('delete_messages', (request) => {
+      deleteMessageChanges.push(request);
       ipc.emit('mail://changed', { accountId: 'account-1' });
       return undefined;
     });
@@ -504,7 +507,7 @@ describe('ReadingPaneContainer', () => {
     const threadChanges: unknown[] = [];
     ipc.override('list_threads', {
       items: ['thread-a', 'thread-b'].map((id, index) => ({
-        id,
+        id: id,
         subject: `Subject ${id}`,
         sender: { display: `Sender ${id}`, address: `${id}@example.com` },
         sentRecipient: null,
@@ -518,8 +521,8 @@ describe('ReadingPaneContainer', () => {
       })),
       nextCursor: null,
     });
-    ipc.override('mutate_threads', (args) => {
-      threadChanges.push(args);
+    ipc.override('mutate_threads', (request) => {
+      threadChanges.push(request);
       return [];
     });
 
@@ -531,7 +534,7 @@ describe('ReadingPaneContainer', () => {
     expect(threadChanges).toEqual([
       expect.objectContaining({ threadIds: ['thread-a', 'thread-b'], add: ['STARRED'] }),
     ]);
-    expect(useMultiSelectStore.getState().selectedIds.size).toBe(2);
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(SELECTED_THREAD_COUNT);
     expect(
       within(await screen.findByTestId('bulk-selection-panel')).getByText(
         '2 conversations selected',

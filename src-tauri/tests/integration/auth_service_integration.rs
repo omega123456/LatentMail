@@ -104,7 +104,7 @@ async fn mark_needs_reauthentication_emits_account_state_and_rejects_unknown_acc
     let received_for_listener = Arc::clone(&received);
     {
         use tauri::Listener;
-        handle.listen("account://state", move |event| {
+        handle.listen(latentmail_lib::events::ACCOUNT_STATE, move |event| {
             *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
         });
     }
@@ -458,10 +458,10 @@ async fn list_accounts_begin_sign_in_and_begin_reauthentication_commands() {
 #[tokio::test]
 async fn receive_code_validates_state_and_extracts_the_code_from_a_raw_http_callback() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let address = listener.local_addr().unwrap();
 
     let writer = tokio::spawn(async move {
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
         stream
             .write_all(b"GET /?code=auth-code&state=expected HTTP/1.1\r\n\r\n")
             .await
@@ -481,10 +481,10 @@ async fn receive_code_validates_state_and_extracts_the_code_from_a_raw_http_call
 #[tokio::test]
 async fn receive_code_rejects_a_request_without_a_target() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let address = listener.local_addr().unwrap();
 
     let writer = tokio::spawn(async move {
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
         stream.write_all(b"GET\r\n\r\n").await.unwrap();
     });
 
@@ -497,10 +497,10 @@ async fn receive_code_rejects_a_request_without_a_target() {
 #[tokio::test]
 async fn receive_code_rejects_a_mismatched_state_and_reports_it_to_the_browser() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let address = listener.local_addr().unwrap();
 
     let writer = tokio::spawn(async move {
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
         stream
             .write_all(b"GET /?code=auth-code&state=wrong HTTP/1.1\r\n\r\n")
             .await

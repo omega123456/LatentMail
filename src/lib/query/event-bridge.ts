@@ -10,6 +10,10 @@ import { useComposeStore } from '@/stores/compose';
 import { appLog } from '@/lib/app-log';
 import { handleOsIntent } from '@/lib/os/intent';
 
+export const QUEUE_SNAPSHOT_DEBOUNCE_MS = 250;
+export const MAILBOX_INVALIDATION_DEBOUNCE_MS = 250;
+export const TRAVERSAL_INVALIDATION_DEBOUNCE_MS = 1000;
+
 export function EventBridge() {
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -26,27 +30,27 @@ export function EventBridge() {
       queueSnapshotTimer = window.setTimeout(() => {
         void queryClient.invalidateQueries({ queryKey: queryKeys.queueOperations });
         queueSnapshotTimer = undefined;
-      }, 250);
+      }, QUEUE_SNAPSHOT_DEBOUNCE_MS);
     };
     const scheduleMailboxInvalidation = (accountId: string) => {
       mailboxInvalidationAccounts.add(accountId);
       if (mailboxInvalidationTimer !== undefined) return;
       mailboxInvalidationTimer = window.setTimeout(() => {
-        mailboxInvalidationAccounts.forEach((accountId) => {
+        mailboxInvalidationAccounts.forEach((pendingAccountId) => {
           void queryClient.invalidateQueries({
-            queryKey: queryKeys.threadsForAccount(accountId),
+            queryKey: queryKeys.threadsForAccount(pendingAccountId),
           });
           void queryClient.invalidateQueries({
-            queryKey: queryKeys.searchForAccount(accountId),
+            queryKey: queryKeys.searchForAccount(pendingAccountId),
           });
           void queryClient.invalidateQueries({
-            queryKey: queryKeys.searchTotalsForAccount(accountId),
+            queryKey: queryKeys.searchTotalsForAccount(pendingAccountId),
           });
-          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(accountId) });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.labels(pendingAccountId) });
         });
         mailboxInvalidationAccounts.clear();
         mailboxInvalidationTimer = undefined;
-      }, 250);
+      }, MAILBOX_INVALIDATION_DEBOUNCE_MS);
     };
     const subscribe = <E extends keyof IpcEventMap>(
       event: E,
@@ -130,7 +134,7 @@ export function EventBridge() {
         });
         traversalAccounts.clear();
         traversalTimer = undefined;
-      }, 1000);
+      }, TRAVERSAL_INVALIDATION_DEBOUNCE_MS);
     });
 
     subscribe('sync://complete', (event) => {

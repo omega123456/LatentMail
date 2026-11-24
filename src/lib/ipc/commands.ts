@@ -4,10 +4,10 @@ import type { IpcCommandMap } from '@/lib/types/ipc';
 
 export async function invoke<C extends keyof IpcCommandMap>(
   command: C,
-  args: IpcCommandMap[C]['args'],
+  request: IpcCommandMap[C]['args'],
 ): Promise<IpcCommandMap[C]['result']> {
   try {
-    return await dispatchInvoke<IpcCommandMap[C]['result']>(command, args);
+    return await dispatchInvoke<IpcCommandMap[C]['result']>(command, request);
   } catch (cause) {
     if (command !== 'write_frontend_log') {
       appLog.error(

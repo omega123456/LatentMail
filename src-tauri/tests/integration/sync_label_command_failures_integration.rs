@@ -76,8 +76,8 @@ async fn harness(account_id: &str) -> Harness {
     app.manage(engine);
     app.manage(storage);
     Harness {
-        app,
-        database,
+        app: app,
+        database: database,
         _directory: directory,
         _server: server,
     }

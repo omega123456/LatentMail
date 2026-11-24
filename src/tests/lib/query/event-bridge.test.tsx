@@ -2,7 +2,12 @@ import { getTime, parseISO, toDate } from 'date-fns';
 import { act, render, waitFor } from '@testing-library/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EventBridge } from '@/lib/query/event-bridge';
+import {
+  EventBridge,
+  MAILBOX_INVALIDATION_DEBOUNCE_MS,
+  QUEUE_SNAPSHOT_DEBOUNCE_MS,
+  TRAVERSAL_INVALIDATION_DEBOUNCE_MS,
+} from '@/lib/query/event-bridge';
 import { useThreadsQuery } from '@/lib/query/hooks';
 import { queryKeys } from '@/lib/query/keys';
 import { QueryProvider } from '@/providers/QueryProvider';
@@ -15,6 +20,28 @@ import { ipc } from '@/tests/ipc-mock';
 import { captureConsole } from '@/tests/console';
 
 const RUST_COMPLETED_AT = getTime(parseISO('2026-08-11T10:00:00Z'));
+const REFETCHES_AFTER_NEW_MAIL = 2;
+const TRAVERSAL_EVENT_BURST = 100;
+const LAST_TRAVERSAL_COUNT = TRAVERSAL_EVENT_BURST - 1;
+const INVALIDATIONS_PER_TRAVERSAL_FLUSH = 2;
+const RETAINED_EXTRA_PAGES = 4;
+const RETAINED_PAGE_FETCHES = RETAINED_EXTRA_PAGES + 1;
+const QUEUE_ITEM_BURST = 20;
+
+type QueryClientHandle = ReturnType<typeof useQueryClient>;
+
+function captureQueryClient() {
+  let captured: QueryClientHandle | undefined;
+  return {
+    receive: (readyClient: QueryClientHandle) => {
+      captured = readyClient;
+    },
+    client: (): QueryClientHandle => {
+      if (!captured) throw new Error('query client was not captured');
+      return captured;
+    },
+  };
+}
 
 function SpyClient({ onReady }: { onReady: (client: ReturnType<typeof useQueryClient>) => void }) {
   onReady(useQueryClient());
@@ -73,17 +100,17 @@ describe('EventBridge', () => {
   });
 
   it('updates one index snapshot and removes only a deleted account snapshot', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('ai://index', expect.any(Function)),
     );
-    client!.setQueryData(queryKeys.aiIndexStatuses, [
+    clientCapture.client().setQueryData(queryKeys.aiIndexStatuses, [
       {
         accountId: 'account-1',
         state: 'building',
@@ -120,7 +147,7 @@ describe('EventBridge', () => {
         error: null,
       }),
     );
-    expect(client!.getQueryData(queryKeys.aiIndexStatuses)).toEqual([
+    expect(clientCapture.client().getQueryData(queryKeys.aiIndexStatuses)).toEqual([
       {
         accountId: 'account-1',
         state: 'complete',
@@ -145,7 +172,7 @@ describe('EventBridge', () => {
       },
     ]);
     act(() => ipc.emit('ai://config', { accountId: 'account-1', removed: true }));
-    expect(client!.getQueryData(queryKeys.aiIndexStatuses)).toEqual([
+    expect(clientCapture.client().getQueryData(queryKeys.aiIndexStatuses)).toEqual([
       {
         accountId: 'account-2',
         state: 'building',
@@ -158,7 +185,7 @@ describe('EventBridge', () => {
         error: null,
       },
     ]);
-    client!.setQueryData(queryKeys.aiIndexStatuses, []);
+    clientCapture.client().setQueryData(queryKeys.aiIndexStatuses, []);
     act(() =>
       ipc.emit('ai://index', {
         accountId: 'account-3',
@@ -172,7 +199,7 @@ describe('EventBridge', () => {
         error: null,
       }),
     );
-    expect(client!.getQueryData(queryKeys.aiIndexStatuses)).toEqual([
+    expect(clientCapture.client().getQueryData(queryKeys.aiIndexStatuses)).toEqual([
       {
         accountId: 'account-3',
         indexed: 1,
@@ -212,17 +239,17 @@ describe('EventBridge', () => {
   });
 
   it('updates lastSynced on an unchanged tick and invalidates only sync status', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('sync://complete', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() =>
       ipc.emit('sync://complete', {
         accountId: 'account-1',
@@ -241,17 +268,17 @@ describe('EventBridge', () => {
   });
 
   it('coalesces completion and new-mail invalidations for one account', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('sync://complete', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     vi.useFakeTimers();
     act(() => {
       ipc.emit('sync://complete', {
@@ -262,7 +289,7 @@ describe('EventBridge', () => {
         completedAt: RUST_COMPLETED_AT,
       });
       ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-1'], arrivals: [] });
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(MAILBOX_INVALIDATION_DEBOUNCE_MS);
     });
     for (const queryKey of [
       queryKeys.threadsForAccount('account-1'),
@@ -281,17 +308,17 @@ describe('EventBridge', () => {
   });
 
   it('invalidates the accounts query on account state changes, so the reauth banner appears live', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('account://state', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() =>
       ipc.emit('account://state', {
         id: 'account-1',
@@ -305,33 +332,33 @@ describe('EventBridge', () => {
   });
 
   it('invalidates the accounts query when Rust announces a removed account', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('account://removed', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() => ipc.emit('account://removed', { accountId: 'account-1' }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.accounts });
   });
 
   it('re-reads every mail view of the account at once when Rust announces a local mail change', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('mail://changed', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() => ipc.emit('mail://changed', { accountId: 'account-1' }));
     expect(invalidate.mock.calls.map(([filters]) => filters)).toEqual([
       { queryKey: queryKeys.threadsForAccount('account-1') },
@@ -343,17 +370,17 @@ describe('EventBridge', () => {
   });
 
   it('invalidates only the matching message-body family after a body fetch', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('message://body-fetched', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() =>
       ipc.emit('message://body-fetched', { accountId: 'account-1', messageId: 'message-1' }),
     );
@@ -363,17 +390,17 @@ describe('EventBridge', () => {
   });
 
   it('invalidates exactly the matching sender-avatar query on resolution, and only that one', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('avatar://resolved', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() =>
       ipc.emit('avatar://resolved', { pipeline: 'sender', key: 'example.com', resolved: true }),
     );
@@ -383,17 +410,17 @@ describe('EventBridge', () => {
   });
 
   it('invalidates exactly the matching account-avatar query on resolution', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('avatar://resolved', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() =>
       ipc.emit('avatar://resolved', { pipeline: 'account', key: 'account-1', resolved: false }),
     );
@@ -403,21 +430,21 @@ describe('EventBridge', () => {
   });
 
   it('invalidates mailbox data for new mail without a completion event', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() =>
       expect(ipc.tauriListen).toHaveBeenCalledWith('mail://new', expect.any(Function)),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     vi.useFakeTimers();
     act(() => {
       ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-1'], arrivals: [] });
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(MAILBOX_INVALIDATION_DEBOUNCE_MS);
     });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.threadsForAccount('account-1'),
@@ -438,7 +465,7 @@ describe('EventBridge', () => {
     });
     render(
       <QueryProvider>
-        <ThreadQuery onReady={(value) => (query = value)} />
+        <ThreadQuery onReady={(readyQuery) => (query = readyQuery)} />
         <EventBridge />
       </QueryProvider>,
     );
@@ -447,7 +474,7 @@ describe('EventBridge', () => {
     act(() => {
       ipc.emit('mail://new', { accountId: 'account-1', threadIds: ['thread-new'], arrivals: [] });
     });
-    await waitFor(() => expect(calls).toBe(2));
+    await waitFor(() => expect(calls).toBe(REFETCHES_AFTER_NEW_MAIL));
   });
 
   it('handles an OS folder intent in the event bridge', async () => {
@@ -465,10 +492,10 @@ describe('EventBridge', () => {
   });
 
   it('coalesces a large traversal into one bounded invalidation burst', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
@@ -476,9 +503,9 @@ describe('EventBridge', () => {
       expect(ipc.tauriListen).toHaveBeenCalledWith('sync://traversal', expect.any(Function)),
     );
     vi.useFakeTimers();
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() => {
-      for (let count = 0; count < 100; count += 1)
+      for (let count = 0; count < TRAVERSAL_EVENT_BURST; count += 1)
         ipc.emit('sync://traversal', {
           accountId: 'account-1',
           kind: 'backfill',
@@ -489,18 +516,18 @@ describe('EventBridge', () => {
           lastAdvancedAt: 1,
           isResumed: false,
         });
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(TRAVERSAL_INVALIDATION_DEBOUNCE_MS);
     });
-    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenCalledTimes(INVALIDATIONS_PER_TRAVERSAL_FLUSH);
     expect(invalidate).not.toHaveBeenCalledWith({
       queryKey: queryKeys.searchForAccount('account-1'),
     });
-    expect(client!.getQueryData(queryKeys.traversalStatus('account-1'))).toEqual({
+    expect(clientCapture.client().getQueryData(queryKeys.traversalStatus('account-1'))).toEqual({
       accountId: 'account-1',
       state: 'backfilling',
       kind: 'backfill',
-      discoveredCount: 99,
-      persistedCount: 99,
+      discoveredCount: LAST_TRAVERSAL_COUNT,
+      persistedCount: LAST_TRAVERSAL_COUNT,
       lastAdvancedAt: 1,
       isResumed: false,
     });
@@ -515,22 +542,23 @@ describe('EventBridge', () => {
       const page = cursor?.latestAt ?? 0;
       return {
         items: [],
-        nextCursor: page < 4 ? { latestAt: page + 1, id: String(page + 1) } : null,
+        nextCursor:
+          page < RETAINED_EXTRA_PAGES ? { latestAt: page + 1, id: String(page + 1) } : null,
         previousCursor: page > 0 ? { latestAt: page - 1, id: String(page - 1) } : null,
       };
     });
     render(
       <QueryProvider>
-        <ThreadQuery onReady={(value) => (query = value)} />
+        <ThreadQuery onReady={(readyQuery) => (query = readyQuery)} />
         <EventBridge />
       </QueryProvider>,
     );
     await waitFor(() => expect(query?.isSuccess).toBe(true));
-    for (let page = 0; page < 4; page += 1)
+    for (let page = 0; page < RETAINED_EXTRA_PAGES; page += 1)
       await act(async () => {
         await query?.fetchNextPage();
       });
-    expect(calls).toBe(5);
+    expect(calls).toBe(RETAINED_PAGE_FETCHES);
     vi.useFakeTimers();
     act(() => {
       ipc.emit('sync://traversal', {
@@ -543,17 +571,17 @@ describe('EventBridge', () => {
         lastAdvancedAt: 1,
         isResumed: false,
       });
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(TRAVERSAL_INVALIDATION_DEBOUNCE_MS);
     });
-    expect(calls).toBe(5);
+    expect(calls).toBe(RETAINED_PAGE_FETCHES);
     vi.useRealTimers();
   });
 
   it('refreshes the mailbox of the account named in a finished mutation event payload', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
@@ -561,7 +589,7 @@ describe('EventBridge', () => {
       expect(ipc.tauriListen).toHaveBeenCalledWith('queue://item', expect.any(Function)),
     );
     vi.useFakeTimers();
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() => {
       ipc.emit('queue://item', {
         id: 'mutation:operation-7',
@@ -569,7 +597,7 @@ describe('EventBridge', () => {
         accountId: 'account-2',
         lane: 'interactive',
       });
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(MAILBOX_INVALIDATION_DEBOUNCE_MS);
     });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.threadsForAccount('account-2'),
@@ -581,10 +609,10 @@ describe('EventBridge', () => {
   });
 
   it('coalesces a burst of queue item and summary events into one queue-snapshot invalidation', async () => {
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
@@ -592,9 +620,9 @@ describe('EventBridge', () => {
       expect(ipc.tauriListen).toHaveBeenCalledWith('queue://item', expect.any(Function)),
     );
     vi.useFakeTimers();
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() => {
-      for (let count = 0; count < 20; count += 1)
+      for (let count = 0; count < QUEUE_ITEM_BURST; count += 1)
         ipc.emit('queue://item', {
           id: `queue:account-1:${count}`,
           status: 'active',
@@ -609,10 +637,11 @@ describe('EventBridge', () => {
         paused: false,
         suspended: false,
       });
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(QUEUE_SNAPSHOT_DEBOUNCE_MS);
     });
     const queueSnapshotCalls = invalidate.mock.calls.filter(
-      ([arg]) => JSON.stringify(arg?.queryKey) === JSON.stringify(queryKeys.queueOperations),
+      ([invalidation]) =>
+        JSON.stringify(invalidation?.queryKey) === JSON.stringify(queryKeys.queueOperations),
     );
     expect(queueSnapshotCalls).toHaveLength(1);
     vi.useRealTimers();
@@ -649,10 +678,10 @@ describe('EventBridge', () => {
 
   it('handles compose delivery events and ignores unrelated queue items through the shared IPC harness', async () => {
     const consoleError = captureConsole('error');
-    let client: ReturnType<typeof useQueryClient> | undefined;
+    const clientCapture = captureQueryClient();
     render(
       <QueryProvider>
-        <SpyClient onReady={(value) => (client = value)} />
+        <SpyClient onReady={clientCapture.receive} />
         <EventBridge />
       </QueryProvider>,
     );
@@ -670,7 +699,7 @@ describe('EventBridge', () => {
         html: '',
       }),
     );
-    const invalidate = vi.spyOn(client!, 'invalidateQueries');
+    const invalidate = vi.spyOn(clientCapture.client(), 'invalidateQueries');
     act(() =>
       ipc.emit('draft://saved', {
         accountId: 'account-1',
@@ -754,7 +783,7 @@ describe('EventBridge', () => {
         lane: 'interactive',
       }),
     );
-    act(() => vi.advanceTimersByTime(250));
+    act(() => vi.advanceTimersByTime(MAILBOX_INVALIDATION_DEBOUNCE_MS));
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: queryKeys.threadsForAccount('account-1'),
     });

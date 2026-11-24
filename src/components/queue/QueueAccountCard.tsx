@@ -1,9 +1,10 @@
 import { Pause, Play } from 'lucide-react';
-import { Avatar } from '@/components/shared/Avatar';
+import { Avatar, AVATAR_SIZE } from '@/components/shared/Avatar';
 import { describeAccountBar } from '@/lib/queue/describe';
 import { laneKey, useSettingsUiStore } from '@/stores/settings-ui';
 import type { Account, AccountQueueSnapshot, Lane } from '@/lib/types/ipc';
 import { QueueLaneRow } from './QueueLaneRow';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function QueueAccountCard({
   account,
@@ -18,8 +19,8 @@ export function QueueAccountCard({
   onCancelOperation: (operationId: string) => Promise<boolean>;
   onRetryOperation: (operationId: string) => void;
 }) {
-  const expandedLanes = useSettingsUiStore((state) => state.expandedLanes);
-  const toggleLaneExpanded = useSettingsUiStore((state) => state.toggleLaneExpanded);
+  const expandedLanes = useSettingsUiStore((settingsUi) => settingsUi.expandedLanes);
+  const toggleLaneExpanded = useSettingsUiStore((settingsUi) => settingsUi.toggleLaneExpanded);
   const bar = describeAccountBar(snapshot);
   const allLanesPaused = snapshot.lanes.every((lane) => lane.state === 'paused');
   const label = account?.displayName ?? snapshot.accountId;
@@ -33,7 +34,7 @@ export function QueueAccountCard({
         className={`flex h-queue-bar-h items-center gap-2.75 pl-3.25 pr-3.5 ${bar.barClass} ${bar.inkClass}`}
       >
         <Avatar
-          size={24}
+          size={AVATAR_SIZE.xs}
           src={account?.avatarUrl ?? null}
           label={label}
           fallbackClassName="text-avatar-sm bg-white/22"
@@ -63,9 +64,9 @@ export function QueueAccountCard({
           className="ml-4.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded-chip opacity-85 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
         >
           {allLanesPaused ? (
-            <Play aria-hidden="true" size={13} />
+            <Play aria-hidden="true" size={ICON_SIZE.xs} />
           ) : (
-            <Pause aria-hidden="true" size={13} />
+            <Pause aria-hidden="true" size={ICON_SIZE.xs} />
           )}
         </button>
       </div>

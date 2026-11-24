@@ -288,7 +288,7 @@ fn truncated_body_caps_at_ten_thousand_chars_and_prefers_plain_text() {
     let long_plain = "a".repeat(12_000);
     let truncated = truncate_body(Some(&long_plain), None).unwrap();
     assert_eq!(truncated.chars().count(), 10_000);
-    assert!(truncated.chars().all(|c| c == 'a'));
+    assert!(truncated.chars().all(|character| character == 'a'));
 
     let with_both = truncate_body(Some("plain wins"), Some("<p>html loses</p>")).unwrap();
     assert_eq!(with_both, "plain wins");

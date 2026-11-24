@@ -67,7 +67,7 @@ fn message(id: &str, sender: &str, body: &str, sent_at: i64) -> Message {
         sender: sender.into(),
         recipients: "me@example.com".into(),
         subject: format!("Subject {id}"),
-        sent_at,
+        sent_at: sent_at,
         snippet: "Snippet".into(),
         html_body: None,
         plain_body: None,
@@ -263,8 +263,8 @@ fn request<'a>(question: &'a str, history: &'a [HistoryMessage]) -> RetrievalReq
         embedding_model: "embedding",
         account_id: "account",
         account_email: "me@example.com",
-        question,
-        history,
+        question: question,
+        history: history,
     }
 }
 

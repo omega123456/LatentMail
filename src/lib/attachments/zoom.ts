@@ -1,7 +1,11 @@
+import { fractionToPercent } from '@/lib/format/percent';
+
 export const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4] as const;
 export const MIN_ZOOM = ZOOM_STEPS[0];
 export const MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1];
 export const PREVIEW_PADDING = 16;
+
+const EDGES_PER_AXIS = 2;
 
 const STEP_TOLERANCE = 1e-6;
 const FIT_PRECISION = 1000;
@@ -50,11 +54,23 @@ export function anchoredScroll({
   from: number;
   to: number;
 }): number {
-  const centringOffset = (zoom: number) => Math.max(0, (viewport - base * zoom) / 2);
-  const point = (scroll + anchor - centringOffset(from)) / from;
-  return Math.max(0, point * to + centringOffset(to) - anchor);
+  const offsetAt = (zoom: number) => centringOffset(viewport, base * zoom);
+  const point = (scroll + anchor - offsetAt(from)) / from;
+  return Math.max(0, point * to + offsetAt(to) - anchor);
+}
+
+export function centringOffset(viewport: number, content: number): number {
+  return Math.max(0, (viewport - content) / EDGES_PER_AXIS);
+}
+
+export function paddedLength(length: number): number {
+  return length + PREVIEW_PADDING * EDGES_PER_AXIS;
+}
+
+export function viewportCentre(element: HTMLElement): { x: number; y: number } {
+  return { x: element.clientWidth / EDGES_PER_AXIS, y: element.clientHeight / EDGES_PER_AXIS };
 }
 
 export function formatZoom(zoom: number): string {
-  return `${Math.round(zoom * 100)}%`;
+  return `${Math.round(fractionToPercent(zoom))}%`;
 }

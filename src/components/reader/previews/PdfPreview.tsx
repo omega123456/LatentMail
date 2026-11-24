@@ -3,14 +3,15 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import pdfWorkerSrc from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import type { PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { useZoom } from '@/lib/attachments/useZoom';
-import { PREVIEW_PADDING, type Size } from '@/lib/attachments/zoom';
+import { centringOffset, paddedLength, PREVIEW_PADDING, type Size } from '@/lib/attachments/zoom';
 import { ZoomToolbar } from './ZoomToolbar';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 const PDF_FIT_CAP = 1.25;
 const RENDER_SETTLE_MS = 200;
-const MAX_CANVAS_PIXELS = 2 ** 25;
+export const MAX_CANVAS_PIXELS = 33_554_432;
+const PRELOAD_VIEWPORTS_AHEAD = 2;
 
 type PageLayout = { tops: number[]; content: Size };
 
@@ -22,7 +23,7 @@ type DocumentLoad = {
 
 function startDocumentLoad(bytes: ArrayBuffer): DocumentLoad {
   return {
-    bytes,
+    bytes: bytes,
     task: pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }),
     released: false,
   };
@@ -49,7 +50,7 @@ function layoutPages(sizes: Size[]): PageLayout {
     cursor += size.height + PREVIEW_PADDING;
   }
   const widest = Math.max(...sizes.map((size) => size.width));
-  return { tops, content: { width: widest + PREVIEW_PADDING * 2, height: cursor } };
+  return { tops: tops, content: { width: paddedLength(widest), height: cursor } };
 }
 
 function pageVisibility(
@@ -59,7 +60,7 @@ function pageVisibility(
   scrollTop: number,
   viewportHeight: number,
 ) {
-  const offset = Math.max(0, (viewportHeight - layout.content.height * zoom) / 2);
+  const offset = centringOffset(viewportHeight, layout.content.height * zoom);
   const top = (scrollTop - offset) / zoom;
   const height = viewportHeight / zoom;
   let current = 0;
@@ -72,7 +73,7 @@ function pageVisibility(
       mostVisible = visible;
       current = index;
     }
-    return end > top - height && start < top + height * 2;
+    return end > top - height && start < top + height * PRELOAD_VIEWPORTS_AHEAD;
   });
   return { current, near };
 }
@@ -103,7 +104,7 @@ function PdfCanvas({
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
     let cancelled = false;
-    const task = page.render({ canvasContext: context, viewport });
+    const task = page.render({ canvasContext: context, viewport: viewport });
     task.promise.catch(() => {
       if (!cancelled) onError();
     });
@@ -179,7 +180,7 @@ function PdfTextLayer({ page, zoom }: { page: PDFPageProxy; zoom: number }) {
     if (!container) return;
     const layer = new pdfjsLib.TextLayer({
       textContentSource: page.streamTextContent(),
-      container,
+      container: container,
       viewport: page.getViewport({ scale: pdfjsLib.PixelsPerInch.PDF_TO_CSS_UNITS }),
     });
     let active = true;
@@ -223,7 +224,7 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
     loadingRef.current = load;
     load.task.promise
       .then((doc) =>
-        Promise.all(Array.from({ length: doc.numPages }, (_, index) => doc.getPage(index + 1))),
+        Promise.all(Array.from({ length: doc.numPages }, (_page, index) => doc.getPage(index + 1))),
       )
       .then((pages) => {
         if (cancelled) return;
@@ -246,7 +247,7 @@ export function PdfPreview({ bytes }: { bytes: ArrayBuffer }) {
 
   const layout = useMemo(() => (pdf ? layoutPages(pdf.sizes) : null), [pdf]);
   const { zoom, mode, viewport, ready, zoomIn, zoomOut, selectPreset } = useZoom({
-    scrollRef,
+    scrollRef: scrollRef,
     content: layout?.content ?? null,
     defaultMode: 'fit-width',
     fitCap: PDF_FIT_CAP,

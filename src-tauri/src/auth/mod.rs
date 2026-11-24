@@ -32,7 +32,7 @@ use crate::storage::{Account, AccountRepository, Storage};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+const PROFILE_PATH: &str = "/users/me/profile";
 #[cfg(not(feature = "test-utils"))]
 const USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 
@@ -69,6 +69,8 @@ const KEYCHAIN_SERVICE: &str = "com.latentmail.desktop.dev.refresh-token";
 const ACCESS_TOKEN_EXPIRY_SKEW: ChronoDuration = ChronoDuration::minutes(5);
 const DEFAULT_ACCESS_TOKEN_LIFETIME: ChronoDuration = ChronoDuration::hours(1);
 const REAUTHENTICATION_STRIKES: u8 = 3;
+const LOOPBACK_HOST: &str = "127.0.0.1";
+const CALLBACK_REQUEST_BUFFER_BYTES: usize = 8192;
 
 type AccessTokenCache = HashMap<String, (String, DateTime<Utc>)>;
 
@@ -113,7 +115,7 @@ pub struct UserInfo {
 impl AuthService {
     pub fn new(storage: Storage) -> Self {
         Self {
-            storage,
+            storage: storage,
             refresh_failures: Arc::new(Mutex::new(HashMap::new())),
             access_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -143,9 +145,9 @@ impl AuthService {
     ) -> Result<(), String> {
         async {
             let client_id = client_id()?;
-            let listener = string_try!(tokio::net::TcpListener::bind("127.0.0.1:0").await);
+            let listener = string_try!(tokio::net::TcpListener::bind(format!("{LOOPBACK_HOST}:0")).await);
             let port = string_try!(listener.local_addr()).port();
-            let redirect = format!("http://127.0.0.1:{port}");
+            let redirect = format!("http://{LOOPBACK_HOST}:{port}");
             tracing::info!(target: "auth", "sign-in listening on {redirect}");
             let authorization = authorization(&client_id, &redirect)?;
             open_consent(&app, &authorization.url)?;
@@ -179,7 +181,7 @@ impl AuthService {
                 account
             };
 
-            string_try!(app.emit("account://state", account));
+            string_try!(app.emit(crate::events::ACCOUNT_STATE, account));
             Ok(())
         }
         .await
@@ -218,9 +220,9 @@ impl AuthService {
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| local_part(&email_for_db));
                 let account = Account {
-                    id,
+                    id: id,
                     email: email_for_db,
-                    display_name,
+                    display_name: display_name,
                     avatar_url: None,
                     history_id: existing.as_ref().and_then(|value| value.history_id),
                     needs_reauthentication: false,
@@ -283,7 +285,7 @@ impl AuthService {
             .await
             .map_err(|error| error.to_string())?;
         let account = updated.ok_or_else(|| "Unknown account".to_owned())?;
-        match app.emit("account://state", account_dto(account)) {
+        match app.emit(crate::events::ACCOUNT_STATE, account_dto(account)) {
             Ok(()) => Ok(()),
             Err(error) => Err(error.to_string()),
         }
@@ -472,7 +474,7 @@ pub fn authorization(client_id: &str, redirect: &str) -> Result<Authorization, S
     Ok(Authorization {
         url: url.to_string(),
         state: state.secret().to_owned(),
-        verifier,
+        verifier: verifier,
     })
 }
 
@@ -481,7 +483,7 @@ pub async fn receive_code(
     expected_state: &str,
 ) -> Result<AuthorizationCode, String> {
     let (mut stream, _) = string_try!(listener.accept().await);
-    let mut request = vec![0; 8192];
+    let mut request = vec![0; CALLBACK_REQUEST_BUFFER_BYTES];
     let bytes = string_try!(stream.read(&mut request).await);
     let target = string_try!(std::str::from_utf8(&request[..bytes]))
         .split_whitespace()
@@ -509,7 +511,9 @@ pub async fn receive_code(
 }
 
 pub fn parse_callback(target: &str, expected_state: &str) -> Result<AuthorizationCode, String> {
-    let url = string_try!(tauri::Url::parse(&format!("http://127.0.0.1{target}")));
+    let url = string_try!(tauri::Url::parse(&format!(
+        "http://{LOOPBACK_HOST}{target}"
+    )));
     let mut values: HashMap<_, _> = url.query_pairs().into_owned().collect();
     if values
         .get("state")
@@ -547,21 +551,24 @@ pub async fn exchange_code(
         .set_pkce_verifier(verifier)
         .request_async(&ReqwestClient::from(crate::http_client()))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 
 pub async fn profile(access_token: &str) -> Result<GmailProfile, String> {
     crate::http_client()
-        .get(oauth_endpoint("LATENTMAIL_GOOGLE_PROFILE_URL", PROFILE_URL))
+        .get(oauth_endpoint(
+            "LATENTMAIL_GOOGLE_PROFILE_URL",
+            &format!("{}{PROFILE_PATH}", crate::gmail::GMAIL_API_BASE_URL),
+        ))
         .bearer_auth(access_token)
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .json()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(not(feature = "test-utils"))]
@@ -574,12 +581,12 @@ pub async fn userinfo(access_token: &str) -> Result<UserInfo, String> {
         .bearer_auth(access_token)
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .json()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "test-utils")]
@@ -621,7 +628,7 @@ where
 fn open_consent<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<(), String> {
     app.opener()
         .open_url(url, None::<&str>)
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 #[cfg(feature = "test-utils")]
 fn open_consent<R: Runtime>(_app: &AppHandle<R>, _url: &str) -> Result<(), String> {
@@ -668,21 +675,21 @@ pub fn has_refresh_token(account_id: &str) -> bool {
 #[cfg(not(feature = "test-utils"))]
 pub fn save_refresh_token(account_id: &str, value: &str) -> Result<(), String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .set_password(value)
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 #[cfg(not(feature = "test-utils"))]
 pub fn load_refresh_token(account_id: &str) -> Result<String, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .get_password()
-        .map_err(|e| e.to_string())
+        .map_err(|error| error.to_string())
 }
 #[cfg(not(feature = "test-utils"))]
 pub fn delete_refresh_token(account_id: &str) -> Result<(), String> {
     match keyring::Entry::new(KEYCHAIN_SERVICE, account_id)
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .delete_credential()
     {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -737,13 +744,13 @@ pub async fn remove_account<R: Runtime>(
     service.remove_account(queue.inner(), &account_id).await?;
     tauri::Emitter::emit(
         &app,
-        "account://removed",
+        crate::events::ACCOUNT_REMOVED,
         serde_json::json!({"accountId":account_id}),
     )
     .map_err(|error| error.to_string())?;
     tauri::Emitter::emit(
         &app,
-        "ai://config",
+        crate::events::AI_CONFIG,
         serde_json::json!({"accountId":account_id,"removed":true}),
     )
     .map_err(|error| error.to_string())

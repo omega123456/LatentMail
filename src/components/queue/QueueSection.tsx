@@ -15,11 +15,12 @@ import type { Lane } from '@/lib/types/ipc';
 import { SettingsSection } from '@/components/settings/SettingsSection';
 import { settingsButton, settingsQuietButton } from '@/components/settings/styles';
 import { QueueAccountCard } from './QueueAccountCard';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function QueueSection() {
   const { data: accounts } = useAccountsQuery();
   const { data: snapshots, isLoading, isError } = useQueueOperationsQuery();
-  const globalPaused = useSyncStore((state) => state.queue.paused);
+  const globalPaused = useSyncStore((sync) => sync.queue.paused);
 
   const cancelOperation = useCancelQueueOperationMutation();
   const retryOperation = useRetryQueueOperationMutation();
@@ -36,8 +37,10 @@ export function QueueSection() {
 
   const handleTogglePause = (accountId: string, lane: Lane | undefined, paused: boolean) => {
     setPaused.mutate({
-      scope: lane ? { scope: 'lane', accountId, lane } : { scope: 'account', accountId },
-      paused,
+      scope: lane
+        ? { scope: 'lane', accountId: accountId, lane: lane }
+        : { scope: 'account', accountId: accountId },
+      paused: paused,
     });
   };
 
@@ -53,7 +56,7 @@ export function QueueSection() {
               onClick={() => retryFailed.mutate(undefined)}
               className={settingsQuietButton}
             >
-              <RotateCcw aria-hidden="true" size={15} />
+              <RotateCcw aria-hidden="true" size={ICON_SIZE.md} />
               Retry all failed
             </button>
           )}
@@ -62,7 +65,7 @@ export function QueueSection() {
             onClick={() => clearHistory.mutate(undefined)}
             className={settingsQuietButton}
           >
-            <History aria-hidden="true" size={15} />
+            <History aria-hidden="true" size={ICON_SIZE.md} />
             Clear history
           </button>
           <button
@@ -72,9 +75,9 @@ export function QueueSection() {
             className={settingsButton}
           >
             {globalPaused ? (
-              <Play aria-hidden="true" size={15} />
+              <Play aria-hidden="true" size={ICON_SIZE.md} />
             ) : (
-              <Pause aria-hidden="true" size={15} />
+              <Pause aria-hidden="true" size={ICON_SIZE.md} />
             )}
             {globalPaused ? 'Resume all' : 'Pause all'}
           </button>

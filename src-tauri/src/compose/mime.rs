@@ -51,7 +51,7 @@ pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
         outgoing.html,
         outgoing.quote_html.as_deref().unwrap_or_default()
     );
-    let plain = html2text::from_read(html.as_bytes(), 80)?;
+    let plain = html2text::from_read(html.as_bytes(), crate::gmail::PLAIN_TEXT_WRAP_COLUMNS)?;
     let alternative = MultiPart::alternative_plain_html(plain, html.clone());
     let related = outgoing.inline.iter().fold(
         MultiPart::related().multipart(alternative),
@@ -70,7 +70,10 @@ pub fn assemble(outgoing: &OutgoingMessage) -> Result<Vec<u8>, MimeError> {
         },
     );
     let body = if outgoing.inline.is_empty() {
-        MultiPart::alternative_plain_html(html2text::from_read(html.as_bytes(), 80)?, html)
+        MultiPart::alternative_plain_html(
+            html2text::from_read(html.as_bytes(), crate::gmail::PLAIN_TEXT_WRAP_COLUMNS)?,
+            html,
+        )
     } else {
         related
     };

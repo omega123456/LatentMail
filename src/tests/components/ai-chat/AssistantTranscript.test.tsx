@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { AssistantTranscript } from '@/components/ai-chat/AssistantTranscript';
 import type { AssistantMessage } from '@/stores/assistant';
 
+const SCROLLED_TO_BOTTOM = 420;
+
 const message = (overrides: Partial<AssistantMessage> = {}): AssistantMessage => ({
   id: 'assistant-1',
   role: 'assistant',
@@ -51,6 +53,6 @@ describe('AssistantTranscript', () => {
         onSourceActivate={vi.fn()}
       />,
     );
-    expect(log.scrollTop).toBe(420);
+    expect(log.scrollTop).toBe(SCROLLED_TO_BOTTOM);
   });
 });

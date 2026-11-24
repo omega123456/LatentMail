@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-pub const DEFAULT_EXCLUDED_LABELS: [&str; 3] = ["TRASH", "SPAM", "DRAFT"];
+use crate::gmail::system_labels::{is_trash_or_spam, SPAM, TRASH};
+
+pub const DEFAULT_EXCLUDED_LABELS: [&str; 3] = [TRASH, SPAM, "DRAFT"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(
@@ -23,11 +25,11 @@ pub struct ScopeFilter {
 impl ScopeFilter {
     pub fn includes_trashed_and_spammed(&self) -> bool {
         match &self.required_label {
-            Some(label) => label == "TRASH" || label == "SPAM",
+            Some(label) => is_trash_or_spam(label),
             None => !self
                 .excluded_labels
                 .iter()
-                .any(|label| label == "TRASH" || label == "SPAM"),
+                .any(|label| is_trash_or_spam(label)),
         }
     }
 }

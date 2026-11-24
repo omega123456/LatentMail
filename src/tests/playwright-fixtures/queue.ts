@@ -24,6 +24,17 @@ const QUEUE_FIXTURE_NOW = parseISO('2026-08-18T12:00:00Z');
 const secondsAgo = (amount: number) => getUnixTime(subSeconds(QUEUE_FIXTURE_NOW, amount));
 const secondsFromNow = (amount: number) => getUnixTime(addSeconds(QUEUE_FIXTURE_NOW, amount));
 
+type OperationAge = { createdSecondsAgo: number; updatedSecondsAgo: number };
+
+function operationTimestamps(age: OperationAge) {
+  return {
+    createdAt: secondsAgo(age.createdSecondsAgo),
+    updatedAt: secondsAgo(age.updatedSecondsAgo),
+  };
+}
+
+const RETRY_IN_SECONDS = 30;
+
 export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operations']['result'] = [
   {
     accountId: 'mail-account',
@@ -49,8 +60,7 @@ export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operat
             error: null,
             retryable: true,
             nextAttemptAt: null,
-            createdAt: secondsAgo(4),
-            updatedAt: secondsAgo(2),
+            ...operationTimestamps({ createdSecondsAgo: 4, updatedSecondsAgo: 2 }),
           },
           {
             id: 'op-queued-1',
@@ -63,8 +73,7 @@ export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operat
             error: null,
             retryable: false,
             nextAttemptAt: null,
-            createdAt: secondsAgo(6),
-            updatedAt: secondsAgo(6),
+            ...operationTimestamps({ createdSecondsAgo: 6, updatedSecondsAgo: 6 }),
           },
         ],
       },
@@ -86,8 +95,7 @@ export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operat
             error: null,
             retryable: false,
             nextAttemptAt: null,
-            createdAt: secondsAgo(10),
-            updatedAt: secondsAgo(10),
+            ...operationTimestamps({ createdSecondsAgo: 10, updatedSecondsAgo: 10 }),
           },
         ],
       },
@@ -125,8 +133,7 @@ export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operat
             error: 'Gmail request failed with status 500',
             retryable: true,
             nextAttemptAt: null,
-            createdAt: secondsAgo(120),
-            updatedAt: secondsAgo(30),
+            ...operationTimestamps({ createdSecondsAgo: 120, updatedSecondsAgo: 30 }),
           },
           {
             id: 'op-retrying-1',
@@ -138,9 +145,8 @@ export const playwrightQueueOperationsSnapshot: IpcCommandMap['read_queue_operat
             attempts: 2,
             error: null,
             retryable: true,
-            nextAttemptAt: secondsFromNow(30),
-            createdAt: secondsAgo(90),
-            updatedAt: secondsAgo(5),
+            nextAttemptAt: secondsFromNow(RETRY_IN_SECONDS),
+            ...operationTimestamps({ createdSecondsAgo: 90, updatedSecondsAgo: 5 }),
           },
         ],
       },

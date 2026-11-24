@@ -1,0 +1,15 @@
+export const DATE_FORMAT = {
+  timeOfDay: 'p',
+  weekday: 'EEEE',
+  monthDay: 'MMM d',
+  monthDayYear: 'MMM d, yyyy',
+  exactDateTime: 'MMM d, yyyy, p',
+  longDateTime: 'PPpp',
+  isoDate: 'yyyy-MM-dd',
+  logTime: 'HH:mm:ss.SSS',
+  logDateTime: 'MMM d · HH:mm:ss.SSS',
+  dayMonthYear: 'd MMM yyyy',
+  longDayMonthYear: 'd MMMM yyyy',
+  monthYear: 'MMMM yyyy',
+  dayOfMonth: 'd',
+} as const;

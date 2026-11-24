@@ -29,7 +29,7 @@ export function mapThreadToRow(thread: MailThread): Conversation {
   const sender = isSent ? (label ? `To: ${label}` : '(No recipient)') : (label ?? '(No sender)');
   return {
     id: thread.id,
-    sender,
+    sender: sender,
     identityLabel: label,
     avatarDomain: domainFor(address),
     subject: thread.subject || '(No subject)',
@@ -41,7 +41,7 @@ export function mapThreadToRow(thread: MailThread): Conversation {
     messageCount: thread.messageCount,
     draft: thread.hasDraft,
     labels: thread.labelIndicators ?? [],
-    systemLabelIds,
+    systemLabelIds: systemLabelIds,
   };
 }
 
@@ -86,7 +86,7 @@ export function computeThreadLabelMembership(
         id: label.id,
         name: label.name,
         color: labelColorId(label),
-        membership,
+        membership: membership,
       };
     });
 }
@@ -130,7 +130,7 @@ export function mapConversation(conversation: IpcConversation): ReaderConversati
       inlineImagesPending: message.inlineImagesPending,
       isDraft: message.labelIds.includes('DRAFT'),
       draftId: message.draftId,
-      attachments: [...message.attachments].sort((a, b) => a.position - b.position),
+      attachments: [...message.attachments].sort((left, right) => left.position - right.position),
     })),
   };
 }

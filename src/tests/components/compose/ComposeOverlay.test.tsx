@@ -6,6 +6,8 @@ import { ComposeOverlay } from '@/components/compose/ComposeOverlay';
 import { type ComposeMode, useComposeStore } from '@/stores/compose';
 import { ipc } from '@/tests/ipc-mock';
 
+const SEND_ATTEMPTS = 2;
+
 function renderOverlay(children: React.ReactNode = null) {
   const client = new QueryClient();
   return render(
@@ -20,7 +22,7 @@ const openSession = (mode: ComposeMode = 'new', extra: Record<string, unknown> =
   act(() => {
     useComposeStore.getState().open({
       id: 'session',
-      mode,
+      mode: mode,
       accountId: 'account-1',
       from: 'me@example.com',
       recipients: { to: [], cc: [], bcc: [] },
@@ -271,7 +273,7 @@ describe('ComposeOverlay', () => {
     await screen.findByText('Couldn’t send.');
     expect(useComposeStore.getState().session).toMatchObject({ draftStatus: 'failed' });
     await user.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(SEND_ATTEMPTS));
 
     expect(useComposeStore.getState().session).not.toBeNull();
     error.mockRestore();

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Check, Minus, Plus } from 'lucide-react';
 import { TextInput } from '@/components/shared/TextInput';
 import { LABEL_COLOR_BY_ID, type LabelColorId } from '@/lib/labels/palette';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type LabelMembership = 'checked' | 'unchecked' | 'indeterminate';
 
@@ -118,7 +119,7 @@ export function LabelsMenu(props: LabelsMenuProps) {
               onClick={onCreateLabel}
               className="inline-flex items-center gap-1 rounded px-2 py-1 text-label-md text-primary hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-primary dark:hover:bg-dark-surface-container cursor-pointer"
             >
-              <Plus aria-hidden="true" size={14} />
+              <Plus aria-hidden="true" size={ICON_SIZE.sm} />
               Create label
             </button>
           )}
@@ -157,8 +158,8 @@ export function LabelsMenu(props: LabelsMenuProps) {
                       : 'border-primary bg-primary text-on-primary dark:border-dark-primary dark:bg-dark-primary dark:text-dark-on-primary'
                   }`}
                 >
-                  {membership === 'checked' && <Check size={12} />}
-                  {membership === 'indeterminate' && <Minus size={12} />}
+                  {membership === 'checked' && <Check size={ICON_SIZE.xxs} />}
+                  {membership === 'indeterminate' && <Minus size={ICON_SIZE.xxs} />}
                 </span>
                 <span
                   aria-hidden="true"

@@ -27,7 +27,7 @@ export const useThemeStore = create<ThemeState>((set) => ({
   hydrate: () => {
     return hydrateSettings().then(({ theme }) => {
       applyTheme(theme);
-      set({ theme, hydrated: true });
+      set({ theme: theme, hydrated: true });
     });
   },
   setTheme: (theme) => {

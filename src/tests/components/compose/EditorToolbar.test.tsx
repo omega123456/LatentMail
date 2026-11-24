@@ -16,7 +16,7 @@ function fakeEditor(active: Set<string>) {
     toggleCodeBlock: () => chain,
     deleteSelection: () => chain,
     insertContent: () => chain,
-    run,
+    run: run,
   };
   return {
     isActive: (name: string) => active.has(name),

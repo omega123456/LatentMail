@@ -38,7 +38,7 @@ pub trait AvatarEmitter: Send + Sync + 'static {
 
 impl<R: Runtime> AvatarEmitter for AppHandle<R> {
     fn emit_resolved(&self, event: AvatarResolvedEvent) {
-        let _ = self.emit("avatar://resolved", event);
+        let _ = self.emit(crate::events::AVATAR_RESOLVED, event);
     }
 }
 
@@ -53,10 +53,10 @@ pub struct AvatarService {
 impl AvatarService {
     pub fn new(cache: AvatarCache, storage: Storage, settings: SettingsService) -> Self {
         Self {
-            cache,
+            cache: cache,
             scheduler: Arc::new(Scheduler::new()),
-            storage,
-            settings,
+            storage: storage,
+            settings: settings,
         }
     }
 
@@ -118,7 +118,7 @@ impl AvatarService {
             app.emit_resolved(AvatarResolvedEvent {
                 pipeline: AvatarPipeline::Sender,
                 key: domain,
-                resolved,
+                resolved: resolved,
             });
         });
     }
@@ -188,7 +188,7 @@ impl AvatarService {
             app.emit_resolved(AvatarResolvedEvent {
                 pipeline: AvatarPipeline::Account,
                 key: account_id,
-                resolved,
+                resolved: resolved,
             });
         });
     }

@@ -12,6 +12,15 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::Mutex, time::Instant};
 
+pub const GMAIL_API_BASE_URL: &str = "https://gmail.googleapis.com/gmail/v1";
+const GMAIL_API_PATH: &str = "/gmail/v1";
+const GMAIL_UPLOAD_PATH: &str = "/upload/gmail/v1";
+const MAX_REQUEST_ATTEMPTS: u8 = 10;
+const LAST_RETRYABLE_ATTEMPT: u8 = MAX_REQUEST_ATTEMPTS - 1;
+const MAX_BACKOFF_EXPONENT: u8 = 5;
+const MULTIPART_FRAMING_BYTES: usize = 256;
+pub const PLAIN_TEXT_WRAP_COLUMNS: usize = 80;
+
 pub const PROFILE_COST: u32 = 1;
 pub const LABELS_LIST_COST: u32 = 1;
 pub const MESSAGES_LIST_COST: u32 = 5;
@@ -48,6 +57,7 @@ pub const RESERVED_ATTACHMENT_ID_PREFIX: &str = "latentmail-inline-";
 static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(crate::http_client);
 
 pub mod labels;
+pub mod system_labels;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
@@ -198,12 +208,12 @@ impl Bucket {
     fn new(rate: f64, capacity: f64) -> Self {
         Self {
             state: Mutex::new((capacity, Instant::now())),
-            rate,
-            capacity,
+            rate: rate,
+            capacity: capacity,
         }
     }
     async fn acquire(&self, cost: u32) {
-        let cost = cost as f64;
+        let cost = f64::from(cost);
         loop {
             let wait = {
                 let mut state = self.state.lock().await;
@@ -464,7 +474,7 @@ impl GmailClient {
     }
     pub async fn message_if_present(&self, id: &str) -> Result<Option<GmailMessage>, GmailError> {
         match self.message(id).await {
-            Err(GmailError::Http(404)) => Ok(None),
+            Err(GmailError::Http(status)) if status == StatusCode::NOT_FOUND.as_u16() => Ok(None),
             other => other.map(Some),
         }
     }
@@ -705,7 +715,7 @@ impl GmailClient {
         max_bytes: usize,
     ) -> Result<T, GmailError> {
         let query = query.into_iter().collect::<Vec<_>>();
-        for attempt in 0..10 {
+        for attempt in 0..MAX_REQUEST_ATTEMPTS {
             let mut request = self
                 .http
                 .request(method.clone(), format!("{}{}", self.base_url, path))
@@ -732,7 +742,7 @@ impl GmailClient {
                         return Err(GmailError::HistoryExpired);
                     }
                     if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
-                        && attempt < 9
+                        && attempt < LAST_RETRYABLE_ATTEMPT
                     {
                         tokio::time::sleep(backoff(attempt + 1)).await;
                         continue;
@@ -746,7 +756,10 @@ impl GmailClient {
                     }
                     return Err(GmailError::Http(status.as_u16()));
                 }
-                Err(error) if (error.is_connect() || error.is_timeout()) && attempt < 9 => {
+                Err(error)
+                    if (error.is_connect() || error.is_timeout())
+                        && attempt < LAST_RETRYABLE_ATTEMPT =>
+                {
                     tokio::time::sleep(backoff(attempt + 1)).await
                 }
                 Err(error) => return Err(GmailError::Network(error)),
@@ -768,7 +781,7 @@ impl GmailClient {
         let metadata = serde_json::to_vec(&DraftUpload {
             message: DraftUploadMessage { thread_id },
         })?;
-        let mut body = Vec::with_capacity(raw.len() + metadata.len() + 256);
+        let mut body = Vec::with_capacity(raw.len() + metadata.len() + MULTIPART_FRAMING_BYTES);
         body.extend_from_slice(
             format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n")
                 .as_bytes(),
@@ -805,14 +818,14 @@ impl GmailClient {
 }
 
 fn upload_base(base: &str) -> String {
-    base.strip_suffix("/gmail/v1").map_or_else(
-        || format!("{base}/upload/gmail/v1"),
-        |prefix| format!("{prefix}/upload/gmail/v1"),
+    base.strip_suffix(GMAIL_API_PATH).map_or_else(
+        || format!("{base}{GMAIL_UPLOAD_PATH}"),
+        |prefix| format!("{prefix}{GMAIL_UPLOAD_PATH}"),
     )
 }
 
 pub fn backoff(attempt: u8) -> Duration {
-    Duration::from_secs(1_u64 << attempt.saturating_sub(1).min(5))
+    Duration::from_secs(1_u64 << attempt.saturating_sub(1).min(MAX_BACKOFF_EXPONENT))
 }
 
 #[derive(Deserialize)]
@@ -1048,9 +1061,9 @@ fn map_message(raw: RawMessage) -> GmailMessage {
         subject: headers.get("subject").cloned().unwrap_or_default(),
         html_body: content.html,
         plain_body: content.plain,
-        has_attachments,
+        has_attachments: has_attachments,
         inline_parts: content.inline,
-        attachment_parts,
+        attachment_parts: attachment_parts,
         oversize: false,
     }
 }
@@ -1107,20 +1120,20 @@ fn collect_part(part: &RawPart, content: &mut Content) {
             .and_then(|body| body.size)
             .unwrap_or_else(|| data.as_ref().map_or(0, |bytes| bytes.len() as u64));
         content.candidates.push(AttachmentCandidate {
-            attachment_id,
+            attachment_id: attachment_id,
             content_id: cid.clone(),
-            filename,
+            filename: filename,
             mime_type: mime.essence_str().to_owned(),
-            size,
+            size: size,
             bytes: data.clone(),
         });
     }
     if let (Some(content_id), Some(bytes)) = (cid, data.clone()) {
         content.inline.push(InlinePart {
-            content_id,
+            content_id: content_id,
 
             mime_type: mime.essence_str().to_owned(),
-            bytes,
+            bytes: bytes,
         });
     }
 
@@ -1168,7 +1181,7 @@ fn embedded_message(part: &RawPart) -> Option<String> {
     let body = carried.plain.or_else(|| {
         carried
             .html
-            .and_then(|html| html2text::from_read(html.as_bytes(), 80).ok())
+            .and_then(|html| html2text::from_read(html.as_bytes(), PLAIN_TEXT_WRAP_COLUMNS).ok())
     });
     block.push('\n');
     block.push_str(body.unwrap_or_default().trim_end());
@@ -1182,7 +1195,9 @@ fn classify_attachments(
     for (position, candidate) in candidates.into_iter().enumerate() {
         let locally_held = candidate.bytes.is_some();
         let cid_referenced = candidate.content_id.as_deref().is_some_and(|content_id| {
-            html.is_some_and(|html| html.contains(&format!("cid:{content_id}")))
+            html.is_some_and(|html| {
+                html.contains(&format!("{}{content_id}", crate::sanitize::CID_SCHEME))
+            })
         });
         if cid_referenced && locally_held {
             continue;
@@ -1196,9 +1211,9 @@ fn classify_attachments(
             .clone()
             .unwrap_or_else(|| format!("attachment-{position}"));
         result.push(AttachmentPart {
-            attachment_id,
+            attachment_id: attachment_id,
             content_id: candidate.content_id,
-            filename,
+            filename: filename,
             mime_type: candidate.mime_type,
             size: candidate.size,
             inline_bytes: candidate.bytes,

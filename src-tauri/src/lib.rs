@@ -5,6 +5,8 @@ pub mod avatars;
 pub mod cli;
 pub mod compose;
 pub mod contacts;
+pub mod date_formats;
+pub mod events;
 pub mod gmail;
 pub mod inline_images;
 pub mod ipc;

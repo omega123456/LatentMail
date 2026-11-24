@@ -40,7 +40,7 @@ pub async fn set_ai_api_key<R: Runtime>(
     credentials::save(&account_id, &api_key)?;
     tauri::Emitter::emit(
         &app,
-        "ai://config",
+        crate::events::AI_CONFIG,
         serde_json::json!({"accountId":account_id}),
     )
     .map_err(|error| error.to_string())
@@ -55,7 +55,7 @@ pub async fn clear_ai_api_key<R: Runtime>(
     credentials::clear(&account_id)?;
     tauri::Emitter::emit(
         &app,
-        "ai://config",
+        crate::events::AI_CONFIG,
         serde_json::json!({"accountId":account_id}),
     )
     .map_err(|error| error.to_string())

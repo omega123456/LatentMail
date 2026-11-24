@@ -1,11 +1,12 @@
 import { ChevronDown } from 'lucide-react';
-import { Avatar } from '@/components/shared/Avatar';
+import { Avatar, AVATAR_SIZE } from '@/components/shared/Avatar';
 import type { AiConfig, AiIndexStatus } from '@/lib/types/ipc';
 import { invoke } from '@/lib/ipc/commands';
 import { SettingSwitch } from './GeneralSection';
 import { AiConnectionSection } from './AiConnectionSection';
 import { AiModelsSection } from './AiModelsSection';
 import { AiIndexSection } from './AiIndexSection';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function AiAccountCard({
   config,
@@ -39,10 +40,10 @@ export function AiAccountCard({
         >
           <ChevronDown
             aria-hidden="true"
-            size={16}
+            size={ICON_SIZE.base}
             className={`shrink-0 text-settings-ink-mute dark:text-dark-settings-ink-mute ${expanded ? '' : '-rotate-90'}`}
           />
-          <Avatar size={30} src={avatarUrl} label={config.displayName} />
+          <Avatar size={AVATAR_SIZE.sm} src={avatarUrl} label={config.displayName} />
           <span className="min-w-0">
             <span className="block truncate text-body-sm font-semibold text-settings-ink dark:text-dark-settings-ink">
               {config.displayName}
@@ -59,7 +60,9 @@ export function AiAccountCard({
         <SettingSwitch
           checked={config.enabled}
           onChange={(enabled) => {
-            void invoke('set_ai_enabled', { accountId: config.accountId, enabled }).then(onChanged);
+            void invoke('set_ai_enabled', { accountId: config.accountId, enabled: enabled }).then(
+              onChanged,
+            );
           }}
           label={`Enable AI for ${config.email}`}
         />

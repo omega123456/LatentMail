@@ -1,6 +1,7 @@
 import type { Editor } from '@tiptap/react';
 import { AlertCircle, Image, Paperclip, Send } from 'lucide-react';
 import { EditorToolbar } from './EditorToolbar';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const iconButtonClass =
   'inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-secondary hover:bg-surface-container-high hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 dark:text-dark-secondary dark:hover:bg-dark-surface-container-high dark:hover:text-dark-primary';
@@ -34,7 +35,7 @@ export function ComposeFooter({
     <div className="flex shrink-0 flex-col gap-2 border-t border-outline-variant px-stack-gap-md pb-3.5 pt-2.5 dark:border-dark-outline-variant">
       {failed && status && (
         <span className="flex min-w-0 items-center gap-1.5 text-label-md text-error dark:text-dark-error">
-          <AlertCircle aria-hidden="true" size={18} className="shrink-0" />
+          <AlertCircle aria-hidden="true" size={ICON_SIZE.lg} className="shrink-0" />
           <span className="truncate">{status}</span>
           <button
             type="button"
@@ -63,7 +64,7 @@ export function ComposeFooter({
             onClick={onAttach}
             className={iconButtonClass}
           >
-            <Paperclip aria-hidden="true" size={18} />
+            <Paperclip aria-hidden="true" size={ICON_SIZE.lg} />
           </button>
           <button
             type="button"
@@ -72,7 +73,7 @@ export function ComposeFooter({
             onClick={onInsertImage}
             className={iconButtonClass}
           >
-            <Image aria-hidden="true" size={18} />
+            <Image aria-hidden="true" size={ICON_SIZE.lg} />
           </button>
           <button
             type="button"
@@ -84,7 +85,7 @@ export function ComposeFooter({
             className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 text-label-md text-on-primary-container hover:bg-primary hover:text-on-primary disabled:cursor-not-allowed disabled:opacity-40 dark:bg-dark-primary-container dark:text-dark-on-primary-container dark:hover:bg-dark-primary dark:hover:text-dark-on-primary"
           >
             Send
-            <Send aria-hidden="true" size={18} />
+            <Send aria-hidden="true" size={ICON_SIZE.lg} />
           </button>
         </div>
       </div>

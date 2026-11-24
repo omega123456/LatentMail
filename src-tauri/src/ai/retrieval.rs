@@ -409,6 +409,6 @@ pub async fn retrieve(
     Ok(Retrieval::Found(Box::new(Retrieved {
         sources: cited_sources(&passages, &sources),
         context: prompts::passage_block(&passages),
-        passages,
+        passages: passages,
     })))
 }

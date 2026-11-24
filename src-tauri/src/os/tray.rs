@@ -125,7 +125,7 @@ pub fn menu(state: &IndicatorState) -> TrayMenu {
         } else {
             vec![1, 3, 4]
         },
-        rows,
+        rows: rows,
     }
 }
 
@@ -194,14 +194,23 @@ fn initialize_platform<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(
         .on_menu_event(|app, event| match event.id().as_ref() {
             "compose" => {
                 crate::os::window::show_and_focus(app);
-                let _ = app.emit("os://intent", serde_json::json!({ "kind": "compose" }));
+                let _ = app.emit(
+                    crate::events::OS_INTENT,
+                    serde_json::json!({ "kind": "compose" }),
+                );
             }
             "sync" => {
-                let _ = app.emit("os://intent", serde_json::json!({ "kind": "syncNow" }));
+                let _ = app.emit(
+                    crate::events::OS_INTENT,
+                    serde_json::json!({ "kind": "syncNow" }),
+                );
             }
             "reauthenticate" => {
                 crate::os::window::show_and_focus(app);
-                let _ = app.emit("os://intent", serde_json::json!({ "kind": "openAccounts" }));
+                let _ = app.emit(
+                    crate::events::OS_INTENT,
+                    serde_json::json!({ "kind": "openAccounts" }),
+                );
             }
             "show" => crate::os::window::show_and_focus(app),
             "quit" => app.exit(0),

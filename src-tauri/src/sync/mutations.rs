@@ -228,7 +228,7 @@ impl SyncEngine {
         remove: HashSet<String>,
     ) -> Result<MutationOutcome, SyncError> {
         let kind = super::derive_operation_kind(&add, &remove);
-        let (reply_tx, reply_rx) = oneshot::channel();
+        let (reply_sender, reply_receiver) = oneshot::channel();
         let is_leader = {
             let mut pending = self.pending.lock().await;
             let account_map = pending.entry(account_id.to_owned()).or_default();
@@ -241,14 +241,14 @@ impl SyncEngine {
             entry.target = Some(target);
             entry.delta.merge(&add, &remove);
             entry.requests.push(PendingRequest {
-                add,
-                remove,
-                reply: reply_tx,
+                add: add,
+                remove: remove,
+                reply: reply_sender,
             });
             is_leader
         };
         if !is_leader {
-            return reply_rx.await.map_err(|_| SyncError::QueueStopped)?;
+            return reply_receiver.await.map_err(|_| SyncError::QueueStopped)?;
         }
 
         tokio::time::sleep(COALESCE_WINDOW).await;
@@ -274,25 +274,25 @@ impl SyncEngine {
             }
         }
         if surviving.is_empty() {
-            return reply_rx.await.map_err(|_| SyncError::QueueStopped)?;
+            return reply_receiver.await.map_err(|_| SyncError::QueueStopped)?;
         }
 
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
-        let op_id = format!(
+        let operation_id = format!(
             "mutation:{account_id}:{}",
-            self.op_counter.fetch_add(1, Ordering::Relaxed)
+            self.operation_counter.fetch_add(1, Ordering::Relaxed)
         );
         self.registry.register(
-            op_id.clone(),
+            operation_id.clone(),
             Box::new(move || Box::pin(execute_flush(storage, client, account_owned, surviving))),
         );
         self.queue
             .enqueue(QueueOperation {
-                id: op_id,
+                id: operation_id,
                 account_id: account_id.to_owned(),
                 lane: Lane::Interactive,
-                kind,
+                kind: kind,
                 entity_key: format!("mutation-batch:{account_id}"),
                 cost: 0,
                 attempts: 0,
@@ -300,7 +300,7 @@ impl SyncEngine {
             })
             .await
             .map_err(|_| SyncError::QueueStopped)?;
-        reply_rx.await.map_err(|_| SyncError::QueueStopped)?
+        reply_receiver.await.map_err(|_| SyncError::QueueStopped)?
     }
 }
 

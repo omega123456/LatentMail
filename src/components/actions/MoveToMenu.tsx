@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { Inbox, ShieldAlert, Trash2 } from 'lucide-react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type MoveDestinationId = 'INBOX' | 'SPAM' | 'TRASH';
 
@@ -70,7 +71,7 @@ export function MoveToMenu({ currentSystemLabelIds, onSelect }: MoveToMenuProps)
                 : 'cursor-pointer text-on-surface hover:bg-surface-container-low dark:text-dark-on-surface dark:hover:bg-dark-surface-container'
             }`}
           >
-            <destination.Icon aria-hidden="true" size={16} />
+            <destination.Icon aria-hidden="true" size={ICON_SIZE.base} />
             <span className="flex-1">{destination.name}</span>
             {inert && <span className="text-label-sm">here</span>}
           </button>

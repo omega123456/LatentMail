@@ -49,7 +49,7 @@ pub fn pause_queue<R: Runtime>(
 ) -> Result<QueueSummary, String> {
     queue.pause();
     let summary = queue.summary();
-    app.emit("queue://summary", &summary)
+    app.emit(crate::events::QUEUE_SUMMARY, &summary)
         .map_err(|error| error.to_string())?;
     Ok(summary)
 }
@@ -61,7 +61,7 @@ pub fn resume_queue<R: Runtime>(
 ) -> Result<QueueSummary, String> {
     queue.resume();
     let summary = queue.summary();
-    app.emit("queue://summary", &summary)
+    app.emit(crate::events::QUEUE_SUMMARY, &summary)
         .map_err(|error| error.to_string())?;
     Ok(summary)
 }

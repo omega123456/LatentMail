@@ -65,7 +65,8 @@ describe('compose autosave', () => {
     expect(
       qualifiesForDraft({ recipients: { to: ['to'], cc: [], bcc: [] }, subject: '', html: '' }),
     ).toBe(true);
-    expect(toDraftRequest(useComposeStore.getState().session!)).toMatchObject({
+    const session = useComposeStore.getState().session;
+    expect(session && toDraftRequest(session)).toMatchObject({
       draftId: 'draft-1',
       attachments: [{ id: 'part', filename: 'a.pdf' }],
     });

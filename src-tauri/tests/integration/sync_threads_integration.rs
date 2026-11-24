@@ -55,12 +55,12 @@ fn thread(id: &str, latest_at: i64, has_draft: bool) -> Thread {
         id: id.into(),
         subject: format!("Subject {id}"),
         participants: "Alice <a@example.com>".into(),
-        latest_at,
+        latest_at: latest_at,
         message_count: 1,
         is_unread: false,
         is_starred: false,
         has_attachments: false,
-        has_draft,
+        has_draft: has_draft,
         sender_identity: ThreadIdentity {
             display: "Alice".into(),
             address: Some("a@example.com".into()),
@@ -462,7 +462,7 @@ async fn conversation_returns_only_the_newest_body_and_cached_reads_target_one_m
                 sender: "alice@example.com".into(),
                 recipients: "me@example.com".into(),
                 subject: "Subject t1".into(),
-                sent_at,
+                sent_at: sent_at,
                 snippet: html.into(),
                 html_body: Some(html.into()),
                 plain_body: None,
@@ -895,7 +895,7 @@ async fn fetch_message_body_hydrates_and_persists_an_unfetched_message_via_a_dir
     let received_for_listener = Arc::clone(&received);
     application
         .handle()
-        .listen("message://body-fetched", move |event| {
+        .listen(latentmail_lib::events::MESSAGE_BODY_FETCHED, move |event| {
             *received_for_listener.lock().unwrap() = Some(event.payload().to_owned());
         });
 

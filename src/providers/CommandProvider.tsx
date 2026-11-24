@@ -56,14 +56,14 @@ export function CommandProvider({ children }: PropsWithChildren) {
       .catch(() => undefined);
   }, []);
 
-  const value = useMemo<CommandContextValue>(() => {
+  const contextValue = useMemo<CommandContextValue>(() => {
     const applyOverrides = (next: CommandOverrides) => {
       persistOverrides(next);
       setOverrides(next);
     };
     return {
       bindings: resolveCommandBindings(overrides),
-      overrides,
+      overrides: overrides,
       setOverride: (command, keys) => applyOverrides({ ...overrides, [command]: keys }),
       clearOverride: (command) => applyOverrides(withoutOverride(overrides, command)),
       clearAllOverrides: () => applyOverrides({}),
@@ -71,7 +71,7 @@ export function CommandProvider({ children }: PropsWithChildren) {
     };
   }, [overrides]);
 
-  return <CommandContext.Provider value={value}>{children}</CommandContext.Provider>;
+  return <CommandContext.Provider value={contextValue}>{children}</CommandContext.Provider>;
 }
 
 export function useCommandBindings(): CommandBindings {

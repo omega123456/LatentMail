@@ -65,7 +65,7 @@ pub fn parse_address(entry: &str) -> Option<AddressIdentity> {
     let mailbox = parse_mailbox(entry)?;
     let display = mailbox.name.unwrap_or_else(|| mailbox.address.clone());
     Some(AddressIdentity {
-        display,
+        display: display,
         address: mailbox.address,
     })
 }

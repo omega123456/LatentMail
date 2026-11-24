@@ -14,6 +14,8 @@ import {
 } from '@/providers/CommandProvider';
 import { captureConsole } from '@/tests/console';
 
+const OVERRIDE_WRITES = 2;
+
 describe('CommandProvider fallback no-ops', () => {
   it('is a harmless no-op to clear a single override or all overrides without a provider ancestor', () => {
     function ClearOverrides() {
@@ -88,8 +90,8 @@ describe('CommandProvider', () => {
   it('persists a new override through write_setting', async () => {
     const user = userEvent.setup();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
 
     render(
@@ -108,8 +110,8 @@ describe('CommandProvider', () => {
   it('resetting a single command clears just its entry, and reset-all appears only while an override exists', async () => {
     const user = userEvent.setup();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
 
     render(
@@ -134,8 +136,8 @@ describe('CommandProvider', () => {
   it('clears every override in a single write', async () => {
     const user = userEvent.setup();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args as { key: string; value: unknown });
+    ipc.override('write_setting', (request) => {
+      writes.push(request as { key: string; value: unknown });
     });
 
     render(
@@ -213,7 +215,7 @@ describe('CommandProvider persistence', () => {
 
     await user.click(screen.getByRole('button', { name: 'reset one' }));
     await waitFor(() => expect(screen.getByTestId('has-any-override')).toHaveTextContent('false'));
-    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes).toHaveBeenCalledTimes(OVERRIDE_WRITES);
     expect(writes).toHaveBeenLastCalledWith({ key: 'commandOverrides', value: {} });
   });
 });

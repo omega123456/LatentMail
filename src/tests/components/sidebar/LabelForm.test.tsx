@@ -3,10 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { LabelForm, validateLabelName } from '@/components/sidebar/LabelForm';
 
+const LABEL_NAME_MAX_LENGTH = 100;
+const OPEN_FORM_COUNT = 2;
+
 describe('validateLabelName', () => {
   it('mirrors every rule LabelRepository::validate_name enforces on the Rust side', () => {
     expect(validateLabelName('  ', [])).toBe('label name cannot be empty');
-    expect(validateLabelName('a'.repeat(101), [])).toBe(
+    expect(validateLabelName('a'.repeat(LABEL_NAME_MAX_LENGTH + 1), [])).toBe(
       'label name must be 100 characters or fewer',
     );
     expect(validateLabelName('50% off', [])).toBe('label name cannot contain \\, *, or %');
@@ -64,7 +67,7 @@ describe('LabelForm', () => {
       </>,
     );
     const fields = screen.getAllByRole('textbox');
-    expect(fields).toHaveLength(2);
+    expect(fields).toHaveLength(OPEN_FORM_COUNT);
     expect(fields[0].id).not.toBe(fields[1].id);
   });
 });

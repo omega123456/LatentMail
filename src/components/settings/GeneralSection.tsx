@@ -67,34 +67,46 @@ export function SubsectionHeading({ children }: { children: string }) {
 }
 
 export function GeneralSection() {
-  const theme = useThemeStore((state) => state.theme);
-  const setTheme = useThemeStore((state) => state.setTheme);
-  const layout = useLayoutStore((state) => state.layout);
-  const setLayout = useLayoutStore((state) => state.setLayout);
-  const density = useLayoutStore((state) => state.density);
-  const setDensity = useLayoutStore((state) => state.setDensity);
-  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
-  const setShowSenderAvatars = useLayoutStore((state) => state.setShowSenderAvatars);
-  const zoomPercent = useLayoutStore((state) => state.zoomPercent);
-  const setZoomPercent = useLayoutStore((state) => state.setZoomPercent);
-  const showUnreadCounts = useLayoutStore((state) => state.showUnreadCounts);
-  const setShowUnreadCounts = useLayoutStore((state) => state.setShowUnreadCounts);
-  const syncOnStartup = useLayoutStore((state) => state.syncOnStartup);
-  const setSyncOnStartup = useLayoutStore((state) => state.setSyncOnStartup);
-  const syncIntervalSeconds = useLayoutStore((state) => state.syncIntervalSeconds);
-  const setSyncIntervalSeconds = useLayoutStore((state) => state.setSyncIntervalSeconds);
-  const alwaysLoadRemoteImages = useLayoutStore((state) => state.alwaysLoadRemoteImages);
-  const setAlwaysLoadRemoteImages = useLayoutStore((state) => state.setAlwaysLoadRemoteImages);
-  const prefetchImageAttachments = useLayoutStore((state) => state.prefetchImageAttachments);
-  const setPrefetchImageAttachments = useLayoutStore((state) => state.setPrefetchImageAttachments);
-  const startAtLogin = useLayoutStore((state) => state.startAtLogin);
-  const setStartAtLogin = useLayoutStore((state) => state.setStartAtLogin);
-  const closeToTray = useLayoutStore((state) => state.closeToTray);
-  const setCloseToTray = useLayoutStore((state) => state.setCloseToTray);
-  const startMinimized = useLayoutStore((state) => state.startMinimized);
-  const setStartMinimized = useLayoutStore((state) => state.setStartMinimized);
-  const desktopNotifications = useLayoutStore((state) => state.desktopNotifications);
-  const setDesktopNotifications = useLayoutStore((state) => state.setDesktopNotifications);
+  const theme = useThemeStore((themeState) => themeState.theme);
+  const setTheme = useThemeStore((themeState) => themeState.setTheme);
+  const layout = useLayoutStore((layoutState) => layoutState.layout);
+  const setLayout = useLayoutStore((layoutState) => layoutState.setLayout);
+  const density = useLayoutStore((layoutState) => layoutState.density);
+  const setDensity = useLayoutStore((layoutState) => layoutState.setDensity);
+  const showSenderAvatars = useLayoutStore((layoutState) => layoutState.showSenderAvatars);
+  const setShowSenderAvatars = useLayoutStore((layoutState) => layoutState.setShowSenderAvatars);
+  const zoomPercent = useLayoutStore((layoutState) => layoutState.zoomPercent);
+  const setZoomPercent = useLayoutStore((layoutState) => layoutState.setZoomPercent);
+  const showUnreadCounts = useLayoutStore((layoutState) => layoutState.showUnreadCounts);
+  const setShowUnreadCounts = useLayoutStore((layoutState) => layoutState.setShowUnreadCounts);
+  const syncOnStartup = useLayoutStore((layoutState) => layoutState.syncOnStartup);
+  const setSyncOnStartup = useLayoutStore((layoutState) => layoutState.setSyncOnStartup);
+  const syncIntervalSeconds = useLayoutStore((layoutState) => layoutState.syncIntervalSeconds);
+  const setSyncIntervalSeconds = useLayoutStore(
+    (layoutState) => layoutState.setSyncIntervalSeconds,
+  );
+  const alwaysLoadRemoteImages = useLayoutStore(
+    (layoutState) => layoutState.alwaysLoadRemoteImages,
+  );
+  const setAlwaysLoadRemoteImages = useLayoutStore(
+    (layoutState) => layoutState.setAlwaysLoadRemoteImages,
+  );
+  const prefetchImageAttachments = useLayoutStore(
+    (layoutState) => layoutState.prefetchImageAttachments,
+  );
+  const setPrefetchImageAttachments = useLayoutStore(
+    (layoutState) => layoutState.setPrefetchImageAttachments,
+  );
+  const startAtLogin = useLayoutStore((layoutState) => layoutState.startAtLogin);
+  const setStartAtLogin = useLayoutStore((layoutState) => layoutState.setStartAtLogin);
+  const closeToTray = useLayoutStore((layoutState) => layoutState.closeToTray);
+  const setCloseToTray = useLayoutStore((layoutState) => layoutState.setCloseToTray);
+  const startMinimized = useLayoutStore((layoutState) => layoutState.startMinimized);
+  const setStartMinimized = useLayoutStore((layoutState) => layoutState.setStartMinimized);
+  const desktopNotifications = useLayoutStore((layoutState) => layoutState.desktopNotifications);
+  const setDesktopNotifications = useLayoutStore(
+    (layoutState) => layoutState.setDesktopNotifications,
+  );
 
   return (
     <SettingsSection title="General" description="Changes apply immediately.">

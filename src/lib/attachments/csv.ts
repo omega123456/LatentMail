@@ -1,3 +1,5 @@
+const ESCAPED_QUOTE_LENGTH = 2;
+
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -22,7 +24,7 @@ export function parseCsv(text: string): string[][] {
       if (char === '"') {
         if (text[index + 1] === '"') {
           field += '"';
-          index += 2;
+          index += ESCAPED_QUOTE_LENGTH;
           continue;
         }
         inQuotes = false;

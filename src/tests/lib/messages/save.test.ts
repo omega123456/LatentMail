@@ -3,13 +3,14 @@ import { saveMessageAs, type MessageExportTarget } from '@/lib/messages/save';
 import { ipc } from '@/tests/ipc-mock';
 import { useToastStore } from '@/stores/toast';
 import { captureConsole } from '@/tests/console';
+import { parseISO } from 'date-fns';
 
 const target: MessageExportTarget = {
   accountId: 'account-1',
   messageId: 'message-1',
   subject: 'Invoice',
   sender: 'billing@northwind.example',
-  sentAt: new Date(2026, 9, 23),
+  sentAt: parseISO('2026-10-23'),
 };
 
 beforeEach(() => {

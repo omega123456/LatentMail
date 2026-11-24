@@ -8,6 +8,12 @@ import { useLayoutStore } from '@/stores/layout';
 import { useSelectionStore } from '@/stores/selection';
 import type { AiConfig, AiIndexStatus } from '@/lib/types/ipc';
 
+const AVAILABLE_MODEL_COUNT = 4;
+const WIDENED_ASSISTANT_WIDTH = 460;
+const ASSISTANT_WIDTH_MAX = 700;
+const NARROW_SHELL_WIDTH = 900;
+const WIDE_SHELL_WIDTH = 1400;
+
 const account = {
   id: 'account-1',
   email: 'alex@example.com',
@@ -56,7 +62,7 @@ function readyAssistant() {
   ipc.override('list_accounts', [account]);
   ipc.override('read_ai_configs', [aiConfig]);
   ipc.override('read_ai_index_status', [aiStatus]);
-  ipc.override('test_ai_connection', 4);
+  ipc.override('test_ai_connection', AVAILABLE_MODEL_COUNT);
 }
 
 function resizeShell(width: number) {
@@ -95,8 +101,8 @@ describe('MailLayout — assistant panel docking and the top-bar trigger', () =>
     const user = userEvent.setup();
     readyAssistant();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args);
+    ipc.override('write_setting', (request) => {
+      writes.push(request);
     });
     render(<App />);
     await user.click(await screen.findByRole('button', { name: 'AI assistant' }));
@@ -105,12 +111,14 @@ describe('MailLayout — assistant panel docking and the top-bar trigger', () =>
     fireEvent.pointerDown(handle, { clientX: 800 });
     fireEvent.pointerMove(window, { clientX: 700 });
     fireEvent.pointerUp(window);
-    await waitFor(() => expect(useLayoutStore.getState().assistantWidth).toBe(460));
+    await waitFor(() =>
+      expect(useLayoutStore.getState().assistantWidth).toBe(WIDENED_ASSISTANT_WIDTH),
+    );
 
     fireEvent.pointerDown(handle, { clientX: 800 });
     fireEvent.pointerMove(window, { clientX: 0 });
     fireEvent.pointerUp(window);
-    await waitFor(() => expect(useLayoutStore.getState().assistantWidth).toBe(700));
+    await waitFor(() => expect(useLayoutStore.getState().assistantWidth).toBe(ASSISTANT_WIDTH_MAX));
     expect(writes).toContainEqual({ key: 'assistantWidth', value: 700 });
   });
 
@@ -138,11 +146,11 @@ describe('MailLayout — narrow shell falls back to the drawer', () => {
     render(<App />);
     await screen.findByTestId('assistant-docked');
 
-    resizeShell(900);
+    resizeShell(NARROW_SHELL_WIDTH);
     expect(await screen.findByTestId('assistant-drawer')).toBeInTheDocument();
     expect(screen.queryByTestId('assistant-docked')).toBeNull();
 
-    resizeShell(1400);
+    resizeShell(WIDE_SHELL_WIDTH);
     expect(await screen.findByTestId('assistant-docked')).toBeInTheDocument();
     expect(screen.queryByTestId('assistant-drawer')).toBeNull();
   });

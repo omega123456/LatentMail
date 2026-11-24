@@ -124,10 +124,10 @@ fn removing_one_staged_part_never_touches_its_siblings_or_a_live_snapshot() {
     let source = directory.path().join("a.txt");
     fs::write(&source, b"a").unwrap();
     let staging = Staging::new(directory.path().join("staged"));
-    let a = staging
+    let staged_path = staging
         .stage_path("account", "draft", &source, "a", "text/plain".into(), None)
         .unwrap();
-    let b = staging
+    let staged_bytes = staging
         .stage_bytes(
             "account",
             "draft",
@@ -142,11 +142,13 @@ fn removing_one_staged_part_never_touches_its_siblings_or_a_live_snapshot() {
             b"b",
         )
         .unwrap();
-    let snapshot = staging.snapshot("op", &[a.clone(), b.clone()]).unwrap();
+    let snapshot = staging
+        .snapshot("op", &[staged_path.clone(), staged_bytes.clone()])
+        .unwrap();
 
     staging.remove_part("account", "draft", "a").unwrap();
-    assert!(!a.path.exists());
-    assert!(b.path.exists());
+    assert!(!staged_path.path.exists());
+    assert!(staged_bytes.path.exists());
     assert!(snapshot.parts[0].path.exists(), "snapshot is immutable");
     assert!(snapshot.parts[1].path.exists());
 }

@@ -256,8 +256,8 @@ async fn harness(raw_response: ResponseTemplate) -> Harness {
     Harness {
         _server: server,
         _directory: directory,
-        storage,
-        app,
+        storage: storage,
+        app: app,
     }
 }
 

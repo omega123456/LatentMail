@@ -1,9 +1,13 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { getUnixTime } from 'date-fns';
+import { addSeconds, getUnixTime, subSeconds } from 'date-fns';
 import { describe, expect, it, vi } from 'vitest';
 import { QueueOperationRow } from '@/components/queue/QueueOperationRow';
 import type { OperationRecord } from '@/lib/types/ipc';
+
+const CREATED_SECONDS_AGO = 10;
+const UPDATED_SECONDS_AGO = 2;
+const RETRY_IN_SECONDS = 30;
 
 function operation(overrides: Partial<OperationRecord>): OperationRecord {
   return {
@@ -17,8 +21,8 @@ function operation(overrides: Partial<OperationRecord>): OperationRecord {
     error: null,
     retryable: true,
     nextAttemptAt: null,
-    createdAt: getUnixTime(new Date()) - 10,
-    updatedAt: getUnixTime(new Date()) - 2,
+    createdAt: getUnixTime(subSeconds(new Date(), CREATED_SECONDS_AGO)),
+    updatedAt: getUnixTime(subSeconds(new Date(), UPDATED_SECONDS_AGO)),
     ...overrides,
   };
 }
@@ -121,7 +125,7 @@ describe('QueueOperationRow', () => {
         operation={operation({
           status: 'retrying',
           attempts: 2,
-          nextAttemptAt: getUnixTime(new Date()) + 30,
+          nextAttemptAt: getUnixTime(addSeconds(new Date(), RETRY_IN_SECONDS)),
         })}
         onCancel={vi.fn()}
         onRetry={vi.fn()}

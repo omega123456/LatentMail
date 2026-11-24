@@ -54,7 +54,7 @@ export function AiModelsSection({
       action={
         <button
           type="button"
-          onClick={() => setRevision((value) => value + 1)}
+          onClick={() => setRevision((currentRevision) => currentRevision + 1)}
           className={`shrink-0 ${settingsQuietButton}`}
         >
           Rescan

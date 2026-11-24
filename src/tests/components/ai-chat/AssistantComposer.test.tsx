@@ -5,6 +5,8 @@ import { AssistantComposer } from '@/components/ai-chat/AssistantComposer';
 import { ipc } from '@/tests/ipc-mock';
 import { QUESTION_LIMIT, useAssistantStore, type AssistantMessage } from '@/stores/assistant';
 
+const CHARACTERS_OVER_LIMIT = 114;
+
 const message = (overrides: Partial<AssistantMessage> = {}): AssistantMessage => ({
   id: 'assistant-1',
   role: 'assistant',
@@ -65,7 +67,7 @@ describe('AssistantComposer', () => {
     expect(screen.getByRole('button', { name: 'Send question' })).toBeDisabled();
     reset({ draft: '   ' });
     expect(screen.getByRole('button', { name: 'Send question' })).toBeDisabled();
-    reset({ draft: 'x'.repeat(QUESTION_LIMIT + 114) });
+    reset({ draft: 'x'.repeat(QUESTION_LIMIT + CHARACTERS_OVER_LIMIT) });
     expect(screen.getByRole('button', { name: 'Send question' })).toBeDisabled();
     expect(screen.getByTestId('assistant-counter')).toHaveTextContent(`2114 / ${QUESTION_LIMIT}`);
     expect(screen.getByTestId('assistant-counter')).toHaveClass('text-error');

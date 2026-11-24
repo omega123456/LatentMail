@@ -32,9 +32,9 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
     let path = directory.path().join("mail.sqlite");
     let storage = Storage::open(&path).unwrap();
 
-    let (writer_ready_tx, writer_ready_rx) = mpsc::channel::<()>();
-    let (release_writer_tx, release_writer_rx) = mpsc::channel::<()>();
-    let (writer_done_tx, writer_done_rx) = mpsc::channel::<()>();
+    let (writer_ready_sender, writer_ready_receiver) = mpsc::channel::<()>();
+    let (release_writer_sender, release_writer_receiver) = mpsc::channel::<()>();
+    let (writer_done_sender, writer_done_receiver) = mpsc::channel::<()>();
 
     let writer_path = path.clone();
     let writer = std::thread::spawn(move || {
@@ -43,13 +43,13 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
         let transaction = connection.transaction().unwrap();
         AccountRepository::upsert(&transaction, &account("writer")).unwrap();
 
-        writer_ready_tx.send(()).unwrap();
-        release_writer_rx.recv().unwrap();
+        writer_ready_sender.send(()).unwrap();
+        release_writer_receiver.recv().unwrap();
         transaction.commit().unwrap();
-        writer_done_tx.send(()).unwrap();
+        writer_done_sender.send(()).unwrap();
     });
 
-    writer_ready_rx.recv().unwrap();
+    writer_ready_receiver.recv().unwrap();
 
     let connection = storage.connection().unwrap();
     let read_result = connection.query_row("SELECT COUNT(*) FROM accounts", [], |row| {
@@ -60,8 +60,8 @@ fn a_read_completes_while_a_sustained_write_transaction_is_in_flight() {
         "a read must complete while a write transaction is in flight under WAL"
     );
 
-    release_writer_tx.send(()).unwrap();
-    writer_done_rx.recv().unwrap();
+    release_writer_sender.send(()).unwrap();
+    writer_done_receiver.recv().unwrap();
     writer.join().unwrap();
 
     let connection = storage.connection().unwrap();

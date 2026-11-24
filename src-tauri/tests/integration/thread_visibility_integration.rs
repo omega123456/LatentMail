@@ -43,7 +43,7 @@ fn message(id: &str, thread_id: &str, sent_at: i64) -> Message {
         sender: "sender@example.com".into(),
         recipients: "recipient@example.com".into(),
         subject: "Subject".into(),
-        sent_at,
+        sent_at: sent_at,
         snippet: "Snippet".into(),
         html_body: None,
         plain_body: None,

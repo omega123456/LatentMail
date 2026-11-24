@@ -1,12 +1,28 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check } from 'lucide-react';
 import {
+  LABEL_COLOR_BY_ID,
   LABEL_COLOR_PALETTE,
   type LabelColorId,
   type LabelColorSwatch,
 } from '@/lib/labels/palette';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const COLUMNS = 10;
+const HEX_RADIX = 16;
+const CHANNEL_MAX = 255;
+const HUE_SECTORS = 6;
+const GREEN_SECTOR_OFFSET = 2;
+const BLUE_SECTOR_OFFSET = 4;
+const DEGREES_PER_HUE_SECTOR = 60;
+const FULL_CIRCLE_DEGREES = 360;
+
+type HexDigits = { start: number; end: number };
+type Rgb = { red: number; green: number; blue: number };
+
+const RED_DIGITS: HexDigits = { start: 1, end: 3 };
+const GREEN_DIGITS: HexDigits = { start: 3, end: 5 };
+const BLUE_DIGITS: HexDigits = { start: 5, end: 7 };
 
 export type LabelColorPickerProps = {
   selectedId: LabelColorId;
@@ -14,34 +30,42 @@ export type LabelColorPickerProps = {
   onCancel: () => void;
 };
 
-function hexToHue(hex: string): number {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const delta = max - min;
-  if (delta === 0) return 0;
-  let hue: number;
-  if (max === r) hue = ((g - b) / delta) % 6;
-  else if (max === g) hue = (b - r) / delta + 2;
-  else hue = (r - g) / delta + 4;
-  hue *= 60;
-  return hue < 0 ? hue + 360 : hue;
+function hexChannel(hex: string, digits: HexDigits): number {
+  return parseInt(hex.slice(digits.start, digits.end), HEX_RADIX) / CHANNEL_MAX;
 }
 
-function byHueFamily(a: LabelColorSwatch, b: LabelColorSwatch): number {
-  const hueA = hexToHue(a.gmailBackground);
-  const hueB = hexToHue(b.gmailBackground);
-  if (hueA !== hueB) return hueA - hueB;
-  return a.gmailBackground.localeCompare(b.gmailBackground);
+function hueSector(rgb: Rgb, max: number, delta: number): number {
+  if (max === rgb.red) return ((rgb.green - rgb.blue) / delta) % HUE_SECTORS;
+  if (max === rgb.green) return (rgb.blue - rgb.red) / delta + GREEN_SECTOR_OFFSET;
+  return (rgb.red - rgb.green) / delta + BLUE_SECTOR_OFFSET;
+}
+
+function hexToHue(hex: string): number {
+  const rgb: Rgb = {
+    red: hexChannel(hex, RED_DIGITS),
+    green: hexChannel(hex, GREEN_DIGITS),
+    blue: hexChannel(hex, BLUE_DIGITS),
+  };
+  const max = Math.max(rgb.red, rgb.green, rgb.blue);
+  const min = Math.min(rgb.red, rgb.green, rgb.blue);
+  const delta = max - min;
+  if (delta === 0) return 0;
+  const hue = hueSector(rgb, max, delta) * DEGREES_PER_HUE_SECTOR;
+  return hue < 0 ? hue + FULL_CIRCLE_DEGREES : hue;
+}
+
+function byHueFamily(left: LabelColorSwatch, right: LabelColorSwatch): number {
+  const leftHue = hexToHue(left.gmailBackground);
+  const rightHue = hexToHue(right.gmailBackground);
+  if (leftHue !== rightHue) return leftHue - rightHue;
+  return left.gmailBackground.localeCompare(right.gmailBackground);
 }
 
 export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPickerProps) {
   const [pendingId, setPendingId] = useState(selectedId);
   const cellRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const palette = useMemo(() => [...LABEL_COLOR_PALETTE].sort(byHueFamily), []);
-  const pendingSwatch = palette.find((swatch) => swatch.id === pendingId)!;
+  const pendingSwatch = LABEL_COLOR_BY_ID[pendingId];
   const rows: LabelColorSwatch[][] = [];
   for (let start = 0; start < palette.length; start += COLUMNS) {
     rows.push(palette.slice(start, start + COLUMNS));
@@ -84,7 +108,7 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
         className="flex max-h-48 flex-col gap-1 overflow-y-auto p-1"
       >
         {rows.map((rowSwatches, rowIndex) => (
-          <div key={rowSwatches[0]!.id} role="row" className="grid grid-cols-10 gap-1">
+          <div key={rowSwatches[0].id} role="row" className="grid grid-cols-10 gap-1">
             {rowSwatches.map((swatch, columnIndex) => {
               const index = rowIndex * COLUMNS + columnIndex;
               const selected = swatch.id === pendingId;
@@ -103,7 +127,9 @@ export function LabelColorPicker({ selectedId, onApply, onCancel }: LabelColorPi
                   onKeyDown={(event) => handleKeyDown(event, index)}
                   className={`flex size-8 cursor-pointer items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-primary ${swatch.dotClass} ${selected ? 'ring-2 ring-primary ring-offset-1 dark:ring-dark-primary' : ''}`}
                 >
-                  {selected && <Check aria-hidden="true" size={14} className={swatch.textClass} />}
+                  {selected && (
+                    <Check aria-hidden="true" size={ICON_SIZE.sm} className={swatch.textClass} />
+                  )}
                 </button>
               );
             })}

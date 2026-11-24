@@ -10,6 +10,7 @@ import {
   Underline,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 type Props = { editor: Editor | null; onLink: () => void };
 
@@ -104,7 +105,7 @@ function ToolbarButton({
       onClick={onClick}
       className={buttonClass}
     >
-      <control.Icon aria-hidden="true" size={18} />
+      <control.Icon aria-hidden="true" size={ICON_SIZE.lg} />
     </button>
   );
 }

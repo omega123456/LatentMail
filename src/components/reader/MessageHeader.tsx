@@ -1,5 +1,5 @@
 import { format, formatISO } from 'date-fns';
-import { Avatar } from '@/components/shared/Avatar';
+import { Avatar, AVATAR_SIZE } from '@/components/shared/Avatar';
 import { Badge } from '@/components/shared/Badge';
 import { CopyButton } from '@/components/shared/CopyButton';
 import type { MessageBadge } from '@/lib/labels/badges';
@@ -7,6 +7,7 @@ import { formatParticipants, type Participant } from '@/lib/format/participants'
 import { domainFor } from '@/lib/avatars/identity';
 import { useSenderAvatarQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 export type MessageSender = Participant;
 
@@ -26,8 +27,8 @@ export function MessageHeader({
   badges?: MessageBadge[];
   onComposeTo?: (participant: Participant) => void;
 }) {
-  const timestamp = format(sentAt, 'PPpp');
-  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
+  const timestamp = format(sentAt, DATE_FORMAT.longDateTime);
+  const showSenderAvatars = useLayoutStore((layout) => layout.showSenderAvatars);
   const { data: avatarSrc } = useSenderAvatarQuery(
     showSenderAvatars ? domainFor(sender.address) : null,
   );
@@ -35,7 +36,9 @@ export function MessageHeader({
   return (
     <header className="group flex select-text items-start justify-between gap-4">
       <div className="flex min-w-0 items-center gap-4">
-        {showSenderAvatars && <Avatar size={48} src={avatarSrc} label={senderLabel} ring />}
+        {showSenderAvatars && (
+          <Avatar size={AVATAR_SIZE.xxl} src={avatarSrc} label={senderLabel} ring />
+        )}
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 flex-wrap items-baseline gap-2">
             <button

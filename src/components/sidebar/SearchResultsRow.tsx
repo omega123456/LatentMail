@@ -1,9 +1,12 @@
 import { Search, X } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE_WIDTH } from '@/components/shared/icon-size';
+
+const MAX_EXACT_RESULT_COUNT = 999;
 
 function formatSearchStatus(total: number, pending: boolean) {
   if (pending) return 'searching…';
   if (total === 0) return 'no results';
-  if (total > 999) return '999+ results';
+  if (total > MAX_EXACT_RESULT_COUNT) return `${MAX_EXACT_RESULT_COUNT}+ results`;
   return `${total} result${total === 1 ? '' : 's'}`;
 }
 
@@ -31,8 +34,8 @@ export function SearchResultsRow({
       >
         <Search
           aria-hidden="true"
-          size={14}
-          strokeWidth={2.5}
+          size={ICON_SIZE.sm}
+          strokeWidth={ICON_STROKE_WIDTH.bold}
           className="shrink-0 text-primary dark:text-dark-primary"
         />
         <span className="min-w-0 flex-1 truncate text-label-md uppercase tabular-nums">
@@ -44,7 +47,7 @@ export function SearchResultsRow({
           onClick={onClose}
           className="-mr-1 shrink-0 cursor-pointer rounded-sm p-1 hover:bg-on-surface/10 focus-visible:outline-2 focus-visible:outline-primary dark:hover:bg-dark-on-surface/10"
         >
-          <X aria-hidden="true" size={14} />
+          <X aria-hidden="true" size={ICON_SIZE.sm} />
         </button>
       </div>
       <p className="truncate text-body-sm text-on-surface dark:text-dark-on-surface" title={query}>
@@ -62,7 +65,7 @@ export function CollapsedSearchIndicator({ query }: { query: string }) {
       aria-label={`Search results for ${query}`}
       className="grid size-9 place-items-center rounded-r border-l-3 border-primary bg-surface-container-high text-primary dark:border-dark-primary dark:bg-dark-surface-container-high dark:text-dark-primary"
     >
-      <Search aria-hidden="true" size={16} strokeWidth={2.5} />
+      <Search aria-hidden="true" size={ICON_SIZE.base} strokeWidth={ICON_STROKE_WIDTH.bold} />
     </div>
   );
 }

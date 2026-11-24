@@ -23,7 +23,7 @@ const TRAY_ICON: tauri::image::Image<'_> = tauri::include_image!("./icons/tray-i
 pub fn dot_geometry(size: u32) -> DotGeometry {
     let radius = (size / 4).max(2);
     DotGeometry {
-        radius,
+        radius: radius,
         center_x: size.saturating_sub(radius + 1),
         center_y: radius + 1,
     }

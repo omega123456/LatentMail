@@ -9,7 +9,7 @@ fn operation(id: &str, lane: Lane, entity: &str) -> QueueOperation {
     QueueOperation {
         id: id.into(),
         account_id: "account".into(),
-        lane,
+        lane: lane,
         kind: OperationKind::Traversal,
         entity_key: entity.into(),
         cost: 1,

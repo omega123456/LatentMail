@@ -10,19 +10,21 @@ import { applySuggestion, suggestionsFor, type SearchSuggestion } from './search
 import type { MailLabel } from '@/lib/types/ipc';
 import { formatBindingLabel, isMacPlatform, primaryBinding } from '@/lib/keyboard/format';
 import { useCommandBindings } from '@/providers/CommandProvider';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { POPOVER_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
 
 export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>(
   function SearchField({ labels }, ref) {
-    const draft = useSearchStore((state) => state.draft);
-    const setDraft = useSearchStore((state) => state.setDraft);
-    const scope = useSearchStore((state) => state.scope);
-    const setScope = useSearchStore((state) => state.setScope);
-    const panelOpen = useSearchStore((state) => state.panelOpen);
-    const openPanel = useSearchStore((state) => state.openPanel);
-    const closePanel = useSearchStore((state) => state.closePanel);
-    const submit = useSearchStore((state) => state.submit);
-    const clear = useSearchStore((state) => state.clear);
-    const showError = useToastStore((state) => state.showError);
+    const draft = useSearchStore((search) => search.draft);
+    const setDraft = useSearchStore((search) => search.setDraft);
+    const scope = useSearchStore((search) => search.scope);
+    const setScope = useSearchStore((search) => search.setScope);
+    const panelOpen = useSearchStore((search) => search.panelOpen);
+    const openPanel = useSearchStore((search) => search.openPanel);
+    const closePanel = useSearchStore((search) => search.closePanel);
+    const submit = useSearchStore((search) => search.submit);
+    const clear = useSearchStore((search) => search.clear);
+    const showError = useToastStore((toaster) => toaster.showError);
 
     const [activeIndex, setActiveIndex] = useState(-1);
     const [dismissed, setDismissed] = useState(false);
@@ -71,7 +73,7 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
         <div className="flex items-center gap-2 rounded-full bg-surface-container-low px-3 py-2 transition-colors hover:bg-surface-container focus-within:outline-2 focus-within:outline-primary dark:bg-dark-surface-container-low dark:hover:bg-dark-surface-container">
           <Search
             aria-hidden="true"
-            size={18}
+            size={ICON_SIZE.lg}
             className="shrink-0 text-on-surface-variant dark:text-dark-on-surface-variant"
           />
           <Popover.Root open={open}>
@@ -131,7 +133,7 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
             <Popover.Portal>
               <Popover.Content
                 align="start"
-                sideOffset={6}
+                sideOffset={POPOVER_SIDE_OFFSET_PX}
                 onOpenAutoFocus={(event) => event.preventDefault()}
                 style={{ width: 'var(--radix-popover-trigger-width)' }}
                 className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"
@@ -152,7 +154,7 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
               onClick={() => clear()}
               className="shrink-0 cursor-pointer rounded p-0.5 text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:text-dark-on-surface"
             >
-              <X aria-hidden="true" size={16} />
+              <X aria-hidden="true" size={ICON_SIZE.base} />
             </button>
           )}
           {showShortcutHint && (
@@ -171,9 +173,9 @@ export const SearchField = forwardRef<HTMLInputElement, { labels: MailLabel[] }>
             className="shrink-0 cursor-pointer rounded p-0.5 text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:text-dark-on-surface"
           >
             {panelOpen ? (
-              <ChevronUp aria-hidden="true" size={16} />
+              <ChevronUp aria-hidden="true" size={ICON_SIZE.base} />
             ) : (
-              <ChevronDown aria-hidden="true" size={16} />
+              <ChevronDown aria-hidden="true" size={ICON_SIZE.base} />
             )}
           </button>
         </div>

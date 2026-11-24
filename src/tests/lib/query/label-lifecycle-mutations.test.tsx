@@ -68,7 +68,7 @@ describe('label lifecycle mutations', () => {
     act(() => rename.result.current.mutate({ labelId: 'Label_1', name: 'Zebra' }));
     await waitFor(() =>
       expect(
-        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((l) => l.name),
+        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((label) => label.name),
       ).toEqual(['Archive', 'Zebra']),
     );
 
@@ -78,7 +78,7 @@ describe('label lifecycle mutations', () => {
     act(() => remove.result.current.mutate({ labelId: 'Label_1' }));
     await waitFor(() =>
       expect(
-        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((l) => l.name),
+        client.getQueryData<MailLabel[]>(queryKeys.labels('account-1'))?.map((label) => label.name),
       ).toEqual(['Archive']),
     );
   });

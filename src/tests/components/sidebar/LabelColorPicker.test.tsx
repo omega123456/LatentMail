@@ -53,7 +53,7 @@ describe('LabelColorPicker', () => {
     render(<LabelColorPicker selectedId="black" onApply={vi.fn()} onCancel={vi.fn()} />);
     const cells = screen.getAllByRole('gridcell');
 
-    cells[0]!.focus();
+    cells[0].focus();
     await user.keyboard('{ArrowDown}');
     expect(cells[10]).toHaveFocus();
     await user.keyboard('{ArrowRight}');

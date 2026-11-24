@@ -1,8 +1,6 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
-pub const MAIL_CHANGED_EVENT: &str = "mail://changed";
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailChanged {
@@ -25,7 +23,7 @@ impl<R: Runtime> MailChangeAnnouncer<R> {
     }
 
     pub fn announce<T>(self, outcome: Result<T, String>) -> Result<T, String> {
-        if let Err(error) = self.app.emit(MAIL_CHANGED_EVENT, self.change) {
+        if let Err(error) = self.app.emit(crate::events::MAIL_CHANGED, self.change) {
             tracing::warn!(target: "sync", "mail change announcement failed: {error}");
         }
         outcome

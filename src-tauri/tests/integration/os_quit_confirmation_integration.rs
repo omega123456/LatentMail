@@ -12,7 +12,7 @@ fn operation(id: &str, kind: OperationKind) -> QueueOperation {
         id: id.into(),
         account_id: "account".into(),
         lane: Lane::Interactive,
-        kind,
+        kind: kind,
         entity_key: id.into(),
         cost: 0,
         attempts: 0,

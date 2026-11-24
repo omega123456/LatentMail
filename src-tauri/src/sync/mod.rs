@@ -27,6 +27,8 @@ use crate::{
     },
 };
 
+const FRESH_ARRIVAL_MINUTES: i64 = 10;
+
 pub mod announce;
 pub mod commands;
 pub mod concurrency;
@@ -121,14 +123,14 @@ fn registry_executor(registry: Arc<WorkRegistry>) -> Executor {
 
 fn gmail_base_url() -> String {
     std::env::var("LATENTMAIL_GMAIL_BASE_URL")
-        .unwrap_or_else(|_| "https://gmail.googleapis.com/gmail/v1".into())
+        .unwrap_or_else(|_| crate::gmail::GMAIL_API_BASE_URL.into())
 }
 
 async fn run_via_queue<F, T>(
     queue: &Arc<QueueEngine>,
     registry: &Arc<WorkRegistry>,
     account_id: &str,
-    op_id: String,
+    operation_id: String,
     future: F,
 ) -> Result<T, SyncError>
 where
@@ -139,7 +141,7 @@ where
         queue,
         registry,
         account_id,
-        op_id,
+        operation_id,
         QueueRoute {
             lane: Lane::Background,
             kind: OperationKind::Sync,
@@ -155,7 +157,7 @@ async fn run_via_traversal_queue<F, T>(
     queue: &Arc<QueueEngine>,
     registry: &Arc<WorkRegistry>,
     account_id: &str,
-    op_id: String,
+    operation_id: String,
     future: F,
 ) -> Result<T, SyncError>
 where
@@ -166,7 +168,7 @@ where
         queue,
         registry,
         account_id,
-        op_id,
+        operation_id,
         QueueRoute {
             lane: Lane::Traversal,
             kind: OperationKind::Traversal,
@@ -182,7 +184,7 @@ async fn run_via_queue_on<F, T>(
     queue: &Arc<QueueEngine>,
     registry: &Arc<WorkRegistry>,
     account_id: &str,
-    op_id: String,
+    operation_id: String,
     route: QueueRoute,
     future: F,
 ) -> Result<T, SyncError>
@@ -190,9 +192,9 @@ where
     F: Future<Output = Result<T, SyncError>> + Send + 'static,
     T: Send + 'static,
 {
-    let (tx, rx) = oneshot::channel::<Result<T, SyncError>>();
+    let (sender, receiver) = oneshot::channel::<Result<T, SyncError>>();
     registry.register(
-        op_id.clone(),
+        operation_id.clone(),
         Box::new(move || {
             Box::pin(async move {
                 let result = future.await;
@@ -201,13 +203,13 @@ where
                 } else {
                     Err(QueueError::Permanent)
                 };
-                let _ = tx.send(result);
+                let _ = sender.send(result);
                 queue_outcome
             })
         }),
     );
     let operation = QueueOperation {
-        id: op_id,
+        id: operation_id,
         account_id: account_id.to_owned(),
         lane: route.lane,
         kind: route.kind,
@@ -221,7 +223,7 @@ where
         .enqueue(operation)
         .await
         .map_err(|_| SyncError::QueueStopped)?;
-    rx.await.map_err(|_| SyncError::QueueStopped)?
+    receiver.await.map_err(|_| SyncError::QueueStopped)?
 }
 
 fn derive_operation_kind(add: &HashSet<String>, remove: &HashSet<String>) -> OperationKind {
@@ -309,7 +311,7 @@ pub struct SyncProgressEvent {
 
 pub fn emit_progress(sink: &EventSink, event: SyncProgressEvent) {
     sink(
-        "sync://progress",
+        crate::events::SYNC_PROGRESS,
         serde_json::to_value(event).expect("SyncProgressEvent always serializes"),
     );
 }
@@ -326,7 +328,7 @@ pub struct SyncCompleteEvent {
 
 pub fn emit_complete(sink: &EventSink, event: SyncCompleteEvent) {
     sink(
-        "sync://complete",
+        crate::events::SYNC_COMPLETE,
         serde_json::to_value(event).expect("SyncCompleteEvent always serializes"),
     );
 }
@@ -350,7 +352,7 @@ pub struct NewMailEvent {
 
 pub fn emit_new_mail(sink: &EventSink, event: NewMailEvent) {
     sink(
-        "mail://new",
+        crate::events::MAIL_NEW,
         serde_json::to_value(event).expect("NewMailEvent always serializes"),
     );
 }
@@ -361,7 +363,7 @@ pub struct SyncEngine {
     registry: Arc<WorkRegistry>,
     events: EventSink,
     status: AsyncMutex<std::collections::HashMap<String, AccountStatus>>,
-    op_counter: Arc<AtomicU64>,
+    operation_counter: Arc<AtomicU64>,
     pending: AsyncMutex<mutations::PendingMutations>,
     gmail_limiters: GmailRateLimiters,
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
@@ -406,18 +408,18 @@ impl SyncEngine {
         gmail_limiters: GmailRateLimiters,
     ) -> Arc<Self> {
         Arc::new(Self {
-            storage,
-            queue,
-            registry,
-            events,
+            storage: storage,
+            queue: queue,
+            registry: registry,
+            events: events,
             status: AsyncMutex::new(std::collections::HashMap::new()),
-            op_counter: Arc::new(AtomicU64::new(0)),
+            operation_counter: Arc::new(AtomicU64::new(0)),
             pending: AsyncMutex::new(std::collections::HashMap::new()),
-            gmail_limiters,
+            gmail_limiters: gmail_limiters,
             active_backfills: Arc::new(AsyncMutex::new(std::collections::HashSet::new())),
             attachment_cache: std::sync::OnceLock::new(),
             ai_catch_up: std::sync::OnceLock::new(),
-            clock,
+            clock: clock,
         })
     }
 
@@ -470,9 +472,9 @@ impl SyncEngine {
         GmailClient::for_account(account_id, token, base_url, &self.gmail_limiters).await
     }
 
-    fn next_op_id(&self, account_id: &str) -> String {
-        let n = self.op_counter.fetch_add(1, Ordering::Relaxed);
-        format!("sync:{account_id}:{n}")
+    fn next_operation_id(&self, account_id: &str) -> String {
+        let sequence = self.operation_counter.fetch_add(1, Ordering::Relaxed);
+        format!("sync:{account_id}:{sequence}")
     }
 
     pub async fn enqueue_embedding<F>(
@@ -484,7 +486,7 @@ impl SyncEngine {
     where
         F: Future<Output = Result<(), String>> + Send + 'static,
     {
-        let id = self.next_op_id(account_id);
+        let id = self.next_operation_id(account_id);
         self.registry.register(
             id.clone(),
             Box::new(move || {
@@ -493,14 +495,14 @@ impl SyncEngine {
         );
         self.queue
             .enqueue(QueueOperation {
-                id,
+                id: id,
                 account_id: account_id.to_owned(),
                 lane: Lane::Embedding,
                 kind: OperationKind::Embed,
                 entity_key: format!("embedding:{account_id}"),
                 cost: 0,
                 attempts: 0,
-                description,
+                description: description,
             })
             .await
             .map_err(|_| SyncError::QueueStopped)
@@ -579,9 +581,9 @@ impl SyncEngine {
             &self.events,
             SyncCompleteEvent {
                 account_id: account_id.to_owned(),
-                history_id,
-                added_count,
-                changed,
+                history_id: history_id,
+                added_count: added_count,
+                changed: changed,
                 completed_at: dto::to_millis(now),
             },
         );
@@ -631,14 +633,18 @@ impl SyncEngine {
         client: GmailClient,
     ) -> Result<(), SyncError> {
         self.set_syncing(account_id).await;
-        let op_id = self.next_op_id(account_id);
+        let operation_id = self.next_operation_id(account_id);
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
         let backfill_client = client.clone();
         let cache = self.attachment_cache().cloned();
-        let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            full_sync_body(&storage, &client, &account_owned, cache).await
-        })
+        let outcome = run_via_queue(
+            &self.queue,
+            &self.registry,
+            account_id,
+            operation_id,
+            async move { full_sync_body(&storage, &client, &account_owned, cache).await },
+        )
         .await;
         let result = self.finish(account_id, outcome).await;
         if result.is_ok() {
@@ -680,7 +686,7 @@ impl SyncEngine {
                 registry: Arc::clone(&self.registry),
                 storage: self.storage.clone(),
                 events: Arc::clone(&self.events),
-                op_counter: Arc::clone(&self.op_counter),
+                operation_counter: Arc::clone(&self.operation_counter),
                 active_backfills: Arc::clone(&self.active_backfills),
                 attachment_cache: self.attachment_cache().cloned(),
             },
@@ -698,7 +704,7 @@ impl SyncEngine {
         checkpoint: i64,
     ) -> Result<(), SyncError> {
         self.set_syncing(account_id).await;
-        let op_id = self.next_op_id(account_id);
+        let operation_id = self.next_operation_id(account_id);
         let storage = self.storage.clone();
         let traversal_queue = Arc::clone(&self.queue);
         let traversal_registry = Arc::clone(&self.registry);
@@ -707,51 +713,57 @@ impl SyncEngine {
         let cache = self.attachment_cache().cloned();
         let reconciliation_cache = cache.clone();
         let now = (self.clock)();
-        let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            match incremental_body(&storage, &client, &account_owned, checkpoint, cache, now)
-                .await?
-            {
-                IncrementalOutcome::Updated {
-                    history_id,
-                    added_count,
-                    thread_ids,
-                    changed,
-                    arrivals,
-                } => Ok(FullSyncOutcome {
-                    history_id,
-                    added_count,
-                    thread_ids,
-                    changed,
-                    arrivals,
-                }),
-                IncrementalOutcome::Expired => {
-                    let reconciliation_client = client.traversal_scoped();
-                    let reconciliation_storage = storage.clone();
-                    let reconciliation_account = account_owned.clone();
-                    run_via_traversal_queue(
-                        &traversal_queue,
-                        &traversal_registry,
-                        &account_owned,
-                        format!("reconcile:{account_owned}:{checkpoint}"),
-                        {
-                            let reconciliation_queue = Arc::clone(&traversal_queue);
-                            async move {
-                                reconcile::run(
-                                    &reconciliation_storage,
-                                    &reconciliation_client,
-                                    &reconciliation_account,
-                                    &reconciliation_events,
-                                    Some(&reconciliation_queue),
-                                    reconciliation_cache,
-                                )
-                                .await
-                            }
-                        },
-                    )
-                    .await
+        let outcome = run_via_queue(
+            &self.queue,
+            &self.registry,
+            account_id,
+            operation_id,
+            async move {
+                match incremental_body(&storage, &client, &account_owned, checkpoint, cache, now)
+                    .await?
+                {
+                    IncrementalOutcome::Updated {
+                        history_id,
+                        added_count,
+                        thread_ids,
+                        changed,
+                        arrivals,
+                    } => Ok(FullSyncOutcome {
+                        history_id,
+                        added_count,
+                        thread_ids,
+                        changed,
+                        arrivals,
+                    }),
+                    IncrementalOutcome::Expired => {
+                        let reconciliation_client = client.traversal_scoped();
+                        let reconciliation_storage = storage.clone();
+                        let reconciliation_account = account_owned.clone();
+                        run_via_traversal_queue(
+                            &traversal_queue,
+                            &traversal_registry,
+                            &account_owned,
+                            format!("reconcile:{account_owned}:{checkpoint}"),
+                            {
+                                let reconciliation_queue = Arc::clone(&traversal_queue);
+                                async move {
+                                    reconcile::run(
+                                        &reconciliation_storage,
+                                        &reconciliation_client,
+                                        &reconciliation_account,
+                                        &reconciliation_events,
+                                        Some(&reconciliation_queue),
+                                        reconciliation_cache,
+                                    )
+                                    .await
+                                }
+                            },
+                        )
+                        .await
+                    }
                 }
-            }
-        })
+            },
+        )
         .await;
         self.finish(account_id, outcome).await
     }
@@ -806,14 +818,18 @@ impl SyncEngine {
     }
 
     pub async fn probe_only(&self, account_id: &str, client: GmailClient) -> Result<(), SyncError> {
-        let op_id = self.next_op_id(account_id);
+        let operation_id = self.next_operation_id(account_id);
         let storage = self.storage.clone();
         let account_owned = account_id.to_owned();
         let cache = self.attachment_cache().cloned();
         let now = (self.clock)();
-        let outcome = run_via_queue(&self.queue, &self.registry, account_id, op_id, async move {
-            probe_only_body(&storage, &client, &account_owned, cache, now).await
-        })
+        let outcome = run_via_queue(
+            &self.queue,
+            &self.registry,
+            account_id,
+            operation_id,
+            async move { probe_only_body(&storage, &client, &account_owned, cache, now).await },
+        )
         .await;
         match outcome {
             Ok(batch) => {
@@ -846,27 +862,27 @@ fn enqueue_backfill_step(
             registry,
             storage,
             events,
-            op_counter,
+            operation_counter,
             active_backfills,
             attachment_cache,
         } = handles;
-        let op_id = format!(
+        let operation_id = format!(
             "traversal:{account_id}:{}",
-            op_counter.fetch_add(1, Ordering::Relaxed)
+            operation_counter.fetch_add(1, Ordering::Relaxed)
         );
         let step_storage = storage.clone();
         let step_events = Arc::clone(&events);
         let step_account = account_id.clone();
         let step_client = client.clone();
         let step_attachment_cache = attachment_cache.clone();
-        let (step_queue, step_registry, step_op_counter, step_active_backfills) = (
+        let (step_queue, step_registry, step_operation_counter, step_active_backfills) = (
             Arc::clone(&queue),
             Arc::clone(&registry),
-            Arc::clone(&op_counter),
+            Arc::clone(&operation_counter),
             Arc::clone(&active_backfills),
         );
         registry.register(
-            op_id.clone(),
+            operation_id.clone(),
             Box::new(move || {
                 Box::pin(async move {
                     let traversal_client = step_client.traversal_scoped();
@@ -895,9 +911,9 @@ fn enqueue_backfill_step(
                                 registry: step_registry,
                                 storage: step_storage,
                                 events: step_events,
-                                op_counter: step_op_counter,
+                                operation_counter: step_operation_counter,
                                 active_backfills: step_active_backfills,
-                                attachment_cache,
+                                attachment_cache: attachment_cache,
                             },
                             step_account,
                             step_client,
@@ -911,7 +927,7 @@ fn enqueue_backfill_step(
         );
         let enqueue_result = queue
             .enqueue(QueueOperation {
-                id: op_id,
+                id: operation_id,
                 account_id: account_id.clone(),
                 lane: Lane::Traversal,
                 kind: OperationKind::Traversal,
@@ -932,7 +948,7 @@ struct BackfillHandles {
     registry: Arc<WorkRegistry>,
     storage: Storage,
     events: EventSink,
-    op_counter: Arc<AtomicU64>,
+    operation_counter: Arc<AtomicU64>,
 
     active_backfills: Arc<AsyncMutex<std::collections::HashSet<String>>>,
     attachment_cache: Option<crate::attachments::AttachmentCache>,
@@ -1003,7 +1019,7 @@ async fn full_sync_body(
 
     Ok(FullSyncOutcome {
         history_id: profile.history_id,
-        added_count,
+        added_count: added_count,
         thread_ids: thread_ids.into_iter().collect(),
         changed: true,
         arrivals: Vec::new(),
@@ -1108,7 +1124,8 @@ fn compute_arrivals(
                 && has("INBOX")
                 && has("UNREAD")
                 && chrono::DateTime::from_timestamp(message.sent_at, 0).is_some_and(|sent_at| {
-                    now.signed_duration_since(sent_at) <= chrono::Duration::minutes(10)
+                    now.signed_duration_since(sent_at)
+                        <= chrono::Duration::minutes(FRESH_ARRIVAL_MINUTES)
                 })
         })
         .map(|message| MailArrival {
@@ -1132,8 +1149,8 @@ fn emit_new_mail_if_present(
             events,
             NewMailEvent {
                 account_id: account_id.to_owned(),
-                thread_ids,
-                arrivals,
+                thread_ids: thread_ids,
+                arrivals: arrivals,
             },
         );
     }
@@ -1175,8 +1192,8 @@ async fn probe_only_body(
         .await?;
     Ok(MaterializedBatch {
         thread_ids: thread_ids.into_iter().collect(),
-        arrivals,
-        added_count,
+        arrivals: arrivals,
+        added_count: added_count,
     })
 }
 
@@ -1336,10 +1353,10 @@ async fn incremental_body(
 
     Ok(IncrementalOutcome::Updated {
         history_id: final_history_id,
-        added_count,
+        added_count: added_count,
         thread_ids: added_thread_ids.into_iter().collect(),
-        changed,
-        arrivals,
+        changed: changed,
+        arrivals: arrivals,
     })
 }
 
@@ -1406,7 +1423,7 @@ pub(crate) fn to_label(account_id: &str, label: &GmailLabel) -> Label {
         id: label.id.clone(),
         name: label.name.clone(),
         kind: label.kind.clone(),
-        color,
+        color: color,
         message_count: label.message_count,
     }
 }
@@ -1425,7 +1442,7 @@ fn write_message(
 }
 
 pub struct SyncScheduler {
-    interval_tx: watch::Sender<Duration>,
+    interval_sender: watch::Sender<Duration>,
 }
 
 impl SyncScheduler {
@@ -1434,15 +1451,15 @@ impl SyncScheduler {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let (tx, mut rx) = watch::channel(initial_interval);
+        let (sender, mut receiver) = watch::channel(initial_interval);
         tokio::spawn(async move {
             let mut first = true;
             loop {
-                let wait = *rx.borrow();
+                let wait = *receiver.borrow();
                 if !(first && run_immediately) {
                     tokio::select! {
                         _ = tokio::time::sleep(wait) => {}
-                        _ = rx.changed() => {
+                        _ = receiver.changed() => {
                             first = false;
                             continue;
                         }
@@ -1452,15 +1469,17 @@ impl SyncScheduler {
                 tick().await;
             }
         });
-        Arc::new(Self { interval_tx: tx })
+        Arc::new(Self {
+            interval_sender: sender,
+        })
     }
 
     pub fn set_interval(&self, interval: Duration) {
-        let _ = self.interval_tx.send(interval);
+        let _ = self.interval_sender.send(interval);
     }
 
     pub fn interval(&self) -> Duration {
-        *self.interval_tx.borrow()
+        *self.interval_sender.borrow()
     }
 }
 
@@ -1534,7 +1553,7 @@ pub async fn run_periodic_cadence<R: Runtime>(
 
 pub fn emitting_event_sink<R: Runtime>(handle: AppHandle<R>) -> EventSink {
     Arc::new(move |event, payload| {
-        if event != "queue://summary" {
+        if event != crate::events::QUEUE_SUMMARY {
             let payload_bytes = payload.to_string().len();
             tracing::info!(target: "events", "emit {event} ({payload_bytes} bytes)");
         }
@@ -1615,8 +1634,8 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>, storage: Storage) -> Result<()
         });
     });
     let queue = QueueEngine::new_with_events_and_hook(
-        250,
-        250,
+        crate::queue::DEFAULT_RATE_PER_SECOND,
+        crate::queue::DEFAULT_BURST,
         executor,
         Arc::clone(&events),
         cancellation_hook,
@@ -1697,7 +1716,7 @@ fn spawn_startup_recovery<R: Runtime>(
         let auth = app.state::<AuthService>().inner().clone();
         for account_id in uncertain_accounts {
             (events)(
-                "send://uncertain",
+                crate::events::SEND_UNCERTAIN,
                 serde_json::to_value(crate::queue::uncertain_send_event(account_id.clone()))
                     .expect("UncertainSendEvent serializes"),
             );

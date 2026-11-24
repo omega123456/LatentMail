@@ -46,8 +46,8 @@ fn harness() -> Harness {
     app.manage(AiService::new(storage.clone()));
     app.manage(sync);
     Harness {
-        app,
-        database,
+        app: app,
+        database: database,
         _directory: directory,
     }
 }

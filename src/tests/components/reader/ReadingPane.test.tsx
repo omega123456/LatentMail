@@ -7,6 +7,8 @@ import { ipc } from '@/tests/ipc-mock';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
 import { useMessageSourceStore } from '@/stores/message-source';
 
+const MESSAGE_COUNT = 2;
+
 describe('ReadingPane', () => {
   it('renders reader states', () => {
     const { rerender } = renderWithQueryClient(<ReadingPane threadId={null} />);
@@ -32,7 +34,7 @@ describe('ReadingPane', () => {
       expect.stringContaining('body{margin:0'),
     );
     await user.click(screen.getByRole('button', { name: 'Expand message from Elena Rodriguez' }));
-    expect(screen.getAllByLabelText('Message body')).toHaveLength(2);
+    expect(screen.getAllByLabelText('Message body')).toHaveLength(MESSAGE_COUNT);
     expect(screen.getByText('Remote images are blocked.')).toBeInTheDocument();
   });
 
@@ -87,7 +89,7 @@ describe('ReadingPane', () => {
       <ReadingPane threadId="thread-1" conversation={conversation} />,
     );
     expect(
-      screen.getByText((_, element) => element?.textContent === 'first line\n  second line'),
+      screen.getByText((_content, element) => element?.textContent === 'first line\n  second line'),
     ).toHaveClass('whitespace-pre-wrap');
     conversation.messages[1].text = null;
     rerender(<ReadingPane threadId="thread-1" conversation={conversation} />);
@@ -98,7 +100,7 @@ describe('ReadingPane', () => {
     const user = userEvent.setup();
     renderWithQueryClient(<ReadingPane threadId="thread-1" />);
     expect(screen.getByRole('toolbar', { name: 'Conversation actions' })).toBeInTheDocument();
-    expect(screen.getAllByRole('toolbar', { name: 'Message actions' })).toHaveLength(2);
+    expect(screen.getAllByRole('toolbar', { name: 'Message actions' })).toHaveLength(MESSAGE_COUNT);
 
     await user.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
   });

@@ -22,7 +22,7 @@ fn base_message(id: &str, history_id: i64) -> GmailMessage {
     GmailMessage {
         id: id.into(),
         thread_id: "thread".into(),
-        history_id,
+        history_id: history_id,
         label_ids: Vec::new(),
         snippet: String::new(),
         sent_at: 1,

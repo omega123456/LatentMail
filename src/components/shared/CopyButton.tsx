@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const COPIED_RESET_MS = 2000;
 
@@ -37,7 +38,11 @@ export function CopyButton({
         onClick={copy}
         className={`${baseClass} ${copied ? copiedClass : restingClass}`}
       >
-        {copied ? <Check aria-hidden="true" size={13} /> : <Copy aria-hidden="true" size={13} />}
+        {copied ? (
+          <Check aria-hidden="true" size={ICON_SIZE.xs} />
+        ) : (
+          <Copy aria-hidden="true" size={ICON_SIZE.xs} />
+        )}
       </button>
       <span role="status" aria-live="polite" className="sr-only">
         {copied ? (confirmation ?? `Copied ${value}`) : ''}

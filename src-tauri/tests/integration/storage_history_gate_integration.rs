@@ -18,7 +18,7 @@ fn message(history_id: i64, subject: &str) -> Message {
         has_attachments: false,
         is_unread: false,
         is_starred: false,
-        history_id,
+        history_id: history_id,
         truncated_body: None,
         html_presence: HtmlPresence::Absent,
     }

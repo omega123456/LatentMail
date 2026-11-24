@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageActionRibbon } from '@/components/actions/MessageActionRibbon';
 
+const SECOND_TO_LAST = -2;
+
 function baseHandlers() {
   return {
     onToggleRead: vi.fn(),
@@ -177,7 +179,7 @@ describe('MessageActionRibbon', () => {
     );
     const buttons = screen.getAllByRole('button');
     expect(buttons.at(-1)).toHaveAccessibleName('More message actions');
-    expect(buttons.at(-2)).toHaveAccessibleName('Delete');
+    expect(buttons.at(SECOND_TO_LAST)).toHaveAccessibleName('Delete');
 
     await user.click(screen.getByRole('button', { name: 'More message actions' }));
     expect(screen.getByRole('menuitem', { name: /Show original/ })).toHaveTextContent('Ctrl+U');

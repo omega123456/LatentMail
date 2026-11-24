@@ -2,7 +2,7 @@ import { useEffect, type PropsWithChildren } from 'react';
 import { useLayoutStore } from '@/stores/layout';
 
 export function LayoutProvider({ children }: PropsWithChildren) {
-  const hydrate = useLayoutStore((state) => state.hydrate);
+  const hydrate = useLayoutStore((layout) => layout.hydrate);
 
   useEffect(() => {
     void hydrate();

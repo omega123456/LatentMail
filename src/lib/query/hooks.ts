@@ -41,13 +41,17 @@ export function useAiModelsQuery(accountId: string, revision: number, enabled: b
   return useQuery({
     queryKey: queryKeys.aiModels(accountId, revision),
     queryFn: () => invoke('list_ai_models', { accountId }),
-    enabled,
+    enabled: enabled,
     staleTime: 0,
     retry: false,
   });
 }
 
-export const AI_CONNECTION_INTERVAL_MS = minutesToMilliseconds(5);
+const AI_CONNECTION_INTERVAL_MINUTES = 5;
+export const AI_CONNECTION_INTERVAL_MS = minutesToMilliseconds(AI_CONNECTION_INTERVAL_MINUTES);
+export const CONTACT_QUERY_MIN_LENGTH = 2;
+export const RETAINED_THREAD_PAGES = 5;
+const THREAD_PAGE_SIZE = 50;
 
 function subscribeToVisibility(onChange: () => void) {
   document.addEventListener('visibilitychange', onChange);
@@ -98,7 +102,7 @@ export function useRebuildAiIndexMutation() {
 }
 
 export function useRemoveAccountMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (accountId: string) => invoke('remove_account', { accountId }),
     onSuccess: (_result, accountId) =>
@@ -116,7 +120,7 @@ export function useQueueOperationsQuery() {
 }
 
 export function useCancelQueueOperationMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (operationId: string) => invoke('cancel_queue_operation', { operationId }),
     onError: () => showError('Couldn’t cancel that operation.'),
@@ -124,7 +128,7 @@ export function useCancelQueueOperationMutation() {
 }
 
 export function useRetryQueueOperationMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (operationId: string) => invoke('retry_queue_operation', { operationId }),
     onError: () => showError('Couldn’t retry that operation.'),
@@ -132,7 +136,7 @@ export function useRetryQueueOperationMutation() {
 }
 
 export function useRetryFailedOperationsMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (accountId?: string) =>
       invoke('retry_failed_operations', { accountId: accountId ?? null }),
@@ -141,7 +145,7 @@ export function useRetryFailedOperationsMutation() {
 }
 
 export function useClearQueueHistoryMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (accountId?: string) =>
       invoke('clear_queue_history', { accountId: accountId ?? null }),
@@ -150,9 +154,10 @@ export function useClearQueueHistoryMutation() {
 }
 
 export function useSetQueuePausedMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
-    mutationFn: (args: { scope: PauseScope; paused: boolean }) => invoke('set_queue_paused', args),
+    mutationFn: (request: { scope: PauseScope; paused: boolean }) =>
+      invoke('set_queue_paused', request),
     onError: () => showError('Couldn’t update the pause state.'),
   });
 }
@@ -169,7 +174,7 @@ export function useLogEntriesQuery() {
 }
 
 export function useAppUpdateQuery() {
-  const updateCheckInterval = useLayoutStore((state) => state.updateCheckInterval);
+  const updateCheckInterval = useLayoutStore((layout) => layout.updateCheckInterval);
   return useQuery({
     queryKey: queryKeys.appUpdate,
     queryFn: () => invoke('check_for_update', {}),
@@ -181,7 +186,7 @@ export function useAppUpdateQuery() {
 }
 
 export function useInstallUpdateMutation() {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: () => invoke('install_update', {}),
     onError: () => showError('Couldn’t install the update.'),
@@ -200,8 +205,8 @@ export function useLabelsQuery(accountId: string | null) {
 export function useContactSuggestionsQuery(accountId: string | null, query: string) {
   return useQuery({
     queryKey: queryKeys.contacts(accountId ?? '', query),
-    queryFn: () => invoke('lookup_contacts', { accountId: accountId as string, query }),
-    enabled: accountId !== null && query.trim().length >= 2,
+    queryFn: () => invoke('lookup_contacts', { accountId: accountId as string, query: query }),
+    enabled: accountId !== null && query.trim().length >= CONTACT_QUERY_MIN_LENGTH,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
 }
@@ -215,7 +220,7 @@ export function useThreadsQuery(accountId: string | null, mailboxId: string | nu
         labelId: mailboxId,
         cursor: pageParam?.cursor ?? null,
         direction: pageParam?.direction ?? 'forward',
-        limit: 50,
+        limit: THREAD_PAGE_SIZE,
       }),
     initialPageParam: null as ThreadPageParam | null,
     getNextPageParam: (lastPage) =>
@@ -226,7 +231,7 @@ export function useThreadsQuery(accountId: string | null, mailboxId: string | nu
       firstPage.previousCursor
         ? { cursor: firstPage.previousCursor, direction: 'backward' as const }
         : undefined,
-    maxPages: 5,
+    maxPages: RETAINED_THREAD_PAGES,
     enabled: accountId !== null && mailboxId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
@@ -238,11 +243,11 @@ export function useSearchThreadsQuery(accountId: string | null, query: string, s
     queryFn: ({ pageParam }) =>
       invoke('search_threads', {
         accountId: accountId as string,
-        query,
-        scope,
+        query: query,
+        scope: scope,
         cursor: pageParam?.cursor ?? null,
         direction: pageParam?.direction ?? 'forward',
-        limit: 50,
+        limit: THREAD_PAGE_SIZE,
       }),
     initialPageParam: null as ThreadPageParam | null,
     getNextPageParam: (lastPage) =>
@@ -253,7 +258,7 @@ export function useSearchThreadsQuery(accountId: string | null, query: string, s
       firstPage.previousCursor
         ? { cursor: firstPage.previousCursor, direction: 'backward' as const }
         : undefined,
-    maxPages: 5,
+    maxPages: RETAINED_THREAD_PAGES,
     enabled: accountId !== null && query.trim().length > 0,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
@@ -262,7 +267,8 @@ export function useSearchThreadsQuery(accountId: string | null, query: string, s
 export function useSearchTotalQuery(accountId: string | null, query: string, scope: SearchScope) {
   return useQuery({
     queryKey: queryKeys.searchTotal(accountId ?? '', query, scope),
-    queryFn: () => invoke('search_total', { accountId: accountId as string, query, scope }),
+    queryFn: () =>
+      invoke('search_total', { accountId: accountId as string, query: query, scope: scope }),
     enabled: accountId !== null && query.trim().length > 0,
     staleTime: LOCAL_FIRST_STALE_TIME,
   });
@@ -278,15 +284,15 @@ export function useParseSearchQueryQuery(query: string) {
 }
 
 function useConversationRequest() {
-  const alwaysLoad = useLayoutStore((state) => state.alwaysLoadRemoteImages);
-  const allowedSenders = useLayoutStore((state) => state.allowedImageSenders);
-  const loadFor = useSelectionStore((state) => state.imagesAllowedFor);
-  const mailboxId = useSelectionStore((state) => state.activeMailboxId) ?? 'INBOX';
-  const searchActive = useSearchStore((state) => state.active);
-  const searchScope = useSearchStore((state) => state.scope);
+  const alwaysLoad = useLayoutStore((layout) => layout.alwaysLoadRemoteImages);
+  const allowedSenders = useLayoutStore((layout) => layout.allowedImageSenders);
+  const loadFor = useSelectionStore((selection) => selection.imagesAllowedFor);
+  const mailboxId = useSelectionStore((selection) => selection.activeMailboxId) ?? 'INBOX';
+  const searchActive = useSearchStore((search) => search.active);
+  const searchScope = useSearchStore((search) => search.scope);
   const imagePolicy: ImagePolicy = useMemo(
     () => ({
-      alwaysLoad,
+      alwaysLoad: alwaysLoad,
       allowedSenders: [...allowedSenders].sort(),
       loadFor: [...loadFor].sort(),
     }),
@@ -294,7 +300,7 @@ function useConversationRequest() {
   );
   const entryScope: ConversationEntryScope = searchActive
     ? { kind: 'search', scope: searchScope }
-    : { kind: 'mailbox', mailboxId };
+    : { kind: 'mailbox', mailboxId: mailboxId };
   return { imagePolicy, entryScope };
 }
 
@@ -311,8 +317,8 @@ export function useConversationQuery(accountId: string | null, threadId: string 
       invoke('load_conversation', {
         accountId: accountId as string,
         threadId: threadId as string,
-        imagePolicy,
-        entryScope,
+        imagePolicy: imagePolicy,
+        entryScope: entryScope,
       }),
     enabled: accountId !== null && threadId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
@@ -336,8 +342,8 @@ export function useMessageBodyQuery(
       invoke('load_message_body', {
         accountId: accountId as string,
         messageId: messageId as string,
-        imagePolicy,
-        entryScope,
+        imagePolicy: imagePolicy,
+        entryScope: entryScope,
       }),
     enabled: enabled && accountId !== null && messageId !== null,
     staleTime: LOCAL_FIRST_STALE_TIME,
@@ -407,7 +413,7 @@ export function useTraversalStatusQuery(accountId: string | null) {
 }
 
 export function useSenderAvatarQuery(domain: string | null) {
-  const showSenderAvatars = useLayoutStore((state) => state.showSenderAvatars);
+  const showSenderAvatars = useLayoutStore((layout) => layout.showSenderAvatars);
   return useQuery({
     queryKey: queryKeys.senderAvatar(domain ?? ''),
     queryFn: async () => {
@@ -444,10 +450,10 @@ export function useAccountAvatarQuery(accountId: string | null) {
 }
 
 export function useFetchMessageBodyMutation(accountId: string | null) {
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (messageId: string) =>
-      invoke('fetch_message_body', { accountId: accountId as string, messageId }),
+      invoke('fetch_message_body', { accountId: accountId as string, messageId: messageId }),
     onError: () => showError('Couldn’t load this message.'),
   });
 }

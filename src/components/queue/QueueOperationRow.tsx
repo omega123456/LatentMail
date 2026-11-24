@@ -4,6 +4,7 @@ import { RotateCcw, X } from 'lucide-react';
 import type { OperationRecord } from '@/lib/types/ipc';
 import { OPERATION_STATUS_META } from '@/lib/queue/describe';
 import { QueueStateChip } from './QueueStateChip';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const CANCELLABLE_STATUSES = new Set(['queued', 'retrying']);
 
@@ -66,7 +67,7 @@ export function QueueOperationRow({
               onClick={() => void handleCancel()}
               className="grid size-6 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-error focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-error"
             >
-              <X aria-hidden="true" size={13} />
+              <X aria-hidden="true" size={ICON_SIZE.xs} />
             </button>
           )}
           {canRetry && (
@@ -76,7 +77,7 @@ export function QueueOperationRow({
               onClick={() => onRetry(operation.id)}
               className="grid size-6 cursor-pointer place-items-center rounded-chip text-settings-ink-mute hover:bg-settings-container hover:text-settings-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-settings-primary dark:text-dark-settings-ink-mute dark:hover:bg-dark-settings-container dark:hover:text-dark-settings-ink"
             >
-              <RotateCcw aria-hidden="true" size={13} />
+              <RotateCcw aria-hidden="true" size={ICON_SIZE.xs} />
             </button>
           )}
         </span>

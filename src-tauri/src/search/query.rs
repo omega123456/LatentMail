@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration as ChronoDuration, Months, NaiveDate, Utc};
 
 pub const MAX_QUERY_LENGTH: usize = 2048;
+const MONTHS_PER_YEAR: u32 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryError {
@@ -106,20 +107,20 @@ fn tokenize(text: &str) -> Vec<RawToken> {
             }
             if let Some(key) = prefix.strip_suffix(':') {
                 tokens.push(RawToken {
-                    negated,
+                    negated: negated,
                     key: Some(key.to_lowercase()),
-                    value,
+                    value: value,
                 });
             } else if prefix.is_empty() {
                 tokens.push(RawToken {
-                    negated,
+                    negated: negated,
                     key: None,
-                    value,
+                    value: value,
                 });
             } else {
                 let raw: String = chars[start..index].iter().collect();
                 tokens.push(RawToken {
-                    negated,
+                    negated: negated,
                     key: None,
                     value: raw,
                 });
@@ -128,13 +129,13 @@ fn tokenize(text: &str) -> Vec<RawToken> {
             let key = prefix[..colon_position].to_lowercase();
             let value = prefix[colon_position + 1..].to_owned();
             tokens.push(RawToken {
-                negated,
+                negated: negated,
                 key: Some(key),
-                value,
+                value: value,
             });
         } else if !prefix.is_empty() {
             tokens.push(RawToken {
-                negated,
+                negated: negated,
                 key: None,
                 value: prefix,
             });
@@ -193,8 +194,8 @@ impl TextTerms {
 
 fn parse_absolute_cutoff(value: &str) -> Option<i64> {
     let value = value.trim();
-    let date = NaiveDate::parse_from_str(value, "%Y/%m/%d")
-        .or_else(|_| NaiveDate::parse_from_str(value, "%Y-%m-%d"))
+    let date = NaiveDate::parse_from_str(value, crate::date_formats::GMAIL_QUERY_DATE)
+        .or_else(|_| NaiveDate::parse_from_str(value, crate::date_formats::ISO_DATE))
         .ok()?;
     Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
@@ -211,7 +212,7 @@ fn parse_duration_cutoff(now: DateTime<Utc>, value: &str) -> Option<i64> {
         "d" => now - ChronoDuration::days(amount),
         "m" => now.checked_sub_months(Months::new(u32::try_from(amount).ok()?))?,
         "y" => {
-            let months = u32::try_from(amount).ok()?.checked_mul(12)?;
+            let months = u32::try_from(amount).ok()?.checked_mul(MONTHS_PER_YEAR)?;
             now.checked_sub_months(Months::new(months))?
         }
         _ => return None,
@@ -246,14 +247,14 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
                 if !value.trim().is_empty() {
                     predicates.push(Predicate {
                         kind: PredicateKind::Label(value),
-                        negated,
+                        negated: negated,
                     });
                 }
             }
             Some("is") => match value.to_lowercase().as_str() {
                 "unread" => predicates.push(Predicate {
                     kind: PredicateKind::Unread,
-                    negated,
+                    negated: negated,
                 }),
                 "read" => predicates.push(Predicate {
                     kind: PredicateKind::Unread,
@@ -261,7 +262,7 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
                 }),
                 "starred" => predicates.push(Predicate {
                     kind: PredicateKind::Starred,
-                    negated,
+                    negated: negated,
                 }),
                 "unstarred" => predicates.push(Predicate {
                     kind: PredicateKind::Starred,
@@ -272,35 +273,35 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
             Some("has") => match value.to_lowercase().as_str() {
                 "attachment" => predicates.push(Predicate {
                     kind: PredicateKind::HasAttachment,
-                    negated,
+                    negated: negated,
                 }),
                 _ => terms.push_literal(format!("has:{value}"), negated),
             },
             Some("before") => match parse_absolute_cutoff(&value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentBefore(cutoff),
-                    negated,
+                    negated: negated,
                 }),
                 None => terms.push_literal(format!("before:{value}"), negated),
             },
             Some("after") => match parse_absolute_cutoff(&value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentAfter(cutoff),
-                    negated,
+                    negated: negated,
                 }),
                 None => terms.push_literal(format!("after:{value}"), negated),
             },
             Some("newer_than") => match parse_duration_cutoff(now, &value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentAfter(cutoff),
-                    negated,
+                    negated: negated,
                 }),
                 None => terms.push_literal(format!("newer_than:{value}"), negated),
             },
             Some("older_than") => match parse_duration_cutoff(now, &value) {
                 Some(cutoff) => predicates.push(Predicate {
                     kind: PredicateKind::SentBefore(cutoff),
-                    negated,
+                    negated: negated,
                 }),
                 None => terms.push_literal(format!("older_than:{value}"), negated),
             },
@@ -335,13 +336,13 @@ fn build(tokens: Vec<RawToken>, now: DateTime<Utc>) -> ParsedQuery {
 
     ParsedQuery {
         has_text_term: match_expression.is_some(),
-        match_expression,
-        from,
-        to,
-        subject,
-        includes,
-        excludes,
-        predicates,
+        match_expression: match_expression,
+        from: from,
+        to: to,
+        subject: subject,
+        includes: includes,
+        excludes: excludes,
+        predicates: predicates,
     }
 }
 

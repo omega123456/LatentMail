@@ -13,6 +13,7 @@ import { AssistantEmptyState } from './AssistantEmptyState';
 import { AssistantNotice } from './AssistantNotice';
 import type { AssistantUnavailableCause } from './AssistantNotice';
 import { AssistantTranscript } from './AssistantTranscript';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const iconButtonClass =
   'grid size-9 shrink-0 cursor-pointer place-items-center rounded-full text-on-surface-variant hover:bg-surface-container focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container';
@@ -43,10 +44,10 @@ export function AssistantPanel({
   const configs = useAiConfigsQuery();
   const statuses = useAiIndexStatusesQuery();
   const connection = useAiConnectionQuery(accountId);
-  const messages = useAssistantStore((state) => state.messages);
-  const selectAccount = useAssistantStore((state) => state.selectAccount);
-  const newChat = useAssistantStore((state) => state.newChat);
-  const ask = useAssistantStore((state) => state.ask);
+  const messages = useAssistantStore((assistant) => assistant.messages);
+  const selectAccount = useAssistantStore((assistant) => assistant.selectAccount);
+  const newChat = useAssistantStore((assistant) => assistant.newChat);
+  const ask = useAssistantStore((assistant) => assistant.ask);
   const prompt = useRef<HTMLTextAreaElement>(null);
   const container = useRef<HTMLElement>(null);
 
@@ -93,7 +94,7 @@ export function AssistantPanel({
             onClick={newChat}
             className={iconButtonClass}
           >
-            <SquarePen aria-hidden="true" size={16} />
+            <SquarePen aria-hidden="true" size={ICON_SIZE.base} />
           </button>
         )}
         <button
@@ -103,7 +104,7 @@ export function AssistantPanel({
           onClick={onClose}
           className={iconButtonClass}
         >
-          <X aria-hidden="true" size={16} />
+          <X aria-hidden="true" size={ICON_SIZE.base} />
         </button>
       </div>
       {cause !== null && (

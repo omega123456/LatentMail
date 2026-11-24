@@ -166,9 +166,9 @@ describe('assistant chat events', () => {
     const logged = ipc.tauriInvoke.mock.calls.filter(
       ([command]) => command === 'write_frontend_log',
     );
-    expect(logged.some(([, args]) => JSON.stringify(args).includes('secret answer text'))).toBe(
-      false,
-    );
+    expect(
+      logged.some(([, request]) => JSON.stringify(request).includes('secret answer text')),
+    ).toBe(false);
     expect(ipc.tauriListen.mock.calls.some(([event]) => event === 'ai-chat://event')).toBe(false);
     client.clear();
   });

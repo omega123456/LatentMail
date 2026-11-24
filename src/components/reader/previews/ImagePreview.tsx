@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useZoom } from '@/lib/attachments/useZoom';
-import { PREVIEW_PADDING, type Size } from '@/lib/attachments/zoom';
+import { paddedLength, PREVIEW_PADDING, type Size } from '@/lib/attachments/zoom';
 import { ZoomToolbar } from './ZoomToolbar';
 
 const IMAGE_FIT_CAP = 1;
@@ -11,14 +11,14 @@ export function ImagePreview({ src, filename }: { src: string; filename: string 
   const content = useMemo(
     () =>
       natural && {
-        width: natural.width + PREVIEW_PADDING * 2,
-        height: natural.height + PREVIEW_PADDING * 2,
+        width: paddedLength(natural.width),
+        height: paddedLength(natural.height),
       },
     [natural],
   );
   const { zoom, mode, zoomIn, zoomOut, selectPreset } = useZoom({
-    scrollRef,
-    content,
+    scrollRef: scrollRef,
+    content: content,
     defaultMode: 'fit-page',
     fitCap: IMAGE_FIT_CAP,
   });

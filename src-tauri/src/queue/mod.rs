@@ -16,6 +16,13 @@ use tokio::{
 
 use crate::storage::{Operation, OperationRepository};
 
+pub const DEFAULT_RATE_PER_SECOND: u32 = 250;
+pub const DEFAULT_BURST: u32 = 250;
+const INTERACTIVE_LANE_SLOTS: usize = 4;
+const SINGLE_LANE_SLOT: usize = 1;
+const MAX_RETRY_BACKOFF_EXPONENT: u8 = 6;
+const MAX_RETRY_DELAY_SECONDS: u64 = 60;
+
 pub mod commands;
 pub mod registry;
 
@@ -47,10 +54,10 @@ impl Lane {
 
     pub fn capacity(self) -> usize {
         match self {
-            Self::Interactive => 4,
-            Self::Background => 1,
-            Self::Traversal => 1,
-            Self::Embedding => 1,
+            Self::Interactive => INTERACTIVE_LANE_SLOTS,
+            Self::Background => SINGLE_LANE_SLOT,
+            Self::Traversal => SINGLE_LANE_SLOT,
+            Self::Embedding => SINGLE_LANE_SLOT,
         }
     }
 }
@@ -160,13 +167,13 @@ struct TokenBucket {
 impl TokenBucket {
     fn new(rate: u32, capacity: u32) -> Self {
         Self {
-            tokens: Mutex::new((capacity as f64, Instant::now())),
-            rate: rate as f64,
-            capacity: capacity as f64,
+            tokens: Mutex::new((f64::from(capacity), Instant::now())),
+            rate: f64::from(rate),
+            capacity: f64::from(capacity),
         }
     }
     async fn acquire(&self, cost: u32) {
-        let cost = cost as f64;
+        let cost = f64::from(cost);
         loop {
             let wait = {
                 let mut state = self.tokens.lock().await;
@@ -239,18 +246,22 @@ impl QueueEngine {
             interactive_pending: Mutex::new(HashMap::new()),
             interactive_drained: Notify::new(),
             buckets: Mutex::new(HashMap::new()),
-            rate_per_second,
-            burst,
+            rate_per_second: rate_per_second,
+            burst: burst,
             counters: Counters::default(),
-            executor,
-            events,
+            executor: executor,
+            events: events,
             registry: QueueRegistry::new(),
-            cancellation_hook,
+            cancellation_hook: cancellation_hook,
         })
     }
 
     pub fn no_op() -> Arc<Self> {
-        Self::new(250, 250, Arc::new(|_| Box::pin(async { Ok(()) })))
+        Self::new(
+            DEFAULT_RATE_PER_SECOND,
+            DEFAULT_BURST,
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        )
     }
 
     pub async fn enqueue(self: &Arc<Self>, operation: QueueOperation) -> Result<(), &'static str> {
@@ -443,7 +454,7 @@ impl QueueEngine {
 
     fn emit(&self, id: &str, account_id: &str, lane: Lane, status: &'static str) {
         (self.events)(
-            "queue://item",
+            crate::events::QUEUE_ITEM,
             serde_json::json!({ "id": id, "status": status, "accountId": account_id, "lane": lane }),
         );
         self.emit_summary();
@@ -451,7 +462,7 @@ impl QueueEngine {
 
     fn emit_summary(&self) {
         (self.events)(
-            "queue://summary",
+            crate::events::QUEUE_SUMMARY,
             serde_json::to_value(self.summary()).expect("QueueSummary serializes"),
         );
     }
@@ -469,15 +480,15 @@ impl QueueEngine {
     async fn account_queue(self: &Arc<Self>, account_id: &str) -> AccountQueue {
         let mut accounts = self.accounts.lock().await;
         if !accounts.contains_key(account_id) {
-            let (interactive, interactive_rx) = mpsc::channel(LANE_CAPACITY);
-            let (background, background_rx) = mpsc::channel(LANE_CAPACITY);
-            let (traversal, traversal_rx) = mpsc::channel(LANE_CAPACITY);
-            let (embedding, embedding_rx) = mpsc::channel(LANE_CAPACITY);
-            self.spawn_lane(interactive_rx, Lane::Interactive);
-            self.spawn_lane(background_rx, Lane::Background);
+            let (interactive, interactive_receiver) = mpsc::channel(LANE_CAPACITY);
+            let (background, background_receiver) = mpsc::channel(LANE_CAPACITY);
+            let (traversal, traversal_receiver) = mpsc::channel(LANE_CAPACITY);
+            let (embedding, embedding_receiver) = mpsc::channel(LANE_CAPACITY);
+            self.spawn_lane(interactive_receiver, Lane::Interactive);
+            self.spawn_lane(background_receiver, Lane::Background);
 
-            self.spawn_lane(traversal_rx, Lane::Traversal);
-            self.spawn_lane(embedding_rx, Lane::Embedding);
+            self.spawn_lane(traversal_receiver, Lane::Traversal);
+            self.spawn_lane(embedding_receiver, Lane::Embedding);
             accounts.insert(
                 account_id.to_owned(),
                 AccountQueue {
@@ -670,7 +681,10 @@ impl QueueEngine {
 }
 
 pub fn retry_delay(attempt: u8) -> Duration {
-    Duration::from_secs((1_u64 << attempt.saturating_sub(1).min(6)).min(60))
+    Duration::from_secs(
+        (1_u64 << attempt.saturating_sub(1).min(MAX_RETRY_BACKOFF_EXPONENT))
+            .min(MAX_RETRY_DELAY_SECONDS),
+    )
 }
 
 pub fn recover_durable_operations(
@@ -709,7 +723,7 @@ pub async fn admit_durable(
             _ => return Err("only Draft/Send operations are durable"),
         },
         entity_key: operation.entity_key.clone(),
-        payload,
+        payload: payload,
         status: "queued".to_owned(),
         attempts: 0,
         next_attempt_at: None,
@@ -742,12 +756,12 @@ pub fn recovered_queue_operation(operation: &Operation) -> Option<QueueOperation
     Some(QueueOperation {
         id: operation.id.clone(),
         account_id: operation.account_id.clone(),
-        lane,
-        kind,
+        lane: lane,
+        kind: kind,
         entity_key: operation.entity_key.clone(),
         cost: 0,
         attempts: operation.attempts.try_into().unwrap_or_default(),
-        description,
+        description: description,
     })
 }
 

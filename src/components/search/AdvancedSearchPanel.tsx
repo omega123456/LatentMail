@@ -11,6 +11,7 @@ import {
   serializeDateFilter,
   type DateFilterValue,
 } from './DateFilter';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 type PanelFields = {
   from: string;
@@ -50,9 +51,9 @@ export function predicateToToken(predicate: SearchPredicate): string | null {
     case 'unread':
       return `${prefix}is:unread`;
     case 'sentBefore':
-      return `${prefix}before:${format(fromUnixTime(predicate.atSeconds), 'yyyy-MM-dd')}`;
+      return `${prefix}before:${format(fromUnixTime(predicate.atSeconds), DATE_FORMAT.isoDate)}`;
     case 'sentAfter':
-      return `${prefix}after:${format(fromUnixTime(predicate.atSeconds), 'yyyy-MM-dd')}`;
+      return `${prefix}after:${format(fromUnixTime(predicate.atSeconds), DATE_FORMAT.isoDate)}`;
     case 'textExcludes':
       return null;
   }
@@ -77,9 +78,9 @@ export function fieldsFromParsedQuery(parsed: ParsedSearchQuery): PanelFields {
     subject: parsed.subject ?? '',
     includesText: [...parsed.includes, ...leftover].join(' '),
     excludesText: parsed.excludes.join(' '),
-    date,
-    hasAttachment,
-    unreadOnly,
+    date: date,
+    hasAttachment: hasAttachment,
+    unreadOnly: unreadOnly,
   };
 }
 
@@ -107,17 +108,31 @@ const selectClass =
 const labelClass = 'text-label-sm text-on-surface-variant dark:text-dark-on-surface-variant';
 const selectWrapperClass = 'flex flex-col gap-1';
 
-function scopeOptions(userLabels: MailLabel[]): SelectOption<string>[] {
+type ScopeChoice = { scope: SearchScope; label: string };
+
+function scopeKey(scope: SearchScope): string {
+  return JSON.stringify(scope);
+}
+
+function scopeChoices(userLabels: MailLabel[]): ScopeChoice[] {
   return [
-    { value: JSON.stringify({ kind: 'default' }), label: 'All mail' },
-    { value: JSON.stringify({ kind: 'label', labelId: 'INBOX' }), label: 'Inbox' },
-    { value: JSON.stringify({ kind: 'label', labelId: 'SENT' }), label: 'Sent' },
-    ...userLabels.map((label) => ({
-      value: JSON.stringify({ kind: 'label', labelId: label.id }),
+    { scope: { kind: 'default' }, label: 'All mail' },
+    { scope: { kind: 'label', labelId: 'INBOX' }, label: 'Inbox' },
+    { scope: { kind: 'label', labelId: 'SENT' }, label: 'Sent' },
+    ...userLabels.map((label): ScopeChoice => ({
+      scope: { kind: 'label', labelId: label.id },
       label: label.name,
     })),
-    { value: JSON.stringify({ kind: 'all' }), label: 'Mail, Spam and Trash' },
+    { scope: { kind: 'all' }, label: 'Mail, Spam and Trash' },
   ];
+}
+
+function scopeOptions(choices: ScopeChoice[]): SelectOption<string>[] {
+  return choices.map((choice) => ({ value: scopeKey(choice.scope), label: choice.label }));
+}
+
+function scopeForKey(choices: ScopeChoice[], key: string): SearchScope | undefined {
+  return choices.find((choice) => scopeKey(choice.scope) === key)?.scope;
 }
 
 export function AdvancedSearchPanel({
@@ -149,7 +164,12 @@ export function AdvancedSearchPanel({
     setOverrides((current) => updater(current ?? baseFields));
 
   const userLabels = labels.filter((label) => label.kind === 'user');
-  const scopeValue = JSON.stringify(scope);
+  const choices = scopeChoices(userLabels);
+  const scopeValue = scopeKey(scope);
+  const selectScope = (key: string) => {
+    const chosen = scopeForKey(choices, key);
+    if (chosen) onScopeChange(chosen);
+  };
 
   return (
     <>
@@ -222,8 +242,8 @@ export function AdvancedSearchPanel({
           <Select
             id="search-panel-scope"
             value={scopeValue}
-            onChange={(next) => onScopeChange(JSON.parse(next) as SearchScope)}
-            options={scopeOptions(userLabels)}
+            onChange={selectScope}
+            options={scopeOptions(choices)}
             className={selectClass}
           />
         </div>

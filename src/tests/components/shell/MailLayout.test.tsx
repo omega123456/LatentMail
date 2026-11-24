@@ -9,6 +9,9 @@ import { useSearchStore } from '@/stores/search';
 import { useSyncStore } from '@/stores/sync';
 import { useComposeStore } from '@/stores/compose';
 import { captureConsole } from '@/tests/console';
+import { MAX_SEARCH_QUERY_LENGTH } from '@/stores/search';
+
+const SEARCH_RESULT_TOTAL = 7;
 
 beforeEach(() => {
   act(() => {
@@ -52,9 +55,9 @@ describe('MailLayout — label lifecycle wiring', () => {
     ipc.override('list_accounts', [account]);
     ipc.override('list_labels', [workLabel]);
     let created: unknown;
-    ipc.override('create_label', (args) => {
-      created = args;
-      return { ...workLabel, id: 'Label_2', name: (args as { name: string }).name };
+    ipc.override('create_label', (request) => {
+      created = request;
+      return { ...workLabel, id: 'Label_2', name: (request as { name: string }).name };
     });
     render(<App />);
     await screen.findByText('Work');
@@ -73,13 +76,13 @@ describe('MailLayout — label lifecycle wiring', () => {
     ipc.override('list_labels', [workLabel]);
     let renamed: unknown;
     let deleted: unknown;
-    ipc.override('rename_label', (args) => {
-      renamed = args;
+    ipc.override('rename_label', (request) => {
+      renamed = request;
       ipc.emit('mail://changed', { accountId: 'account-1' });
-      return { ...workLabel, name: (args as { name: string }).name };
+      return { ...workLabel, name: (request as { name: string }).name };
     });
-    ipc.override('delete_label', (args) => {
-      deleted = args;
+    ipc.override('delete_label', (request) => {
+      deleted = request;
       ipc.emit('mail://changed', { accountId: 'account-1' });
       return undefined;
     });
@@ -174,7 +177,7 @@ describe('MailLayout — search', () => {
     const user = userEvent.setup();
     ipc.override('list_accounts', [account]);
     ipc.override('search_threads', { items: [searchResultThread], nextCursor: null });
-    ipc.override('search_total', 7);
+    ipc.override('search_total', SEARCH_RESULT_TOTAL);
     render(<App />);
     await screen.findByRole('button', { name: 'Collapse sidebar' });
     const field = screen.getByLabelText('Search mail');
@@ -253,7 +256,7 @@ describe('MailLayout — search', () => {
     await screen.findByRole('button', { name: 'Collapse sidebar' });
     const field = screen.getByLabelText('Search mail');
     await user.click(field);
-    fireEvent.change(field, { target: { value: 'x'.repeat(2049) } });
+    fireEvent.change(field, { target: { value: 'x'.repeat(MAX_SEARCH_QUERY_LENGTH + 1) } });
     await user.keyboard('{Enter}');
     expect(await screen.findByText(/limited to 2048 characters/)).toBeInTheDocument();
     expect(screen.queryByTestId('search-results-row')).not.toBeInTheDocument();

@@ -1238,12 +1238,18 @@ export const LABEL_COLOR_PALETTE: LabelColorSwatch[] = [
     gmailText: '#ffffff',
   },
 ];
+const GMAIL_COLOR_KEY_SEPARATOR = '|';
+
+function gmailColorKey(background: string, text: string): string {
+  return background.toLowerCase() + GMAIL_COLOR_KEY_SEPARATOR + text.toLowerCase();
+}
+
 export const LABEL_COLOR_BY_ID: Record<string, LabelColorSwatch> = Object.fromEntries(
-  LABEL_COLOR_PALETTE.map((swatch) => [swatch.id, swatch]),
-) as Record<string, LabelColorSwatch>;
+  LABEL_COLOR_PALETTE.map((swatch): [string, LabelColorSwatch] => [swatch.id, swatch]),
+);
 export const LABEL_COLOR_BY_GMAIL_HEX: Record<string, LabelColorSwatch> = Object.fromEntries(
-  LABEL_COLOR_PALETTE.map((swatch) => [
-    swatch.gmailBackground.toLowerCase() + '|' + swatch.gmailText.toLowerCase(),
+  LABEL_COLOR_PALETTE.map((swatch): [string, LabelColorSwatch] => [
+    gmailColorKey(swatch.gmailBackground, swatch.gmailText),
     swatch,
   ]),
 );
@@ -1251,8 +1257,5 @@ export function resolveLabelColorSwatch(
   color: { background: string; text: string } | null | undefined,
 ): LabelColorSwatch | null {
   if (!color) return null;
-  return (
-    LABEL_COLOR_BY_GMAIL_HEX[color.background.toLowerCase() + '|' + color.text.toLowerCase()] ??
-    null
-  );
+  return LABEL_COLOR_BY_GMAIL_HEX[gmailColorKey(color.background, color.text)] ?? null;
 }

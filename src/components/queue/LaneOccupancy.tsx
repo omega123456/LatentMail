@@ -9,7 +9,7 @@ export function LaneOccupancy({
 }) {
   return (
     <span aria-hidden="true" className="flex shrink-0 items-center gap-slot-gap">
-      {Array.from({ length: capacity }, (_, index) => (
+      {Array.from({ length: capacity }, (_slot, index) => (
         <span
           key={index}
           data-testid="lane-slot"

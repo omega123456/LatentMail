@@ -68,8 +68,8 @@ fn request<'a>(question: &'a str, history: &'a [HistoryMessage]) -> RetrievalReq
         embedding_model: "embedding",
         account_id: "account",
         account_email: "me@example.com",
-        question,
-        history,
+        question: question,
+        history: history,
     }
 }
 

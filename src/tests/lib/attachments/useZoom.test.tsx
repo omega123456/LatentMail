@@ -1,8 +1,16 @@
 import { act, fireEvent, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { useZoom } from '@/lib/attachments/useZoom';
-import type { FitMode, Size } from '@/lib/attachments/zoom';
+import { MAX_ZOOM, type FitMode, type Size } from '@/lib/attachments/zoom';
 import { setPlatform } from '@/tests/platform';
+
+const FITTED_ZOOM = 1.25;
+const FIT_PAGE_ZOOM = 0.75;
+const ONE_STEP_IN_ZOOM = 1.5;
+const TWO_STEPS_IN_ZOOM = 2;
+const PINCHED_ZOOM = 2.5;
+const ABOVE_MAX_ZOOM = 9;
+const ANCHORED_SCROLL_TOP = 30;
 
 function scrollElement(width = 400, height = 300) {
   const element = document.createElement('div');
@@ -49,14 +57,14 @@ describe('useZoom', () => {
     measure();
     expect(result.current.ready).toBe(true);
     expect(result.current.mode).toBe('fit-width');
-    expect(result.current.zoom).toBe(1.25);
+    expect(result.current.zoom).toBe(FITTED_ZOOM);
     expect(result.current.viewport).toEqual({ width: 400, height: 300 });
   });
 
   it('fits the whole page when that is the default', () => {
     const { result } = setup({ defaultMode: 'fit-page', fitCap: 4 });
     measure();
-    expect(result.current.zoom).toBe(0.75);
+    expect(result.current.zoom).toBe(FIT_PAGE_ZOOM);
   });
 
   it('steps the ladder from the buttons and keeps the centre of the view in place', () => {
@@ -64,11 +72,11 @@ describe('useZoom', () => {
     measure();
     act(() => result.current.zoomIn());
     expect(result.current.mode).toBe('custom');
-    expect(result.current.zoom).toBe(1.5);
+    expect(result.current.zoom).toBe(ONE_STEP_IN_ZOOM);
     expect(element?.scrollLeft).toBe(0);
-    expect(element?.scrollTop).toBe(30);
+    expect(element?.scrollTop).toBe(ANCHORED_SCROLL_TOP);
     act(() => result.current.zoomOut());
-    expect(result.current.zoom).toBe(1.25);
+    expect(result.current.zoom).toBe(FITTED_ZOOM);
   });
 
   it('chains zoom changes made before a render from the pending scroll position', () => {
@@ -78,17 +86,17 @@ describe('useZoom', () => {
       result.current.zoomIn();
       result.current.zoomIn();
     });
-    expect(result.current.zoom).toBe(2);
+    expect(result.current.zoom).toBe(TWO_STEPS_IN_ZOOM);
   });
 
   it('selects a fixed preset or a fit mode from the menu', () => {
     const { result } = setup({ fitCap: 4 });
     measure();
-    act(() => result.current.selectPreset(9));
-    expect(result.current.zoom).toBe(4);
+    act(() => result.current.selectPreset(ABOVE_MAX_ZOOM));
+    expect(result.current.zoom).toBe(MAX_ZOOM);
     act(() => result.current.selectPreset('fit-page'));
     expect(result.current.mode).toBe('fit-page');
-    expect(result.current.zoom).toBe(0.75);
+    expect(result.current.zoom).toBe(FIT_PAGE_ZOOM);
   });
 
   it('keeps the current zoom when a fit mode is chosen before anything is measured', () => {
@@ -96,7 +104,7 @@ describe('useZoom', () => {
     act(() => result.current.selectPreset('fit-page'));
     expect(result.current.zoom).toBe(1);
     act(() => result.current.zoomIn());
-    expect(result.current.zoom).toBe(1.25);
+    expect(result.current.zoom).toBe(FITTED_ZOOM);
   });
 
   it('uses Command on macOS for zoom in, out and reset', () => {
@@ -104,16 +112,16 @@ describe('useZoom', () => {
     const { result } = setup();
     measure();
     fireEvent.keyDown(document, { key: '=', metaKey: true });
-    expect(result.current.zoom).toBe(1.5);
+    expect(result.current.zoom).toBe(ONE_STEP_IN_ZOOM);
     fireEvent.keyDown(document, { key: '+', metaKey: true });
-    expect(result.current.zoom).toBe(2);
+    expect(result.current.zoom).toBe(TWO_STEPS_IN_ZOOM);
     fireEvent.keyDown(document, { key: '-', metaKey: true });
-    expect(result.current.zoom).toBe(1.5);
+    expect(result.current.zoom).toBe(ONE_STEP_IN_ZOOM);
     fireEvent.keyDown(document, { key: '=', ctrlKey: true });
-    expect(result.current.zoom).toBe(1.5);
+    expect(result.current.zoom).toBe(ONE_STEP_IN_ZOOM);
     fireEvent.keyDown(document, { key: '0', metaKey: true });
     expect(result.current.mode).toBe('fit-width');
-    expect(result.current.zoom).toBe(1.25);
+    expect(result.current.zoom).toBe(FITTED_ZOOM);
   });
 
   it('uses Ctrl on Windows and ignores other chords', () => {
@@ -136,7 +144,7 @@ describe('useZoom', () => {
       element?.dispatchEvent(plain);
     });
     expect(plain.defaultPrevented).toBe(false);
-    expect(result.current.zoom).toBe(1.25);
+    expect(result.current.zoom).toBe(FITTED_ZOOM);
 
     const pinch = new WheelEvent('wheel', {
       deltaY: -60,
@@ -150,7 +158,7 @@ describe('useZoom', () => {
     });
     expect(pinch.defaultPrevented).toBe(true);
     expect(result.current.mode).toBe('custom');
-    expect(result.current.zoom).toBeGreaterThan(1.25);
+    expect(result.current.zoom).toBeGreaterThan(FITTED_ZOOM);
   });
 
   it('follows a WebKit pinch gesture relative to the zoom it started from', () => {
@@ -168,13 +176,13 @@ describe('useZoom', () => {
     });
     expect(start.defaultPrevented).toBe(true);
     expect(change.defaultPrevented).toBe(true);
-    expect(result.current.zoom).toBe(2.5);
+    expect(result.current.zoom).toBe(PINCHED_ZOOM);
   });
 
   it('does nothing to the DOM when there is no scroll element', () => {
     const { result } = setup({ element: null });
     act(() => result.current.zoomIn());
-    expect(result.current.zoom).toBe(1.25);
+    expect(result.current.zoom).toBe(FITTED_ZOOM);
     expect(result.current.ready).toBe(false);
   });
 });

@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { ModelCardList } from '@/components/settings/ModelCardList';
 
+const MODEL_COUNT = 31;
+
 it('filters and selects a model from the dropdown', async () => {
   const user = userEvent.setup();
   const change = vi.fn();
@@ -27,7 +29,7 @@ it('filters and selects a model from the dropdown', async () => {
 });
 
 it('shows the selected model and its dimensions on the trigger', () => {
-  const models = Array.from({ length: 31 }, (_, index) => ({
+  const models = Array.from({ length: MODEL_COUNT }, (_model, index) => ({
     id: `model-${index}`,
     ownedBy: null,
   }));

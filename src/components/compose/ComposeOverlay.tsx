@@ -25,17 +25,17 @@ const fieldRow =
   'flex items-center gap-2 border-b border-outline-variant pt-field-row-y pb-field-row-y focus-within:border-b-2 focus-within:border-primary focus-within:pb-field-row-y-focus dark:border-dark-outline-variant dark:focus-within:border-dark-primary';
 
 export function ComposeOverlay() {
-  const session = useComposeStore((state) => state.session);
-  const close = useComposeStore((state) => state.close);
-  const setHtml = useComposeStore((state) => state.setHtml);
-  const setSubject = useComposeStore((state) => state.setSubject);
-  const revealCcBcc = useComposeStore((state) => state.revealCcBcc);
-  const toggleQuote = useComposeStore((state) => state.toggleQuote);
-  const setDimensions = useComposeStore((state) => state.setDimensions);
+  const session = useComposeStore((compose) => compose.session);
+  const close = useComposeStore((compose) => compose.close);
+  const setHtml = useComposeStore((compose) => compose.setHtml);
+  const setSubject = useComposeStore((compose) => compose.setSubject);
+  const revealCcBcc = useComposeStore((compose) => compose.revealCcBcc);
+  const toggleQuote = useComposeStore((compose) => compose.toggleQuote);
+  const setDimensions = useComposeStore((compose) => compose.setDimensions);
   const ready = useComposeStore(selectHasCommittedRecipient);
   const readingAttachment = useComposeStore(selectHasReadingAttachment);
   const qualifies = useComposeStore(selectQualifiesForDraft);
-  const setStatus = useComposeStore((state) => state.setDraftStatus);
+  const setStatus = useComposeStore((compose) => compose.setDraftStatus);
   const { saveNow } = useComposeAutosave();
 
   const toInputRef = useRef<HTMLInputElement>(null);

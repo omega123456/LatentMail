@@ -15,6 +15,11 @@ import { useSelectionStore } from '@/stores/selection';
 import { useSyncStore } from '@/stores/sync';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 
+const LIST_WIDTH_AFTER_DRAG = 370;
+const PRESERVED_SCROLL_TOP = 413;
+const READER_HEIGHT_MIN_PERCENT = 20;
+const READER_HEIGHT_MAX_PERCENT = 80;
+
 beforeEach(() => {
   act(() => {
     useSelectionStore.setState({
@@ -306,8 +311,12 @@ describe('AppShell wired to real data', () => {
     await user.click(screen.getByRole('button', { name: 'Expand sidebar' }));
     expect(screen.getByTestId('sidebar-slot')).toBeInTheDocument();
 
-    const inbox = screen.getAllByText('Inbox').find((element) => element.closest('button'))!;
-    await user.click(inbox.closest('button')!);
+    const inboxButton = screen
+      .getAllByText('Inbox')
+      .map((element) => element.closest('button'))
+      .find((button) => button !== null);
+    if (!inboxButton) throw new Error('expected an Inbox button');
+    await user.click(inboxButton);
     expect(useSelectionStore.getState().activeMailboxId).toBe('INBOX');
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize conversation list' }), {
@@ -315,7 +324,7 @@ describe('AppShell wired to real data', () => {
     });
     fireEvent.pointerMove(window, { clientX: 30 });
     fireEvent.pointerUp(window);
-    expect(useLayoutStore.getState().listWidth).toBe(370);
+    expect(useLayoutStore.getState().listWidth).toBe(LIST_WIDTH_AFTER_DRAG);
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     expect(await screen.findByTestId('settings-shell')).toBeInTheDocument();
@@ -350,7 +359,7 @@ describe('AppShell wired to real data', () => {
 
     await user.click(screen.getByRole('button', { name: 'Settings' }));
     await screen.findByTestId('settings-shell');
-    const preservedMail = screen.getByTestId('mail-layout').parentElement!;
+    const preservedMail = screen.getByTestId('mail-layout').parentElement;
     expect(preservedMail).not.toHaveAttribute('hidden');
     expect(preservedMail).toHaveAttribute('inert');
     expect(preservedMail).toHaveClass('invisible', 'pointer-events-none');
@@ -358,7 +367,7 @@ describe('AppShell wired to real data', () => {
     await screen.findByTestId('mail-layout');
 
     expect(screen.getByTestId('conversation-list')).toBe(list);
-    expect(list.scrollTop).toBe(413);
+    expect(list.scrollTop).toBe(PRESERVED_SCROLL_TOP);
     expect(useSelectionStore.getState()).toEqual(before.selection);
     expect(useSearchStore.getState()).toEqual(before.search);
   });
@@ -411,11 +420,11 @@ describe('AppShell wired to real data', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize reader' }), { clientY: 10 });
     fireEvent.pointerMove(window, { clientY: 30 });
     fireEvent.pointerUp(window);
-    expect(useLayoutStore.getState().readerHeight).toBe(20);
+    expect(useLayoutStore.getState().readerHeight).toBe(READER_HEIGHT_MIN_PERCENT);
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Resize reader' }), { clientY: 30 });
     fireEvent.pointerMove(window, { clientY: 10 });
     fireEvent.pointerUp(window);
-    expect(useLayoutStore.getState().readerHeight).toBe(80);
+    expect(useLayoutStore.getState().readerHeight).toBe(READER_HEIGHT_MAX_PERCENT);
   });
 });

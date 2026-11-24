@@ -90,6 +90,8 @@ test-utils = []
 
 [lints.clippy]
 too_many_arguments = "deny"
+min_ident_chars = "deny"
+redundant_field_names = "allow"
 
 [profile.dev]
 debug = "line-tables-only"

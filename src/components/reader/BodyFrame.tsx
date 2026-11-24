@@ -11,7 +11,7 @@ const wiredDocuments = new WeakSet<Document>();
 function wireFrame(
   frame: HTMLIFrameElement,
   heightConstrained: boolean,
-  setHeight: (value: number) => void,
+  setHeight: (height: number) => void,
   loaded: boolean,
 ) {
   const frameDocument = frame.contentDocument;

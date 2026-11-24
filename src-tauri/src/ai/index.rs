@@ -9,6 +9,9 @@ use crate::{
 use std::{future::Future, pin::Pin, time::Duration};
 use tauri::{AppHandle, Emitter, Runtime};
 
+const EMBED_ATTEMPTS: u8 = 3;
+const EMBED_BACKOFF_STEP_MILLISECONDS: u64 = 50;
+
 pub const MAX_CHUNKS_PER_OPERATION: usize = 64;
 
 #[derive(Clone, serde::Serialize)]
@@ -44,7 +47,7 @@ pub async fn status(service: &AiService, account_id: String) -> Result<IndexStat
                 total_eligible_messages: counts.total_eligible_messages,
                 indexed_passages: counts.indexed_passages,
                 paused: config.index_paused,
-                error,
+                error: error,
                 state: if has_error {
                     IndexState::Interrupted
                 } else if needs_rebuild {
@@ -239,8 +242,8 @@ pub async fn build<R: Runtime>(
         .iter()
         .flat_map(|(_, chunks)| chunks.iter().cloned())
         .collect();
-    let batched = embed_with_retry(&provider, &model, texts, 3, |attempt| {
-        Duration::from_millis(50 * u64::from(attempt))
+    let batched = embed_with_retry(&provider, &model, texts, EMBED_ATTEMPTS, |attempt| {
+        Duration::from_millis(EMBED_BACKOFF_STEP_MILLISECONDS * u64::from(attempt))
     })
     .await;
     let (entries, skipped) = match batched {
@@ -281,10 +284,10 @@ fn message_entries(
         .enumerate()
         .map(|(chunk_index, vector)| {
             Ok(MessageEmbedding {
-                message_seq,
+                message_seq: message_seq,
                 chunk_index: i64::try_from(chunk_index)
                     .map_err(|error: std::num::TryFromIntError| error.to_string())?,
-                vector,
+                vector: vector,
             })
         })
         .collect()
@@ -322,7 +325,7 @@ pub async fn emit_status<R: Runtime>(
 ) -> Result<(), String> {
     let current = status(service, account_id.clone()).await?;
     app.emit(
-        "ai://index",
+        crate::events::AI_INDEX,
         serde_json::json!({"accountId":account_id,"state":current.state,"indexed":current.indexed,"total":current.total,"indexedMessages":current.indexed_messages,"totalEligibleMessages":current.total_eligible_messages,"indexedPassages":current.indexed_passages,"paused":current.paused,"error":current.error}),
     )
     .map_err(|error| error.to_string())
@@ -368,8 +371,11 @@ pub async fn set_paused<R: Runtime>(
     if !paused {
         service.clear_index_error(&account_id)?;
     }
-    app.emit("ai://config", serde_json::json!({"accountId":account_id}))
-        .map_err(|error| error.to_string())?;
+    app.emit(
+        crate::events::AI_CONFIG,
+        serde_json::json!({"accountId":account_id}),
+    )
+    .map_err(|error| error.to_string())?;
     emit_status(app, service, account_id).await
 }
 
@@ -397,8 +403,11 @@ pub async fn rebuild<R: Runtime>(
         .map_err(|error| error.to_string())?;
     service.clear_index_error(&account_id)?;
     service.set_index_state(&account_id, IndexState::NotStarted)?;
-    app.emit("ai://config", serde_json::json!({"accountId":account_id}))
-        .map_err(|error| error.to_string())?;
+    app.emit(
+        crate::events::AI_CONFIG,
+        serde_json::json!({"accountId":account_id}),
+    )
+    .map_err(|error| error.to_string())?;
     emit_status(app, service, account_id.clone()).await?;
     enqueue(app.clone(), service.clone(), sync, account_id).await
 }

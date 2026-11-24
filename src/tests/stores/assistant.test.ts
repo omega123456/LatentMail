@@ -4,6 +4,8 @@ import { ipc } from '@/tests/ipc-mock';
 import { isStreaming, QUESTION_LIMIT, useAssistantStore } from '@/stores/assistant';
 import { captureConsole } from '@/tests/console';
 
+const QUESTION_AND_ANSWER = 2;
+
 function reset() {
   useAssistantStore.setState({
     sessionId: 'session-1',
@@ -45,7 +47,7 @@ describe('assistant store', () => {
     useAssistantStore.getState().ask('first');
     useAssistantStore.getState().ask('second');
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
-    expect(useAssistantStore.getState().messages).toHaveLength(2);
+    expect(useAssistantStore.getState().messages).toHaveLength(QUESTION_AND_ANSWER);
   });
 
   it('reports a failed start as the answer error and ends the stream', async () => {
@@ -143,7 +145,7 @@ describe('assistant store', () => {
     const sessionId = useAssistantStore.getState().sessionId;
     useAssistantStore.getState().selectAccount('account-1');
     expect(useAssistantStore.getState().sessionId).toBe(sessionId);
-    expect(useAssistantStore.getState().messages).toHaveLength(2);
+    expect(useAssistantStore.getState().messages).toHaveLength(QUESTION_AND_ANSWER);
 
     ipc.override('cancel_ai_chat', true);
     useAssistantStore.getState().selectAccount('account-2');

@@ -18,6 +18,7 @@ import {
   ReaderDialogFrame,
   ReaderDialogStatus,
 } from './ReaderDialogFrame';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 type PdfPreviewComponent = (typeof import('./previews/PdfPreview'))['PdfPreview'];
 
@@ -38,10 +39,10 @@ function usePreviewBytes(
     let cancelled = false;
     void invoke('read_attachment_bytes', { accountId, messageId, attachmentId })
       .then((bytes) => {
-        if (!cancelled) setState({ key, bytes, failed: false });
+        if (!cancelled) setState({ key: key, bytes: bytes, failed: false });
       })
       .catch(() => {
-        if (!cancelled) setState({ key, bytes: null, failed: true });
+        if (!cancelled) setState({ key: key, bytes: null, failed: true });
       });
     return () => {
       cancelled = true;
@@ -65,10 +66,10 @@ function usePdfPreview(enabled: boolean) {
     let cancelled = false;
     void import('./previews/PdfPreview')
       .then(({ PdfPreview }) => {
-        if (!cancelled) setState({ enabled, component: PdfPreview, failed: false });
+        if (!cancelled) setState({ enabled: enabled, component: PdfPreview, failed: false });
       })
       .catch(() => {
-        if (!cancelled) setState({ enabled, component: null, failed: true });
+        if (!cancelled) setState({ enabled: enabled, component: null, failed: true });
       });
     return () => {
       cancelled = true;
@@ -89,10 +90,10 @@ function useDocxHtml(bytes: ArrayBuffer | undefined) {
     void import('mammoth')
       .then((mammoth) => mammoth.convertToHtml({ arrayBuffer: bytes }))
       .then((result) => {
-        if (!cancelled) setState({ bytes, html: result.value, failed: false });
+        if (!cancelled) setState({ bytes: bytes, html: result.value, failed: false });
       })
       .catch(() => {
-        if (!cancelled) setState({ bytes, html: null, failed: true });
+        if (!cancelled) setState({ bytes: bytes, html: null, failed: true });
       });
     return () => {
       cancelled = true;
@@ -112,8 +113,8 @@ export function AttachmentPreviewDialog({
   attachment: MessageAttachment;
   onClose: () => void;
 }) {
-  const showSuccess = useToastStore((state) => state.showSuccess);
-  const showError = useToastStore((state) => state.showError);
+  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
+  const showError = useToastStore((toaster) => toaster.showError);
   const kind = resolvePreviewKind(attachment.mimeType, attachment.filename);
 
   const imageQuery = useCachedAttachmentQuery(
@@ -165,10 +166,10 @@ export function AttachmentPreviewDialog({
     if (!destination) return;
     try {
       await invoke('save_attachment_to_path', {
-        accountId,
-        messageId,
+        accountId: accountId,
+        messageId: messageId,
         attachmentId: attachment.id,
-        destination,
+        destination: destination,
       });
       showSuccess(`Downloaded ${attachment.filename}`);
     } catch {
@@ -184,19 +185,23 @@ export function AttachmentPreviewDialog({
       onClose={onClose}
       actions={
         <button type="button" onClick={() => void download()} className={dialogPrimaryButtonClass}>
-          <Download size={14} aria-hidden="true" />
+          <Download size={ICON_SIZE.sm} aria-hidden="true" />
           Download
         </button>
       }
     >
       {loading ? (
         <ReaderDialogStatus>
-          <Loader2 className="animate-spin" size={22} aria-hidden="true" />
+          <Loader2 className="animate-spin" size={ICON_SIZE.xl2} aria-hidden="true" />
           <span>Loading preview…</span>
         </ReaderDialogStatus>
       ) : failedAcquisition ? (
         <ReaderDialogStatus>
-          <File size={26} aria-hidden="true" className="text-outline dark:text-dark-outline" />
+          <File
+            size={ICON_SIZE.xl4}
+            aria-hidden="true"
+            className="text-outline dark:text-dark-outline"
+          />
           <p>
             Couldn&apos;t load preview.
             <br />

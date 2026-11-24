@@ -10,6 +10,10 @@ import {
 import { queryKeys } from '@/lib/query/keys';
 import { ipc } from '@/tests/ipc-mock';
 import { captureConsole } from '@/tests/console';
+import { minutesToMilliseconds } from 'date-fns';
+
+const FIVE_MINUTES = 5;
+const AVAILABLE_MODEL_COUNT = 4;
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -27,16 +31,16 @@ function setVisibility(state: DocumentVisibilityState) {
 describe('AI connection query', () => {
   it('keys the poll per account and polls every five minutes', () => {
     expect(queryKeys.aiConnection('account-1')).toEqual(['aiConnection', 'account-1']);
-    expect(AI_CONNECTION_INTERVAL_MS).toBe(300_000);
+    expect(AI_CONNECTION_INTERVAL_MS).toBe(minutesToMilliseconds(FIVE_MINUTES));
   });
 
   it('reports the model count once the provider answers', async () => {
-    ipc.override('test_ai_connection', 4);
+    ipc.override('test_ai_connection', AVAILABLE_MODEL_COUNT);
     const client = new QueryClient();
     const { result } = renderHook(() => useAiConnectionQuery('account-1'), {
       wrapper: wrapper(client),
     });
-    await waitFor(() => expect(result.current.data).toBe(4));
+    await waitFor(() => expect(result.current.data).toBe(AVAILABLE_MODEL_COUNT));
     client.clear();
   });
 
@@ -59,7 +63,7 @@ describe('AI connection query', () => {
   });
 
   it('stops while the window is hidden and resumes when it is visible again', async () => {
-    const probe = vi.fn(() => 2);
+    const probe = vi.fn(() => AVAILABLE_MODEL_COUNT);
     ipc.override('test_ai_connection', probe);
     setVisibility('hidden');
     const client = new QueryClient();
@@ -74,7 +78,7 @@ describe('AI connection query', () => {
   });
 
   it('stays disabled for a caller that has not enabled it', () => {
-    const probe = vi.fn(() => 2);
+    const probe = vi.fn(() => AVAILABLE_MODEL_COUNT);
     ipc.override('test_ai_connection', probe);
     const client = new QueryClient();
     renderHook(() => useAiConnectionQuery('account-1', false), { wrapper: wrapper(client) });

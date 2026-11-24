@@ -3,11 +3,10 @@ import { dispatchSetZoom } from '@/lib/ipc/dispatch';
 import { invoke } from '@/lib/ipc/commands';
 import { hydrateSettings } from '@/lib/settings/hydrate';
 import type { Density, LayoutMode, LogLevel, Settings, UpdateCheckInterval } from '@/lib/types/ipc';
+import { percentToFraction, WHOLE_PERCENT } from '@/lib/format/percent';
 
 export type Route = 'auth' | 'mail' | 'settings';
 
-export const ASSISTANT_WIDTH_MIN = 280;
-export const ASSISTANT_WIDTH_MAX = 700;
 export const ASSISTANT_DOCK_MIN_SHELL_WIDTH = 1200;
 
 type LayoutState = Pick<
@@ -68,12 +67,19 @@ type LayoutState = Pick<
   untrustImageSender: (address: string) => void;
 };
 
-function clampSize(value: number, min: number, max: number) {
-  return Math.round(Math.min(max, Math.max(min, value)));
+type SizeRange = { min: number; max: number };
+
+const SIDEBAR_WIDTH_RANGE: SizeRange = { min: 180, max: 400 };
+const LIST_WIDTH_RANGE: SizeRange = { min: 240, max: 600 };
+const READER_HEIGHT_PERCENT_RANGE: SizeRange = { min: 20, max: 80 };
+const ASSISTANT_WIDTH_RANGE: SizeRange = { min: 280, max: 700 };
+
+function clampSize(size: number, range: SizeRange) {
+  return Math.round(Math.min(range.max, Math.max(range.min, size)));
 }
 
 export function applyZoom(zoomPercent: number) {
-  void dispatchSetZoom(zoomPercent / 100).catch(() => undefined);
+  void dispatchSetZoom(percentToFraction(zoomPercent)).catch(() => undefined);
 }
 
 function persist<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -116,11 +122,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
         sidebarWidth: settings.sidebarWidth,
         listWidth: settings.listWidth,
         readerHeight: settings.readerHeight,
-        assistantWidth: clampSize(
-          settings.assistantWidth,
-          ASSISTANT_WIDTH_MIN,
-          ASSISTANT_WIDTH_MAX,
-        ),
+        assistantWidth: clampSize(settings.assistantWidth, ASSISTANT_WIDTH_RANGE),
         showUnreadCounts: settings.showUnreadCounts,
         showSenderAvatars: settings.showSenderAvatars,
         zoomPercent: settings.zoomPercent,
@@ -166,23 +168,23 @@ export const useLayoutStore = create<LayoutState>((set) => ({
     persist('sidebarCollapsed', sidebarCollapsed);
   },
   setSidebarWidth: (sidebarWidth) => {
-    sidebarWidth = clampSize(sidebarWidth, 180, 400);
+    sidebarWidth = clampSize(sidebarWidth, SIDEBAR_WIDTH_RANGE);
     set({ sidebarWidth });
     persist('sidebarWidth', sidebarWidth);
   },
   setListWidth: (listWidth) => {
-    listWidth = clampSize(listWidth, 240, 600);
+    listWidth = clampSize(listWidth, LIST_WIDTH_RANGE);
     set({ listWidth });
     persist('listWidth', listWidth);
   },
   setReaderHeight: (readerHeight) => {
-    readerHeight = clampSize(readerHeight, 20, 80);
+    readerHeight = clampSize(readerHeight, READER_HEIGHT_PERCENT_RANGE);
     set({ readerHeight });
     persist('readerHeight', readerHeight);
   },
   setAssistantOpen: (assistantOpen) => set({ assistantOpen }),
   setAssistantWidth: (assistantWidth) => {
-    assistantWidth = clampSize(assistantWidth, ASSISTANT_WIDTH_MIN, ASSISTANT_WIDTH_MAX);
+    assistantWidth = clampSize(assistantWidth, ASSISTANT_WIDTH_RANGE);
     set({ assistantWidth });
     persist('assistantWidth', assistantWidth);
   },
@@ -261,4 +263,4 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   },
 }));
 
-applyZoom(100);
+applyZoom(WHOLE_PERCENT);

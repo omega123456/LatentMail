@@ -17,7 +17,9 @@ let nextId = 0;
 export const useToastStore = create<ToastState>((set) => {
   const push = (severity: ToastSeverity, message: string) =>
     set((state) => ({
-      toasts: [...state.toasts, { id: nextId++, severity, message }].slice(-MAX_VISIBLE_TOASTS),
+      toasts: [...state.toasts, { id: nextId++, severity: severity, message: message }].slice(
+        -MAX_VISIBLE_TOASTS,
+      ),
     }));
   return {
     toasts: [],

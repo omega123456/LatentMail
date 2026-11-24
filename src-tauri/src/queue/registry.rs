@@ -333,12 +333,12 @@ impl QueueRegistry {
                         };
 
                         LaneSnapshot {
-                            lane,
+                            lane: lane,
                             capacity: lane.capacity(),
-                            active,
-                            backlog,
-                            state,
-                            operations,
+                            active: active,
+                            backlog: backlog,
+                            state: state,
+                            operations: operations,
                         }
                     })
                     .collect();
@@ -360,7 +360,7 @@ impl QueueRegistry {
                 }
             })
             .collect();
-        snapshots.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+        snapshots.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         snapshots
     }
 }

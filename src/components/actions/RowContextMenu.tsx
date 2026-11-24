@@ -17,6 +17,8 @@ import {
 import { computeRibbonVisibility } from './ActionRibbon';
 import { LabelsMenu, type LabelMenuEntry } from './LabelsMenu';
 import { MoveToMenu, type MoveDestinationId } from './MoveToMenu';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { MENU_COLLISION_PADDING_PX } from '@/components/shared/floating-offsets';
 
 export const menuContentClass =
   'z-50 min-w-56 rounded-md border border-outline-variant/40 bg-surface-container-lowest p-1 shadow-sm dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest';
@@ -72,7 +74,10 @@ export function RowContextMenu({
     <ContextMenu.Root open={open} onOpenChange={setOpen}>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className={menuContentClass} collisionPadding={8}>
+        <ContextMenu.Content
+          className={menuContentClass}
+          collisionPadding={MENU_COLLISION_PADDING_PX}
+        >
           {!multi && (
             <ContextMenu.Item className={itemClass} onSelect={onOpen}>
               Open
@@ -80,25 +85,25 @@ export function RowContextMenu({
           )}
           {!multi && onReply && (
             <ContextMenu.Item className={itemClass} onSelect={onReply}>
-              <Reply aria-hidden="true" size={16} />
+              <Reply aria-hidden="true" size={ICON_SIZE.base} />
               Reply
             </ContextMenu.Item>
           )}
           {!multi && onReplyAll && (
             <ContextMenu.Item className={itemClass} onSelect={onReplyAll}>
-              <ReplyAll aria-hidden="true" size={16} />
+              <ReplyAll aria-hidden="true" size={ICON_SIZE.base} />
               Reply all
             </ContextMenu.Item>
           )}
           {!multi && onForward && (
             <ContextMenu.Item className={itemClass} onSelect={onForward}>
-              <Forward aria-hidden="true" size={16} />
+              <Forward aria-hidden="true" size={ICON_SIZE.base} />
               Forward
             </ContextMenu.Item>
           )}
           {!multi && onEditDraft && (
             <ContextMenu.Item className={itemClass} onSelect={onEditDraft}>
-              <PenSquare aria-hidden="true" size={16} />
+              <PenSquare aria-hidden="true" size={ICON_SIZE.base} />
               Edit draft
             </ContextMenu.Item>
           )}
@@ -108,16 +113,20 @@ export function RowContextMenu({
           {visibility.showReadToggle && (
             <ContextMenu.Item className={itemClass} onSelect={onToggleRead}>
               {unread ? (
-                <MailOpen aria-hidden="true" size={16} />
+                <MailOpen aria-hidden="true" size={ICON_SIZE.base} />
               ) : (
-                <Mail aria-hidden="true" size={16} />
+                <Mail aria-hidden="true" size={ICON_SIZE.base} />
               )}
               {unread ? `Mark${countSuffix} read` : `Mark${countSuffix} unread`}
             </ContextMenu.Item>
           )}
           {visibility.showStar && (
             <ContextMenu.Item className={itemClass} onSelect={onToggleStar}>
-              <Star aria-hidden="true" size={16} fill={starred ? 'currentColor' : 'none'} />
+              <Star
+                aria-hidden="true"
+                size={ICON_SIZE.base}
+                fill={starred ? 'currentColor' : 'none'}
+              />
               {starred ? `Unstar${countSuffix}` : `Star${countSuffix}`}
             </ContextMenu.Item>
           )}
@@ -125,13 +134,16 @@ export function RowContextMenu({
             <ContextMenu.Sub>
               <ContextMenu.SubTrigger className={subTriggerClass}>
                 <span className="flex items-center gap-2">
-                  <FolderInput aria-hidden="true" size={16} />
+                  <FolderInput aria-hidden="true" size={ICON_SIZE.base} />
                   {multi ? `Move${countSuffix} to` : 'Move to'}
                 </span>
                 <span aria-hidden="true">▸</span>
               </ContextMenu.SubTrigger>
               <ContextMenu.Portal>
-                <ContextMenu.SubContent className={menuContentClass} collisionPadding={8}>
+                <ContextMenu.SubContent
+                  className={menuContentClass}
+                  collisionPadding={MENU_COLLISION_PADDING_PX}
+                >
                   <MoveToMenu
                     currentSystemLabelIds={systemLabelIds}
                     onSelect={(destination) => {
@@ -147,13 +159,16 @@ export function RowContextMenu({
             <ContextMenu.Sub>
               <ContextMenu.SubTrigger className={subTriggerClass}>
                 <span className="flex items-center gap-2">
-                  <Tag aria-hidden="true" size={16} />
+                  <Tag aria-hidden="true" size={ICON_SIZE.base} />
                   {multi ? `Labels (${selectionCount})` : 'Labels'}
                 </span>
                 <span aria-hidden="true">▸</span>
               </ContextMenu.SubTrigger>
               <ContextMenu.Portal>
-                <ContextMenu.SubContent className={`${menuContentClass} w-64`} collisionPadding={8}>
+                <ContextMenu.SubContent
+                  className={`${menuContentClass} w-64`}
+                  collisionPadding={MENU_COLLISION_PADDING_PX}
+                >
                   <LabelsMenu variant="immediate" labels={labels} onToggle={onToggleLabel} />
                 </ContextMenu.SubContent>
               </ContextMenu.Portal>
@@ -164,9 +179,9 @@ export function RowContextMenu({
               <ContextMenu.Separator className="my-1 h-px bg-outline-variant/40 dark:bg-dark-outline-variant/40" />
               <ContextMenu.Item className={itemClass} onSelect={onToggleSpam}>
                 {visibility.spamMode === 'notSpam' ? (
-                  <ShieldOff aria-hidden="true" size={16} />
+                  <ShieldOff aria-hidden="true" size={ICON_SIZE.base} />
                 ) : (
-                  <ShieldAlert aria-hidden="true" size={16} />
+                  <ShieldAlert aria-hidden="true" size={ICON_SIZE.base} />
                 )}
                 {visibility.spamMode === 'notSpam'
                   ? `Mark${countSuffix} as not spam`
@@ -181,7 +196,7 @@ export function RowContextMenu({
                 className={`${itemClass} text-error hover:bg-error-container dark:text-dark-error dark:hover:bg-dark-error-container`}
                 onSelect={onDelete}
               >
-                <Trash2 aria-hidden="true" size={16} />
+                <Trash2 aria-hidden="true" size={ICON_SIZE.base} />
                 {`Delete${countSuffix}`}
               </ContextMenu.Item>
             </>

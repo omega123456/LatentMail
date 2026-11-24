@@ -1,6 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ipc } from '@/tests/ipc-mock';
 
+const SIDEBAR_WIDTH = 300;
+const LIST_WIDTH = 420;
+const READER_HEIGHT_PERCENT = 60;
+const SYNC_INTERVAL_SECONDS = 600;
+const FRACTION_ROUNDED_DOWN = 0.4;
+const FRACTION_ROUNDED_UP = 0.6;
+const HALF_ROUNDED_UP = 0.5;
+const ZOOM_PERCENT = 125;
+const ZOOM_FACTOR = 1.25;
+
 async function loadStore() {
   const module = await import('@/stores/layout');
   module.useLayoutStore.setState({
@@ -68,20 +78,20 @@ describe('layout store', () => {
   it('writes each changed pane preference immediately', async () => {
     const store = await loadStore();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args);
+    ipc.override('write_setting', (request) => {
+      writes.push(request);
     });
 
     store.getState().setLayout('list-only');
     store.getState().setDensity('spacious');
     store.getState().setSidebarCollapsed(true);
-    store.getState().setSidebarWidth(300);
-    store.getState().setListWidth(420);
-    store.getState().setReaderHeight(60);
+    store.getState().setSidebarWidth(SIDEBAR_WIDTH);
+    store.getState().setListWidth(LIST_WIDTH);
+    store.getState().setReaderHeight(READER_HEIGHT_PERCENT);
     store.getState().setShowUnreadCounts(false);
     store.getState().setShowSenderAvatars(false);
     store.getState().setSyncOnStartup(false);
-    store.getState().setSyncIntervalSeconds(600);
+    store.getState().setSyncIntervalSeconds(SYNC_INTERVAL_SECONDS);
     await Promise.resolve();
 
     expect(writes).toEqual([
@@ -110,13 +120,13 @@ describe('layout store', () => {
   it('persists whole-pixel pane sizes from fractional drag offsets', async () => {
     const store = await loadStore();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args);
+    ipc.override('write_setting', (request) => {
+      writes.push(request);
     });
 
-    store.getState().setSidebarWidth(300.4);
-    store.getState().setListWidth(420.6);
-    store.getState().setReaderHeight(60.5);
+    store.getState().setSidebarWidth(SIDEBAR_WIDTH + FRACTION_ROUNDED_DOWN);
+    store.getState().setListWidth(LIST_WIDTH + FRACTION_ROUNDED_UP);
+    store.getState().setReaderHeight(READER_HEIGHT_PERCENT + HALF_ROUNDED_UP);
     await Promise.resolve();
 
     expect(writes).toEqual([
@@ -130,8 +140,8 @@ describe('layout store', () => {
   it('normalises trusted senders, ignores a duplicate, and persists each whole list', async () => {
     const store = await loadStore();
     const writes: Array<{ key: string; value: unknown }> = [];
-    ipc.override('write_setting', (args) => {
-      writes.push(args);
+    ipc.override('write_setting', (request) => {
+      writes.push(request);
     });
 
     store.getState().setAlwaysLoadRemoteImages(true);
@@ -155,9 +165,9 @@ describe('layout store', () => {
 
   it('zooms the webview itself instead of the document', async () => {
     const useLayoutStore = await loadStore();
-    useLayoutStore.getState().setZoomPercent(125);
+    useLayoutStore.getState().setZoomPercent(ZOOM_PERCENT);
 
-    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(1.25);
+    expect(ipc.tauriSetZoom).toHaveBeenCalledWith(ZOOM_FACTOR);
     expect(document.body.style.zoom).toBe('');
   });
 });

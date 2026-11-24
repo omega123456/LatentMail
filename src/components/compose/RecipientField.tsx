@@ -3,19 +3,23 @@ import { Popover } from 'radix-ui';
 import { X } from 'lucide-react';
 import { ContactSuggestions } from './ContactSuggestions';
 import { TextInput } from '@/components/shared/TextInput';
-import { useContactSuggestionsQuery } from '@/lib/query/hooks';
+import { CONTACT_QUERY_MIN_LENGTH, useContactSuggestionsQuery } from '@/lib/query/hooks';
 import { parseParticipant } from '@/lib/format/participants';
 import { type RecipientRole, useComposeStore } from '@/stores/compose';
 import type { ContactSuggestion } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { POPOVER_SIDE_OFFSET_PX } from '@/components/shared/floating-offsets';
 
 const CHIP_ROWS_3_PX = 96;
 
-function useDebouncedValue(value: string, delayMs: number) {
-  const [debounced, setDebounced] = useState(value);
+const CONTACT_LOOKUP_DEBOUNCE_MS = 150;
+
+function useDebouncedValue(liveValue: string, delayMs: number) {
+  const [debounced, setDebounced] = useState(liveValue);
   useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs);
+    const timer = setTimeout(() => setDebounced(liveValue), delayMs);
     return () => clearTimeout(timer);
-  }, [value, delayMs]);
+  }, [liveValue, delayMs]);
   return debounced;
 }
 
@@ -37,11 +41,11 @@ export function RecipientField({
   placeholder: string;
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }) {
-  const session = useComposeStore((state) => state.session);
-  const commitRecipient = useComposeStore((state) => state.commitRecipient);
-  const removeRecipient = useComposeStore((state) => state.removeRecipient);
-  const removeLastRecipient = useComposeStore((state) => state.removeLastRecipient);
-  const setOverflowCount = useComposeStore((state) => state.setOverflowCount);
+  const session = useComposeStore((compose) => compose.session);
+  const commitRecipient = useComposeStore((compose) => compose.commitRecipient);
+  const removeRecipient = useComposeStore((compose) => compose.removeRecipient);
+  const removeLastRecipient = useComposeStore((compose) => compose.removeLastRecipient);
+  const setOverflowCount = useComposeStore((compose) => compose.setOverflowCount);
   const chips = session?.recipients[fieldRole] ?? [];
 
   const [inputValue, setInputValue] = useState('');
@@ -57,10 +61,11 @@ export function RecipientField({
   const listboxId = useId();
 
   const trimmedQuery = inputValue.trim();
-  const debouncedQuery = useDebouncedValue(trimmedQuery, 150);
+  const debouncedQuery = useDebouncedValue(trimmedQuery, CONTACT_LOOKUP_DEBOUNCE_MS);
   const suggestionsQuery = useContactSuggestionsQuery(accountId, debouncedQuery);
   const suggestions: ContactSuggestion[] = suggestionsQuery.data ?? [];
-  const open = !dismissed && trimmedQuery.length >= 2 && suggestions.length > 0;
+  const open =
+    !dismissed && trimmedQuery.length >= CONTACT_QUERY_MIN_LENGTH && suggestions.length > 0;
 
   useEffect(() => {
     const node = chipListRef.current;
@@ -89,8 +94,10 @@ export function RecipientField({
   };
 
   const selectSuggestion = (item: ContactSuggestion) => {
-    const value = item.displayName ? `${item.displayName} <${item.address}>` : item.address;
-    commitRecipient(fieldRole, value);
+    const formattedRecipient = item.displayName
+      ? `${item.displayName} <${item.address}>`
+      : item.address;
+    commitRecipient(fieldRole, formattedRecipient);
     setInputValue('');
     setActiveIndex(-1);
     setDismissed(true);
@@ -167,7 +174,7 @@ export function RecipientField({
                     onClick={() => removeRecipient(fieldRole, index)}
                     className="cursor-pointer rounded-full text-secondary hover:bg-surface-container-highest hover:text-on-surface dark:text-dark-secondary dark:hover:bg-dark-surface-container-highest dark:hover:text-dark-on-surface"
                   >
-                    <X aria-hidden="true" size={12} />
+                    <X aria-hidden="true" size={ICON_SIZE.xxs} />
                   </button>
                 </span>
               ))}
@@ -208,7 +215,7 @@ export function RecipientField({
         <Popover.Portal>
           <Popover.Content
             align="start"
-            sideOffset={6}
+            sideOffset={POPOVER_SIDE_OFFSET_PX}
             onOpenAutoFocus={(event) => event.preventDefault()}
             style={{ width: 'var(--radix-popover-trigger-width)' }}
             className="z-50 max-h-64 overflow-auto rounded-md border border-outline-variant bg-surface-container-lowest p-1 shadow-lg dark:border-dark-outline-variant dark:bg-dark-surface-container-lowest"

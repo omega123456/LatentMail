@@ -20,7 +20,7 @@ use super::{
     ThreadCursor, ThreadDto, ThreadPage, ThreadPageDirection, TraversalStatusDto,
 };
 
-const DEFAULT_PAGE_SIZE: i64 = 50;
+const DEFAULT_PAGE_SIZE: u32 = 50;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,11 +152,11 @@ async fn admit_compose(
             .draft_id
             .clone()
             .unwrap_or(request.session_id.clone()),
-        payload,
+        payload: payload,
     };
     crate::compose::drafts::admit(&services, admission, &parts).await?;
     Ok(ComposeQueueAcceptance {
-        operation_id,
+        operation_id: operation_id,
         draft_id: request.draft_id,
     })
 }
@@ -314,14 +314,14 @@ pub async fn hydrate_compose_draft<R: Runtime>(
     };
     Ok(HydratedComposeDraft {
         session_id: crate::compose::drafts::generate_id("compose"),
-        account_id,
-        draft_id,
+        account_id: account_id,
+        draft_id: draft_id,
         from: draft.message.sender,
         to: split_addresses(&draft.message.to_recipients),
         cc: split_addresses(&draft.message.cc_recipients),
         bcc: split_addresses(&draft.message.bcc_recipients),
         subject: draft.message.subject,
-        html,
+        html: html,
         quote_html: boundary_matches.then_some(quote_html).flatten(),
         quote_plain: metadata
             .as_ref()
@@ -344,7 +344,7 @@ pub async fn hydrate_compose_draft<R: Runtime>(
             .as_ref()
             .and_then(|value| value.original_message_id.clone()),
         original_gmail_message_id: metadata.and_then(|value| value.original_gmail_message_id),
-        attachments,
+        attachments: attachments,
     })
 }
 
@@ -480,11 +480,11 @@ pub async fn stage_attachment_from_bytes(
 ) -> Result<super::dto::StagedAttachmentDto, String> {
     let id = crate::compose::drafts::generate_id("staged");
     let descriptor = crate::compose::staging::StagedPart {
-        id,
-        filename,
-        mime_type,
+        id: id,
+        filename: filename,
+        mime_type: mime_type,
         path: std::path::PathBuf::new(),
-        content_id,
+        content_id: content_id,
 
         size: 0,
     };
@@ -512,7 +512,8 @@ pub async fn list_threads(
     direction: Option<ThreadPageDirection>,
     limit: Option<u32>,
 ) -> Result<ThreadPage, String> {
-    let limit = limit.map_or(DEFAULT_PAGE_SIZE, |value| value as i64).max(1);
+    let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE).max(1);
+    let page_size = usize::try_from(limit).unwrap_or(usize::MAX);
     let cursor_pair = cursor.map(|cursor| (cursor.latest_at, cursor.id));
     let has_cursor = cursor_pair.is_some();
     let direction = direction.unwrap_or_default();
@@ -524,18 +525,18 @@ pub async fn list_threads(
                     &account_id,
                     label_id.as_deref(),
                     cursor_pair,
-                    limit + 1,
+                    i64::from(limit) + 1,
                     direction,
                 )
             })
             .await
     );
-    let has_more = rows.len() as i64 > limit;
+    let has_more = rows.len() > page_size;
     if has_more {
         match direction {
-            ThreadPageDirection::Forward => rows.truncate(limit as usize),
+            ThreadPageDirection::Forward => rows.truncate(page_size),
             ThreadPageDirection::Backward => {
-                rows.drain(..rows.len() - limit as usize);
+                rows.drain(..rows.len() - page_size);
             }
         }
     }
@@ -638,7 +639,7 @@ pub async fn load_conversation(
     }
 
     Ok(ConversationDto {
-        thread_id,
+        thread_id: thread_id,
         subject: thread_subject,
         messages: message_dtos,
     })
@@ -702,9 +703,9 @@ async fn download_inline_images(
         };
         match client.attachment(message_id, &part.attachment_id).await {
             Ok(bytes) => parts.push(crate::storage::InlinePart {
-                content_id,
+                content_id: content_id,
                 mime_type: part.mime_type.clone(),
-                bytes,
+                bytes: bytes,
             }),
             Err(error) => {
                 tracing::debug!("inline image {content_id} of {message_id} failed: {error}");
@@ -817,7 +818,7 @@ pub async fn fetch_message_body<R: Runtime>(
             .await
     );
     app.emit(
-        "message://body-fetched",
+        crate::events::MESSAGE_BODY_FETCHED,
         MessageBodyFetchedDto {
             account_id,
             message_id,
@@ -965,7 +966,9 @@ async fn apply_mutate_threads<R: Runtime>(
             .cloned()
             .unwrap_or_default();
         if !drafts.is_empty() {
-            if add != HashSet::from(["TRASH".to_owned()]) || !remove.is_empty() {
+            if add != HashSet::from([crate::gmail::system_labels::TRASH.to_owned()])
+                || !remove.is_empty()
+            {
                 return Err("Draft messages cannot be modified; delete them instead.".into());
             }
             for message_id in drafts {
@@ -973,7 +976,7 @@ async fn apply_mutate_threads<R: Runtime>(
                     .await?;
             }
             results.push(MutationResultDto {
-                thread_id,
+                thread_id: thread_id,
                 outcome: super::MutationOutcome::Applied.into(),
             });
             continue;
@@ -993,7 +996,7 @@ async fn apply_mutate_threads<R: Runtime>(
         let (thread_id, outcome) = outcome.map_err(|error| error.to_string())?;
         let outcome = outcome.map_err(|error| error.to_string())?;
         results.push(MutationResultDto {
-            thread_id,
+            thread_id: thread_id,
             outcome: outcome.into(),
         });
     }

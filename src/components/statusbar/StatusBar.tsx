@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { differenceInMinutes, format } from 'date-fns';
+import { differenceInMinutes, format, secondsToMilliseconds } from 'date-fns';
 import { ListChecks, Loader2, Pause, Play, RefreshCw, Sparkles } from 'lucide-react';
 import { exactTime } from '@/lib/format/relative-time';
 import { useNow } from '@/lib/format/use-now';
@@ -13,8 +13,13 @@ import { useLayoutStore } from '@/stores/layout';
 import { useSettingsUiStore } from '@/stores/settings-ui';
 import { useSyncStore } from '@/stores/sync';
 import type { AiConfig, TraversalStatus } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
+import { percentOf, WHOLE_PERCENT } from '@/lib/format/percent';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 const MINUTES_PER_HOUR = 60;
+const LAST_SYNCED_REFRESH_SECONDS = 30;
+const LAST_SYNCED_REFRESH_MS = secondsToMilliseconds(LAST_SYNCED_REFRESH_SECONDS);
 
 const barClass =
   'flex h-status-bar-h items-stretch justify-between gap-stack-gap-md px-container-padding text-label-sm';
@@ -41,7 +46,7 @@ function freshness(lastSynced: Date | null, now: Date) {
   const minutes = Math.max(0, differenceInMinutes(now, lastSynced));
   if (minutes === 0) return 'Synced just now';
   if (minutes < MINUTES_PER_HOUR) return `Synced ${minutes}m ago`;
-  return `Synced at ${format(lastSynced, 'p')}`;
+  return `Synced at ${format(lastSynced, DATE_FORMAT.timeOfDay)}`;
 }
 
 function traversalLabel(traversal: TraversalStatus) {
@@ -65,7 +70,7 @@ function ProgressTrack({
   name: string;
   unit: string;
 }) {
-  const percent = total === 0 ? 0 : Math.min(100, (completed / total) * 100);
+  const percent = Math.min(WHOLE_PERCENT, percentOf(completed, total));
   return (
     <div
       role="progressbar"
@@ -89,9 +94,9 @@ function ProgressTrack({
 
 export function StatusBar({ accountId = null }: { accountId?: string | null }) {
   const { queue, lastSynced, syncState, error, refreshing } = useSyncStore();
-  const setRoute = useLayoutStore((state) => state.setRoute);
-  const setActiveSection = useSettingsUiStore((state) => state.setActiveSection);
-  const now = useNow(30_000);
+  const setRoute = useLayoutStore((layout) => layout.setRoute);
+  const setActiveSection = useSettingsUiStore((settingsUi) => settingsUi.setActiveSection);
+  const now = useNow(LAST_SYNCED_REFRESH_MS);
   const traversal = activeTraversal(useTraversalStatusQuery(accountId).data);
   const { data: aiConfigs = [] } = useAiConfigsQuery();
   const aiConfig = aiConfigs.find((config) => config.accountId === accountId);
@@ -152,7 +157,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
       <div className="flex min-w-0 items-center gap-stack-gap-sm">
         <span className="flex size-4 shrink-0 items-center justify-center">
           {working ? (
-            <Loader2 aria-hidden="true" size={14} className="motion-safe:animate-spin" />
+            <Loader2 aria-hidden="true" size={ICON_SIZE.sm} className="motion-safe:animate-spin" />
           ) : (
             <span className={`size-chip-dot rounded-full ${dotClass}`} />
           )}
@@ -199,7 +204,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
             onClick={refresh}
             className={restingControlClass}
           >
-            <RefreshCw aria-hidden="true" size={14} />
+            <RefreshCw aria-hidden="true" size={ICON_SIZE.sm} />
           </button>
         )}
         <button
@@ -209,7 +214,11 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
           onClick={togglePaused}
           className={paused ? pausedControlClass : restingControlClass}
         >
-          {paused ? <Play aria-hidden="true" size={14} /> : <Pause aria-hidden="true" size={14} />}
+          {paused ? (
+            <Play aria-hidden="true" size={ICON_SIZE.sm} />
+          ) : (
+            <Pause aria-hidden="true" size={ICON_SIZE.sm} />
+          )}
         </button>
       </div>
       <div className="flex items-center gap-stack-gap-sm">
@@ -224,7 +233,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
             }}
             className={paused ? pausedQueueClass : restingQueueClass}
           >
-            <Sparkles aria-hidden="true" size={14} />
+            <Sparkles aria-hidden="true" size={ICON_SIZE.sm} />
             <span className="max-w-40 truncate">{aiModelLabel(aiConfig)}</span>
           </button>
         )}
@@ -238,7 +247,7 @@ export function StatusBar({ accountId = null }: { accountId?: string | null }) {
             }}
             className={paused ? pausedQueueClass : restingQueueClass}
           >
-            <ListChecks aria-hidden="true" size={14} />
+            <ListChecks aria-hidden="true" size={ICON_SIZE.sm} />
             <span
               className={`tabular-nums ${queue.failed > 0 ? 'text-error dark:text-dark-error' : ''}`}
             >

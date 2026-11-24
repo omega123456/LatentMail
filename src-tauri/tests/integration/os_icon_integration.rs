@@ -31,10 +31,11 @@ fn rendered_tray_icons_composite_the_state_dot_and_overlay_is_red() {
     let idle = tray_icon(0, false).unwrap();
     let unread = tray_icon(1, false).unwrap();
     let reauthentication = tray_icon(1, true).unwrap();
-    let pixel = |icon: &latentmail_lib::os::icon::RasterIcon, x: usize, y: usize| -> [u8; 4] {
-        let offset = (y * usize::try_from(icon.width).unwrap() + x) * 4;
-        icon.rgba[offset..offset + 4].try_into().unwrap()
-    };
+    let pixel =
+        |icon: &latentmail_lib::os::icon::RasterIcon, column: usize, row: usize| -> [u8; 4] {
+            let offset = (row * usize::try_from(icon.width).unwrap() + column) * 4;
+            icon.rgba[offset..offset + 4].try_into().unwrap()
+        };
 
     assert_eq!((idle.width, idle.height), (32, 32));
     assert_ne!(idle.rgba, unread.rgba);

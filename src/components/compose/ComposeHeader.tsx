@@ -1,5 +1,6 @@
 import { Trash2, X } from 'lucide-react';
 import { type ComposeMode, modeTitles } from '@/stores/compose';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const circularButton =
   'inline-flex size-8 cursor-pointer items-center justify-center rounded-full text-secondary focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-secondary';
@@ -29,7 +30,7 @@ export function ComposeHeader({
           onClick={onDiscard}
           className={`${circularButton} hover:bg-surface-container-high hover:text-error disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-dark-surface-container-high dark:hover:text-dark-error`}
         >
-          <Trash2 aria-hidden="true" size={18} />
+          <Trash2 aria-hidden="true" size={ICON_SIZE.lg} />
         </button>
         <button
           type="button"
@@ -38,7 +39,7 @@ export function ComposeHeader({
           onClick={onClose}
           className={`${circularButton} hover:bg-surface-container-high hover:text-primary dark:hover:bg-dark-surface-container-high dark:hover:text-dark-primary`}
         >
-          <X aria-hidden="true" size={18} />
+          <X aria-hidden="true" size={ICON_SIZE.lg} />
         </button>
       </div>
     </div>

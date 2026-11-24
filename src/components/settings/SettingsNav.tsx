@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { SettingsSectionId } from '@/stores/settings-ui';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 const sections: { id: SettingsSectionId; label: string; Icon: LucideIcon }[] = [
   { id: 'general', label: 'General', Icon: SlidersHorizontal },
@@ -49,7 +50,7 @@ export function SettingsNav({
         onClick={onBackToMail}
         className={navRow(false)}
       >
-        <ArrowLeft aria-hidden="true" size={15} />
+        <ArrowLeft aria-hidden="true" size={ICON_SIZE.md} />
         <span className="flex-1 text-left">Mail</span>
       </button>
       <div
@@ -72,7 +73,7 @@ export function SettingsNav({
                 className="absolute inset-y-2 left-0 w-0.75 rounded-full bg-settings-primary dark:bg-dark-settings-primary"
               />
             )}
-            <Icon aria-hidden="true" size={15} />
+            <Icon aria-hidden="true" size={ICON_SIZE.md} />
             <span className="flex-1 text-left">{label}</span>
           </button>
         );

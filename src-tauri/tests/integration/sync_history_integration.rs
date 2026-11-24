@@ -40,7 +40,7 @@ fn seed_message(id: &str, thread_id: &str, sent_at: i64, unread: bool) -> Messag
         sender: format!("{id}@example.com"),
         recipients: "me@example.com".into(),
         subject: "Existing".into(),
-        sent_at,
+        sent_at: sent_at,
         snippet: String::new(),
         html_body: None,
         plain_body: None,
@@ -206,11 +206,15 @@ async fn incremental_sync_applies_every_delta_type_and_advances_the_checkpoint()
     assert_eq!(catch_ups.load(Ordering::SeqCst), 1);
 
     let fired = events.lock().unwrap().clone();
-    assert!(fired.iter().any(|(name, _)| name == "sync://complete"));
-    assert!(fired.iter().any(|(name, _)| name == "mail://new"));
+    assert!(fired
+        .iter()
+        .any(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE));
+    assert!(fired
+        .iter()
+        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
     let complete = fired
         .iter()
-        .find(|(name, _)| name == "sync://complete")
+        .find(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE)
         .map(|(_, payload)| payload);
     assert_eq!(
         complete.and_then(|payload| payload.get("changed")),
@@ -305,7 +309,7 @@ async fn incremental_sync_reports_only_unread_inbox_arrivals() {
     let fired = events.lock().unwrap().clone();
     let new_mail = fired
         .iter()
-        .find(|(name, _)| name == "mail://new")
+        .find(|(name, _)| name == latentmail_lib::events::MAIL_NEW)
         .map(|(_, payload)| payload.clone())
         .expect("mail://new is emitted for the arrival");
     assert_eq!(
@@ -354,7 +358,7 @@ async fn history_does_not_notify_again_for_unread_mail_saved_by_the_probe() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(name, _)| name == "mail://new")
+            .filter(|(name, _)| name == latentmail_lib::events::MAIL_NEW)
             .flat_map(|(_, payload)| payload["arrivals"].as_array().unwrap().iter())
             .map(|arrival| arrival["subject"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>()
@@ -476,7 +480,7 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         .lock()
         .unwrap()
         .iter()
-        .any(|(name, _)| name == "mail://new"));
+        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
     assert_eq!(
         AccountRepository::get(&connection, "account")
             .unwrap()
@@ -492,10 +496,12 @@ async fn incremental_sync_ingests_inbox_mail_history_has_not_reported_yet() {
         .await
         .unwrap();
     let second = events.lock().unwrap().clone();
-    assert!(!second.iter().any(|(name, _)| name == "mail://new"));
+    assert!(!second
+        .iter()
+        .any(|(name, _)| name == latentmail_lib::events::MAIL_NEW));
     let complete = second
         .iter()
-        .find(|(name, _)| name == "sync://complete")
+        .find(|(name, _)| name == latentmail_lib::events::SYNC_COMPLETE)
         .map(|(_, payload)| payload);
     assert_eq!(
         complete.and_then(|payload| payload.get("changed")),
@@ -747,54 +753,54 @@ async fn a_stale_full_state_write_from_history_is_rejected_by_the_existing_gate(
 
 #[tokio::test(start_paused = true)]
 async fn changing_the_poll_interval_takes_effect_without_waiting_out_the_old_one() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
     let scheduler = SyncScheduler::start(Duration::from_secs(600), false, move || {
-        let tx = tx.clone();
+        let sender = sender.clone();
         async move {
-            let _ = tx.send(());
+            let _ = sender.send(());
         }
     });
 
     tokio::time::advance(Duration::from_secs(60)).await;
-    assert!(rx.try_recv().is_err(), "should not have ticked yet");
+    assert!(receiver.try_recv().is_err(), "should not have ticked yet");
 
     scheduler.set_interval(Duration::from_secs(120));
     tokio::time::advance(Duration::from_secs(121)).await;
     assert!(
-        rx.recv().await.is_some(),
+        receiver.recv().await.is_some(),
         "new interval should have fired a tick"
     );
 }
 
 #[tokio::test(start_paused = true)]
 async fn sync_on_startup_disabled_genuinely_skips_the_immediate_tick() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
     let _scheduler = SyncScheduler::start(Duration::from_secs(600), false, move || {
-        let tx = tx.clone();
+        let sender = sender.clone();
         async move {
-            let _ = tx.send(());
+            let _ = sender.send(());
         }
     });
 
     tokio::task::yield_now().await;
     assert!(
-        rx.try_recv().is_err(),
+        receiver.try_recv().is_err(),
         "sync-on-startup=false must not tick immediately"
     );
 }
 
 #[tokio::test(start_paused = true)]
 async fn sync_on_startup_enabled_ticks_immediately() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
     let _scheduler = SyncScheduler::start(Duration::from_secs(600), true, move || {
-        let tx = tx.clone();
+        let sender = sender.clone();
         async move {
-            let _ = tx.send(());
+            let _ = sender.send(());
         }
     });
 
     assert!(
-        rx.recv().await.is_some(),
+        receiver.recv().await.is_some(),
         "sync-on-startup=true must tick immediately"
     );
 }

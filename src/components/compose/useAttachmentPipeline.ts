@@ -16,11 +16,11 @@ function basename(path: string): string {
 }
 
 export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null>) {
-  const session = useComposeStore((state) => state.session);
-  const addReadingAttachment = useComposeStore((state) => state.addReadingAttachment);
-  const settleAttachment = useComposeStore((state) => state.settleAttachment);
-  const failAttachment = useComposeStore((state) => state.failAttachment);
-  const removeAttachment = useComposeStore((state) => state.removeAttachment);
+  const session = useComposeStore((compose) => compose.session);
+  const addReadingAttachment = useComposeStore((compose) => compose.addReadingAttachment);
+  const settleAttachment = useComposeStore((compose) => compose.settleAttachment);
+  const failAttachment = useComposeStore((compose) => compose.failAttachment);
+  const removeAttachment = useComposeStore((compose) => compose.removeAttachment);
 
   const accountId = session?.accountId ?? '';
   const owner = session?.draftId ?? session?.id ?? '';
@@ -30,10 +30,10 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     (path: string, contentId: string | null) => {
       const localId = crypto.randomUUID();
       addReadingAttachment({
-        localId,
+        localId: localId,
         filename: basename(path),
         mimeType: guessMimeType(path),
-        contentId,
+        contentId: contentId,
       });
       void stageAttachmentPath(accountId, owner, path, contentId)
         .then((staged) => {
@@ -70,7 +70,11 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
       const attachment = session?.attachments.find((entry) => entry.localId === localId);
       removeAttachment(localId);
       if (attachment?.staged) {
-        void invoke('release_staged_attachment', { accountId, owner, id: attachment.staged.id });
+        void invoke('release_staged_attachment', {
+          accountId: accountId,
+          owner: owner,
+          id: attachment.staged.id,
+        });
       }
     },
     [session?.attachments, removeAttachment, accountId, owner],
@@ -99,7 +103,11 @@ export function useAttachmentPipeline(bodyRef: RefObject<BodyEditorHandle | null
     removedInlineImages.forEach((attachment) => {
       removeAttachment(attachment.localId);
       if (attachment.staged) {
-        void invoke('release_staged_attachment', { accountId, owner, id: attachment.staged.id });
+        void invoke('release_staged_attachment', {
+          accountId: accountId,
+          owner: owner,
+          id: attachment.staged.id,
+        });
       }
     });
   }, [session?.html, session?.attachments, accountId, owner, removeAttachment]);

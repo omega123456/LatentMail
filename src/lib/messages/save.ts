@@ -33,12 +33,16 @@ export async function saveMessageAs(
     },
   });
   if (!destination) return;
-  const args = { accountId: target.accountId, messageId: target.messageId, destination };
+  const request = {
+    accountId: target.accountId,
+    messageId: target.messageId,
+    destination: destination,
+  };
   const { showSuccess, showError } = useToastStore.getState();
   try {
     await (exportFormat === 'eml'
-      ? invoke('save_message_source_to_path', args)
-      : invoke('save_message_html_to_path', args));
+      ? invoke('save_message_source_to_path', request)
+      : invoke('save_message_html_to_path', request));
     showSuccess(`Saved "${destination.split(/[/\\]/).pop()}"`);
   } catch (error) {
     showError(

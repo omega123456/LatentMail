@@ -1,5 +1,6 @@
 import { SYSTEM_BADGES, type SystemBadgeId } from '@/lib/labels/badges';
 import { navCount, navRail, navRow } from './rowStyles';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type Mailbox = { id: string; name: string; unreadCount: number };
 
@@ -38,7 +39,7 @@ export function FolderList({
             {active && !collapsed && <span aria-hidden="true" className={navRail} />}
             <Icon
               aria-hidden="true"
-              size={18}
+              size={ICON_SIZE.lg}
               className={active ? 'text-primary dark:text-dark-primary' : undefined}
             />
             {!collapsed && (

@@ -1,9 +1,10 @@
 import { ChevronDown, CircleAlert, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { invoke } from '@/lib/ipc/commands';
-import { Avatar } from '@/components/shared/Avatar';
+import { Avatar, AVATAR_SIZE } from '@/components/shared/Avatar';
 import { useAccountAvatarQuery } from '@/lib/query/hooks';
 import type { Account } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export function AccountSwitcher({
   accounts,
@@ -33,11 +34,11 @@ export function AccountSwitcher({
         aria-label={collapsed ? active.email : undefined}
         title={collapsed ? active.email : undefined}
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setOpen((wasOpen) => !wasOpen)}
         className={`flex w-full cursor-pointer items-center gap-3 rounded px-2 py-2 text-left text-on-surface focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface ${collapsed ? 'justify-center' : ''}`}
       >
         <Avatar
-          size={collapsed ? 36 : 40}
+          size={collapsed ? AVATAR_SIZE.lg : AVATAR_SIZE.xl}
           src={activeAvatarSrc}
           label={active.displayName}
           ariaLabel={collapsed ? active.email : undefined}
@@ -50,7 +51,7 @@ export function AccountSwitcher({
                 Active: {active.email}
               </span>
             </span>
-            <ChevronDown aria-hidden="true" size={16} />
+            <ChevronDown aria-hidden="true" size={ICON_SIZE.base} />
           </>
         )}
       </button>
@@ -70,13 +71,13 @@ export function AccountSwitcher({
               }}
               className="flex w-full cursor-pointer items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-left text-body-sm text-on-surface hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface dark:hover:bg-primary/15"
             >
-              <Avatar size={24} label={account.displayName} />
+              <Avatar size={AVATAR_SIZE.xs} label={account.displayName} />
               <span className="min-w-0 flex-1 truncate">{account.email}</span>
               {account.needsReauthentication && (
                 <CircleAlert
                   aria-label="Needs reauthentication"
                   className="text-error dark:text-dark-error"
-                  size={16}
+                  size={ICON_SIZE.base}
                 />
               )}
             </button>
@@ -88,7 +89,7 @@ export function AccountSwitcher({
             onClick={() => void addAccount()}
             className="mt-stack-gap-sm flex w-full cursor-pointer items-center gap-stack-gap-sm rounded px-stack-gap-sm py-2 text-body-sm text-primary disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-primary"
           >
-            <Plus aria-hidden="true" size={16} />
+            <Plus aria-hidden="true" size={ICON_SIZE.base} />
             {adding ? 'Adding account…' : 'Add account'}
           </button>
         </div>

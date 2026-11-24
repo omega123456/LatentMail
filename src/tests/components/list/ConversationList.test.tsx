@@ -10,6 +10,13 @@ import { useMultiSelectStore } from '@/stores/multi-select';
 import { useSelectionStore } from '@/stores/selection';
 import { useSearchStore } from '@/stores/search';
 import { renderWithQueryClient } from '@/tests/render-with-query-client';
+import { closestOrThrow } from '@/tests/dom';
+
+const CURSOR_AFTER_FIRST_PAGE_DOWN = 2;
+const CURSOR_AFTER_SECOND_PAGE_DOWN = 3;
+const PRESERVED_SCROLL_TOP = 30;
+const LOADED_ROW_COUNT = 4;
+const TRIAGE_CALLS = 2;
 
 const nextPage = [
   {
@@ -95,9 +102,9 @@ describe('ConversationList', () => {
       value: 272,
     });
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' })));
-    expect(useSelectionStore.getState().keyboardCursor).toBe(2);
+    expect(useSelectionStore.getState().keyboardCursor).toBe(CURSOR_AFTER_FIRST_PAGE_DOWN);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' })));
-    expect(useSelectionStore.getState().keyboardCursor).toBe(3);
+    expect(useSelectionStore.getState().keyboardCursor).toBe(CURSOR_AFTER_SECOND_PAGE_DOWN);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp' })));
     expect(useSelectionStore.getState().keyboardCursor).toBe(0);
   });
@@ -190,7 +197,7 @@ describe('ConversationList', () => {
     Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 30 });
     Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 200 });
     rerender(<ConversationList threads={[...prepended, ...nextPage]} />);
-    expect(list.scrollTop).toBeGreaterThan(30);
+    expect(list.scrollTop).toBeGreaterThan(PRESERVED_SCROLL_TOP);
   });
 
   it('requests an older page at the retained window top and preserves its scroll anchor', () => {
@@ -212,7 +219,7 @@ describe('ConversationList', () => {
     rerender(
       <ConversationList threads={[...prepended, ...nextPage]} onLoadPrevious={onLoadPrevious} />,
     );
-    expect(list.scrollTop).toBeGreaterThan(30);
+    expect(list.scrollTop).toBeGreaterThan(PRESERVED_SCROLL_TOP);
   });
 
   it('shows a label already on the row as checked in the row context menu and lets it be removed', async () => {
@@ -276,7 +283,7 @@ describe('ConversationList multi-selection', () => {
   it('Cmd/Ctrl-A selects exactly the loaded rows', () => {
     renderWithQueryClient(<ConversationList />);
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true })));
-    expect(useMultiSelectStore.getState().selectedIds.size).toBe(4);
+    expect(useMultiSelectStore.getState().selectedIds.size).toBe(LOADED_ROW_COUNT);
     for (const row of screen.getAllByTestId('conversation-row'))
       expect(row).toHaveAttribute('data-selected', 'true');
   });
@@ -335,7 +342,10 @@ describe('ConversationList multi-selection', () => {
 
     await user.pointer({
       keys: '[MouseRight]',
-      target: screen.getByLabelText('Open In trash').closest('[data-testid="conversation-row"]')!,
+      target: closestOrThrow(
+        screen.getByLabelText('Open In trash'),
+        '[data-testid="conversation-row"]',
+      ),
     });
     expect(await screen.findByText('Delete 2')).toBeInTheDocument();
     expect(screen.getByText('Star 2')).toBeInTheDocument();
@@ -381,7 +391,7 @@ describe('ConversationList triage shortcuts', () => {
     });
     screen.getByLabelText('filter').focus();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })));
-    expect(onTriage).toHaveBeenCalledTimes(2);
+    expect(onTriage).toHaveBeenCalledTimes(TRIAGE_CALLS);
   });
 });
 

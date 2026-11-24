@@ -5,6 +5,8 @@ import { useSyncStore } from '@/stores/sync';
 import { useToastStore } from '@/stores/toast';
 import { ipc } from '@/tests/ipc-mock';
 
+const SEPARATE_ERROR_EPISODES = 2;
+
 afterEach(() =>
   act(() => {
     useSyncStore.setState({
@@ -85,7 +87,7 @@ describe('useSyncStore', () => {
     expect(useToastStore.getState().toasts).toHaveLength(1);
     act(() => useSyncStore.getState().setSyncState('idle'));
     act(() => useSyncStore.getState().setSyncState('error'));
-    expect(useToastStore.getState().toasts).toHaveLength(2);
+    expect(useToastStore.getState().toasts).toHaveLength(SEPARATE_ERROR_EPISODES);
   });
 
   it('suppresses a sync failure toast while the system is suspended', () => {

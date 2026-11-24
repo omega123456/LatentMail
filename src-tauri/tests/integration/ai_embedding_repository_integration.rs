@@ -19,7 +19,7 @@ fn message(account_id: &str, id: &str, history_id: i64) -> Message {
         has_attachments: false,
         is_unread: false,
         is_starred: false,
-        history_id,
+        history_id: history_id,
         truncated_body: Some("Immutable body".into()),
         html_presence: HtmlPresence::Absent,
     }

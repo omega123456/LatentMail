@@ -5,6 +5,7 @@ import { LabelColorPicker } from './LabelColorPicker';
 import { LabelForm } from './LabelForm';
 import { LabelRowConfirm } from './LabelRowConfirm';
 import { navCount, navRail, navRow } from './rowStyles';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 export type Label = {
   id: string;
@@ -55,12 +56,12 @@ export function LabelList({
           aria-label="Create label"
           aria-expanded={creating}
           onClick={() => {
-            setCreating((value) => !value);
+            setCreating((wasCreating) => !wasCreating);
             setError(null);
           }}
           className="cursor-pointer rounded p-1 text-on-surface-variant hover:bg-surface-container-low focus-visible:outline-2 focus-visible:outline-primary dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
         >
-          <Plus aria-hidden="true" size={16} />
+          <Plus aria-hidden="true" size={ICON_SIZE.base} />
         </button>
       </div>
       {creating && (
@@ -126,7 +127,7 @@ export function LabelList({
                     }}
                     className="cursor-pointer rounded p-1 text-on-surface-variant opacity-0 hover:bg-surface-container-low focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-focus-within:opacity-100 group-hover:opacity-100 dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
                   >
-                    <Pencil aria-hidden="true" size={14} />
+                    <Pencil aria-hidden="true" size={ICON_SIZE.sm} />
                   </button>
                   <button
                     type="button"
@@ -137,7 +138,7 @@ export function LabelList({
                     }}
                     className="cursor-pointer rounded p-1 text-on-surface-variant opacity-0 hover:bg-surface-container-low focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-focus-within:opacity-100 group-hover:opacity-100 dark:text-dark-on-surface-variant dark:hover:bg-dark-surface-container"
                   >
-                    <X aria-hidden="true" size={14} />
+                    <X aria-hidden="true" size={ICON_SIZE.sm} />
                   </button>
                 </div>
                 {rowActive && rowMode?.kind === 'renaming' && (
@@ -156,10 +157,10 @@ export function LabelList({
                         setError(null);
                         try {
                           if (name !== label.name) {
-                            await onRenameLabel({ id: label.id, name });
+                            await onRenameLabel({ id: label.id, name: name });
                           }
                           if (colorId !== label.color) {
-                            await onRecolorLabel({ id: label.id, colorId });
+                            await onRecolorLabel({ id: label.id, colorId: colorId });
                           }
                         } catch (submitError) {
                           setError(
@@ -191,7 +192,7 @@ export function LabelList({
                       closeRow();
                       setError(null);
                       try {
-                        await onRecolorLabel({ id: label.id, colorId });
+                        await onRecolorLabel({ id: label.id, colorId: colorId });
                       } catch (submitError) {
                         setError(
                           submitError instanceof Error

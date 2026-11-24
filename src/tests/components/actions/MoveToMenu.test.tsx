@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MoveToMenu } from '@/components/actions/MoveToMenu';
 
+const DESTINATION_COUNT = 3;
+
 describe('MoveToMenu', () => {
   it('renders a destination the thread already carries as inert and dispatches a click on any other destination', async () => {
     const user = userEvent.setup();
@@ -18,14 +20,14 @@ describe('MoveToMenu', () => {
 
   it('never offers Sent or Draft — only the three mutable system mailboxes appear', () => {
     render(<MoveToMenu currentSystemLabelIds={['SENT']} onSelect={vi.fn()} />);
-    expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+    expect(screen.getAllByRole('menuitem')).toHaveLength(DESTINATION_COUNT);
     expect(screen.getByRole('menuitem', { name: /Inbox/ })).toBeEnabled();
   });
 
   it('never removes a thread from a user label — no "removing from" affordance is rendered', () => {
     render(<MoveToMenu currentSystemLabelIds={['Label_1']} onSelect={vi.fn()} />);
     expect(screen.queryByText(/Removing from/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+    expect(screen.getAllByRole('menuitem')).toHaveLength(DESTINATION_COUNT);
     expect(screen.getByRole('menuitem', { name: /Inbox/ })).toBeEnabled();
   });
 

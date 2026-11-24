@@ -8,6 +8,11 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::storage::{SettingRepository, Storage, StorageError};
 
 const WINDOW_STATE_KEY: &str = "windowState";
+const LOG_LEVEL_KEY: &str = "logLevel";
+const START_AT_LOGIN_KEY: &str = "startAtLogin";
+const CLOSE_TO_TRAY_KEY: &str = "closeToTray";
+const START_MINIMIZED_KEY: &str = "startMinimized";
+const SYNC_INTERVAL_SECONDS_KEY: &str = "syncIntervalSeconds";
 
 pub const MIN_SYNC_INTERVAL_SECS: u64 = 15;
 
@@ -115,8 +120,10 @@ impl From<&LogLevel> for LevelFilter {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
-    pub x: i32,
-    pub y: i32,
+    #[serde(rename = "x")]
+    pub left: i32,
+    #[serde(rename = "y")]
+    pub top: i32,
     pub width: u32,
     pub height: u32,
     pub maximized: bool,
@@ -208,7 +215,7 @@ impl SettingsService {
             .connection()
             .ok()
             .and_then(|connection| {
-                SettingRepository::get(&connection, "logLevel")
+                SettingRepository::get(&connection, LOG_LEVEL_KEY)
                     .ok()
                     .flatten()
             })
@@ -217,17 +224,21 @@ impl SettingsService {
     }
 
     pub fn close_to_tray(&self) -> bool {
-        self.bool_setting("closeToTray", true)
+        self.bool_setting(CLOSE_TO_TRAY_KEY, true)
     }
 
     pub fn start_minimized(&self) -> bool {
-        self.bool_setting("startMinimized", false)
+        self.bool_setting(START_MINIMIZED_KEY, false)
     }
 
     pub fn set_start_at_login(&self, enabled: bool) -> Result<(), StorageError> {
         let connection = self.storage.connection()?;
         let value = serde_json::to_string(&enabled).expect("boolean is serializable");
-        Ok(SettingRepository::set(&connection, "startAtLogin", &value)?)
+        Ok(SettingRepository::set(
+            &connection,
+            START_AT_LOGIN_KEY,
+            &value,
+        )?)
     }
 
     fn bool_setting(&self, key: &str, default: bool) -> bool {
@@ -253,17 +264,17 @@ impl Settings {
             "assistantWidth" => set_value(&mut self.assistant_width, value),
             "syncOnStartup" => set_value(&mut self.sync_on_startup, value),
             "showUnreadCounts" => set_value(&mut self.show_unread_counts, value),
-            "syncIntervalSeconds" => set_value(&mut self.sync_interval_seconds, value),
+            SYNC_INTERVAL_SECONDS_KEY => set_value(&mut self.sync_interval_seconds, value),
             "showSenderAvatars" => set_value(&mut self.show_sender_avatars, value),
             "zoomPercent" => set_value(&mut self.zoom_percent, value),
             "alwaysLoadRemoteImages" => set_value(&mut self.always_load_remote_images, value),
             "allowedImageSenders" => set_value(&mut self.allowed_image_senders, value),
             "commandOverrides" => set_value(&mut self.command_overrides, value),
-            "logLevel" => set_value(&mut self.log_level, value),
+            LOG_LEVEL_KEY => set_value(&mut self.log_level, value),
             "prefetchImageAttachments" => set_value(&mut self.prefetch_image_attachments, value),
-            "startAtLogin" => set_value(&mut self.start_at_login, value),
-            "closeToTray" => set_value(&mut self.close_to_tray, value),
-            "startMinimized" => set_value(&mut self.start_minimized, value),
+            START_AT_LOGIN_KEY => set_value(&mut self.start_at_login, value),
+            CLOSE_TO_TRAY_KEY => set_value(&mut self.close_to_tray, value),
+            START_MINIMIZED_KEY => set_value(&mut self.start_minimized, value),
             "desktopNotifications" => set_value(&mut self.desktop_notifications, value),
             "updateCheckInterval" => set_value(&mut self.update_check_interval, value),
             "installUpdateOnQuit" => set_value(&mut self.install_update_on_quit, value),
@@ -290,7 +301,7 @@ pub async fn write_setting<R: Runtime>(
     key: String,
     value: Value,
 ) -> Result<(), String> {
-    if key == "startAtLogin" {
+    if key == START_AT_LOGIN_KEY {
         let enabled = value
             .as_bool()
             .ok_or_else(|| "Unknown or invalid setting: startAtLogin".to_owned())?;
@@ -303,7 +314,7 @@ pub async fn write_setting<R: Runtime>(
 
 fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
     match key {
-        "syncIntervalSeconds" => {
+        SYNC_INTERVAL_SECONDS_KEY => {
             let (Some(seconds), Some(schedulers)) = (
                 value.as_u64().and_then(|value| u32::try_from(value).ok()),
                 app.try_state::<crate::sync::SyncSchedulers>(),
@@ -316,7 +327,7 @@ fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
                     u64::from(seconds).max(MIN_SYNC_INTERVAL_SECS),
                 ));
         }
-        "logLevel" => {
+        LOG_LEVEL_KEY => {
             let Ok(level) = serde_json::from_value::<LogLevel>(value.clone()) else {
                 return;
             };
@@ -328,7 +339,7 @@ fn apply_live<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
 
 pub fn restore_window<R: Runtime>(window: &WebviewWindow<R>, service: &SettingsService) {
     if let Ok(Some(state)) = service.window_state() {
-        let _ = window.set_position(PhysicalPosition::new(state.x, state.y));
+        let _ = window.set_position(PhysicalPosition::new(state.left, state.top));
         let _ = window.set_size(PhysicalSize::new(state.width, state.height));
         if state.maximized {
             let _ = window.maximize();
@@ -345,11 +356,11 @@ pub fn save_window<R: Runtime>(window: &tauri::Window<R>, service: &SettingsServ
         return;
     };
     let _ = service.save_window_state(&WindowState {
-        x: position.x,
-        y: position.y,
+        left: position.x,
+        top: position.y,
         width: size.width,
         height: size.height,
-        maximized,
+        maximized: maximized,
     });
 }
 

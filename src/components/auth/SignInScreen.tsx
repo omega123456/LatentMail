@@ -6,7 +6,7 @@ import { useToastStore } from '@/stores/toast';
 export function SignInScreen() {
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   const signIn = async () => {
     setSigningIn(true);
     setError(null);

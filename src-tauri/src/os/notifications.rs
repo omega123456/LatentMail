@@ -10,6 +10,8 @@ use tokio::sync::Mutex;
 
 use crate::sync::{MailArrival, NewMailEvent};
 
+const BATCH_WINDOW_SECONDS: i64 = 3;
+
 #[cfg(not(feature = "test-utils"))]
 const ACCOUNT_ID: &str = "accountId";
 #[cfg(not(feature = "test-utils"))]
@@ -43,7 +45,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     #[cfg(not(feature = "test-utils"))]
     register_click_handler(app)?;
     let handle = app.clone();
-    app.listen("mail://new", move |event| {
+    app.listen(crate::events::MAIL_NEW, move |event| {
         let Ok(event) = serde_json::from_str::<NewMailEvent>(event.payload()) else {
             return;
         };
@@ -78,7 +80,7 @@ async fn enqueue_arrivals<R: Runtime>(app: AppHandle<R>, event: NewMailEvent) {
         .lock()
         .await
         .insert(account_id.clone());
-    let Ok(delay) = Duration::seconds(3).to_std() else {
+    let Ok(delay) = Duration::seconds(BATCH_WINDOW_SECONDS).to_std() else {
         return;
     };
     tokio::time::sleep(delay).await;
@@ -183,7 +185,11 @@ impl NotificationController {
 
     pub fn click<R: Runtime>(app: &AppHandle<R>, account_id: String, thread_id: Option<String>) {
         crate::os::window::show_and_focus(app);
-        let _ = tauri::Emitter::emit(app, "os://intent", click_intent(account_id, thread_id));
+        let _ = tauri::Emitter::emit(
+            app,
+            crate::events::OS_INTENT,
+            click_intent(account_id, thread_id),
+        );
     }
 }
 
@@ -214,7 +220,7 @@ fn register_click_handler<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
                     return;
                 };
                 let intent = click_intent(account_id, response.user_info.get(THREAD_ID).cloned());
-                let _ = handle.emit("os://intent", intent);
+                let _ = handle.emit(crate::events::OS_INTENT, intent);
             }),
             Vec::new(),
         )

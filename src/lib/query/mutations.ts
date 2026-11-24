@@ -18,20 +18,20 @@ import { compareLabelNames } from '@/lib/labels/order';
 
 function useLabelLifecycleMutation<TArgs>(
   accountId: string | null,
-  mutationFn: (args: TArgs) => Promise<unknown>,
+  mutationFn: (request: TArgs) => Promise<unknown>,
   copy: { done: string; failed: string },
-  optimistic: (labels: MailLabel[], args: TArgs) => MailLabel[],
+  optimistic: (labels: MailLabel[], request: TArgs) => MailLabel[],
 ) {
   const queryClient = useQueryClient();
-  const showSuccess = useToastStore((state) => state.showSuccess);
-  const showError = useToastStore((state) => state.showError);
+  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
-    mutationFn,
-    onMutate: async (args: TArgs) => {
+    mutationFn: mutationFn,
+    onMutate: async (request: TArgs) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.labels(accountId ?? '') });
       queryClient.setQueryData<MailLabel[]>(
         queryKeys.labels(accountId ?? ''),
-        (labels) => labels && optimistic(labels, args),
+        (labels) => labels && optimistic(labels, request),
       );
     },
     onSuccess: () => showSuccess(copy.done),
@@ -47,17 +47,17 @@ function labelColorFor(colorId: string | null): MailLabelColor | null {
 export function useCreateLabelMutation(accountId: string | null) {
   return useLabelLifecycleMutation(
     accountId,
-    (args: { name: string; colorId: string | null }) =>
-      invoke('create_label', { accountId: accountId as string, ...args }),
+    (request: { name: string; colorId: string | null }) =>
+      invoke('create_label', { accountId: accountId as string, ...request }),
     { done: 'Label created.', failed: 'Couldn’t create the label.' },
-    (labels, args) =>
+    (labels, request) =>
       [
         ...labels,
         {
-          id: `pending-label-${args.name}`,
-          name: args.name,
+          id: `pending-label-${request.name}`,
+          name: request.name,
           kind: 'user',
-          color: labelColorFor(args.colorId),
+          color: labelColorFor(request.colorId),
           messageCount: 0,
           unreadCount: 0,
         },
@@ -68,12 +68,12 @@ export function useCreateLabelMutation(accountId: string | null) {
 export function useRenameLabelMutation(accountId: string | null) {
   return useLabelLifecycleMutation(
     accountId,
-    (args: { labelId: string; name: string }) =>
-      invoke('rename_label', { accountId: accountId as string, ...args }),
+    (request: { labelId: string; name: string }) =>
+      invoke('rename_label', { accountId: accountId as string, ...request }),
     { done: 'Label renamed.', failed: 'Couldn’t rename the label.' },
-    (labels, args) =>
+    (labels, request) =>
       labels
-        .map((label) => (label.id === args.labelId ? { ...label, name: args.name } : label))
+        .map((label) => (label.id === request.labelId ? { ...label, name: request.name } : label))
         .sort(compareLabelNames),
   );
 }
@@ -81,12 +81,12 @@ export function useRenameLabelMutation(accountId: string | null) {
 export function useRecolorLabelMutation(accountId: string | null) {
   return useLabelLifecycleMutation(
     accountId,
-    (args: { labelId: string; colorId: string }) =>
-      invoke('recolor_label', { accountId: accountId as string, ...args }),
+    (request: { labelId: string; colorId: string }) =>
+      invoke('recolor_label', { accountId: accountId as string, ...request }),
     { done: 'Label colour updated.', failed: 'Couldn’t update the colour.' },
-    (labels, args) =>
+    (labels, request) =>
       labels.map((label) =>
-        label.id === args.labelId ? { ...label, color: labelColorFor(args.colorId) } : label,
+        label.id === request.labelId ? { ...label, color: labelColorFor(request.colorId) } : label,
       ),
   );
 }
@@ -94,10 +94,10 @@ export function useRecolorLabelMutation(accountId: string | null) {
 export function useDeleteLabelMutation(accountId: string | null) {
   return useLabelLifecycleMutation(
     accountId,
-    (args: { labelId: string }) =>
-      invoke('delete_label', { accountId: accountId as string, ...args }),
+    (request: { labelId: string }) =>
+      invoke('delete_label', { accountId: accountId as string, ...request }),
     { done: 'Label deleted.', failed: 'Couldn’t delete the label.' },
-    (labels, args) => labels.filter((label) => label.id !== args.labelId),
+    (labels, request) => labels.filter((label) => label.id !== request.labelId),
   );
 }
 
@@ -176,7 +176,7 @@ function virtualMailboxIdForScope(scope: SearchScope): string | null {
 
 export function useTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (change: TriageChange) =>
       invoke('mutate_threads', { accountId: accountId as string, ...change }),
@@ -252,7 +252,7 @@ export function useTriageMutation(accountId: string | null) {
 
 export function useDeleteThreadsMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (change: { threadIds: string[] }) =>
       invoke('delete_threads', { accountId: accountId as string, ...change }),
@@ -291,7 +291,7 @@ export function useDeleteThreadsMutation(accountId: string | null) {
 
 export function useMoveThreadsMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (change: { threadIds: string[]; destination: MoveDestination }) =>
       invoke('move_threads', { accountId: accountId as string, ...change }),
@@ -334,9 +334,9 @@ export function useThreadTriageIntentMutation(accountId: string | null) {
     isPending: labelMutation.isPending || deleteMutation.isPending || moveMutation.isPending,
     mutate: (threadIds: string[], intent: ThreadTriageIntent) => {
       if (intent.kind === 'label')
-        labelMutation.mutate({ threadIds, add: intent.add, remove: intent.remove });
+        labelMutation.mutate({ threadIds: threadIds, add: intent.add, remove: intent.remove });
       else if (intent.kind === 'delete') deleteMutation.mutate({ threadIds });
-      else moveMutation.mutate({ threadIds, destination: intent.destination });
+      else moveMutation.mutate({ threadIds: threadIds, destination: intent.destination });
     },
   };
 }
@@ -371,7 +371,7 @@ function optimisticallyUpdateConversationMessages(
 
 export function useMessageTriageMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (change: MessageTriageChange) =>
       invoke('mutate_messages', { accountId: accountId as string, ...change }),
@@ -412,7 +412,7 @@ export function useMessageTriageMutation(accountId: string | null) {
 
 export function useDeleteMessagesMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (change: { threadId: string; messageIds: string[] }) =>
       invoke('delete_messages', { accountId: accountId as string, messageIds: change.messageIds }),
@@ -438,7 +438,7 @@ export function useDeleteMessagesMutation(accountId: string | null) {
 
 export function useMoveMessagesMutation(accountId: string | null) {
   const queryClient = useQueryClient();
-  const showError = useToastStore((state) => state.showError);
+  const showError = useToastStore((toaster) => toaster.showError);
   return useMutation({
     mutationFn: (change: {
       threadId: string;
@@ -478,9 +478,19 @@ export function useMessageTriageIntentMutation(accountId: string | null) {
     isPending: labelMutation.isPending || deleteMutation.isPending || moveMutation.isPending,
     mutate: (threadId: string, messageIds: string[], intent: MessageTriageIntent) => {
       if (intent.kind === 'label')
-        labelMutation.mutate({ threadId, messageIds, add: intent.add, remove: intent.remove });
+        labelMutation.mutate({
+          threadId: threadId,
+          messageIds: messageIds,
+          add: intent.add,
+          remove: intent.remove,
+        });
       else if (intent.kind === 'delete') deleteMutation.mutate({ threadId, messageIds });
-      else moveMutation.mutate({ threadId, messageIds, destination: intent.destination });
+      else
+        moveMutation.mutate({
+          threadId: threadId,
+          messageIds: messageIds,
+          destination: intent.destination,
+        });
     },
   };
 }

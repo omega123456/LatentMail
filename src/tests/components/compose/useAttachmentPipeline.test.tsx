@@ -43,7 +43,7 @@ describe('useAttachmentPipeline', () => {
         staged: { id: 'part' },
       }),
     );
-    const localId = useComposeStore.getState().session!.attachments[0].localId;
+    const localId = useComposeStore.getState().session?.attachments[0].localId ?? '';
     act(() => result.current.onRemoveAttachment(localId));
     await waitFor(() =>
       expect(release).toHaveBeenCalledWith({ accountId: 'account', owner: 'session', id: 'part' }),
@@ -64,13 +64,13 @@ describe('useAttachmentPipeline', () => {
     });
     ipc.override('release_staged_attachment', release);
     const bodyRef = {
-      current: { focus: () => undefined, insertInlineImage },
+      current: { focus: () => undefined, insertInlineImage: insertInlineImage },
     } as RefObject<BodyEditorHandle>;
     const { result } = renderHook(() => useAttachmentPipeline(bodyRef));
 
     await act(async () => result.current.onInsertImage());
     await waitFor(() => expect(insertInlineImage).toHaveBeenCalled());
-    const assetUrl = useComposeStore.getState().session!.attachments[0].staged!.assetUrl;
+    const assetUrl = useComposeStore.getState().session?.attachments[0].staged?.assetUrl;
     act(() => useComposeStore.getState().setHtml(`<img src="${assetUrl}">`));
     act(() => useComposeStore.getState().setHtml(''));
     await waitFor(() =>

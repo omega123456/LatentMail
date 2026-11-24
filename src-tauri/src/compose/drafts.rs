@@ -137,14 +137,14 @@ pub async fn admit(
         services.queue,
         services.storage,
         QueueOperation {
-            id,
-            account_id,
+            id: id,
+            account_id: account_id,
             lane: Lane::Interactive,
-            kind,
-            entity_key,
+            kind: kind,
+            entity_key: entity_key,
             cost: 0,
             attempts: 0,
-            description,
+            description: description,
         },
         payload_json,
     )
@@ -214,7 +214,7 @@ async fn terminal_failed<R: Runtime>(
         })
         .await;
     let _ = app.emit(
-        "compose://failed",
+        crate::events::COMPOSE_FAILED,
         serde_json::json!({
             "accountId": operation.account_id,
             "sessionId": operation.entity_key,
@@ -377,8 +377,8 @@ async fn run<R: Runtime>(
         quote_html: quote_html.clone(),
         in_reply_to: payload.in_reply_to.clone(),
         references: payload.references.clone(),
-        inline,
-        attachments,
+        inline: inline,
+        attachments: attachments,
     };
     let raw = match mime::assemble(&outgoing) {
         Ok(raw) => raw,
@@ -539,9 +539,9 @@ async fn run<R: Runtime>(
         })
         .await;
     let event = if consumed {
-        "send://complete"
+        crate::events::SEND_COMPLETE
     } else {
-        "draft://saved"
+        crate::events::DRAFT_SAVED
     };
     let _ = app.emit(event, serde_json::json!({ "accountId": account_id, "sessionId": operation.entity_key, "draftId": draft_id }));
     Ok(())

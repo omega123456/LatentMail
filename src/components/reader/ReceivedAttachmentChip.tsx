@@ -8,6 +8,7 @@ import { resolveMimeIcon } from '@/lib/format/mime-icon';
 import { useCachedAttachmentQuery } from '@/lib/query/hooks';
 import { useLayoutStore } from '@/stores/layout';
 import type { MessageAttachment } from '@/lib/types/ipc';
+import { ICON_SIZE } from '@/components/shared/icon-size';
 
 type DownloadState = 'idle' | 'downloading' | 'failed';
 
@@ -23,7 +24,7 @@ export function ReceivedAttachmentChip({
   onPreview: () => void;
 }) {
   const [downloadState, setDownloadState] = useState<DownloadState>('idle');
-  const prefetch = useLayoutStore((state) => state.prefetchImageAttachments);
+  const prefetch = useLayoutStore((layout) => layout.prefetchImageAttachments);
   const { family, Icon, coloured, inkClassName, wellClassName } = resolveMimeIcon(
     attachment.mimeType,
     attachment.filename,
@@ -44,10 +45,10 @@ export function ReceivedAttachmentChip({
     setDownloadState('downloading');
     try {
       await invoke('save_attachment_to_path', {
-        accountId,
-        messageId,
+        accountId: accountId,
+        messageId: messageId,
         attachmentId: attachment.id,
-        destination,
+        destination: destination,
       });
       setDownloadState('idle');
     } catch {
@@ -77,9 +78,9 @@ export function ReceivedAttachmentChip({
         } grid place-items-center ${thumbnailLoading ? 'animate-pulse' : ''}`}
       >
         {downloading ? (
-          <Loader2 className="animate-spin" size={16} />
+          <Loader2 className="animate-spin" size={ICON_SIZE.base} />
         ) : failed ? (
-          <AlertCircle size={16} />
+          <AlertCircle size={ICON_SIZE.base} />
         ) : showThumbnail && cachedQuery.data ? (
           <img
             data-testid="attachment-thumbnail"
@@ -124,9 +125,9 @@ export function ReceivedAttachmentChip({
         className="relative z-10 shrink-0 cursor-pointer rounded-chip p-1 text-secondary hover:bg-surface-container hover:text-on-surface focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary disabled:cursor-not-allowed dark:text-dark-secondary dark:hover:bg-dark-surface-container dark:hover:text-dark-on-surface"
       >
         {downloading ? (
-          <Loader2 className="animate-spin" size={14} aria-hidden="true" />
+          <Loader2 className="animate-spin" size={ICON_SIZE.sm} aria-hidden="true" />
         ) : (
-          <Download size={14} aria-hidden="true" />
+          <Download size={ICON_SIZE.sm} aria-hidden="true" />
         )}
       </button>
     </div>

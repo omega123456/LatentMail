@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  RETAINED_THREAD_PAGES,
   useAccountAvatarQuery,
   useAccountsQuery,
   useCancelQueueOperationMutation,
@@ -36,6 +37,8 @@ import { useSearchStore } from '@/stores/search';
 import { useToastStore } from '@/stores/toast';
 import { ipc } from '@/tests/ipc-mock';
 import { captureConsole } from '@/tests/console';
+
+const PAGES_AFTER_FIRST_FETCH = 2;
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -104,8 +107,8 @@ describe('query hooks', () => {
   it('loads conversations with the mailbox or active search entry scope', async () => {
     const client = new QueryClient();
     const calls: unknown[] = [];
-    ipc.override('load_conversation', (args) => {
-      calls.push(args);
+    ipc.override('load_conversation', (request) => {
+      calls.push(request);
       return { threadId: 'thread-1', subject: '', messages: [] };
     });
     const { rerender } = renderHook(() => useConversationQuery('account', 'thread-1'), {
@@ -151,8 +154,8 @@ describe('query hooks', () => {
   it('loads cached message bodies by policy and leaves Gmail fetch refresh to events', async () => {
     const client = new QueryClient();
     const bodies: unknown[] = [];
-    ipc.override('load_message_body', (args) => {
-      bodies.push(args);
+    ipc.override('load_message_body', (request) => {
+      bodies.push(request);
       return {
         htmlBody: '<p>Cached</p>',
         plainBody: null,
@@ -221,11 +224,9 @@ describe('query hooks', () => {
       });
     });
     expect([...useMultiSelectStore.getState().selectedIds]).toEqual(['thread-1']);
-    const message = (
-      client.getQueryData(queryKeys.conversationThread('account', 'thread-1')) as {
-        messages: Array<{ isStarred: boolean; isUnread: boolean }>;
-      }
-    ).messages[0];
+    const message = client.getQueryData<{
+      messages: Array<{ isStarred: boolean; isUnread: boolean }>;
+    }>(queryKeys.conversationThread('account', 'thread-1'))?.messages[0];
     expect(message).toMatchObject({ isStarred: true, isUnread: false });
   });
 
@@ -262,19 +263,15 @@ describe('query hooks', () => {
       result.current.mutate({ threadIds: ['thread-1'], add: ['Label_1'], remove: ['Label_2'] }),
     );
     await waitFor(() => {
-      const page = (
-        client.getQueryData(queryKeys.threads('account', 'INBOX')) as {
-          pages: Array<{ items: { labelIndicators: string[] }[] }>;
-        }
-      ).pages[0];
-      expect(page.items[0].labelIndicators).toEqual(['Clients']);
+      const page = client.getQueryData<{
+        pages: Array<{ items: { labelIndicators: string[] }[] }>;
+      }>(queryKeys.threads('account', 'INBOX'))?.pages[0];
+      expect(page?.items[0].labelIndicators).toEqual(['Clients']);
     });
     expect(
-      (
-        client.getQueryData(queryKeys.conversationThread('account', 'thread-1')) as {
-          messages: { labelIds: string[] }[];
-        }
-      ).messages[0].labelIds,
+      client.getQueryData<{
+        messages: { labelIds: string[] }[];
+      }>(queryKeys.conversationThread('account', 'thread-1'))?.messages[0].labelIds,
     ).toEqual(['INBOX', 'Label_1']);
   });
 });
@@ -339,22 +336,23 @@ describe('avatar queries', () => {
 
 describe('search query hooks', () => {
   it('retains five mailbox and search pages and restores the previous page', async () => {
-    const calls: Array<{ command: string; args: unknown }> = [];
+    const calls: Array<{ command: string; request: unknown }> = [];
     const page = (cursor: { latestAt: number; id: string } | null) => {
       const index = cursor?.latestAt ?? 0;
       return {
         items: [{ ...thread, id: `thread-${index}` }],
-        nextCursor: index < 5 ? { latestAt: index + 1, id: String(index + 1) } : null,
+        nextCursor:
+          index < RETAINED_THREAD_PAGES ? { latestAt: index + 1, id: String(index + 1) } : null,
         previousCursor: index > 0 ? { latestAt: index - 1, id: String(index - 1) } : null,
       };
     };
-    ipc.override('list_threads', (args) => {
-      calls.push({ command: 'list_threads', args });
-      return page(args.cursor ?? null);
+    ipc.override('list_threads', (request) => {
+      calls.push({ command: 'list_threads', request: request });
+      return page(request.cursor ?? null);
     });
-    ipc.override('search_threads', (args) => {
-      calls.push({ command: 'search_threads', args });
-      return page(args.cursor ?? null);
+    ipc.override('search_threads', (request) => {
+      calls.push({ command: 'search_threads', request: request });
+      return page(request.cursor ?? null);
     });
     const client = new QueryClient();
     const { result } = renderHook(
@@ -369,62 +367,54 @@ describe('search query hooks', () => {
     );
     expect(result.current.mailbox.hasNextPage).toBe(true);
     expect(result.current.search.hasNextPage).toBe(true);
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < RETAINED_THREAD_PAGES; index += 1) {
       await act(async () => {
         await result.current.mailbox.fetchNextPage();
       });
       expect(
-        (client.getQueryData(queryKeys.threads('account', 'INBOX')) as { pages: unknown[] }).pages,
-      ).toHaveLength(Math.min(5, index + 2));
+        client.getQueryData<{ pages: unknown[] }>(queryKeys.threads('account', 'INBOX'))?.pages,
+      ).toHaveLength(Math.min(RETAINED_THREAD_PAGES, index + PAGES_AFTER_FIRST_FETCH));
       await act(async () => {
         await result.current.search.fetchNextPage();
       });
       expect(
-        (
-          client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-            pages: unknown[];
-          }
-        ).pages,
-      ).toHaveLength(Math.min(5, index + 2));
+        client.getQueryData<{
+          pages: unknown[];
+        }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages,
+      ).toHaveLength(Math.min(RETAINED_THREAD_PAGES, index + PAGES_AFTER_FIRST_FETCH));
     }
     expect(
-      (client.getQueryData(queryKeys.threads('account', 'INBOX')) as { pages: unknown[] }).pages,
-    ).toHaveLength(5);
+      client.getQueryData<{ pages: unknown[] }>(queryKeys.threads('account', 'INBOX'))?.pages,
+    ).toHaveLength(RETAINED_THREAD_PAGES);
     expect(
-      (
-        client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-          pages: unknown[];
-        }
-      ).pages,
-    ).toHaveLength(5);
+      client.getQueryData<{
+        pages: unknown[];
+      }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages,
+    ).toHaveLength(RETAINED_THREAD_PAGES);
     await act(async () => {
       await result.current.mailbox.fetchPreviousPage();
       await result.current.search.fetchPreviousPage();
     });
     expect(
-      (
-        client.getQueryData(queryKeys.threads('account', 'INBOX')) as {
-          pages: Array<{ items: (typeof thread)[] }>;
-        }
-      ).pages[0].items[0].id,
+      client.getQueryData<{
+        pages: Array<{ items: (typeof thread)[] }>;
+      }>(queryKeys.threads('account', 'INBOX'))?.pages[0].items[0].id,
     ).toBe('thread-0');
     expect(
-      (
-        client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-          pages: Array<{ items: (typeof thread)[] }>;
-        }
-      ).pages[0].items[0].id,
+      client.getQueryData<{
+        pages: Array<{ items: (typeof thread)[] }>;
+      }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0].items[0].id,
     ).toBe('thread-0');
     expect(calls).toContainEqual({
       command: 'list_threads',
-      args: expect.objectContaining({
+      request: expect.objectContaining({
         cursor: { latestAt: 0, id: '0' },
         direction: 'backward',
       }),
     });
     expect(calls).toContainEqual({
       command: 'search_threads',
-      args: expect.objectContaining({
+      request: expect.objectContaining({
         cursor: { latestAt: 0, id: '0' },
         direction: 'backward',
       }),
@@ -490,12 +480,10 @@ describe('search optimistic removal', () => {
     await act(async () => {
       await result.current.mutateAsync({ threadIds: ['thread-sent'] });
     });
-    const page = (
-      client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-        pages: Array<{ items: (typeof sentThread)[] }>;
-      }
-    ).pages[0];
-    expect(page.items).toHaveLength(0);
+    const page = client.getQueryData<{
+      pages: Array<{ items: (typeof sentThread)[] }>;
+    }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0];
+    expect(page?.items).toHaveLength(0);
     expect(
       client.getQueryData(queryKeys.searchTotal('account', 'from:anna', { kind: 'default' })),
     ).toBe(0);
@@ -517,12 +505,10 @@ describe('search optimistic removal', () => {
     await act(async () => {
       await result.current.mutateAsync({ threadIds: ['thread-sent'] });
     });
-    const page = (
-      client.getQueryData(
-        queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
-      ) as { pages: Array<{ items: (typeof sentThread)[] }> }
-    ).pages[0];
-    expect(page.items).toHaveLength(1);
+    const page = client.getQueryData<{ pages: Array<{ items: (typeof sentThread)[] }> }>(
+      queryKeys.search('account', 'from:anna', { kind: 'label', labelId: 'TRASH' }),
+    )?.pages[0];
+    expect(page?.items).toHaveLength(1);
   });
 
   it('removes a row from a default-scoped search when it is moved to Spam', async () => {
@@ -535,12 +521,10 @@ describe('search optimistic removal', () => {
     await act(async () => {
       await result.current.mutateAsync({ threadIds: ['thread-sent'], destination: 'SPAM' });
     });
-    const page = (
-      client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-        pages: Array<{ items: (typeof sentThread)[] }>;
-      }
-    ).pages[0];
-    expect(page.items).toHaveLength(0);
+    const page = client.getQueryData<{
+      pages: Array<{ items: (typeof sentThread)[] }>;
+    }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0];
+    expect(page?.items).toHaveLength(0);
   });
 
   it('keeps star/read changes visible in the search cache rather than removing the row', async () => {
@@ -555,13 +539,11 @@ describe('search optimistic removal', () => {
         remove: [],
       });
     });
-    const page = (
-      client.getQueryData(queryKeys.search('account', 'from:anna', { kind: 'default' })) as {
-        pages: Array<{ items: { id: string; isStarred: boolean }[] }>;
-      }
-    ).pages[0];
-    expect(page.items).toHaveLength(1);
-    expect(page.items[0].isStarred).toBe(true);
+    const page = client.getQueryData<{
+      pages: Array<{ items: { id: string; isStarred: boolean }[] }>;
+    }>(queryKeys.search('account', 'from:anna', { kind: 'default' }))?.pages[0];
+    expect(page?.items).toHaveLength(1);
+    expect(page?.items[0].isStarred).toBe(true);
   });
 });
 
@@ -597,7 +579,8 @@ describe('queue hooks', () => {
 
   it('retries every failed operation, optionally scoped to an account', async () => {
     const client = new QueryClient();
-    const retryAll = vi.fn(() => 2);
+    const retriedCount = 2;
+    const retryAll = vi.fn(() => retriedCount);
     ipc.override('retry_failed_operations', retryAll);
     const { result } = renderHook(() => useRetryFailedOperationsMutation(), {
       wrapper: wrapper(client),

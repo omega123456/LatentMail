@@ -88,9 +88,9 @@ async fn indicator_refreshes_from_each_domain_event_with_managed_storage() {
         .unwrap();
     app.manage(Storage::open(directory.path().join("mail.sqlite")).unwrap());
     initialize(app.handle()).unwrap();
-    app.emit("mail://new", ()).unwrap();
-    app.emit("queue://item", ()).unwrap();
-    app.emit("account://state", ()).unwrap();
+    app.emit(latentmail_lib::events::MAIL_NEW, ()).unwrap();
+    app.emit(latentmail_lib::events::QUEUE_ITEM, ()).unwrap();
+    app.emit(latentmail_lib::events::ACCOUNT_STATE, ()).unwrap();
     tokio::time::sleep(chrono::Duration::milliseconds(150).to_std().unwrap()).await;
     assert!(app.try_state::<OsIntegration>().is_some());
     assert!(app.state::<OsIntegration>().indicator_applications().0 > 0);
@@ -127,13 +127,14 @@ async fn mailto_waits_for_frontend_readiness_before_emitting_an_intent() {
     initialize(app.handle()).unwrap();
     let received = Arc::new(Mutex::new(Vec::new()));
     let target = Arc::clone(&received);
-    app.listen("os://intent", move |event| {
+    app.listen(latentmail_lib::events::OS_INTENT, move |event| {
         target.lock().unwrap().push(event.payload().to_owned());
     });
     emit_mailto(app.handle(), "mailto:alex%40example.com?subject=Hello");
     tokio::time::sleep(chrono::Duration::milliseconds(20).to_std().unwrap()).await;
     assert!(received.lock().unwrap().is_empty());
-    app.emit("frontend://ready", ()).unwrap();
+    app.emit(latentmail_lib::events::FRONTEND_READY, ())
+        .unwrap();
     tokio::time::sleep(chrono::Duration::milliseconds(20).to_std().unwrap()).await;
     assert!(received.lock().unwrap()[0].contains("alex@example.com"));
 }
@@ -146,10 +147,11 @@ fn ready_frontend_receives_mailto_without_queueing() {
     initialize(app.handle()).unwrap();
     let received = Arc::new(Mutex::new(Vec::new()));
     let target = Arc::clone(&received);
-    app.listen("os://intent", move |event| {
+    app.listen(latentmail_lib::events::OS_INTENT, move |event| {
         target.lock().unwrap().push(event.payload().to_owned());
     });
-    app.emit("frontend://ready", ()).unwrap();
+    app.emit(latentmail_lib::events::FRONTEND_READY, ())
+        .unwrap();
 
     emit_mailto(app.handle(), "mailto:alex%40example.com?subject=Hello");
 

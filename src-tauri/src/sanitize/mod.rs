@@ -3,6 +3,9 @@ use std::{borrow::Cow, collections::HashMap};
 use ammonia::Builder;
 
 pub const MAX_SANITIZED_HTML_BYTES: usize = 512 * 1024;
+pub const CID_SCHEME: &str = "cid:";
+const DATA_IMAGE_PREFIX: &str = "data:image/";
+const DATA_SCHEME: &str = "data:";
 const REMOTE_IMAGE_PLACEHOLDER: &str =
     "data:image/gif;base64,R0lGODlhAQABAIAAAMLCwgAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
 
@@ -34,8 +37,8 @@ pub fn referenced_content_ids(html: &str) -> Vec<String> {
     let lower = html.to_ascii_lowercase();
     let mut ids = Vec::new();
     let mut cursor = 0;
-    while let Some(offset) = lower[cursor..].find("cid:") {
-        let start = cursor + offset + "cid:".len();
+    while let Some(offset) = lower[cursor..].find(CID_SCHEME) {
+        let start = cursor + offset + CID_SCHEME.len();
         let end = html[start..]
             .find(|character: char| {
                 character.is_whitespace() || matches!(character, '"' | '\'' | ')' | '>')
@@ -124,7 +127,7 @@ fn clean(html: &str, cid_sources: &HashMap<String, String>, allow_remote: bool) 
         );
     let html = builder.clean(html).to_string();
     SanitizedHtml {
-        html,
+        html: html,
         truncated: false,
         remote_images_blocked: ImageOutcome::read(&outcome.remote_blocked),
         inline_images_missing: ImageOutcome::read(&outcome.inline_missing),
@@ -139,7 +142,7 @@ fn image_source(
 ) -> Option<String> {
     let source = value.trim();
     let lower = source.to_ascii_lowercase();
-    if let Some(cid) = lower.strip_prefix("cid:") {
+    if let Some(cid) = lower.strip_prefix(CID_SCHEME) {
         let id = source[source.len() - cid.len()..].trim_matches(['<', '>']);
         let source = cid_sources
             .get(id)
@@ -151,10 +154,10 @@ fn image_source(
         };
         return Some(source.clone());
     }
-    if lower.starts_with("data:image/") {
+    if lower.starts_with(DATA_IMAGE_PREFIX) {
         return Some(source.to_owned());
     }
-    if lower.starts_with("data:") {
+    if lower.starts_with(DATA_SCHEME) {
         return None;
     }
     if allow_remote {

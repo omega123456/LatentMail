@@ -8,6 +8,7 @@ import { SettingRow } from './SettingRow';
 import { settingsButton, settingsTriggerClass } from './styles';
 import { SettingsSection } from './SettingsSection';
 import { UPDATE_INTERVAL_OPTIONS } from '@/lib/update-intervals';
+import { DATE_FORMAT } from '@/lib/format/date-formats';
 
 function SettingSwitch({
   checked,
@@ -41,12 +42,12 @@ function SubsectionHeading({ children }: { children: string }) {
 export function UpdatesSection() {
   const { data, dataUpdatedAt, isFetching, refetch } = useAppUpdateQuery();
   const installMutation = useInstallUpdateMutation();
-  const showSuccess = useToastStore((state) => state.showSuccess);
-  const showError = useToastStore((state) => state.showError);
-  const updateCheckInterval = useLayoutStore((state) => state.updateCheckInterval);
-  const setUpdateCheckInterval = useLayoutStore((state) => state.setUpdateCheckInterval);
-  const installUpdateOnQuit = useLayoutStore((state) => state.installUpdateOnQuit);
-  const setInstallUpdateOnQuit = useLayoutStore((state) => state.setInstallUpdateOnQuit);
+  const showSuccess = useToastStore((toaster) => toaster.showSuccess);
+  const showError = useToastStore((toaster) => toaster.showError);
+  const updateCheckInterval = useLayoutStore((layout) => layout.updateCheckInterval);
+  const setUpdateCheckInterval = useLayoutStore((layout) => layout.setUpdateCheckInterval);
+  const installUpdateOnQuit = useLayoutStore((layout) => layout.installUpdateOnQuit);
+  const setInstallUpdateOnQuit = useLayoutStore((layout) => layout.setInstallUpdateOnQuit);
 
   const available = data?.available ?? null;
   const currentVersion = data?.currentVersion ?? '…';
@@ -81,7 +82,7 @@ export function UpdatesSection() {
             {available
               ? `You have ${currentVersion}${
                   available.dateMillis
-                    ? ` · released ${format(new Date(available.dateMillis), 'd MMMM yyyy')}`
+                    ? ` · released ${format(new Date(available.dateMillis), DATE_FORMAT.longDayMonthYear)}`
                     : ''
                 }`
               : dataUpdatedAt

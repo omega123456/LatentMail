@@ -125,7 +125,7 @@ async fn active_backfill_pauses_after_a_committed_batch_and_resumes_from_its_cur
     let pause_queue = queue.clone();
 
     let sink: EventSink = Arc::new(move |name, _payload| {
-        if name == "sync://traversal" {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
             pause_queue.pause();
         }
     });
@@ -280,7 +280,7 @@ async fn restarted_backfill_run_reports_resumed_on_every_page_of_that_run() {
     let pauses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let sink_pauses = Arc::clone(&pauses);
     let sink: EventSink = Arc::new(move |name, _payload| {
-        if name == "sync://traversal" {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
             pause_queue.pause();
             sink_pauses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
@@ -605,7 +605,7 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
         250,
         registry.clone(),
         Arc::new(move |name, payload| {
-            if name == "queue://item" {
+            if name == latentmail_lib::events::QUEUE_ITEM {
                 sink_events.lock().unwrap().push(payload);
             }
         }),
@@ -613,7 +613,7 @@ async fn a_second_enqueue_backfill_call_is_a_no_op_while_a_chain_is_already_in_f
     let pause_queue = queue.clone();
 
     let sink: EventSink = Arc::new(move |name, _payload| {
-        if name == "sync://traversal" {
+        if name == latentmail_lib::events::SYNC_TRAVERSAL {
             pause_queue.pause();
         }
     });
@@ -1306,7 +1306,7 @@ async fn backfill_advances_as_one_discrete_queue_operation_per_page() {
         250,
         registry.clone(),
         Arc::new(move |name, payload| {
-            if name == "queue://item" {
+            if name == latentmail_lib::events::QUEUE_ITEM {
                 sink_events.lock().unwrap().push(payload);
             }
         }),
