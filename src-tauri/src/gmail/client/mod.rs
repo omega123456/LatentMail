@@ -121,6 +121,13 @@ impl GmailClient {
         })
         .await
     }
+    pub(super) async fn get_list_page<T: DeserializeOwned + Default>(
+        &self,
+        spec: GetRequest<'_>,
+    ) -> Result<T, GmailError> {
+        let page: Option<T> = self.get(spec).await?;
+        Ok(page.unwrap_or_default())
+    }
     pub(super) async fn send<T: DeserializeOwned, B: Serialize + ?Sized>(
         &self,
         spec: SendRequest<'_, B>,

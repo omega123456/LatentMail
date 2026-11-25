@@ -85,7 +85,7 @@ impl GmailClient {
         if let Some(token) = page_token {
             query.push(("pageToken".to_owned(), token.to_owned()));
         }
-        self.get(GetRequest {
+        self.get_list_page(GetRequest {
             path: "/users/me/drafts",
             query: &query,
             cost: DRAFTS_LIST_COST,

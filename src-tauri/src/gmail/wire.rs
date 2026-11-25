@@ -16,7 +16,7 @@ pub(super) struct RawLabels {
     pub(super) labels: Vec<labels::RawLabel>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RawMessageList {
     pub(super) messages: Option<Vec<RawRef>>,
@@ -81,7 +81,7 @@ pub(super) struct BatchModifyRequest<'a> {
     pub(super) remove_label_ids: &'a [String],
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub(super) struct RawDraftList {
     pub(super) drafts: Option<Vec<RawDraftRef>>,
     #[serde(rename = "nextPageToken")]

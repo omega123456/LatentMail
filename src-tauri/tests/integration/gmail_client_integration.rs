@@ -195,6 +195,42 @@ async fn list_draft_ids_follows_the_next_page_token_across_multiple_pages() {
 }
 
 #[tokio::test]
+async fn a_label_with_no_messages_lists_as_an_empty_final_page_when_gmail_omits_the_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/messages"))
+        .and(query_param("labelIds", "Label_empty"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let page = GmailClient::with_base_url("token", server.uri())
+        .list_messages_page(&["Label_empty".to_owned()], None)
+        .await
+        .unwrap();
+
+    assert!(page.items.is_empty());
+    assert_eq!(page.next_page_token, None);
+}
+
+#[tokio::test]
+async fn an_account_with_no_drafts_lists_no_draft_ids_when_gmail_omits_the_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/me/drafts"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let mapping = GmailClient::with_base_url("token", server.uri())
+        .list_draft_ids()
+        .await
+        .unwrap();
+
+    assert!(mapping.is_empty());
+}
+
+#[tokio::test]
 async fn history_page_forwards_a_supplied_page_token() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

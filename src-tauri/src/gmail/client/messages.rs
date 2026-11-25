@@ -62,7 +62,7 @@ impl GmailClient {
             request.options.page_size.min(MAX_PAGE_SIZE).to_string(),
         ));
         let raw: RawMessageList = self
-            .get(GetRequest {
+            .get_list_page(GetRequest {
                 path: "/users/me/messages",
                 query: &query,
                 cost: MESSAGES_LIST_COST,
