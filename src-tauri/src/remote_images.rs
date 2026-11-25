@@ -1,19 +1,70 @@
 use std::{
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
 
+use ipnet::{Ipv4Net, Ipv6Net};
+use reqwest::{
+    dns::{Addrs, Name, Resolve, Resolving},
+    redirect,
+};
 use tauri::http::Response;
 use url::{form_urlencoded, Host, Url};
 
 use crate::image_scheme::{self, ServedImage};
 
 pub const SCHEME: &str = "remoteimg";
+pub const MAX_REDIRECTS: usize = 10;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(15);
 const RETRY_DELAY: Duration = Duration::from_millis(250);
 const LOCALHOST: &str = "localhost";
 const LOCALHOST_SUFFIX: &str = ".localhost";
+const IPV4_OCTET_COUNT: usize = 4;
+
+const THIS_NETWORK: Ipv4Net = Ipv4Net::new_assert(Ipv4Addr::new(0, 0, 0, 0), 8);
+const SHARED_ADDRESS_SPACE: Ipv4Net = Ipv4Net::new_assert(Ipv4Addr::new(100, 64, 0, 0), 10);
+const PROTOCOL_ASSIGNMENTS: Ipv4Net = Ipv4Net::new_assert(Ipv4Addr::new(192, 0, 0, 0), 24);
+const BENCHMARKING: Ipv4Net = Ipv4Net::new_assert(Ipv4Addr::new(198, 18, 0, 0), 15);
+const MULTICAST_AND_RESERVED: Ipv4Net = Ipv4Net::new_assert(Ipv4Addr::new(224, 0, 0, 0), 3);
+
+const NON_PUBLIC_IPV4_NETWORKS: [Ipv4Net; 5] = [
+    THIS_NETWORK,
+    SHARED_ADDRESS_SPACE,
+    PROTOCOL_ASSIGNMENTS,
+    BENCHMARKING,
+    MULTICAST_AND_RESERVED,
+];
+
+struct Ipv4Embedding {
+    network: Ipv6Net,
+    first_octet: usize,
+}
+
+const IPV4_COMPATIBLE: Ipv4Embedding = Ipv4Embedding {
+    network: Ipv6Net::new_assert(Ipv6Addr::UNSPECIFIED, 96),
+    first_octet: 12,
+};
+const NAT64: Ipv4Embedding = Ipv4Embedding {
+    network: Ipv6Net::new_assert(Ipv6Addr::new(0x64, 0xff9b, 0, 0, 0, 0, 0, 0), 96),
+    first_octet: 12,
+};
+const SIX_TO_FOUR: Ipv4Embedding = Ipv4Embedding {
+    network: Ipv6Net::new_assert(Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 16),
+    first_octet: 2,
+};
+
+const IPV4_EMBEDDINGS: [Ipv4Embedding; 3] = [IPV4_COMPATIBLE, NAT64, SIX_TO_FOUR];
+
+impl Ipv4Embedding {
+    fn extract(&self, address: Ipv6Addr) -> Option<Ipv4Addr> {
+        let octets = address.octets();
+        let embedded = octets.get(self.first_octet..self.first_octet + IPV4_OCTET_COUNT)?;
+        <[u8; IPV4_OCTET_COUNT]>::try_from(embedded)
+            .ok()
+            .map(Ipv4Addr::from)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostScope {
@@ -41,24 +92,105 @@ fn is_localhost_name(domain: &str) -> bool {
     domain == LOCALHOST || domain.ends_with(LOCALHOST_SUFFIX)
 }
 
-fn is_public_ipv4(address: Ipv4Addr) -> bool {
-    let reserved = address.is_loopback()
+pub fn is_public_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => is_public_ipv4(address),
+        IpAddr::V6(address) => is_public_ipv6(address),
+    }
+}
+
+fn is_special_purpose_ipv4(address: Ipv4Addr) -> bool {
+    address.is_loopback()
         || address.is_private()
         || address.is_link_local()
         || address.is_unspecified()
-        || address.is_broadcast();
+        || address.is_broadcast()
+        || address.is_documentation()
+}
+
+fn is_in_non_public_ipv4_network(address: Ipv4Addr) -> bool {
+    NON_PUBLIC_IPV4_NETWORKS
+        .iter()
+        .any(|network| network.contains(&address))
+}
+
+fn is_public_ipv4(address: Ipv4Addr) -> bool {
+    let reserved = is_special_purpose_ipv4(address) || is_in_non_public_ipv4_network(address);
     !reserved
 }
 
-fn is_public_ipv6(address: Ipv6Addr) -> bool {
+fn embedded_ipv4(address: Ipv6Addr) -> Option<Ipv4Addr> {
     if let Some(mapped) = address.to_ipv4_mapped() {
-        return is_public_ipv4(mapped);
+        return Some(mapped);
     }
-    let reserved = address.is_loopback()
+    IPV4_EMBEDDINGS
+        .iter()
+        .find(|embedding| embedding.network.contains(&address))
+        .and_then(|embedding| embedding.extract(address))
+}
+
+fn is_special_purpose_ipv6(address: Ipv6Addr) -> bool {
+    address.is_loopback()
         || address.is_unspecified()
         || address.is_unique_local()
-        || address.is_unicast_link_local();
-    !reserved
+        || address.is_unicast_link_local()
+        || address.is_multicast()
+}
+
+fn is_public_ipv6(address: Ipv6Addr) -> bool {
+    if let Some(embedded) = embedded_ipv4(address) {
+        return is_public_ipv4(embedded);
+    }
+    !is_special_purpose_ipv6(address)
+}
+
+fn is_http_url(target: &Url) -> bool {
+    matches!(target.scheme(), "http" | "https")
+}
+
+pub fn follows_redirect(next: &Url, visited: usize) -> bool {
+    let within_limit = visited <= MAX_REDIRECTS;
+    within_limit && is_http_url(next) && is_public_host(next)
+}
+
+pub fn redirect_policy() -> redirect::Policy {
+    redirect::Policy::custom(|attempt| {
+        if follows_redirect(attempt.url(), attempt.previous().len()) {
+            return attempt.follow();
+        }
+        attempt.stop()
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("every resolved address is private or loopback")]
+pub struct NoPublicAddress;
+
+pub fn retain_public_addresses(
+    addresses: impl IntoIterator<Item = SocketAddr>,
+) -> Result<Vec<SocketAddr>, NoPublicAddress> {
+    let public: Vec<SocketAddr> = addresses
+        .into_iter()
+        .filter(|address| is_public_address(address.ip()))
+        .collect();
+    if public.is_empty() {
+        return Err(NoPublicAddress);
+    }
+    Ok(public)
+}
+
+pub struct PublicAddressResolver;
+
+impl Resolve for PublicAddressResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_owned();
+        Box::pin(async move {
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let public = retain_public_addresses(resolved)?;
+            let addresses: Addrs = Box::new(public.into_iter());
+            Ok(addresses)
+        })
+    }
 }
 
 pub fn proxy_url(target: &str) -> String {
@@ -75,7 +207,7 @@ pub fn target(uri: &str) -> Option<Url> {
         .find(|(key, _)| key == "url")
         .map(|(_, value)| value.into_owned())?;
     let target = Url::parse(&target).ok()?;
-    matches!(target.scheme(), "http" | "https").then_some(target)
+    is_http_url(&target).then_some(target)
 }
 
 pub async fn respond(client: &reqwest::Client, uri: &str, hosts: HostScope) -> Response<Vec<u8>> {

@@ -31,6 +31,7 @@ futures-util = { version = "~0.3", default-features = false }
 hickory-resolver = "~0.26.1"
 http = "~1.5.0"
 image = { version = "~0.25.10", default-features = false, features = ["png", "tiff"] }
+ipnet = "~2.12.1"
 keyring = { version = "~3.6.3", features = ["apple-native", "windows-native"] }
 lettre = { version = "~0.11.23", default-features = false, features = ["builder"] }
 html2text = "~0.13.6"

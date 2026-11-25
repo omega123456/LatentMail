@@ -35,7 +35,7 @@ pub mod storage;
 pub mod sync;
 pub mod updater;
 
-pub use http::{http_client, is_retryable_status};
+pub use http::{http_client, is_retryable_status, remote_image_client};
 
 #[cfg(not(coverage))]
 pub use runtime::run;
@@ -45,8 +45,8 @@ mod runtime {
     use tauri::Manager;
 
     use crate::{
-        ai, auth, avatars, cli, http_client, inline_images, ipc, logging, os, remote_images,
-        settings, shell, storage, sync,
+        ai, auth, avatars, cli, inline_images, ipc, logging, os, remote_image_client,
+        remote_images, settings, shell, storage, sync,
     };
 
     #[cfg(windows)]
@@ -70,7 +70,7 @@ mod runtime {
         }
         let builder = register_image_protocols(
             shell::register_plugins(ipc::register(tauri::Builder::default())),
-            http_client(),
+            remote_image_client(),
         );
         builder
             .setup(|app| {

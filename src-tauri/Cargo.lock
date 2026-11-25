@@ -2966,6 +2966,7 @@ dependencies = [
  "html2text",
  "http",
  "image",
+ "ipnet",
  "keyring",
  "lettre",
  "mime",
